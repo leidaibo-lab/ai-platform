@@ -2,7 +2,7 @@
 
 ## Purpose
 
-该规范描述当前轻量 AI Gateway 的稳定能力边界：LiteLLM Proxy 对外暴露 OpenAI-compatible 接口，服务端保存上游密钥，Demo Server 提供浏览器交互入口。
+该规范描述当前轻量 AI Gateway 已落地切片的稳定能力边界：LiteLLM Proxy 对外暴露 OpenAI-compatible 接口，服务端保存上游密钥，Demo Server 提供浏览器交互入口和 Runtime 分层 API。
 
 ## Requirements
 
@@ -54,39 +54,39 @@
 - **THEN** 脚本 SHALL 请求 `/v1/chat/completions`
 - **AND** 请求体 SHALL 使用 `model: chat-default`
 
-### Requirement: Demo status endpoint
+### Requirement: Gateway status endpoint
 
 Demo Server SHALL 提供状态检查接口，返回 LiteLLM 连接状态、gateway base url 和模型别名。
 
 #### Scenario: Browser checks status
 
 - **GIVEN** Demo Server 已启动
-- **WHEN** 浏览器请求 `GET /api/status`
+- **WHEN** 浏览器请求 `GET /api/gateway/status`
 - **THEN** Demo Server SHALL 尝试请求 LiteLLM `/v1/models`
 - **AND** 响应 SHALL 包含 `ok`、`gatewayBaseUrl` 和 `model`
 
-### Requirement: Demo chat endpoint
+### Requirement: Runtime chat endpoint
 
 Demo Server SHALL 提供聊天接口，支持文本、图片 URL、图片 data URL、文档链接和最近上下文。
 
 #### Scenario: User sends mixed content
 
 - **GIVEN** Demo Server 已启动
-- **WHEN** 浏览器请求 `POST /api/chat`
+- **WHEN** 浏览器请求 `POST /api/runtime/chat`
 - **AND** 请求包含 `message`、`imageUrls`、`documentUrls`、`history` 或 `summary`
 - **THEN** Demo Server SHALL 构造 OpenAI-compatible `messages`
 - **AND** 图片 SHALL 使用 `image_url` 多模态格式
 - **AND** 文档链接 SHALL 作为文本上下文附加
 - **AND** Demo Server SHALL 将请求转发到 LiteLLM `/v1/chat/completions`
 
-### Requirement: Demo summary endpoint
+### Requirement: Runtime summary endpoint
 
 Demo Server SHALL 提供摘要接口，用于将旧对话压缩成后续请求可复用的中文上下文摘要。
 
 #### Scenario: History exceeds recent window
 
 - **GIVEN** 浏览器已有历史消息
-- **WHEN** 浏览器请求 `POST /api/summarize`
+- **WHEN** 浏览器请求 `POST /api/runtime/summaries`
 - **THEN** Demo Server SHALL 调用 LiteLLM 生成中文摘要
 - **AND** 摘要 SHALL 保留用户目标、关键事实、已做决定、代码或文件名、未完成事项
 
@@ -101,4 +101,3 @@ Demo Server SHALL 对历史消息和摘要做估算 token 预算控制，优先�
 - **THEN** 系统 SHALL 保留当前消息
 - **AND** 系统 SHALL 优先保留摘要和最近历史
 - **AND** 系统 SHALL 裁剪超预算的旧消息
-
