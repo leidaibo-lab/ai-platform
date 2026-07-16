@@ -2,6 +2,12 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+/**
+ * 从项目环境文件生成 Demo Server、Runtime 和模型网关所需的分层配置。
+ *
+ * @param {string} rootDir - 项目根目录。
+ * @returns {Promise<object>} 归一化后的 Demo 配置。
+ */
 export async function loadDemoConfig(rootDir) {
   const env = await loadEnv(join(rootDir, ".env"));
 
@@ -26,10 +32,17 @@ export async function loadDemoConfig(rootDir) {
   };
 }
 
+/**
+ * 读取简单 KEY=VALUE 环境文件；文件不存在时返回空对象且不修改进程环境变量。
+ *
+ * @param {string} filePath - 环境文件路径。
+ * @returns {Promise<Record<string, string>>} 文件中解析出的键值对。
+ */
 export async function loadEnv(filePath) {
   if (!existsSync(filePath)) return {};
   const content = await readFile(filePath, "utf8");
 
+  // 将有效配置行累积为键值对象，并忽略空行、注释和无等号内容。
   return content.split(/\r?\n/).reduce((acc, line) => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) return acc;
@@ -45,10 +58,17 @@ export async function loadEnv(filePath) {
   }, {});
 }
 
+/**
+ * 统一移除基础地址末尾的斜杠，避免调用方拼接路径时产生重复分隔符。
+ *
+ * @param {unknown} value - 待处理的地址值。
+ * @returns {string} 不含末尾斜杠的字符串。
+ */
 export function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
+// 将环境变量转换为正数配置，无效值回退到调用方提供的默认值。
 function readPositiveNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
