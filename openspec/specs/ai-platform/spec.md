@@ -1,8 +1,8 @@
-# ai-gateway Specification
+# ai-platform Specification
 
 ## Purpose
 
-该规范描述当前轻量 AI Gateway 已落地切片的稳定能力边界：LiteLLM Proxy 对外暴露 OpenAI-compatible 接口，服务端保存上游密钥，Demo Server 提供浏览器交互入口和 Runtime 分层 API。
+该规范描述 AI 应用基础平台当前 V0.5 集成切片的稳定能力边界：LiteLLM Proxy 作为模型网关对外暴露 OpenAI-compatible 接口，服务端保存上游密钥，Demo Server 提供浏览器交互入口和 Runtime 分层 API。
 
 ## Requirements
 
@@ -73,11 +73,19 @@ Demo Server SHALL 提供聊天接口，支持文本、图片 URL、图片 data U
 
 - **GIVEN** Demo Server 已启动
 - **WHEN** 浏览器请求 `POST /api/runtime/chat`
-- **AND** 请求包含 `message`、`imageUrls`、`documentUrls`、`history` 或 `summary`
+- **AND** 请求至少包含非空 `message`、`imageUrls` 或 `documentUrls` 中的一项
+- **AND** 请求可以包含可选的 `history` 和 `summary`
 - **THEN** Demo Server SHALL 构造 OpenAI-compatible `messages`
 - **AND** 图片 SHALL 使用 `image_url` 多模态格式
 - **AND** 文档链接 SHALL 作为文本上下文附加
 - **AND** Demo Server SHALL 将请求转发到 LiteLLM `/v1/chat/completions`
+
+#### Scenario: Request has no current input
+
+- **GIVEN** Demo Server 已启动
+- **WHEN** 浏览器请求 `POST /api/runtime/chat`
+- **AND** `message`、`imageUrls` 和 `documentUrls` 均为空或缺失
+- **THEN** Demo Server SHALL 返回 `400` 输入错误
 
 ### Requirement: Runtime summary endpoint
 
@@ -87,8 +95,17 @@ Demo Server SHALL 提供摘要接口，用于将旧对话压缩成后续请求�
 
 - **GIVEN** 浏览器已有历史消息
 - **WHEN** 浏览器请求 `POST /api/runtime/summaries`
+- **AND** 请求包含非空 `messages` 数组
+- **AND** 请求可以包含已有 `summary`
 - **THEN** Demo Server SHALL 调用 LiteLLM 生成中文摘要
 - **AND** 摘要 SHALL 保留用户目标、关键事实、已做决定、代码或文件名、未完成事项
+
+#### Scenario: Summary request has no messages
+
+- **GIVEN** Demo Server 已启动
+- **WHEN** 浏览器请求 `POST /api/runtime/summaries`
+- **AND** `messages` 为空或缺失
+- **THEN** Demo Server SHALL 返回 `400` 输入错误
 
 ### Requirement: Context budget guard
 

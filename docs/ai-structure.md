@@ -1,512 +1,384 @@
-# AI 结构说明
+# AI 应用基础平台架构说明
 
-## 项目重新定义
+## 项目定位
 
-当前项目重新定义为一个按父级能力逐步完善的轻量 AI Gateway。它不是单纯的 LiteLLM Proxy 包装，也不是一次性建设完整智能体平台，而是以 LiteLLM 作为模型网关底座，把接入、Runtime、工具连接、模型治理和运营治理拆成可以分阶段成熟的父级集合。
+项目总称为“AI 应用基础平台”，项目、仓库和目录统一使用 `ai-platform`，面向不同业务场景按需组合渠道、Agent Runtime、连接器、知识、模型网关和治理能力。拆出的模型网关服务使用 `model-gateway`。
 
-五个父级是后续所有规划和实现的归属边界：
+系统中只有模型访问、模型路由、模型密钥和模型调用治理属于严格意义上的 AI Gateway；渠道、平台管理、Agent Runtime、工具和知识连接属于独立架构区域。项目改名不改变这个职责边界，也不改变当前稳定 API 行为。
 
-- 接入层：负责 Demo、客户端、内部脚本，后续扩展到业务系统、IM、IDE 和 API。
-- 智能体/工作流运行层：负责任务理解、上下文、摘要记忆、工具循环、结果组装和人工确认。
-- 工具注册与连接器层：负责 MCP、业务 API、搜索/网页、文档解析、知识库和 RAG 连接器。
-- 模型网关层：负责 LiteLLM、模型别名、多模型路由、fallback、provider key 收口和成本策略。
-- 治理与运营层：负责身份、权限、预算、限流、审计、观测、评测、反馈闭环和安全护栏。
+当前阶段仍使用单仓和轻量本地部署验证完整调用链路，不提前拆成微服务。所有新增能力必须先归入明确区域，并通过稳定接口交互，确保未来可以按项目需要独立部署和复用。
 
-当前代码只落地这个目标结构里的轻量切片：浏览器 Demo 和客户端接入、Demo Runtime、LiteLLM 调用封装、上下文预算与摘要记忆、工具注册预留，以及 OpenSpec/docs/smoke test 的最小治理。MCP、RAG、多人 key、预算、审计、统一运营平台仍属于后续规划，不作为当前稳定能力。
+## 六个架构区域
 
-## 架构总图与实施对齐
+| 区域 | 核心职责 | 明确不负责 | 当前落地 |
+| --- | --- | --- | --- |
+| 渠道与体验层 | Demo、Web、IM、IDE、API 等入口适配；输入输出格式转换 | Agent 编排、工具执行、模型供应商密钥 | `demo/index.html`、`scripts/demo-server.mjs` 的静态页面和 HTTP 接入部分 |
+| 平台控制面 | 租户、用户、应用、Agent 定义、版本发布、配置和运营入口 | 执行单次 Agent 任务、直接调用上游模型 | 尚未实现；未来的大平台属于此区域，不只是更大的 Demo |
+| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有聊天、摘要、消息构造和上下文预算雏形 |
+| 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有工具注册预留，尚未接入真实工具和知识能力 |
+| 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default`、上游 key 收口和 gateway client |
+| 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 当前只有 OpenSpec、文档和 smoke test 的最小约束 |
 
-这部分用于统一对齐：目标结构有哪些父级与子项，当前项目已经落到哪一层，后续每个版本要补哪一层。读图时先看完善可行性规划图，再看当前落地总图和规划实施图，最后用实施对比表判断当前改动应该落在哪个父级。
+这六个区域是概念、代码和未来服务拆分的统一归属边界。MCP、RAG、预算、审计等不是新的平级平台：MCP 和 RAG 属于连接器与知识层，模型预算属于模型网关，工具审批和任务评测属于 Agent Runtime 与治理区域。
 
-### 完善可行性规划图
+## 目标架构
 
-这张图按“父级能力 -> 子项依赖 -> 治理校验点 -> 实施顺序”组织，用于判断架构完善的可行性和后续拆解边界。
+![AI 应用基础平台目标架构](./assets/ai-platform-architecture.png)
 
-![AI Gateway 完善可行性规划图](./assets/complete-ai-gateway-architecture.png)
-
-### 当前落地总图
-
-当前代码处于 `V0.5`：已经完成本地模型代理、Demo 接入、上下文预算、摘要记忆和后端分层，但还没有真实工具循环、知识库、多人治理和平台运营能力。
-
-![AI Gateway 当前落地总图](./assets/current-v05-architecture.png)
+PNG 用于快速阅读和分享，下面的 Mermaid 是可检索、可维护的结构事实源。
 
 ```mermaid
 flowchart TB
-  subgraph Access["接入层"]
-    Browser["浏览器 Demo<br/>demo/index.html"]
-    Clients["OpenAI-compatible 客户端<br/>Cursor / 内部脚本"]
-    DemoApi["Demo 分层 API<br/>/api/gateway/status<br/>/api/runtime/chat<br/>/api/runtime/summaries"]
+  subgraph AiPlatform["AI 应用基础平台 / ai-platform"]
+    subgraph Experience["渠道与体验层"]
+      Demo["开发 Demo"]
+      Web["业务 Web / 管理入口"]
+      Channels["IM / IDE / API Adapter"]
+    end
+
+    subgraph ControlPlane["平台控制面"]
+      Tenant["租户 / 用户 / 应用"]
+      AgentDefinition["Agent 定义 / 版本 / 发布"]
+      PolicyConfig["工具策略 / 模型策略配置"]
+    end
+
+    subgraph Runtime["Agent Runtime / agent-runtime"]
+      RunApi["Run API"]
+      Session["会话 / 上下文 / 任务状态"]
+      Orchestrator["任务路由 / 工具循环 / 人工确认"]
+    end
+
+    subgraph Connector["连接器与知识层"]
+      ToolExecutor["Tool Executor / MCP"]
+      BusinessApi["业务 API / 搜索 / 网页"]
+      Knowledge["文档解析 / RAG / 知识权限"]
+    end
+
+    subgraph ModelGateway["模型网关 / model-gateway"]
+      GatewayApi["OpenAI-compatible API"]
+      ModelRoute["模型别名 / 路由 / fallback"]
+      ModelAccess["virtual key / provider key / 预算限流"]
+    end
+
+    subgraph Governance["治理与可观测"]
+      Identity["身份上下文 / 策略"]
+      Trace["调用追踪 / 审计"]
+      Evaluation["评测 / 安全 / 反馈"]
+    end
   end
 
-  subgraph Runtime["智能体/工作流运行层"]
-    ChatRuntime["聊天运行<br/>src/runtime/chat-runtime.mjs"]
-    MessageBuilder["消息构造<br/>src/runtime/message-builder.mjs"]
-    ContextBudget["上下文预算<br/>src/runtime/context-budget.mjs"]
-  end
-
-  subgraph Tools["工具注册与连接器层"]
-    ToolRegistry["工具注册预留<br/>src/tools/tool-registry.mjs"]
-    RealTools["真实工具 / MCP / 业务 API<br/>尚未接入"]
-  end
-
-  subgraph Gateway["模型网关层"]
-    GatewayClient["LiteLLM Client<br/>src/gateway/litellm-client.mjs"]
-    LiteLLM["LiteLLM Proxy :4000<br/>config.yaml"]
-    Upstream["上游 OpenAI-compatible API"]
-  end
-
-  subgraph Governance["治理与运营层"]
-    Contract["OpenSpec 稳定契约"]
-    Smoke["scripts/test-chat.sh"]
-    Docs["README / docs"]
-    MissingGov["身份 / 预算 / 限流 / 审计<br/>尚未接入"]
-  end
-
-  Browser --> DemoApi
-  DemoApi --> ChatRuntime
-  ChatRuntime --> MessageBuilder
-  ChatRuntime --> ContextBudget
-  ChatRuntime -.-> ToolRegistry
-  ToolRegistry -.-> RealTools
-  ChatRuntime --> GatewayClient
-  Clients --> LiteLLM
-  GatewayClient --> LiteLLM
-  LiteLLM --> Upstream
-  Contract -.-> DemoApi
-  Contract -.-> ChatRuntime
-  Smoke -.-> LiteLLM
-  Docs -.-> Access
-  Docs -.-> Runtime
-  MissingGov -.-> Gateway
+  Demo --> RunApi
+  Web --> RunApi
+  Channels --> RunApi
+  Tenant --> AgentDefinition
+  AgentDefinition --> RunApi
+  PolicyConfig -.-> Orchestrator
+  PolicyConfig -.-> ToolExecutor
+  PolicyConfig -.-> ModelRoute
+  RunApi --> Session
+  Session --> Orchestrator
+  Orchestrator <--> ToolExecutor
+  ToolExecutor --> BusinessApi
+  ToolExecutor --> Knowledge
+  Orchestrator --> GatewayApi
+  GatewayApi --> ModelRoute
+  ModelRoute --> ModelAccess
+  Identity -.-> RunApi
+  Identity -.-> GatewayApi
+  Trace -.-> Runtime
+  Trace -.-> Connector
+  Trace -.-> ModelGateway
+  Evaluation -.-> Runtime
+  Evaluation -.-> Connector
+  Evaluation -.-> ModelGateway
 ```
 
-### 目标平台总图
+图中的实线表示运行时主调用方向，虚线表示配置或治理关系。平台控制面发布配置，不进入每次请求的核心同步链路；治理区域接收统一事件并下发策略，不接管各区域的业务职责。
 
-目标形态不是把所有功能平铺，而是把能力挂到五个父级下。MCP、搜索、RAG、预算、审计都不是独立顶层，它们分别属于工具连接、知识接入、模型治理或运营治理。
+## 控制面与数据面
 
-```mermaid
-flowchart TB
-  subgraph Access["1. 接入层"]
-    MultiEntry["Web / IM / IDE / API"]
-    BusinessApp["业务系统入口"]
-  end
+为了后续拆服务，需要先区分两类运行性质：
 
-  subgraph Runtime["2. 智能体/工作流运行层"]
-    Planner["任务理解 / 规划"]
-    Memory["上下文 / 摘要 / 任务记忆"]
-    ToolLoop["工具调用循环"]
-    HumanReview["人工确认 / 失败兜底"]
-  end
+| 平面 | 包含区域 | 特征 |
+| --- | --- | --- |
+| 控制面 | 平台控制面、治理策略配置 | 低频写入；管理租户、Agent 版本、工具和模型策略；向数据面发布不可变版本 |
+| 数据面 | 渠道适配、Agent Runtime、连接器与知识、模型网关 | 高频执行；按已发布配置处理请求；不得在单次调用中隐式修改平台配置 |
 
-  subgraph Tools["3. 工具注册与连接器层"]
-    Mcp["MCP Server"]
-    BusinessApi["业务 API Adapter"]
-    WebSearch["搜索 / 网页抓取"]
-    Knowledge["文档 / 知识库 / RAG"]
-  end
+治理与可观测横跨两个平面：策略配置属于控制面，追踪、审计和评测事件采集属于数据面旁路。
 
-  subgraph Gateway["4. 模型网关层"]
-    ModelAlias["模型别名"]
-    Route["多模型路由 / fallback"]
-    VirtualKey["virtual key / provider key 收口"]
-    CostRoute["成本 / 质量策略"]
-  end
+## 依赖规则
 
-  subgraph Governance["5. 治理与运营层"]
-    Identity["身份 / 权限"]
-    Budget["预算 / 限流"]
-    Audit["审计 / 调用追踪"]
-    Eval["评测 / 观测"]
-    Safety["安全护栏"]
-  end
+区域之间只允许以下主依赖：
 
-  MultiEntry --> Runtime
-  BusinessApp --> Runtime
-  Runtime --> Tools
-  Tools --> Runtime
-  Runtime --> Gateway
-  Gateway --> Runtime
-  Runtime --> Access
-  Governance -.-> Access
-  Governance -.-> Runtime
-  Governance -.-> Tools
-  Governance -.-> Gateway
+```text
+渠道与体验层
+    -> Agent Runtime API
+
+平台控制面
+    -> 发布 AgentDefinition / ToolPolicy / ModelPolicy
+
+Agent Runtime
+    -> Connector API
+    -> Model Gateway API
+
+各区域
+    -> Governance Event API
 ```
 
-### 规划实施图
+必须守住这些边界：
 
-每个版本只重点成熟一到两个父级，避免一次性把网关、工具、知识库和运营平台都做成半成品。
+- 渠道只做协议和展示适配；正式平台与 Demo 可以并存，不需要互相替换。
+- 需要上下文、工具或工作流的请求必须经过 Agent Runtime；只有 Cursor、内部脚本等纯模型客户端可以直连模型网关。
+- Agent Runtime 只使用模型别名或逻辑模型能力，不读取 `UPSTREAM_API_KEY`，不依赖具体 provider。
+- 连接器执行外部能力，但不自行决定完整任务流程；工具选择、循环次数和人工确认由 Agent Runtime 控制。
+- 模型网关只处理模型调用，不保存业务会话、任务状态、工具结果或知识权限。
+- 平台控制面通过版本化配置影响执行，不直接嵌入 Runtime、连接器或模型网关的内部实现。
+- 治理事件采用统一结构旁路采集；不得让日志、评测或审计服务成为所有请求的单点同步阻塞。
 
-![AI Gateway 架构规划图](./assets/roadmap-layer-plan.png)
+## 架构模式与设计原则
+
+本架构使用以下模式解决明确的变化点：
+
+- Ports and Adapters：Demo、Web、IM 和 IDE 是入站 Adapter；模型网关客户端和连接器客户端是出站 Adapter；Agent Runtime 只依赖稳定端口，不依赖具体渠道、LiteLLM 或业务 API 实现。
+- Control Plane / Data Plane：平台控制面发布版本化配置，数据面按不可变版本执行，避免管理操作和高频任务执行相互耦合。
+- Registry：连接器区域通过 Tool Registry 管理工具描述和实现映射，Runtime 只按工具契约选择和调用，不维护业务连接器分支。
+- Event-driven Observation：治理与可观测通过统一事件旁路采集 trace、audit 和 evaluation 数据，不侵入各区域核心执行逻辑。
+- Compatibility Adapter：拆服务期间保留现有 Demo API 作为兼容 Adapter，逐步把内部调用切到新服务契约，避免页面和后端一次性迁移。
+
+具体设计原则：
+
+- 单一职责：每个区域只拥有一种主要变化原因，模型供应商变化不应迫使平台页面或工具执行逻辑一起修改。
+- 依赖倒置：Runtime 依赖 Model Gateway Port 和 Connector Port，具体 HTTP 客户端、LiteLLM 和业务 Adapter 位于边界外侧。
+- 高内聚低耦合：会话和任务状态集中在 Runtime，工具与凭据集中在连接器，模型路由与 provider key 集中在模型网关。
+- KISS 与 YAGNI：当前先保持单仓和模块调用，只有拆分触发条件成立后才引入数据库、消息系统和网络服务。
+- 数据所有权：每类事实数据只有一个写入所有者，跨区域只通过 API、版本化配置或事件共享。
+
+## 可插拔边界
+
+可插拔不是替换整个后端，而是让区域通过稳定契约独立变化。
+
+### 渠道适配契约
+
+Demo、正式 Web 平台、飞书、IDE 和 API Adapter 都应转换为统一的 `RunRequest`，至少携带：
+
+| 字段 | 说明 |
+| --- | --- |
+| `requestId` | 全链路唯一请求标识 |
+| `tenantId` | 租户或组织标识；本地 Demo 可以使用固定开发值 |
+| `appId` | 调用应用或 Agent 所属应用 |
+| `userId` | 最终用户或服务身份 |
+| `agentId`、`agentVersion` | 运行的 Agent 定义和不可变版本 |
+| `conversationId` | 会话标识；无会话请求可为空 |
+| `input` | 当前文本或结构化输入 |
+| `attachments` | 图片、文档等附件引用 |
+
+渠道层不能把浏览器或 IM 平台特有字段直接渗透到 Runtime 核心结构。
+
+### 平台配置契约
+
+平台控制面向执行区域发布三类版本化配置：
+
+- `AgentDefinition`：系统提示词、模型策略引用、可用工具集合、上下文策略和人工确认规则。
+- `ToolPolicy`：工具 allowlist、参数边界、凭据引用、超时、结果大小和风险等级。
+- `ModelPolicy`：模型别名、候选模型、fallback、预算、限流和质量/成本策略。
+
+运行请求引用已发布版本，不读取管理页面的临时编辑状态。
+
+### Runtime 到模型网关契约
+
+- 保持 OpenAI-compatible 或明确版本化的内部模型接口。
+- Runtime 只传模型别名、消息、工具描述和生成参数。
+- 通过 header 或请求元数据透传 `requestId`、`tenantId`、`appId` 和 `userId`。
+- 模型网关返回标准响应、usage、实际模型、路由结果和可追踪错误，不返回 provider key。
+
+### Runtime 到连接器契约
+
+- Runtime 发送版本化 `ToolInvocation`，包含工具名、参数、调用身份、风险等级和确认状态。
+- 连接器负责 schema 校验、凭据引用解析、超时、重试和结果大小限制。
+- 返回结构化 `ToolResult`，明确成功、失败、可重试性和脱敏后的结果。
+- 写操作必须带有效确认凭证；连接器不能只依赖前端传入的布尔值放行。
+
+## 数据所有权
+
+服务能否独立拆分，核心不在目录，而在数据是否有唯一所有者。
+
+| 区域 | 独占数据 | 其他区域如何使用 |
+| --- | --- | --- |
+| 渠道与体验层 | 渠道账号映射、展示偏好、临时交互状态 | 转换为统一身份和 `RunRequest` |
+| 平台控制面 | 租户、用户、应用、Agent 定义、发布版本和策略引用 | 通过版本化配置 API 或配置事件分发 |
+| Agent Runtime | Run、会话、任务状态、checkpoint、短期记忆和确认状态 | 通过 Run/Session API 查询，不允许跨服务直接写库 |
+| 连接器与知识层 | 工具定义、连接器实例、凭据引用、索引元数据和知识权限映射 | 通过 Tool/Knowledge API 使用 |
+| 模型网关 | virtual key、provider 配置、模型路由、预算和模型调用 usage | 通过模型 API 和用量查询 API 使用 |
+| 治理与可观测 | trace、audit event、evaluation result、feedback | 通过事件和只读查询接口使用 |
+
+禁止多个服务共同写同一张表。真正拆分前，先完成数据所有权迁移，再把模块改成网络服务。
+
+## 独立服务拆分蓝图
+
+当前不要求一次性拆完。每个区域只有在出现独立扩缩容、独立安全边界、跨项目复用或独立团队所有权时，才值得成为服务。
+
+| 候选服务 | 来源区域 | 适合拆出的触发条件 | 对外主要契约 |
+| --- | --- | --- | --- |
+| `channel-adapter-*` | 渠道与体验层 | 接入飞书、IDE 等独立渠道，发布节奏不同 | `RunRequest` / 渠道消息回写 |
+| `platform-control` | 平台控制面 | 多租户、多应用、需要 Agent 配置和发布管理 | Tenant/App/Agent/Policy API |
+| `agent-runtime` | Agent Runtime | 多个项目复用统一会话、任务和工具循环 | Run/Session/Confirmation API |
+| `connector-service` | 连接器与知识层 | 多项目共享 MCP、业务 API 或连接器凭据 | Tool Registry/Invocation API |
+| `knowledge-service` | 连接器与知识层 | 文档解析、索引和检索需要独立资源或权限边界 | Ingest/Search/Citation API |
+| `model-gateway` | 模型网关 | 多项目共享模型入口，需要独立预算、限流和路由 | OpenAI-compatible API / Key/Usage API |
+| `governance-service` | 治理与可观测 | 需要统一 trace、审计、评测和成本分析 | Event Ingest/Trace/Evaluation API |
+
+推荐拆分顺序：
+
+`ai-platform` 是总项目或总仓库名，不作为一个必须单独部署的服务；表中的候选服务可以按业务场景选用。
+
+1. 保持 LiteLLM 为独立 `model-gateway`，当前已经具备这个部署边界。
+2. 把 `src/runtime/` 稳定为无渠道依赖的 `agent-runtime` 模块，再按复用需求独立部署。
+3. 第一个真实工具跑通后，把工具 schema、执行和凭据边界收敛到 `connector-service`。
+4. 出现文档解析、索引资源或知识权限需求时，再从连接器区域拆出 `knowledge-service`。
+5. 出现多个项目、租户和 Agent 版本管理需求后，再建设 `platform-control`。
+6. 调用规模和治理要求上升后，把统一事件采集、评测和审计查询拆成 `governance-service`。
+
+## 当前代码映射
+
+当前处于 `V0.5`，还是一个集成式 Demo Runtime 加独立 LiteLLM Proxy，但代码已经可以映射到目标区域：
+
+![AI 应用基础平台当前 V0.5 落地图](./assets/ai-platform-current-v05.png)
 
 ```mermaid
 flowchart LR
-  V0["V0<br/>本地模型代理<br/>跑通 LiteLLM + Demo"]
-  V05["V0.5 当前<br/>后端分层<br/>API 按层级命名"]
-  V1["V1<br/>单应用工具型智能体<br/>补工具循环和人工确认"]
-  V2["V2<br/>团队级受控模型网关<br/>补 virtual key / 预算 / 限流"]
-  V3["V3<br/>企业知识增强平台<br/>补文档解析 / 检索 / 权限"]
-  V4["V4<br/>多入口智能体平台<br/>补统一 runtime / 运营闭环"]
+  subgraph CurrentPlatform["AI 应用基础平台当前 V0.5 / ai-platform"]
+    subgraph CurrentProcess["当前 Demo Server 进程 :4010"]
+      DemoUi["demo/index.html<br/>渠道与体验层"]
+      HttpAdapter["scripts/demo-server.mjs<br/>HTTP Adapter"]
+      RuntimeCode["src/runtime<br/>Agent Runtime 雏形"]
+      ToolRegistry["src/tools<br/>连接器注册预留"]
+      GatewayClient["src/gateway<br/>模型网关客户端"]
+      ConfigLoader["src/config<br/>本地配置装配"]
+    end
 
-  V0 --> V05 --> V1 --> V2 --> V3 --> V4
-```
+    subgraph GatewayProcess["当前模型网关进程 :4000"]
+      LiteLLM["LiteLLM Proxy"]
+      GatewayConfig["config.yaml"]
+    end
 
-### 实施对比表
+    Contract["OpenSpec / docs / smoke test<br/>最小治理"]
+  end
 
-| 阶段 | 主要目标 | 成熟父级 | 应该落地 | 暂不做 |
-| --- | --- | --- | --- | --- |
-| V0 | 跑通本地代理和 Demo | 接入层、模型网关层 | LiteLLM、模型别名、Demo、smoke test | 工具、知识库、多人治理 |
-| V0.5 当前 | 把 Demo 从单文件拆成可演进结构 | 接入层、runtime 雏形、gateway client | 分层 API、`src/runtime/`、`src/gateway/`、`src/tools/` 预留 | 真实工具循环、MCP、RAG、virtual key |
-| V1 | 单应用具备工具型智能体能力 | 智能体/工作流运行层、工具注册与连接器层 | task router、工具 allowlist、工具调用循环、人工确认 | 平台化工具市场、复杂权限系统 |
-| V2 | 团队共享模型入口且可治理 | 模型网关层、治理与运营层 | LiteLLM database、virtual key、预算、限流、审计 | 统一企业知识平台 |
-| V3 | 企业知识可被可靠引用 | 工具注册与连接器层、runtime | 文档解析、检索、权限过滤、引用来源、缓存删除边界 | 多入口统一运营平台 |
-| V4 | 多入口、多团队复用智能体平台 | 五个父级整体成型 | 多入口接入、workflow 模板、连接器生命周期、评测运营闭环 | 单场景临时堆功能 |
+  Upstream["上游 OpenAI-compatible API"]
 
-## 分层结构
-
-### 当前运行结构
-
-```mermaid
-flowchart TD
-  Client["客户端 / Cursor / 内部脚本"] --> LiteLLM["LiteLLM Proxy :4000"]
-  Browser["浏览器 Demo"] --> DemoServer["Demo Server :4010<br/>HTTP 接入层"]
-  DemoServer --> Runtime["src/runtime<br/>上下文 / 摘要 / 消息构造"]
-  Runtime -.-> ToolRegistry["src/tools<br/>工具注册预留"]
-  Runtime --> GatewayClient["src/gateway<br/>LiteLLM Client"]
+  DemoUi --> HttpAdapter
+  HttpAdapter --> RuntimeCode
+  RuntimeCode -.-> ToolRegistry
+  RuntimeCode --> GatewayClient
   GatewayClient --> LiteLLM
-  Smoke["scripts/test-chat.sh"] --> LiteLLM
-  LiteLLM --> Upstream["上游 OpenAI-compatible API"]
-  Env[".env 服务端环境变量"] --> ConfigLoader["src/config"]
-  ConfigLoader --> DemoServer
-  ConfigLoader --> Runtime
+  GatewayConfig --> LiteLLM
+  LiteLLM --> Upstream
+  ConfigLoader --> HttpAdapter
+  ConfigLoader --> RuntimeCode
   ConfigLoader --> GatewayClient
-  Env --> LiteLLM
-  Config["config.yaml"] --> LiteLLM
+  Contract -.-> CurrentProcess
+  Contract -.-> GatewayProcess
 ```
 
-### 平台父级职责
-
-后续规划参考主流企业级智能体平台形态推进：接入层负责入口，智能体/工作流运行层负责计划、上下文和工具循环，工具注册与连接器层负责外部能力接入，模型网关层负责模型路由和密钥治理，治理与运营层横切全链路。不要把 MCP、搜索、RAG、预算、审计等功能点都拆成平级模块；它们应挂在对应父级能力下。
-
-| 父级 | 放什么 | 当前状态 |
+| 当前文件 | 归属区域 | 后续拆分方向 |
 | --- | --- | --- |
-| 接入层 | Demo、客户端、未来的业务系统/IM/内部工具入口 | 已有 Demo 和客户端直连方式 |
-| 智能体/工作流运行层 | 任务理解、上下文/记忆、工具调用循环、结果组装、人工确认 | 已有上下文、摘要和 token 裁剪；尚未形成工具循环 |
-| 工具注册与连接器层 | MCP Server、业务 API、搜索/网页、文档/知识库连接器 | 已预留工具注册入口；尚未接入真实工具 |
-| 模型网关层 | LiteLLM、模型别名、多模型路由、fallback、provider key 收口 | 已有 LiteLLM 和 `chat-default` |
-| 治理与运营层 | 身份、权限、预算、限流、审计、日志、评测、观测、安全护栏 | 仅有文档约束和本地 smoke test |
+| `demo/index.html` | 渠道与体验层 | 保留为开发 Demo；正式平台作为另一个调用方并存 |
+| `scripts/demo-server.mjs` | 渠道 HTTP Adapter 与本地装配入口 | 渠道路由留在 adapter；Runtime 通过稳定 API 或模块接口调用 |
+| `src/runtime/` | Agent Runtime | 去除 Demo 专属结构后可独立为 `agent-runtime` |
+| `src/tools/` | 连接器与知识层 | 增加真实 registry、executor 和 adapter 后可独立为 `connector-service` |
+| `src/gateway/litellm-client.mjs` | Runtime 到模型网关的客户端边界 | 保持为接口适配器，不承载模型网关服务端策略 |
+| `config.yaml`、`docker-compose.yml` | 模型网关 | LiteLLM 独立部署和治理 |
+| `openspec/`、调用日志和未来评测 | 治理与可观测 | 按区域建立契约，统一事件模型 |
 
-参考形态：
+## 当前 API 归属
 
-- OpenAI Agents SDK 把工具、交接、会话、追踪和安全护栏放在智能体运行体系内。
-- Amazon Bedrock Agents 通过动作组执行动作，通过知识库接入知识，并可关联安全护栏。
-- Microsoft Foundry Agent Service 强调托管智能体、工具、身份、记忆和可观测性。
-- Google Gemini Enterprise Agent Platform 强调企业智能体的构建、扩展、治理和优化。
-
-## 入口与职责
-
-| 层级 | 文件 | 职责 |
+| API | 当前提供者 | 目标归属 |
 | --- | --- | --- |
-| 使用说明 | `README.md` | 启动、测试、客户端配置、后续升级方向 |
-| 协作入口 | `AGENTS.md` | AI 协作规则、文档路由、OpenSpec 同步判断 |
-| 稳定契约 | `openspec/specs/ai-gateway/spec.md` | 固化代理、鉴权、模型别名、Demo API 和上下文预算能力 |
-| Proxy 配置 | `config.yaml` | `chat-default` 到真实上游模型的映射、上游 base/key、master key |
-| 容器启动 | `docker-compose.yml` | 启动 LiteLLM Proxy，挂载 `config.yaml`，读取 `.env` |
-| Smoke test | `scripts/test-chat.sh` | 用 `LITELLM_MASTER_KEY` 调本地 `/v1/chat/completions` |
-| Demo Server | `scripts/demo-server.mjs` | 接入层，只负责静态页面、分层 API 路由、JSON 收发和错误返回 |
-| Demo UI | `demo/index.html` | 浏览器聊天界面，支持文本、图片、文档链接和本地上下文 |
-| 配置加载 | `src/config/env.mjs` | 读取 `.env`，生成 Demo Server、runtime 和 gateway client 所需配置 |
-| Runtime | `src/runtime/` | 负责聊天运行、摘要压缩、上下文预算、消息构造和输入校验 |
-| Gateway Client | `src/gateway/litellm-client.mjs` | 封装 LiteLLM `/v1/models` 和 `/v1/chat/completions` 调用 |
-| Tool Registry | `src/tools/tool-registry.mjs` | 预留工具注册和工具意图判断入口，当前不启用真实工具循环 |
+| `GET /api/gateway/status` | Demo Server | 渠道层的聚合状态接口；底层调用模型网关健康检查 |
+| `POST /api/runtime/chat` | Demo Server | Agent Runtime 的 Run API 雏形 |
+| `POST /api/runtime/summaries` | Demo Server | Agent Runtime 的上下文压缩能力 |
+| `POST /v1/chat/completions` | LiteLLM | 模型网关标准模型接口 |
 
-Demo Server 对浏览器暴露的分层 API：
+未来拆出服务时，先提供兼容 adapter 保留现有 Demo API，再让正式平台直接使用版本化 Runtime API，避免页面和服务同时迁移。
 
-| API | 所属层级 | 职责 |
-| --- | --- | --- |
-| `GET /api/gateway/status` | 模型网关层 | 检查 LiteLLM 连接状态，返回 gateway base url 和模型别名 |
-| `POST /api/runtime/chat` | 智能体/工作流运行层 | 接收当前消息、图片、文档链接、摘要和历史，返回助手回复 |
-| `POST /api/runtime/summaries` | 智能体/工作流运行层 | 将旧历史压缩成后续请求可复用的摘要 |
+## 两条调用链
 
-## 调用链路
+### 纯模型调用
 
-### 客户端直连 LiteLLM
+Cursor、内部脚本或只需要模型响应的项目可以直接复用模型网关：
 
 ```text
-客户端
-  -> http://localhost:4000/v1/chat/completions
-  -> Authorization: Bearer LITELLM_MASTER_KEY
-  -> model: chat-default
-  -> LiteLLM 读取 config.yaml
-  -> 命中真实模型 openai/gpt-5.5
-  -> 使用 UPSTREAM_API_BASE + UPSTREAM_API_KEY 调用上游
-  -> 返回 OpenAI-compatible 响应
+模型客户端
+  -> Model Gateway /v1/chat/completions
+  -> 模型别名、鉴权、路由、预算和限流
+  -> 上游模型
 ```
 
-### 浏览器 Demo 链路
+### Agent 调用
+
+需要会话、工具、知识或人工确认的项目必须经过 Agent Runtime：
 
 ```text
-浏览器 Demo
-  -> POST /api/runtime/chat
-  -> Demo Server 接收请求并交给 runtime
-  -> Runtime 组装 messages、图片 URL、文档链接文本、摘要和最近历史
-  -> Gateway Client 使用 LITELLM_MASTER_KEY 调 LiteLLM
-  -> LiteLLM 转发到上游
-  -> Runtime 抽取 choices[0].message.content
-  -> Demo Server 返回浏览器
+Demo / 正式平台 / IM / API Adapter
+  -> Agent Runtime
+      -> Connector / Knowledge
+      -> Model Gateway
+  -> 最终结果或确认状态
 ```
 
-浏览器不会接触 `UPSTREAM_API_KEY`，也不直接调用上游中转站。
+这两条链路可以同时存在。模型网关是可独立复用的基础服务，Agent Runtime 是更高一层的执行服务，平台和渠道是它们的调用方。
 
-## 配置边界
+## 配置与密钥边界
 
-| 变量或配置 | 所在位置 | 说明 |
+| 配置或凭据 | 所有区域 | 说明 |
 | --- | --- | --- |
-| `UPSTREAM_API_BASE` | `.env` | 上游 OpenAI-compatible 地址，通常带 `/v1` |
-| `UPSTREAM_API_KEY` | `.env` | 上游真实 key，只能服务端使用 |
-| `LITELLM_MASTER_KEY` | `.env` | 本地 LiteLLM 对外访问 key |
-| `LITELLM_BASE_URL` | `.env` 可选 | Demo Server 调用 LiteLLM 的地址，默认 `http://localhost:4000` |
-| `LITELLM_MODEL` | `.env` 可选 | Demo Server 使用的模型别名，默认 `chat-default` |
-| `DEMO_MAX_CONTEXT_TOKENS` | `.env` 可选 | Demo 上下文预算，默认 `12000` |
-| `model_list[].model_name` | `config.yaml` | 对外模型别名，目前是 `chat-default` |
-| `model_list[].litellm_params.model` | `config.yaml` | 上游真实模型名，目前是 `openai/gpt-5.5` |
+| `UPSTREAM_API_BASE`、`UPSTREAM_API_KEY` | 模型网关 | 只在模型网关服务端保存 |
+| `LITELLM_MASTER_KEY` / virtual key | 模型网关 | 调用方只持有分配给自己的访问凭据 |
+| 模型别名、fallback、预算和限流策略 | 模型网关 | 平台控制面可以管理策略引用，但不直接持有 provider key |
+| Agent 提示词、工具集合、上下文策略 | 平台控制面 | 发布为不可变 `AgentDefinition`，Runtime 按版本读取 |
+| 业务 API 和 MCP 凭据引用 | 连接器与知识层 | Runtime 只传工具调用身份，不读取真实凭据 |
+| 会话、摘要、任务和确认状态 | Agent Runtime | 不写入模型网关或渠道本地存储作为事实源 |
 
-## 当前 AI 能力边界
+## 当前能力边界
 
 已具备：
 
 - OpenAI-compatible chat completions 代理。
-- 服务端密钥收口。
-- 单模型别名路由。
-- 本地 smoke test。
-- 本地浏览器 Demo。
-- 图片 URL / 图片 data URL 转发。
-- 文档链接作为文本上下文附加。
-- 最近对话上下文、摘要记忆和估算 token 预算裁剪。
-- 后端已拆出接入层、runtime、LiteLLM client 和工具注册预留层。
+- 服务端上游密钥收口和单模型别名路由。
+- 浏览器 Demo 与分层 API。
+- 文本、图片 URL、图片 data URL 和文档链接输入。
+- 最近上下文、摘要记忆和估算 token 预算裁剪。
+- Agent Runtime、连接器注册和模型网关客户端的模块边界雏形。
+- OpenSpec、文档和 smoke test 的最小治理。
 
 暂未覆盖：
 
-- 多用户 virtual key 管理。
-- 团队、用户、模型维度预算。
-- RPM/TPM 限流策略。
-- 细粒度调用统计和审计。
-- 多上游 fallback。
-- 后台管理页面。
-- 私有文档抓取、网页解析或文档内图片提取。
+- 平台控制面和正式多渠道接入。
+- 真实工具循环、MCP、业务 API 和人工确认。
+- 私有文档解析、知识索引、RAG、引用和知识权限。
+- 多用户 virtual key、预算、RPM/TPM 限流、调用统计和多上游 fallback。
+- 持久化会话、统一 trace、审计、评测和反馈闭环。
 
-## 版本架构演进规划
+## 演进路线
 
-版本规划按“系统形态”推进，而不是按功能清单堆叠。每个版本都要回答：当前系统是哪种架构、哪些父级已经成型、哪些父级仍保持最小实现。
+版本仍按可验证系统形态推进，但每一版明确成熟哪个架构区域：
 
-读图方式：每一版只重点成熟一到两个父级能力，其他父级保持够用，不提前平台化。当前项目处于 `V0.5`。
+![AI 应用基础平台演进路线](./assets/ai-platform-roadmap.png)
 
-```mermaid
-flowchart LR
-  V0["V0 本地模型代理 + Demo<br/>成型：接入层、模型网关层最小闭环"]
-  V05["V0.5 后端分层<br/>成型：runtime 雏形、分层 API"]
-  V1["V1 单应用工具型智能体<br/>成型：应用内 runtime、工具循环"]
-  V2["V2 团队级受控模型网关<br/>成型：模型网关治理、调用身份"]
-  V3["V3 企业知识增强平台<br/>成型：知识连接器、RAG 编排"]
-  V4["V4 多入口智能体平台<br/>成型：统一 runtime、连接器治理、运营闭环"]
+| 阶段 | 系统形态 | 重点成熟区域 | 进入下一阶段的条件 |
+| --- | --- | --- | --- |
+| V0 | 本地模型代理 + Demo | 渠道与体验、模型网关 | 模型代理链路和 Demo 可用 |
+| V0.5 当前 | 分层 Demo Runtime | Agent Runtime 模块边界、模型网关客户端 | 分层 API 稳定；确认第一个真实工具场景 |
+| V1 | 单应用工具型 Agent | Agent Runtime、连接器与知识 | 至少一个工具闭环；能区分普通问答、工具请求和人工确认；失败有兜底 |
+| V2 | 团队级受控模型入口 | 模型网关、治理与可观测 | 多调用方身份可区分；预算、限流、路由和 fallback 可追踪 |
+| V3 | 企业知识增强服务 | 连接器与知识、Agent Runtime | 文档解析、检索、权限和引用链路稳定 |
+| V4 | AI 应用基础平台 | 平台控制面、渠道与体验、全链路治理 | 多项目复用 Runtime、连接器和模型网关；配置发布和运营闭环稳定 |
 
-  V0 --> V05 --> V1 --> V2 --> V3 --> V4
-```
+实施原则：当前只做 V0.5 到 V1 的必要工作。未来大平台作为新的平台控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关；独立服务按复用和所有权需求逐个拆出，不把所有区域一次性平台化。
 
-### 版本矩阵
+## OpenSpec 与文档边界
 
-| 版本 | 系统形态 | 接入层 | 智能体/工作流运行层 | 工具注册与连接器层 | 模型网关层 | 治理与运营层 |
-| --- | --- | --- | --- | --- | --- | --- |
-| V0 | 本地模型代理 + Demo | Demo、客户端直连 | 上下文摘要和 token 裁剪 | 无 | 单 LiteLLM、单模型别名 | 文档约束、smoke test |
-| V0.5 当前 | 分层 Demo Runtime | 分层 API、Demo | `src/runtime/` 承接聊天、摘要、预算 | `src/tools/` 预留入口 | `src/gateway/` 封装 LiteLLM 调用 | OpenSpec、docs、smoke test |
-| V1 | 单应用工具型智能体 | Demo / API | 任务路由、工具循环、人工确认点 | 少量工具、MCP/API 连接器 | 继续复用 LiteLLM | 工具 allowlist、基础日志 |
-| V2 | 团队级受控模型网关 | 小团队客户端 / 内部服务 | 应用侧 runtime 继续保留 | 工具注册先不平台化 | virtual key、多模型路由、fallback | 身份、预算、限流、审计 |
-| V3 | 企业知识增强平台 | 业务入口 + 知识入口 | RAG 编排、引用、任务记忆 | 文档解析、索引、权限过滤、业务数据连接器 | 网关承接模型策略 | 数据权限、脱敏、工具审计 |
-| V4 | 多入口智能体平台 | IM / Web / IDE / API 多入口 | workflow 模板、多智能体、任务状态 | 连接器生命周期和工具市场 | 多供应商统一策略 | 观测、评测、成本、护栏、运营闭环 |
-
-### V0 本地模型代理 + Demo
-
-架构形态：
-
-```text
-Demo / 客户端
-  -> Demo Server 或 LiteLLM
-  -> LiteLLM Proxy
-  -> 上游 OpenAI-compatible API
-```
-
-本版定位是验证模型代理链路，不承担企业级平台职责。
-
-父级状态：
-
-- 接入层：已有浏览器 Demo 和 OpenAI-compatible 客户端接入方式。
-- 智能体/工作流运行层：只有轻量上下文、摘要记忆和 token 预算裁剪，还不是完整工具循环。
-- 工具注册与连接器层：不接外部工具。
-- 模型网关层：LiteLLM 负责 `chat-default` 到真实模型的映射和 key 收口。
-- 治理与运营层：依赖 README、OpenSpec 和 smoke test 做最小约束。
-
-进入下一版的条件：
-
-- 模型代理链路稳定。
-- Demo 能支持多轮上下文和多模态输入。
-- 需要把 Demo Server 从单文件实现拆成可演进结构。
-
-### V0.5 分层 Demo Runtime
-
-架构形态：
-
-```text
-浏览器 Demo
-  -> 分层 API
-  -> 接入层 Demo Server
-  -> src/runtime
-  -> src/gateway
-  -> LiteLLM
-  -> 上游模型
-```
-
-本版定位是把代码结构调到 V1-ready，但不提前引入真实工具、RAG 或多人治理。
-
-父级状态：
-
-- 接入层：Demo Server 只负责静态资源、分层 API 路由、JSON 收发和错误返回。
-- 智能体/工作流运行层：`src/runtime/` 承接聊天运行、摘要压缩、上下文预算和消息构造。
-- 工具注册与连接器层：`src/tools/tool-registry.mjs` 只作为预留入口，不启用真实工具循环。
-- 模型网关层：`src/gateway/litellm-client.mjs` 封装 LiteLLM 调用。
-- 治理与运营层：OpenSpec、README、docs 和 smoke test 继续作为最小治理手段。
-
-进入下一版的条件：
-
-- 分层 API 稳定。
-- 至少确认一个真实工具场景，例如网页抓取、搜索、业务 API 或 MCP Server。
-- 明确哪些工具需要人工确认，哪些工具只读可自动调用。
-
-### V1 单应用工具型智能体
-
-架构形态：
-
-```text
-Demo / API
-  -> Demo Server 内部 runtime
-      -> 判断是否需要工具
-      -> 调用工具
-      -> 回填工具结果
-  -> LiteLLM
-  -> 上游模型
-```
-
-本版目标不是做平台，而是让一个应用具备最小工具循环。
-
-父级状态：
-
-- 接入层：仍以 Demo 或轻量 API 为主。
-- 智能体/工作流运行层：新增 `taskRouter`、工具调用循环、工具结果组装、人工确认点。
-- 工具注册与连接器层：先做本地工具清单，可接 `search`、`fetchPage`、业务 API adapter 或外部 MCP Server。
-- 模型网关层：继续复用 LiteLLM，不把业务工具编排塞进网关。
-- 治理与运营层：增加工具 allowlist、基础调用日志和高风险动作确认。
-
-进入下一版的条件：
-
-- 至少一个工具链路真实跑通。
-- 能区分普通问答、查外部数据、需要人工确认三类请求。
-- 工具调用失败时有兜底回答。
-
-### V2 团队级受控模型网关
-
-架构形态：
-
-```text
-多个内部调用方
-  -> 统一 gateway endpoint / 模型别名
-  -> LiteLLM database / virtual key / 路由策略
-  -> 多上游模型
-```
-
-本版重点是把模型访问变成团队级受控基础设施。
-
-父级状态：
-
-- 接入层：从 Demo 扩到小团队客户端、内部脚本和业务服务。
-- 智能体/工作流运行层：仍由具体应用持有，不上升为统一平台 runtime。
-- 工具注册与连接器层：可继续保持 V1 的应用内工具，不急着平台化。
-- 模型网关层：引入 LiteLLM database、virtual key、多模型路由、fallback、provider key 管理。
-- 治理与运营层：补身份、团队、预算、RPM/TPM 限流、基础审计和调用统计。
-
-进入下一版的条件：
-
-- 多人/多服务共用 gateway 时仍能区分调用身份。
-- 能控制不同用户或团队的预算和限流。
-- 模型路由和 fallback 策略可配置、可追踪。
-
-### V3 企业知识增强平台
-
-架构形态：
-
-```text
-业务问题
-  -> 智能体/工作流运行层
-  -> 知识库 / 文档 / 业务数据连接器
-  -> RAG 上下文
-  -> 模型网关
-  -> 带引用和权限边界的回答
-```
-
-本版重点是把“文档链接只是文本”升级为真正的企业知识接入。
-
-父级状态：
-
-- 接入层：增加文档、知识库或业务入口。
-- 智能体/工作流运行层：负责 RAG 编排、引用来源、超长文档摘要和任务级记忆。
-- 工具注册与连接器层：形成文档解析、OCR、表格解析、向量检索、权限过滤、业务数据连接器。
-- 模型网关层：继续承接模型策略，不保存业务知识权限逻辑。
-- 治理与运营层：补知识访问权限、数据脱敏、工具调用审计和引用追踪。
-
-进入下一版的条件：
-
-- 能稳定回答内部知识问题并返回来源。
-- 权限过滤在检索前或检索时生效。
-- 文档解析、索引、缓存和删除有明确边界。
-
-### V4 多入口智能体平台
-
-架构形态：
-
-```text
-IM / Web / IDE / API 多入口
-  -> 统一智能体/工作流运行层
-  -> 工具注册与连接器层
-  -> 模型网关层
-  -> 治理与运营层横切全链路
-```
-
-本版才进入平台化阶段，重点是多入口、多场景、多团队复用。
-
-父级状态：
-
-- 接入层：接入飞书/企微/钉钉、Web、IDE、内部 API。
-- 智能体/工作流运行层：沉淀 workflow 模板、多智能体协同、任务状态、人工协同和失败兜底。
-- 工具注册与连接器层：管理连接器生命周期、工具权限、工具版本和工具市场。
-- 模型网关层：支撑多供应商统一策略、fallback、成本和质量路由。
-- 治理与运营层：形成审计、成本看板、质量评测、调用追踪、反馈闭环和安全护栏。
-
-进入下一阶段的条件：
-
-- V1-V3 至少有一条真实业务链路跑通并可度量。
-- 有跨入口复用需求，而不是只有单个 Demo 或单个业务场景。
-- 评测和监控围绕业务任务效果，而不是只看模型调用成功率。
-
-## 变更同步原则
-
-需要同步 `openspec/` 的变更：
-
-- 改 `chat-default` 的语义或模型别名策略。
-- 改 LiteLLM 鉴权方式或 key 边界。
-- 改 Demo Server API 路径、请求体或返回体。
-- 改上下文摘要、历史裁剪、图片/文档链接输入契约。
-- 新增 virtual key、预算、限流、统计等稳定能力。
-
-只更新 `docs/` 或 `README.md` 通常足够的变更：
-
-- 启动说明、使用说明、示例命令调整。
-- Demo 页面文案或样式微调。
-- 不改变接口和行为的内部重排。
+- `openspec/specs/ai-platform/spec.md` 保留 V0.5 集成切片的稳定行为契约；路径随项目改名迁移，但现有 API 行为保持不变。
+- 首次真正拆出服务时，按模型网关、Agent Runtime、连接器或平台控制面分别建立稳定 spec，并在兼容期说明旧 API 到新服务契约的映射。
+- 修改代理行为、鉴权、模型路由、Runtime API、上下文预算或多模态输入契约时，必须同步 OpenSpec。
+- 只调整架构归属、拆分建议、启动说明或示例文案且不改变运行行为时，只需更新 README、docs 和项目级约定。

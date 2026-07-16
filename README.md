@@ -1,22 +1,23 @@
-# ai-gateway
+# AI 应用基础平台
 
-一个按五个父级能力逐步演进的轻量 AI Gateway 项目。当前实现以 LiteLLM Proxy 作为模型网关底座，把上游 OpenAI-compatible 中转站 key 收在服务端，并对本地客户端、脚本和 Demo 暴露统一入口。
+面向不同业务场景，按需组合渠道、Agent Runtime、连接器、知识、模型网关和治理能力的 AI 应用基础平台。当前实现使用 LiteLLM Proxy 收口上游 OpenAI-compatible 中转站 key，并提供本地客户端、脚本和 Demo 所需的模型入口与轻量 Agent Runtime。
 
 ## 项目定义
 
-`ai-gateway` 不是单纯的 LiteLLM Proxy 包装，也不是一次性建设完整智能体平台。它的项目边界按父级能力组织：
+AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后端能力都统称为 AI Gateway。整体按六个可独立复用和部署的区域组织：
 
-1. 接入层：承接浏览器 Demo、客户端、内部脚本，后续扩展到业务系统、IM、IDE 和 API。
-2. 智能体/工作流运行层：承接聊天运行、上下文预算、摘要记忆，后续扩展到任务理解、工具循环和人工确认。
-3. 工具注册与连接器层：先预留工具注册边界，后续接入 MCP、业务 API、搜索/网页、文档和知识库连接器。
-4. 模型网关层：当前由 LiteLLM 负责模型别名、上游转发和 key 收口，后续扩展到 virtual key、多模型路由、fallback 和成本策略。
-5. 治理与运营层：当前由 OpenSpec、README、docs 和 smoke test 做最小治理，后续补身份、权限、预算、限流、审计、评测和安全护栏。
+1. 渠道与体验层：Demo、Web、IM、IDE 和 API Adapter。
+2. 平台控制面：租户、用户、应用、Agent 定义、版本发布和策略配置。
+3. Agent Runtime：会话、上下文、任务路由、工具循环、结果组装和人工确认。
+4. 连接器与知识层：MCP、业务 API、搜索/网页、文档解析、RAG 和知识权限。
+5. 模型网关：LiteLLM、模型别名、provider key、virtual key、路由、fallback、预算和限流。
+6. 治理与可观测：身份上下文、审计、调用追踪、评测、反馈和安全策略。
 
-当前代码只落地这个目标结构里的轻量切片：接入层、Runtime 雏形、模型网关调用封装和工具注册预留。未实现的父级子项只作为规划边界，不在当前版本声明为可用能力。
+严格意义上的 AI Gateway 只指第 5 个区域。项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。当前代码落地的是开发 Demo、Agent Runtime 雏形、模型网关客户端、LiteLLM 模型网关和连接器注册预留；未来正式平台作为新的控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关。
 
 ## 适用场景
 
-- 小范围内部试用 AI Gateway 的模型入口、Demo 接入和上下文处理能力。
+- 小范围内部试用模型网关、Demo 接入和 Agent Runtime 的上下文处理能力。
 - 先验证上游中转站能否被统一代理，再逐步增加工具、知识和治理能力。
 - 客户端只使用统一 base url、访问 key 和模型别名，不接触上游真实 key。
 - 暂时不引入云厂商 AI Gateway、管理后台或数据库。
@@ -73,7 +74,7 @@ docker compose up -d
 如果当前机器没有 `docker compose`，可以直接用 Docker 启动：
 
 ```bash
-docker run -d --name ai-gateway-litellm \
+docker run -d --name ai-platform-model-gateway \
   --env-file .env \
   -p 4000:4000 \
   -v "$PWD/config.yaml:/app/config.yaml:ro" \
@@ -90,7 +91,7 @@ docker compose logs -f litellm
 Docker 直启方式查看日志：
 
 ```bash
-docker logs -f ai-gateway-litellm
+docker logs -f ai-platform-model-gateway
 ```
 
 ## 验证
@@ -177,18 +178,18 @@ Demo Server API 按层级暴露：
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |
-| 代理行为、Demo API、鉴权、模型别名、上下文预算等稳定契约 | `openspec/specs/ai-gateway/spec.md` |
+| 平台当前集成切片、Demo API、鉴权、模型别名、上下文预算等稳定契约 | `openspec/specs/ai-platform/spec.md` |
 
 Skill 相关内容统一放在 `.agents/skills/`，并遵守 `https://gitlab.seakoi.net/seakoi/skills` 仓库的指南、要求、原则。修改 Skill 后可运行 `node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs` 校验目录与 frontmatter。修改代理行为、Demo API、鉴权、模型别名或上下文预算时，需要同步 OpenSpec；只调整启动说明、示例命令或文案时，通常更新 README 或 docs 即可。
 
 ## 后续升级方向
 
-当前项目按父级能力演进，不把所有功能点平铺成同一层：
+当前保持单仓和轻量部署，先稳定区域接口，再按跨项目复用、独立安全边界、独立扩缩容或团队所有权逐个拆成服务：
 
-1. 接入层：从 Demo 扩到业务系统、IM、内部工具。
-2. 智能体/工作流运行层：补任务理解、工具调用循环、上下文记忆和人工确认。
-3. 工具注册与连接器层：补 MCP、搜索/网页、业务 API、文档和知识库连接器。
-4. 模型网关层：从单模型别名扩到 virtual key、多模型路由和 fallback。
-5. 治理与运营层：补身份权限、预算限流、审计日志、观测评测和安全护栏。
+1. V1：补 Agent Runtime 的任务路由、工具循环、失败兜底和人工确认，并跑通一个真实连接器。
+2. V2：把 LiteLLM 模型网关补成团队共享服务，增加 virtual key、多模型路由、fallback、预算、限流和调用统计。
+3. V3：按资源和权限边界拆出连接器服务与知识服务。
+4. V4：建设平台控制面和多渠道 Adapter，复用已经稳定的 Runtime、连接器和模型网关。
+5. 治理与可观测贯穿所有阶段，通过统一身份上下文和事件结构接入，不成为同步调用单点。
 
-架构总图、规划图和 V0.5-V4 实施对比见 `docs/ai-structure.md`。
+区域定义、依赖规则、数据所有权、服务拆分条件和 V0.5-V4 实施对比见 `docs/ai-structure.md`。
