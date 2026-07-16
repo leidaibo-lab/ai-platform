@@ -1,0 +1,240 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1580" viewBox="0 0 2400 1580">
+  <defs>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#eef8f5"/>
+      <stop offset="48%" stop-color="#fbfcfd"/>
+      <stop offset="100%" stop-color="#f3f0fb"/>
+    </linearGradient>
+    <linearGradient id="accessBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#dff6ef"/>
+      <stop offset="100%" stop-color="#f7fffc"/>
+    </linearGradient>
+    <linearGradient id="runtimeBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e6f0ff"/>
+      <stop offset="100%" stop-color="#f9fbff"/>
+    </linearGradient>
+    <linearGradient id="toolsBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fff4dd"/>
+      <stop offset="100%" stop-color="#fffdf7"/>
+    </linearGradient>
+    <linearGradient id="gatewayBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#efe8ff"/>
+      <stop offset="100%" stop-color="#fbf8ff"/>
+    </linearGradient>
+    <linearGradient id="govBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fff0eb"/>
+      <stop offset="100%" stop-color="#fffaf8"/>
+    </linearGradient>
+    <filter id="shadow" x="-18%" y="-18%" width="136%" height="136%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#17212b" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" markerWidth="16" markerHeight="16" refX="11" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#405264"/>
+    </marker>
+    <marker id="softArrow" markerWidth="16" markerHeight="16" refX="11" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#82909d"/>
+    </marker>
+    <marker id="govArrow" markerWidth="16" markerHeight="16" refX="11" refY="5.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#b36b5a"/>
+    </marker>
+    <style>
+      .title { font: 800 56px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #13202c; }
+      .subtitle { font: 600 25px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #536475; }
+      .badge { font: 800 17px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #ffffff; }
+      .parentTitle { font: 800 28px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #17212b; }
+      .parentDesc { font: 600 17px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #647282; }
+      .childNo { font: 800 13px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #ffffff; }
+      .childTitle { font: 800 21px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #17212b; }
+      .childText { font: 600 16px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #586879; }
+      .small { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #748292; }
+      .label { font: 800 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #405264; }
+      .section { font: 800 23px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; fill: #17212b; }
+      .card { stroke: rgba(39, 53, 69, .13); stroke-width: 1.5; filter: url(#shadow); }
+      .child { fill: #ffffff; stroke: rgba(39, 53, 69, .14); stroke-width: 1.4; }
+      .line { fill: none; stroke: #405264; stroke-width: 3.2; marker-end: url(#arrow); }
+      .softLine { fill: none; stroke: #82909d; stroke-width: 2.5; stroke-dasharray: 8 8; marker-end: url(#softArrow); }
+      .govLine { fill: none; stroke: #b36b5a; stroke-width: 2.5; stroke-dasharray: 8 8; marker-end: url(#govArrow); }
+      .innerLine { fill: none; stroke: rgba(64,82,100,.62); stroke-width: 2.4; marker-end: url(#softArrow); }
+    </style>
+  </defs>
+
+  <rect width="2400" height="1580" fill="url(#pageBg)"/>
+  <rect x="56" y="52" width="2288" height="1470" rx="38" fill="rgba(255,255,255,.68)" stroke="rgba(39,53,69,.10)"/>
+
+  <text x="112" y="130" class="title">AI Gateway 完善可行性规划图</text>
+  <text x="112" y="174" class="subtitle">父级能力、子项依赖、治理校验点和实施顺序一图对齐</text>
+  <rect x="1940" y="90" width="292" height="48" rx="24" fill="#0f7b6c"/>
+  <text x="2016" y="121" class="badge">父子集合 + 依赖关系</text>
+
+  <!-- Access -->
+  <rect x="100" y="238" width="420" height="860" rx="30" fill="url(#accessBg)" class="card"/>
+  <text x="138" y="288" class="parentTitle">1. 接入层</text>
+  <text x="138" y="322" class="parentDesc">统一入口，只做会话接入和契约适配</text>
+
+  <rect x="138" y="370" width="344" height="104" rx="18" class="child"/>
+  <circle cx="164" cy="398" r="16" fill="#0f7b6c"/><text x="155" y="403" class="childNo">A1</text>
+  <text x="190" y="407" class="childTitle">入口形态集合</text>
+  <text x="190" y="436" class="childText">Web / IM / IDE / API / 业务系统</text>
+
+  <rect x="138" y="514" width="344" height="104" rx="18" class="child"/>
+  <circle cx="164" cy="542" r="16" fill="#0f7b6c"/><text x="155" y="547" class="childNo">A2</text>
+  <text x="190" y="551" class="childTitle">会话与输入集合</text>
+  <text x="190" y="580" class="childText">文本 / 图片 / 文档链接 / 历史</text>
+
+  <rect x="138" y="658" width="344" height="126" rx="18" class="child"/>
+  <circle cx="164" cy="686" r="16" fill="#0f7b6c"/><text x="155" y="691" class="childNo">A3</text>
+  <text x="190" y="695" class="childTitle">API 契约集合</text>
+  <text x="190" y="724" class="childText">/api/gateway/*</text>
+  <text x="190" y="750" class="childText">/api/runtime/*</text>
+
+  <rect x="138" y="824" width="344" height="104" rx="18" class="child"/>
+  <circle cx="164" cy="852" r="16" fill="#0f7b6c"/><text x="155" y="857" class="childNo">A4</text>
+  <text x="190" y="861" class="childTitle">身份入口集合</text>
+  <text x="190" y="890" class="childText">用户 / 团队 / 应用 / 服务账号</text>
+
+  <path d="M310 474 L310 514" class="innerLine"/>
+  <path d="M310 618 L310 658" class="innerLine"/>
+  <path d="M310 784 L310 824" class="innerLine"/>
+
+  <!-- Runtime -->
+  <rect x="590" y="238" width="468" height="860" rx="30" fill="url(#runtimeBg)" class="card"/>
+  <text x="628" y="288" class="parentTitle">2. 智能体 / 工作流运行层</text>
+  <text x="628" y="322" class="parentDesc">理解任务、管理上下文、执行工具循环</text>
+
+  <rect x="628" y="370" width="392" height="104" rx="18" class="child"/>
+  <circle cx="654" cy="398" r="16" fill="#4a6b8e"/><text x="646" y="403" class="childNo">R1</text>
+  <text x="680" y="407" class="childTitle">任务理解集合</text>
+  <text x="680" y="436" class="childText">意图识别 / 任务路由 / 规划</text>
+
+  <rect x="628" y="514" width="392" height="104" rx="18" class="child"/>
+  <circle cx="654" cy="542" r="16" fill="#4a6b8e"/><text x="646" y="547" class="childNo">R2</text>
+  <text x="680" y="551" class="childTitle">上下文集合</text>
+  <text x="680" y="580" class="childText">history / summary / token 预算 / 记忆</text>
+
+  <rect x="628" y="658" width="392" height="126" rx="18" class="child"/>
+  <circle cx="654" cy="686" r="16" fill="#4a6b8e"/><text x="646" y="691" class="childNo">R3</text>
+  <text x="680" y="695" class="childTitle">工具循环集合</text>
+  <text x="680" y="724" class="childText">判断工具 / 调用工具 / 回填结果</text>
+  <text x="680" y="750" class="childText">失败兜底 / 重试策略</text>
+
+  <rect x="628" y="824" width="392" height="104" rx="18" class="child"/>
+  <circle cx="654" cy="852" r="16" fill="#4a6b8e"/><text x="646" y="857" class="childNo">R4</text>
+  <text x="680" y="861" class="childTitle">人工协同集合</text>
+  <text x="680" y="890" class="childText">高风险确认 / 审批 / 可解释结果</text>
+
+  <path d="M824 474 L824 514" class="innerLine"/>
+  <path d="M824 618 L824 658" class="innerLine"/>
+  <path d="M824 784 L824 824" class="innerLine"/>
+
+  <!-- Tools -->
+  <rect x="1128" y="238" width="448" height="860" rx="30" fill="url(#toolsBg)" class="card"/>
+  <text x="1166" y="288" class="parentTitle">3. 工具注册与连接器层</text>
+  <text x="1166" y="322" class="parentDesc">统一注册、授权、调用外部能力</text>
+
+  <rect x="1166" y="370" width="372" height="104" rx="18" class="child"/>
+  <circle cx="1192" cy="398" r="16" fill="#a36b16"/><text x="1184" y="403" class="childNo">T1</text>
+  <text x="1218" y="407" class="childTitle">工具注册集合</text>
+  <text x="1218" y="436" class="childText">tool schema / allowlist / 版本</text>
+
+  <rect x="1166" y="514" width="372" height="104" rx="18" class="child"/>
+  <circle cx="1192" cy="542" r="16" fill="#a36b16"/><text x="1184" y="547" class="childNo">T2</text>
+  <text x="1218" y="551" class="childTitle">连接协议集合</text>
+  <text x="1218" y="580" class="childText">MCP Server / REST API / Webhook</text>
+
+  <rect x="1166" y="658" width="372" height="126" rx="18" class="child"/>
+  <circle cx="1192" cy="686" r="16" fill="#a36b16"/><text x="1184" y="691" class="childNo">T3</text>
+  <text x="1218" y="695" class="childTitle">业务工具集合</text>
+  <text x="1218" y="724" class="childText">搜索 / 网页抓取 / 业务系统</text>
+  <text x="1218" y="750" class="childText">只读工具 / 写入工具</text>
+
+  <rect x="1166" y="824" width="372" height="104" rx="18" class="child"/>
+  <circle cx="1192" cy="852" r="16" fill="#a36b16"/><text x="1184" y="857" class="childNo">T4</text>
+  <text x="1218" y="861" class="childTitle">知识连接集合</text>
+  <text x="1218" y="890" class="childText">文档解析 / 索引 / 权限过滤 / RAG</text>
+
+  <path d="M1352 474 L1352 514" class="innerLine"/>
+  <path d="M1352 618 L1352 658" class="innerLine"/>
+  <path d="M1352 784 L1352 824" class="innerLine"/>
+
+  <!-- Gateway -->
+  <rect x="1646" y="238" width="448" height="860" rx="30" fill="url(#gatewayBg)" class="card"/>
+  <text x="1684" y="288" class="parentTitle">4. 模型网关层</text>
+  <text x="1684" y="322" class="parentDesc">统一模型策略、路由、密钥和成本</text>
+
+  <rect x="1684" y="370" width="372" height="104" rx="18" class="child"/>
+  <circle cx="1710" cy="398" r="16" fill="#7257a7"/><text x="1701" y="403" class="childNo">M1</text>
+  <text x="1736" y="407" class="childTitle">模型入口集合</text>
+  <text x="1736" y="436" class="childText">OpenAI-compatible / model alias</text>
+
+  <rect x="1684" y="514" width="372" height="104" rx="18" class="child"/>
+  <circle cx="1710" cy="542" r="16" fill="#7257a7"/><text x="1701" y="547" class="childNo">M2</text>
+  <text x="1736" y="551" class="childTitle">路由策略集合</text>
+  <text x="1736" y="580" class="childText">多模型路由 / fallback / retry</text>
+
+  <rect x="1684" y="658" width="372" height="126" rx="18" class="child"/>
+  <circle cx="1710" cy="686" r="16" fill="#7257a7"/><text x="1701" y="691" class="childNo">M3</text>
+  <text x="1736" y="695" class="childTitle">密钥治理集合</text>
+  <text x="1736" y="724" class="childText">provider key 收口</text>
+  <text x="1736" y="750" class="childText">virtual key / team key</text>
+
+  <rect x="1684" y="824" width="372" height="104" rx="18" class="child"/>
+  <circle cx="1710" cy="852" r="16" fill="#7257a7"/><text x="1701" y="857" class="childNo">M4</text>
+  <text x="1736" y="861" class="childTitle">成本质量集合</text>
+  <text x="1736" y="890" class="childText">预算 / RPM / TPM / 成本路由</text>
+
+  <path d="M1870 474 L1870 514" class="innerLine"/>
+  <path d="M1870 618 L1870 658" class="innerLine"/>
+  <path d="M1870 784 L1870 824" class="innerLine"/>
+
+  <!-- Governance -->
+  <rect x="100" y="1162" width="1994" height="214" rx="30" fill="url(#govBg)" class="card"/>
+  <text x="138" y="1212" class="parentTitle">5. 治理与运营层</text>
+  <text x="138" y="1246" class="parentDesc">横切所有父级能力，负责可控、可观测、可度量、可回滚</text>
+
+  <rect x="138" y="1280" width="328" height="42" rx="21" fill="#ffffff" stroke="rgba(39,53,69,.13)"/>
+  <text x="164" y="1308" class="childText">G1 身份权限 / 团队空间 / 应用范围</text>
+  <rect x="500" y="1280" width="342" height="42" rx="21" fill="#ffffff" stroke="rgba(39,53,69,.13)"/>
+  <text x="526" y="1308" class="childText">G2 预算限流 / 调用配额 / 成本看板</text>
+  <rect x="876" y="1280" width="342" height="42" rx="21" fill="#ffffff" stroke="rgba(39,53,69,.13)"/>
+  <text x="902" y="1308" class="childText">G3 审计日志 / 调用追踪 / 变更记录</text>
+  <rect x="1252" y="1280" width="342" height="42" rx="21" fill="#ffffff" stroke="rgba(39,53,69,.13)"/>
+  <text x="1278" y="1308" class="childText">G4 安全护栏 / 数据脱敏 / 高危确认</text>
+  <rect x="1628" y="1280" width="340" height="42" rx="21" fill="#ffffff" stroke="rgba(39,53,69,.13)"/>
+  <text x="1654" y="1308" class="childText">G5 评测观测 / 反馈闭环 / OpenSpec</text>
+
+  <!-- Cross-layer dependency lines -->
+  <path d="M482 392 C530 392 560 392 628 392" class="line"/>
+  <text x="504" y="374" class="label">入口触发</text>
+  <path d="M482 566 C532 566 560 566 628 566" class="line"/>
+  <text x="502" y="548" class="label">输入转上下文</text>
+  <path d="M482 714 C526 714 556 714 628 714" class="line"/>
+  <text x="506" y="696" class="label">API 到 runtime</text>
+
+  <path d="M1020 714 C1070 714 1100 714 1166 714" class="line"/>
+  <text x="1048" y="696" class="label">工具调用</text>
+  <path d="M1538 876 C1580 876 1608 566 1684 566" class="softLine"/>
+  <text x="1564" y="650" class="label">知识增强模型请求</text>
+  <path d="M1538 392 C1586 392 1620 392 1684 392" class="line"/>
+  <text x="1566" y="374" class="label">模型调用入口</text>
+  <path d="M1352 928 C1340 1000 946 1020 824 928" class="softLine"/>
+  <text x="968" y="1010" class="label">检索结果回填上下文</text>
+  <path d="M1352 658 C1290 600 1036 612 1020 686" class="softLine"/>
+  <text x="1080" y="610" class="label">工具 schema 约束调用</text>
+
+  <!-- Governance dependency lines -->
+  <path d="M302 1280 C302 1120 310 1000 310 928" class="govLine"/>
+  <text x="324" y="1120" class="label">身份校验</text>
+  <path d="M671 1280 C780 1114 862 1010 824 928" class="govLine"/>
+  <text x="712" y="1120" class="label">运行成本与配额</text>
+  <path d="M1047 1280 C1198 1134 1352 1030 1352 928" class="govLine"/>
+  <text x="1140" y="1134" class="label">工具审计</text>
+  <path d="M1423 1280 C1423 1108 824 1008 824 928" class="govLine"/>
+  <text x="1324" y="1112" class="label">高危确认</text>
+  <path d="M1798 1280 C1840 1130 1870 1014 1870 928" class="govLine"/>
+  <text x="1810" y="1122" class="label">质量观测</text>
+
+  <rect x="100" y="1418" width="1994" height="70" rx="28" fill="#17212b"/>
+  <text x="138" y="1461" fill="#ffffff" style="font: 800 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;">可行性判断：先验证主链路 A -> R -> T -> M，再补治理闭环 G；每个子项都能拆成独立迭代、验收和回滚边界。</text>
+
+  <text x="100" y="1530" class="small">图例：实线是主执行依赖，灰色虚线是增强/回填依赖，红色虚线是治理校验依赖；父级内部箭头表示子项成熟顺序。</text>
+</svg>

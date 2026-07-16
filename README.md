@@ -1,16 +1,28 @@
 # ai-gateway
 
-一个轻量 LiteLLM Proxy 项目，用来把上游 OpenAI-compatible 中转站 key 收在服务端，并对本地客户端、脚本和 Demo 暴露统一的 OpenAI-compatible 接口。
+一个按五个父级能力逐步演进的轻量 AI Gateway 项目。当前实现以 LiteLLM Proxy 作为模型网关底座，把上游 OpenAI-compatible 中转站 key 收在服务端，并对本地客户端、脚本和 Demo 暴露统一入口。
+
+## 项目定义
+
+`ai-gateway` 不是单纯的 LiteLLM Proxy 包装，也不是一次性建设完整智能体平台。它的项目边界按父级能力组织：
+
+1. 接入层：承接浏览器 Demo、客户端、内部脚本，后续扩展到业务系统、IM、IDE 和 API。
+2. 智能体/工作流运行层：承接聊天运行、上下文预算、摘要记忆，后续扩展到任务理解、工具循环和人工确认。
+3. 工具注册与连接器层：先预留工具注册边界，后续接入 MCP、业务 API、搜索/网页、文档和知识库连接器。
+4. 模型网关层：当前由 LiteLLM 负责模型别名、上游转发和 key 收口，后续扩展到 virtual key、多模型路由、fallback 和成本策略。
+5. 治理与运营层：当前由 OpenSpec、README、docs 和 smoke test 做最小治理，后续补身份、权限、预算、限流、审计、评测和安全护栏。
+
+当前代码只落地这个目标结构里的轻量切片：接入层、Runtime 雏形、模型网关调用封装和工具注册预留。未实现的父级子项只作为规划边界，不在当前版本声明为可用能力。
 
 ## 适用场景
 
-- 小范围内部试用 AI Gateway 能力。
-- 先验证上游中转站能否被统一代理。
-- 客户端只使用统一 base url、访问 key 和模型别名。
+- 小范围内部试用 AI Gateway 的模型入口、Demo 接入和上下文处理能力。
+- 先验证上游中转站能否被统一代理，再逐步增加工具、知识和治理能力。
+- 客户端只使用统一 base url、访问 key 和模型别名，不接触上游真实 key。
 - 暂时不引入云厂商 AI Gateway、管理后台或数据库。
-- 后续需要多人 key、预算、限流和统计时，再升级 LiteLLM virtual key 与数据库。
+- 后续需要多人 key、预算、限流和统计时，再升级 LiteLLM virtual key、数据库和治理层能力。
 
-## 工作方式
+## 当前工作方式
 
 ```text
 客户端 / Cursor / 内部脚本
@@ -134,10 +146,18 @@ Demo 输入区支持：
 - 图片：可以上传本地图片，也可以粘贴图片 URL；Demo Server 会按 OpenAI-compatible 的 `image_url` 多模态格式转发。
 - 文档链接：可以粘贴一个或多个链接，Demo Server 会把它们作为文本上下文附在用户消息里。
 - 上下文：浏览器会保存最近几轮用户/助手消息，并在下一次请求里随 `messages` 一起传给模型；侧边栏可以看到当前上下文条数，也可以清空上下文。
-- 摘要记忆：历史消息超过近期窗口后，Demo 会调用 `/api/summarize` 把旧对话压缩成摘要；后续请求按“摘要 + 最近消息 + 当前消息”发送。
+- 摘要记忆：历史消息超过近期窗口后，Demo 会调用 `/api/runtime/summaries` 把旧对话压缩成摘要；后续请求按“摘要 + 最近消息 + 当前消息”发送。
 - Token 预算：Demo Server 会按 `DEMO_MAX_CONTEXT_TOKENS` 做兜底裁剪，优先保留当前消息、摘要和最近历史，超预算的旧消息不会发送给模型。
 
 注意：LiteLLM Proxy 只负责转发请求，不会自动打开文档链接、读取私有文档，也不会自动提取文档里的图片。如果要让模型处理文档里的图片，需要把图片单独上传，或提供可公开访问的图片直链，并确保当前上游模型支持视觉输入。
+
+Demo Server API 按层级暴露：
+
+| API | 说明 |
+| --- | --- |
+| `GET /api/gateway/status` | 检查 LiteLLM 连接状态、gateway base url 和模型别名 |
+| `POST /api/runtime/chat` | 发送当前消息、图片、文档链接、摘要和历史，返回助手回复 |
+| `POST /api/runtime/summaries` | 将旧历史压缩成后续请求可复用的摘要 |
 
 ## 配置与密钥
 
@@ -155,6 +175,7 @@ Demo 输入区支持：
 | AI 协作规则、文档路由、提交规范 | `AGENTS.md` |
 | Agent Skill 索引、目录规范、治理规则 | `.agents/skills/README.md` |
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |
+| 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |
 | 代理行为、Demo API、鉴权、模型别名、上下文预算等稳定契约 | `openspec/specs/ai-gateway/spec.md` |
 
@@ -162,12 +183,12 @@ Skill 相关内容统一放在 `.agents/skills/`，并遵守 `https://gitlab.sea
 
 ## 后续升级方向
 
-当前项目是最小试用版，没有引入数据库。等你需要下面能力时，再接 Postgres：
+当前项目按父级能力演进，不把所有功能点平铺成同一层：
 
-- 给不同人发 virtual key
-- 按人、团队、模型做预算
-- 按 key 做限流
-- 查看更细的使用统计
-- 多中转站或多模型 fallback
+1. 接入层：从 Demo 扩到业务系统、IM、内部工具。
+2. 智能体/工作流运行层：补任务理解、工具调用循环、上下文记忆和人工确认。
+3. 工具注册与连接器层：补 MCP、搜索/网页、业务 API、文档和知识库连接器。
+4. 模型网关层：从单模型别名扩到 virtual key、多模型路由和 fallback。
+5. 治理与运营层：补身份权限、预算限流、审计日志、观测评测和安全护栏。
 
-到那一步，可以继续基于这个项目加 `DATABASE_URL`、Postgres 服务和 LiteLLM virtual key 管理接口。
+架构总图、规划图和 V0.5-V4 实施对比见 `docs/ai-structure.md`。

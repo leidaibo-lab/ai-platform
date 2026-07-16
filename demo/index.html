@@ -697,7 +697,7 @@
 
       async function loadStatus() {
         try {
-          const res = await fetch("/api/status");
+          const res = await fetch("/api/gateway/status");
           const data = await res.json();
           endpoint.textContent = data.gatewayBaseUrl;
           model.textContent = data.model;
@@ -767,7 +767,7 @@
         latency.textContent = "-";
 
         try {
-          const res = await fetch("/api/chat", {
+          const res = await fetch("/api/runtime/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -851,7 +851,7 @@
         lastStatus.textContent = "压缩上下文";
 
         try {
-          const res = await fetch("/api/summarize", {
+          const res = await fetch("/api/runtime/summaries", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
