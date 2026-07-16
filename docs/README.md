@@ -4,7 +4,8 @@
 
 ## 文档索引
 
-- [AI 结构说明](./ai-structure.md)：当前 LiteLLM Proxy、Demo Server、浏览器 Demo、配置和密钥边界。
+- [AI 结构说明](./ai-structure.md)：项目重新定义、五个父级能力、当前 LiteLLM/Demo Runtime 切片、配置和密钥边界，以及规划图和 V0.5-V4 实施对比。
+- [编码规范](./coding-standards.md)：函数注释、数据结构、设计模式、设计原则和变更检查要求。
 - [Agent Skills 索引](../.agents/skills/README.md)：本项目 Skill 目录规范、索引和治理要求。
 
 ## 与 OpenSpec 的分工
