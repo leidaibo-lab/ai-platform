@@ -9,13 +9,17 @@
 - 如果目录是 Git 仓库，先用 `git status --short`、`git diff --stat`、`git diff --name-only` 检索关键变更信息；当前目录不是 Git 仓库时，用 `find`/`rg --files` 说明依据。
 - 不读取、打印或提交 `.env` 中的真实密钥；示例值放在 `.env.example`。
 - 提交信息遵守 `type(scope): message`。
-- 提交标题和必要说明以中文描述为主，例如 `docs(ai-gateway): 补充 skills 规范与校验脚本`。
+- 提交标题和必要说明以中文描述为主，例如 `docs(ai-platform): 补充架构边界与服务拆分说明`。
 
 ## 项目定位
 
-当前项目重新定义为按五个父级能力逐步演进的轻量 AI Gateway。它以 LiteLLM Proxy 作为模型网关底座，把上游 OpenAI-compatible 中转站密钥收在服务端，并在此之上逐步补齐接入层、智能体/工作流运行层、工具注册与连接器层、模型网关层、治理与运营层。
+当前项目总称为“AI 应用基础平台”，定位为面向不同业务场景、按需组合和逐步拆分 AI 能力的基础平台。整体分为渠道与体验层、平台控制面、Agent Runtime、连接器与知识层、模型网关、治理与可观测六个区域；只有模型访问、路由、密钥和模型调用治理属于严格意义上的 AI Gateway。
 
-当前代码只落地这个目标结构里的轻量切片：浏览器 Demo 和客户端接入、Demo Runtime、LiteLLM 调用封装、上下文预算与摘要记忆、工具注册预留，以及 OpenSpec/docs/smoke test 的最小治理。不要把 MCP、RAG、预算、审计等能力拆成新的顶层；它们应分别挂在工具连接、知识接入、模型治理或运营治理父级下。
+当前项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。模型网关仍是平台内部区域，不得用 `ai-platform` 代替模型网关领域名称。
+
+当前代码只落地这个目标结构里的轻量切片：浏览器 Demo 和客户端接入、Agent Runtime 雏形、LiteLLM 调用封装、上下文预算与摘要记忆、连接器注册预留，以及 OpenSpec/docs/smoke test 的最小治理。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
+
+区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
 核心链路：
 
@@ -39,7 +43,7 @@ LiteLLM Proxy
         |
         | /api/runtime/chat
         v
-Demo Server 接入层
+Demo Server 渠道 HTTP Adapter
         |
         v
 Runtime 上下文与消息构造
@@ -52,11 +56,11 @@ LiteLLM Proxy -> 上游 OpenAI-compatible API
 
 - `README.md`：面向使用者的启动、测试、客户端配置说明。
 - `docs/README.md`：项目文档索引。
-- `docs/ai-structure.md`：AI 调用链路、模块分层、配置边界和演进路线。
+- `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。
 - `docs/coding-standards.md`：函数注释、数据结构、设计模式和设计原则等编码规范。
 - `.agents/skills/README.md`：Agent Skill 索引和目录治理规则。
-- `openspec/project.md`：项目级约定和技术边界。
-- `openspec/specs/ai-gateway/spec.md`：稳定能力契约。修改代理行为、Demo API、鉴权方式、模型别名、上下文预算或密钥边界时，需要同步这里。
+- `openspec/project.md`：项目级区域边界、依赖规则和技术约定。
+- `openspec/specs/ai-platform/spec.md`：稳定能力契约。修改代理行为、Demo API、鉴权方式、模型别名、上下文预算或密钥边界时，需要同步这里。
 
 ## 编码规范
 
@@ -89,11 +93,11 @@ LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `config.yaml`：LiteLLM Proxy 的模型别名、上游转发参数和 master key 配置。
 - `docker-compose.yml`：本地 LiteLLM 容器启动入口。
 - `scripts/test-chat.sh`：最小 chat completions smoke test。
-- `scripts/demo-server.mjs`：本地 Demo Server 接入层，负责静态页面、分层 API 路由、JSON 收发和错误返回。
+- `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责静态页面、分层 API 路由、JSON 收发和错误返回。
 - `demo/index.html`：浏览器交互页面。浏览器只调用 Demo Server，不直接接触上游真实 key。
 - `src/config/env.mjs`：Demo Server、runtime 和 gateway client 的配置加载入口。
-- `src/runtime/`：聊天运行、摘要压缩、上下文预算、消息构造和输入校验。
-- `src/gateway/litellm-client.mjs`：LiteLLM `/v1/models` 和 `/v1/chat/completions` 调用封装。
-- `src/tools/tool-registry.mjs`：工具注册和工具意图判断预留入口，当前不启用真实工具循环。
+- `src/runtime/`：Agent Runtime 雏形，负责聊天运行、摘要压缩、上下文预算、消息构造和输入校验。
+- `src/gateway/litellm-client.mjs`：Agent Runtime 到模型网关的客户端边界，封装 LiteLLM `/v1/models` 和 `/v1/chat/completions` 调用。
+- `src/tools/tool-registry.mjs`：连接器与知识层的工具注册和工具意图判断预留入口，当前不启用真实工具循环。
 - `.agents/skills/company-public/skill-governance/SKILL.md`：Skill 创建、更新、迁移和校验规范。
 - `.agents/skills/company-public/skill-governance/scripts/validate-skills.mjs`：Skill 目录与 frontmatter 校验脚本。

@@ -20,7 +20,7 @@ export async function loadDemoConfig(rootDir) {
     },
     prompts: {
       demoSystemPrompt:
-        "你是 AI Gateway Demo 助手。请优先结合提供的对话摘要、最近上下文和当前用户消息回答。",
+        "你是 AI 应用基础平台 Demo 助手。请优先结合提供的对话摘要、最近上下文和当前用户消息回答。",
       summarySystemPrompt: "你负责把历史对话压缩成可供下一轮模型理解的上下文摘要。",
     },
   };
