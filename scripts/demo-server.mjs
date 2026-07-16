@@ -61,7 +61,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(config.port, () => {
-  console.log(`AI Gateway demo: http://localhost:${config.port}`);
+  console.log(`AI Platform demo: http://localhost:${config.port}`);
   console.log(`Gateway base URL: ${gatewayClient.gatewayBaseUrl}`);
   console.log(`Model alias: ${gatewayClient.model}`);
 });

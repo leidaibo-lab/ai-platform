@@ -71,4 +71,4 @@ const validMessages = messages.filter((message) => isValidMessage(message));
 - 变更说明列出实际采用的设计原则及对应代码依据，不能只罗列原则名称。
 - 输入校验、外部 I/O 和核心逻辑边界清晰，必要的测试或 smoke test 已更新并通过。
 
-本规范属于工程协作约束，不改变 AI Gateway 的接口、配置和安全边界，因此无需单独修改稳定 OpenSpec；当具体代码变更影响稳定能力契约时，仍按 `AGENTS.md` 的 OpenSpec 规则同步更新。
+本规范属于工程协作约束，不改变 AI 应用基础平台的接口、配置和安全边界，因此无需单独修改稳定 OpenSpec；当具体代码变更影响稳定能力契约时，仍按 `AGENTS.md` 的 OpenSpec 规则同步更新。
