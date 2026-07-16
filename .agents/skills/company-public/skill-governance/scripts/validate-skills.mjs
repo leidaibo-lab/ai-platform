@@ -26,6 +26,7 @@ if (issues.length > 0) {
 
 console.log("SKILL_STRUCTURE_OK");
 
+// 检查项目根目录，避免出现绕过统一 Skill 路由的平行资产目录。
 function validateRootShape() {
   for (const name of [".cursor", ".trae", ".qoder", ".vscode", "skills"]) {
     const target = join(projectRoot, name);
@@ -35,8 +36,15 @@ function validateRootShape() {
   }
 }
 
+/**
+ * 递归查找 Skill 入口文件并返回稳定排序，保证校验输出顺序可复现。
+ *
+ * @param {string} root - Skill 根目录。
+ * @returns {string[]} SKILL.md 文件绝对路径列表。
+ */
 function findSkillFiles(root) {
   const results = [];
+  // 深度遍历目录，只收集约定名称的 Skill 入口文件。
   const walk = (dir) => {
     for (const entry of readdirSync(dir)) {
       const fullPath = join(dir, entry);
@@ -52,6 +60,12 @@ function findSkillFiles(root) {
   return results.sort();
 }
 
+/**
+ * 校验单个 Skill 的目录层级、名称和必填 frontmatter 元数据。
+ *
+ * @param {string} skillFile - SKILL.md 文件绝对路径。
+ * @returns {void}
+ */
 function validateSkill(skillFile) {
   const rel = relative(skillsRoot, skillFile);
   const parts = rel.split("/");
@@ -94,6 +108,12 @@ function validateSkill(skillFile) {
   }
 }
 
+/**
+ * 解析当前治理规则使用的扁平 YAML frontmatter 及 metadata 子字段。
+ *
+ * @param {string} filePath - SKILL.md 文件路径。
+ * @returns {object|null} frontmatter 数据；格式缺失或未闭合时返回 null。
+ */
 function parseFrontmatter(filePath) {
   const content = readFileSync(filePath, "utf8");
   if (!content.startsWith("---\n")) return null;
@@ -122,8 +142,8 @@ function parseFrontmatter(filePath) {
   return result;
 }
 
+// 输出无法继续校验的基础错误并以失败状态结束进程。
 function fail(message) {
   console.error(message);
   process.exit(1);
 }
-

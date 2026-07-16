@@ -3,6 +3,12 @@ import { buildUserContent, normalizeChatInput, validateChatInput } from "./messa
 import { createToolRegistry } from "../tools/tool-registry.mjs";
 
 export class RuntimeInputError extends Error {
+  /**
+   * 保存可直接返回给渠道层的校验错误载荷和 HTTP 状态码。
+   *
+   * @param {object} payload - Runtime 输入错误详情。
+   * @param {number} [status=400] - 建议返回的 HTTP 状态码。
+   */
   constructor(payload, status = 400) {
     super(payload.error || "Invalid runtime input");
     this.name = "RuntimeInputError";
@@ -11,10 +17,27 @@ export class RuntimeInputError extends Error {
   }
 }
 
+/**
+ * 通过依赖注入装配聊天、摘要、上下文预算和工具意图边界。
+ *
+ * @param {object} dependencies - Runtime 依赖和策略配置。
+ * @param {object} dependencies.gatewayClient - 模型网关客户端。
+ * @param {object} dependencies.contextOptions - 上下文预算配置。
+ * @param {string} dependencies.systemPrompt - 常规对话系统提示。
+ * @param {string} dependencies.summarySystemPrompt - 摘要任务系统提示。
+ * @param {object} [dependencies.toolRegistry] - 可选工具注册表。
+ * @returns {object} 渠道适配器可调用的 Runtime API。
+ */
 export function createChatRuntime({ gatewayClient, contextOptions, systemPrompt, summarySystemPrompt, toolRegistry }) {
   const registry = toolRegistry || createToolRegistry();
 
   return {
+    /**
+     * 校验并归一化渠道输入，在预算内构造消息后调用模型网关完成对话。
+     *
+     * @param {unknown} body - 渠道请求体。
+     * @returns {Promise<object>} 助手内容、模型信息、用量和上下文统计。
+     */
     async chat(body) {
       const input = normalizeChatInput(body);
       const validationError = validateChatInput(input);
@@ -51,6 +74,12 @@ export function createChatRuntime({ gatewayClient, contextOptions, systemPrompt,
       };
     },
 
+    /**
+     * 将旧历史与已有摘要合并为受预算限制的新摘要。
+     *
+     * @param {unknown} body - 摘要、待压缩消息组成的渠道请求体。
+     * @returns {Promise<object>} 新摘要及模型调用信息。
+     */
     async summarize(body) {
       const summary = normalizeSummary(body?.summary, contextOptions);
       const messages = normalizeHistory(body?.messages, contextOptions);
@@ -66,6 +95,7 @@ export function createChatRuntime({ gatewayClient, contextOptions, systemPrompt,
         summary ? `已有摘要：\n${summary}` : "已有摘要：无",
         "",
         "新增对话：",
+        // 为模型标记每条历史的说话方，保留原始消息顺序。
         ...messages.map((item) => `${item.role === "user" ? "用户" : "助手"}：${item.content}`),
       ].join("\n");
 
