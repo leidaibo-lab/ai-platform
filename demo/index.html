@@ -681,6 +681,13 @@
       let activeLinkType = "image";
       let isComposing = false;
 
+      /**
+       * 向对话区追加一条消息并滚动到最新内容。
+       *
+       * @param {string} role - 消息展示角色。
+       * @param {string} text - 消息正文。
+       * @returns {HTMLDivElement} 新建的消息节点。
+       */
       function addMessage(role, text) {
         const node = document.createElement("div");
         node.className = `message ${role}`;
@@ -690,11 +697,13 @@
         return node;
       }
 
+      // 同步更新连接状态指示点和可读状态文本。
       function setHealth(ok, text) {
         statusDot.className = `dot ${ok ? "ok" : "bad"}`;
         statusText.textContent = text;
       }
 
+      // 从 Demo Server 获取模型网关状态并刷新侧栏连接信息。
       async function loadStatus() {
         try {
           const res = await fetch("/api/gateway/status");
@@ -711,18 +720,25 @@
         }
       }
 
+      // 将空白或逗号分隔的地址文本整理为去空、去重列表。
       function parseUrlList(value) {
+        // 去除每个候选地址首尾的空白字符。
         return [...new Set(value.split(/[\s,，]+/).map((url) => url.trim()).filter(Boolean))];
       }
 
+      // 提取当前全部图片附件的可发送地址。
       function getImageUrls() {
+        // 请求载荷只需要图片地址，不携带本地展示元数据。
         return attachedImages.map((image) => image.url);
       }
 
+      // 提取当前全部文档附件的可发送地址。
       function getDocumentUrls() {
+        // 请求载荷只需要文档地址，不携带本地展示元数据。
         return attachedDocuments.map((document) => document.url);
       }
 
+      // 组合输入框、附件、摘要和预算内历史，生成 Runtime 聊天请求载荷。
       function buildPayload() {
         return {
           message: messageInput.value.trim(),
@@ -733,20 +749,24 @@
         };
       }
 
+      // 判断当前请求是否至少包含正文、图片或文档链接之一。
       function hasPayloadContent(payload) {
         return payload.message || payload.imageUrls.length > 0 || payload.documentUrls.length > 0;
       }
 
+      // 将用户本轮输入整理为适合在对话区展示和写入历史的纯文本。
       function formatUserMessage(payload) {
         const sections = [];
         if (payload.message) sections.push(payload.message);
         if (payload.imageUrls.length > 0) sections.push(`图片：${payload.imageUrls.length} 个`);
         if (payload.documentUrls.length > 0) {
+          // 将每个文档地址显示为独立列表项。
           sections.push(`文档链接：\n${payload.documentUrls.map((url) => `- ${url}`).join("\n")}`);
         }
         return sections.join("\n\n");
       }
 
+      // 清空已提交的输入和附件，并恢复编辑器初始状态。
       function resetComposer() {
         messageInput.value = "";
         attachedImages = [];
@@ -757,6 +777,12 @@
         resizeInput();
       }
 
+      /**
+       * 调用 Runtime 聊天接口，并同步消息区、历史、耗时和连接状态。
+       *
+       * @param {object} payload - 当前聊天请求载荷。
+       * @returns {Promise<void>}
+       */
       async function ask(payload) {
         const startedAt = performance.now();
         const userText = formatUserMessage(payload);
@@ -800,20 +826,24 @@
         }
       }
 
+      // 根据输入内容高度调整文本框，并限制最大高度避免挤压页面。
       function autoResize(field) {
         field.style.height = "auto";
         field.style.height = `${Math.min(field.scrollHeight, 160)}px`;
       }
 
+      // 重新计算主消息输入框高度。
       function resizeInput() {
         autoResize(messageInput);
       }
 
+      // 将已完成消息追加到近期上下文，并刷新上下文计数。
       function appendHistory(role, content) {
         conversationHistory.push({ role, content });
         updateContextCount();
       }
 
+      // 清空浏览器内维护的近期历史和摘要记忆。
       function clearConversationContext() {
         conversationHistory = [];
         conversationSummary = "";
@@ -822,11 +852,17 @@
         messageInput.focus();
       }
 
+      // 在侧栏展示近期消息数量及摘要是否存在。
       function updateContextCount() {
         const summaryText = conversationSummary ? "，有摘要" : "，无摘要";
         contextCount.textContent = `${conversationHistory.length} 条近期消息${summaryText}`;
       }
 
+      /**
+       * 从最近消息向前选择字符预算内的请求历史，优先保留最新上下文。
+       *
+       * @returns {Array<object>} 保持时间顺序的历史消息副本。
+       */
       function selectHistoryForRequest() {
         const selected = [];
         let used = 0;
@@ -841,6 +877,11 @@
         return selected;
       }
 
+      /**
+       * 将超出近期窗口的旧消息合并进摘要，并保留窗口内消息供后续请求使用。
+       *
+       * @returns {Promise<void>}
+       */
       async function compactHistoryIfNeeded() {
         if (isSummarizing || conversationHistory.length <= maxRecentHistoryMessages) return;
 
@@ -871,6 +912,7 @@
         }
       }
 
+      // 根据当前附件数量更新编辑器底部提示。
       function updateAttachmentNote() {
         const imageCount = attachedImages.length;
         const documentCount = attachedDocuments.length;
@@ -881,9 +923,16 @@
         attachmentNote.textContent = `已追加图片 ${imageCount} 个，文档链接 ${documentCount} 个`;
       }
 
+      /**
+       * 根据当前图片和文档状态重建附件列表，并绑定预览失败与移除交互。
+       *
+       * @returns {void}
+       */
       function renderAttachments() {
         const items = [
+          // 给图片展示项补充统一的附件类型标记。
           ...attachedImages.map((image) => ({ ...image, type: "image" })),
+          // 给文档展示项补充统一的附件类型标记。
           ...attachedDocuments.map((document) => ({ ...document, type: "document" })),
         ];
         attachments.textContent = "";
@@ -899,6 +948,7 @@
             const image = document.createElement("img");
             image.src = item.url;
             image.alt = item.name;
+            // 图片预览加载失败时退化为稳定的文本占位符。
             image.addEventListener("error", () => {
               thumb.textContent = "IMG";
             });
@@ -922,10 +972,13 @@
           remove.type = "button";
           remove.textContent = "×";
           remove.setAttribute("aria-label", `移除 ${item.name}`);
+          // 从对应附件集合移除当前项，并重建列表保持展示状态一致。
           remove.addEventListener("click", () => {
             if (item.type === "image") {
+              // 保留当前移除目标之外的图片附件。
               attachedImages = attachedImages.filter((image) => image.id !== item.id);
             } else {
+              // 保留当前移除目标之外的文档附件。
               attachedDocuments = attachedDocuments.filter((document) => document.id !== item.id);
             }
             renderAttachments();
@@ -938,7 +991,14 @@
         updateAttachmentNote();
       }
 
+      /**
+       * 校验本地图片数量、类型和体积，读取为 data URL 后加入附件集合。
+       *
+       * @param {File[]} files - 用户选择的本地文件。
+       * @returns {Promise<void>}
+       */
       async function addImageFiles(files) {
+        // 只允许浏览器识别为图片 MIME 类型的文件进入读取流程。
         const images = files.filter((file) => file.type.startsWith("image/"));
         if (images.length !== files.length) {
           addMessage("error", "只能上传图片文件。");
@@ -964,6 +1024,7 @@
         renderAttachments();
       }
 
+      // 将输入框中的图片或文档地址转换为附件项，并刷新编辑器状态。
       function addLink(type) {
         const urls = parseUrlList(linkInput.value);
         if (urls.length === 0) return;
@@ -995,25 +1056,37 @@
         renderAttachments();
       }
 
+      /**
+       * 通过 FileReader 将本地文件异步读取为可随 JSON 请求发送的 data URL。
+       *
+       * @param {File} file - 待读取图片文件。
+       * @returns {Promise<string>} 文件 data URL。
+       */
       function readFileAsDataUrl(file) {
+        // 将 FileReader 的事件接口转换为可等待的 Promise。
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
+          // 文件读取完成后统一返回字符串结果。
           reader.onload = () => resolve(String(reader.result || ""));
+          // 文件读取失败时保留浏览器错误，缺失时提供可读兜底错误。
           reader.onerror = () => reject(reader.error || new Error("图片读取失败"));
           reader.readAsDataURL(file);
         });
       }
 
+      // 将字节数格式化为附件列表使用的 KB 或 MB 文本。
       function formatSize(size) {
         if (!size) return "";
         if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
         return `${(size / 1024 / 1024).toFixed(1)} MB`;
       }
 
+      // 根据图片来源生成本地文件大小或远程链接说明。
       function formatImageSubtitle(image) {
         return image.source === "file" ? `本地图片 ${formatSize(image.size)}` : "图片链接";
       }
 
+      // 优先从 URL 路径提取可读文件名，解析失败时使用业务兜底名称。
       function readableName(value, fallback) {
         try {
           const url = new URL(value);
@@ -1024,6 +1097,7 @@
         }
       }
 
+      // 打开指定附件类型的链接输入区，并同步标签、占位符和焦点。
       function openLinkAdder(type) {
         activeLinkType = type;
         closeAddMenu();
@@ -1034,21 +1108,25 @@
         linkInput.focus();
       }
 
+      // 关闭链接输入区并清理尚未确认的内容。
       function closeLinkAdder() {
         linkAdder.hidden = true;
         linkInput.value = "";
       }
 
+      // 切换附件菜单显隐并同步无障碍展开状态。
       function toggleAddMenu() {
         addMenu.hidden = !addMenu.hidden;
         openAddMenu.setAttribute("aria-expanded", String(!addMenu.hidden));
       }
 
+      // 关闭附件菜单并重置无障碍展开状态。
       function closeAddMenu() {
         addMenu.hidden = true;
         openAddMenu.setAttribute("aria-expanded", "false");
       }
 
+      // 提交有效输入后立即重置编辑器，并异步发起聊天请求。
       form.addEventListener("submit", (event) => {
         event.preventDefault();
         const payload = buildPayload();
@@ -1057,7 +1135,9 @@
         ask(payload);
       });
 
+      // 为每个示例提示按钮绑定将预设内容写入输入框的交互。
       document.querySelectorAll(".prompt").forEach((button) => {
+        // 清空按钮使用独立处理函数，其余按钮填充对应预设问题。
         button.addEventListener("click", () => {
           if (button.id === "clearContext") return;
           messageInput.value = button.dataset.message || button.textContent.trim();
@@ -1067,12 +1147,15 @@
       });
 
       messageInput.addEventListener("input", resizeInput);
+      // 标记输入法组合开始，防止中文候选确认时误提交表单。
       messageInput.addEventListener("compositionstart", () => {
         isComposing = true;
       });
+      // 输入法组合结束后恢复 Enter 提交能力。
       messageInput.addEventListener("compositionend", () => {
         isComposing = false;
       });
+      // 在非输入法组合状态下用 Enter 提交，Shift+Enter 保留换行。
       messageInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey && !isComposing) {
           event.preventDefault();
@@ -1080,6 +1163,7 @@
         }
       });
 
+      // 读取本次选择的图片，并在结束后清空控件以支持重复选择同一文件。
       imageFileInput.addEventListener("change", async () => {
         try {
           await addImageFiles([...imageFileInput.files]);
@@ -1092,25 +1176,31 @@
 
       openAddMenu.addEventListener("click", toggleAddMenu);
       clearContext.addEventListener("click", clearConversationContext);
+      // 关闭菜单后触发隐藏文件控件，进入本地图片选择流程。
       chooseImageButton.addEventListener("click", () => {
         closeAddMenu();
         imageFileInput.click();
       });
+      // 按按钮声明的附件类型绑定对应链接输入面板。
       addMenu.querySelectorAll("[data-link-type]").forEach((button) => {
+        // 打开当前按钮所代表的图片或文档链接输入区。
         button.addEventListener("click", () => {
           openLinkAdder(button.dataset.linkType);
         });
       });
+      // 将输入地址按当前附件类型加入编辑器。
       confirmLink.addEventListener("click", () => {
         addLink(activeLinkType);
       });
       cancelLink.addEventListener("click", closeLinkAdder);
+      // 在链接输入区按 Enter 时确认当前地址，避免触发聊天表单提交。
       linkInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
           addLink(activeLinkType);
         }
       });
+      // 使用 Escape 同时关闭附件菜单和链接输入区。
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
           closeAddMenu();
