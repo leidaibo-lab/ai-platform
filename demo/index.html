@@ -3,556 +3,215 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI 应用基础平台 Demo</title>
+    <title>AI 应用基础平台</title>
     <style>
       :root {
         color-scheme: light;
-        --bg: #f5f7f9;
+        --bg: #f3f5f7;
         --panel: #ffffff;
-        --panel-muted: #eef3f8;
-        --text: #17212b;
-        --muted: #667381;
-        --line: #d8e0e8;
-        --accent: #0f7b6c;
-        --accent-strong: #095c51;
-        --warn: #a4441f;
-        --shadow: 0 12px 32px rgba(36, 48, 61, 0.12);
+        --panel-muted: #f6f8fa;
+        --text: #18212b;
+        --muted: #687481;
+        --line: #d8dfe6;
+        --accent: #147565;
+        --accent-soft: #e5f2ee;
+        --danger: #a5452b;
+        --danger-soft: #fff0eb;
+        --info: #315f8b;
+        --shadow: 0 8px 22px rgba(27, 39, 51, 0.08);
       }
 
-      * {
-        box-sizing: border-box;
-      }
-
+      * { box-sizing: border-box; }
       body {
         margin: 0;
         min-height: 100vh;
-        background:
-          linear-gradient(135deg, rgba(15, 123, 108, 0.09), transparent 42%),
-          linear-gradient(315deg, rgba(74, 107, 142, 0.11), transparent 38%),
-          var(--bg);
+        background: var(--bg);
         color: var(--text);
-        font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-          "Segoe UI", sans-serif;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
-
-      button,
-      input,
-      textarea {
-        font: inherit;
-      }
+      button, input, textarea { font: inherit; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      [hidden] { display: none !important; }
 
       .shell {
         display: grid;
-        grid-template-rows: auto 1fr auto;
-        gap: 16px;
-        width: min(1040px, calc(100vw - 32px));
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 12px;
+        width: min(1440px, calc(100vw - 24px));
         min-height: 100vh;
         margin: 0 auto;
-        padding: 24px 0;
+        padding: 12px 0;
       }
-
       .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 16px;
-        padding: 14px 18px;
+        min-width: 0;
+        padding: 12px 16px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: rgba(255, 255, 255, 0.82);
-        box-shadow: 0 8px 20px rgba(36, 48, 61, 0.08);
-        backdrop-filter: blur(10px);
+        background: var(--panel);
       }
-
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        min-width: 0;
-      }
-
+      .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
       .mark {
         display: grid;
         place-items: center;
-        width: 36px;
-        height: 36px;
-        border-radius: 8px;
-        background: #0f7b6c;
-        color: white;
-        font-weight: 750;
+        width: 34px;
+        height: 34px;
+        border-radius: 7px;
+        background: var(--accent);
+        color: #ffffff;
+        font-weight: 500;
       }
-
-      .title {
-        min-width: 0;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 18px;
-        line-height: 1.2;
-      }
-
-      .subtitle {
-        margin-top: 2px;
-        color: var(--muted);
-        font-size: 13px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex: 0 0 auto;
-        color: var(--muted);
-        font-size: 13px;
-      }
-
-      .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        background: #d0dae3;
-      }
-
-      .dot.ok {
-        background: #1f9d78;
-        box-shadow: 0 0 0 4px rgba(31, 157, 120, 0.14);
-      }
-
-      .dot.bad {
-        background: #c05a2b;
-        box-shadow: 0 0 0 4px rgba(192, 90, 43, 0.14);
-      }
+      h1 { margin: 0; font-size: 17px; letter-spacing: 0; }
+      .subtitle { margin-top: 2px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .health { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #aeb8c2; }
+      .dot.ok { background: #218563; }
+      .dot.bad { background: var(--danger); }
 
       .workspace {
         display: grid;
-        grid-template-columns: 1fr 320px;
-        gap: 16px;
-        min-height: 0;
-      }
-
-      .conversation,
-      .side {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.88);
-        box-shadow: var(--shadow);
-      }
-
-      .conversation {
-        display: grid;
-        grid-template-rows: 1fr auto;
-        min-height: 560px;
-        overflow: hidden;
-      }
-
-      .messages {
-        display: flex;
-        flex-direction: column;
+        grid-template-columns: 232px minmax(420px, 1fr) 272px;
         gap: 12px;
         min-height: 0;
-        padding: 18px;
-        overflow: auto;
       }
-
-      .message {
-        max-width: min(720px, 92%);
-        padding: 12px 14px;
+      .panel {
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: 8px;
-        white-space: pre-wrap;
-        line-height: 1.55;
-      }
-
-      .message.user {
-        align-self: flex-end;
-        background: #e8f4f0;
-        border-color: #badbd2;
-      }
-
-      .message.assistant {
-        align-self: flex-start;
         background: var(--panel);
-      }
-
-      .message.error {
-        align-self: flex-start;
-        background: #fff1ea;
-        border-color: #f0c4ad;
-        color: var(--warn);
-      }
-
-      .composer {
-        position: relative;
-        padding: 14px;
-        border-top: 1px solid var(--line);
-        background: var(--panel-muted);
-      }
-
-      .composer-box {
-        display: grid;
-        gap: 12px;
-        min-width: 0;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 12px;
-        background: white;
-        box-shadow: 0 8px 20px rgba(36, 48, 61, 0.08);
-      }
-
-      .message-input {
-        width: 100%;
-        min-height: 54px;
-        max-height: 160px;
-        resize: none;
-        border: 0;
-        padding: 2px 2px 0;
-        color: var(--text);
-        background: transparent;
-        outline: none;
-        overflow: auto;
-        line-height: 1.55;
-      }
-
-      .composer-box:focus-within {
-        border-color: rgba(15, 123, 108, 0.72);
-        box-shadow:
-          0 8px 20px rgba(36, 48, 61, 0.08),
-          0 0 0 4px rgba(15, 123, 108, 0.12);
-      }
-
-      .attachment-note,
-      .link-label {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .attachments {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        min-width: 0;
-      }
-
-      .attachment-card {
-        position: relative;
-        display: grid;
-        grid-template-columns: 42px minmax(0, 1fr);
-        align-items: center;
-        gap: 8px;
-        width: min(240px, 100%);
-        min-height: 52px;
-        padding: 6px 30px 6px 6px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #f8fbfd;
-      }
-
-      .attachment-thumb {
-        display: grid;
-        place-items: center;
-        width: 42px;
-        height: 42px;
-        border-radius: 8px;
-        background: #e8f4f0;
-        color: var(--accent-strong);
-        font-weight: 800;
-        overflow: hidden;
-      }
-
-      .attachment-thumb img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
-
-      .attachment-meta {
-        display: grid;
-        gap: 2px;
-        min-width: 0;
-      }
-
-      .attachment-title,
-      .attachment-subtitle {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .attachment-title {
-        color: var(--text);
-        font-size: 13px;
-        font-weight: 700;
-      }
-
-      .attachment-subtitle {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .remove-attachment {
-        position: absolute;
-        top: 5px;
-        right: 5px;
-        display: grid;
-        place-items: center;
-        width: 22px;
-        height: 22px;
-        border: 0;
-        border-radius: 999px;
-        background: rgba(23, 33, 43, 0.08);
-        color: var(--text);
-        cursor: pointer;
-      }
-
-      .remove-attachment:hover {
-        background: rgba(23, 33, 43, 0.14);
-      }
-
-      .link-adder {
-        display: grid;
-        gap: 8px;
-        padding: 10px;
-        border: 1px dashed #badbd2;
-        border-radius: 8px;
-        background: #f4fbf8;
-      }
-
-      .link-adder[hidden],
-      .attachments[hidden],
-      .add-menu[hidden] {
-        display: none;
-      }
-
-      .link-input-row,
-      .composer-toolbar,
-      .toolbar-left {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-width: 0;
-      }
-
-      .link-input {
-        width: 100%;
-        min-width: 0;
-        min-height: 36px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 0 10px;
-        color: var(--text);
-        background: white;
-        outline: none;
-      }
-
-      .link-input:focus {
-        border-color: rgba(15, 123, 108, 0.72);
-      }
-
-      .file-input {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-      }
-
-      .composer-toolbar {
-        justify-content: space-between;
-      }
-
-      .toolbar-left {
-        position: relative;
-      }
-
-      .icon-button,
-      .link-action {
-        display: grid;
-        place-items: center;
-        border: 1px solid var(--line);
-        background: white;
-        color: var(--text);
-        cursor: pointer;
-      }
-
-      .icon-button {
-        width: 34px;
-        height: 34px;
-        border-radius: 999px;
-        font-size: 22px;
-        line-height: 1;
-      }
-
-      .icon-button:hover,
-      .link-action:hover {
-        border-color: rgba(15, 123, 108, 0.7);
-        color: var(--accent-strong);
-      }
-
-      .add-menu {
-        position: absolute;
-        bottom: 42px;
-        left: 0;
-        z-index: 2;
-        display: grid;
-        gap: 6px;
-        min-width: 156px;
-        padding: 8px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: white;
         box-shadow: var(--shadow);
       }
-
-      .menu-item {
+      .panel-header {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 8px;
-        width: 100%;
-        min-height: 34px;
-        border: 0;
-        border-radius: 8px;
-        padding: 0 9px;
-        background: transparent;
-        color: var(--text);
-        cursor: pointer;
-        text-align: left;
-      }
-
-      .menu-item:hover {
-        background: #eef3f8;
-      }
-
-      .menu-icon {
-        width: 18px;
-        text-align: center;
-      }
-
-      .link-action {
-        width: 36px;
-        height: 36px;
-        border-radius: 999px;
-        font-size: 18px;
-      }
-
-      .send {
-        display: grid;
-        place-items: center;
-        width: 38px;
-        height: 38px;
-        border: 0;
-        border-radius: 999px;
-        background: var(--accent);
-        color: white;
-        cursor: pointer;
-        font-size: 22px;
-        line-height: 1;
-      }
-
-      .send:hover {
-        background: var(--accent-strong);
-      }
-
-      .send:disabled {
-        cursor: wait;
-        opacity: 0.58;
-      }
-
-      .side {
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
-        padding: 16px;
-      }
-
-      .metric {
-        display: grid;
-        gap: 6px;
-        padding-bottom: 14px;
+        min-width: 0;
+        min-height: 48px;
+        padding: 10px 12px;
         border-bottom: 1px solid var(--line);
       }
-
-      .metric:last-child {
-        border-bottom: 0;
-        padding-bottom: 0;
-      }
-
-      .label {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .value {
-        color: var(--text);
-        font-size: 15px;
-        overflow-wrap: anywhere;
-      }
-
-      .prompts {
+      .panel-title { min-width: 0; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .icon-button, .send-button {
         display: grid;
-        gap: 8px;
-      }
-
-      .prompt {
-        width: 100%;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        flex: 0 0 34px;
         border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 10px 12px;
-        background: white;
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+      }
+      .icon-button:hover { border-color: var(--accent); color: var(--accent); }
+      .icon-button:disabled, .send-button:disabled { cursor: not-allowed; opacity: 0.45; }
+
+      .sessions { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; }
+      .session-list { min-height: 0; padding: 6px; overflow: auto; }
+      .session-item {
+        display: grid;
+        gap: 4px;
+        width: 100%;
+        margin: 0 0 4px;
+        padding: 9px 10px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
         color: var(--text);
         cursor: pointer;
         text-align: left;
       }
+      .session-item:hover { background: var(--panel-muted); }
+      .session-item.active { background: var(--accent-soft); }
+      .session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+      .session-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
+      .session-footer { padding: 10px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 
-      .prompt:hover {
-        border-color: rgba(15, 123, 108, 0.7);
+      .conversation { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 640px; overflow: hidden; }
+      .conversation-status { color: var(--muted); font-size: 12px; }
+      .messages { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; padding: 16px; overflow: auto; }
+      .message {
+        max-width: min(760px, 88%);
+        padding: 11px 13px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        line-height: 1.55;
       }
+      .message.user { align-self: flex-end; border-color: #b9d8ce; background: var(--accent-soft); }
+      .message.assistant { align-self: flex-start; }
+      .message.pending { color: var(--muted); }
+      .message.error { align-self: flex-start; border-color: #ecc0b1; background: var(--danger-soft); color: var(--danger); }
+      .empty-state { margin: auto; color: var(--muted); font-size: 13px; }
 
-      .footer {
-        color: var(--muted);
-        font-size: 12px;
-        text-align: center;
+      .composer { position: relative; min-width: 0; padding: 12px; border-top: 1px solid var(--line); background: var(--panel-muted); }
+      .composer-box { display: grid; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+      .message-input { width: 100%; min-height: 52px; max-height: 160px; resize: none; border: 0; outline: 0; color: var(--text); background: transparent; line-height: 1.5; }
+      .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .toolbar-left { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .attachment-note { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .send-button { border-color: var(--accent); background: var(--accent); color: #ffffff; }
+      .add-menu {
+        position: absolute;
+        left: 0;
+        bottom: 42px;
+        z-index: 4;
+        width: 160px;
+        padding: 5px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
       }
+      .menu-item { width: 100%; padding: 8px 9px; border: 0; border-radius: 5px; background: transparent; cursor: pointer; text-align: left; }
+      .menu-item:hover { background: var(--panel-muted); }
+      .file-input { display: none; }
+      .link-adder { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; }
+      .link-input { min-width: 0; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; }
+      .link-action { width: 34px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); cursor: pointer; }
+      .attachments { display: flex; gap: 7px; flex-wrap: wrap; }
+      .attachment { display: flex; align-items: center; gap: 7px; max-width: 220px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-muted); }
+      .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+      .attachment-remove { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 
-      @media (max-width: 820px) {
-        .shell {
-          width: min(100vw - 20px, 1040px);
-          padding: 10px 0;
-        }
+      .inspector { min-height: 0; overflow: auto; }
+      .metric { padding: 11px 12px; border-bottom: 1px solid var(--line); }
+      .metric-label { color: var(--muted); font-size: 11px; }
+      .metric-value { margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
+      .memory-list { display: grid; gap: 6px; padding: 10px 12px; }
+      .memory-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
+      .memory-item:last-child { border-bottom: 0; }
+      .memory-key { color: var(--info); font-size: 11px; }
+      .memory-value { margin-top: 3px; font-size: 12px; overflow-wrap: anywhere; }
+      .command { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; text-align: left; }
+      .command:hover { border-color: var(--accent); }
+      .command.danger { color: var(--danger); }
+      .command:disabled { opacity: 0.45; cursor: not-allowed; }
+      .actions { display: grid; gap: 7px; padding: 10px 12px; }
 
-        .topbar,
-        .workspace {
-          grid-template-columns: 1fr;
-        }
-
-        .topbar {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .conversation {
-          min-height: 520px;
-        }
-
-        .side {
-          order: -1;
-        }
-
-        .composer {
-          padding: 10px;
-        }
-
-        .composer-box {
-          padding: 10px;
-        }
-
-        .attachment-card {
-          width: 100%;
-        }
+      @media (max-width: 1080px) {
+        .workspace { grid-template-columns: 220px minmax(0, 1fr); }
+        .inspector { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .inspector .panel-header, .inspector .memory-list, .inspector .actions { grid-column: 1 / -1; }
+      }
+      @media (max-width: 760px) {
+        .shell { width: min(calc(100vw - 12px), 760px); padding: 6px 0; }
+        .workspace { grid-template-columns: 1fr; }
+        .sessions { max-height: none; }
+        .session-list { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; }
+        .session-item { flex: 0 0 min(240px, calc(100vw - 48px)); margin: 0; }
+        .conversation { min-height: 560px; }
+        .messages { padding: 12px; }
+        .message { max-width: 94%; }
+        .inspector { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .topbar { align-items: flex-start; }
+        .health { margin-top: 4px; }
       }
     </style>
   </head>
@@ -560,658 +219,533 @@
     <main class="shell">
       <header class="topbar">
         <div class="brand">
-          <div class="mark">AG</div>
-          <div class="title">
-            <h1>AI 应用基础平台 Demo</h1>
-            <div class="subtitle" id="endpoint">localhost</div>
+          <div class="mark">AI</div>
+          <div>
+            <h1>AI 应用基础平台</h1>
+            <div class="subtitle" id="endpoint">连接模型网关中</div>
           </div>
         </div>
-        <div class="status">
-          <span class="dot" id="statusDot"></span>
-          <span id="statusText">检查中</span>
-        </div>
+        <div class="health"><span class="dot" id="statusDot"></span><span id="statusText">检查中</span></div>
       </header>
 
       <section class="workspace">
-        <div class="conversation">
-          <div class="messages" id="messages">
-            <div class="message assistant">本地网关已接入，可以发送文字、图片和文档链接。</div>
+        <aside class="panel sessions">
+          <div class="panel-header">
+            <div class="panel-title">会话</div>
+            <button class="icon-button" id="newConversation" type="button" aria-label="新建会话" title="新建会话">+</button>
           </div>
+          <div class="session-list" id="sessionList"></div>
+          <div class="session-footer" id="sessionCount">0 个会话</div>
+        </aside>
+
+        <section class="panel conversation">
+          <div class="panel-header">
+            <div class="panel-title" id="conversationTitle">选择会话</div>
+            <div class="conversation-status" id="conversationStatus">-</div>
+          </div>
+          <div class="messages" id="messages"><div class="empty-state">正在加载会话</div></div>
           <form class="composer" id="form">
             <div class="composer-box">
               <div class="attachments" id="attachments" hidden></div>
-              <textarea class="message-input" id="messageInput" rows="2" placeholder="输入消息，或用左下角 + 追加图片/文档链接" autocomplete="off">用一句话说明当前 AI 应用基础平台是否生效。</textarea>
-
               <div class="link-adder" id="linkAdder" hidden>
-                <div class="link-label" id="linkLabel">追加链接</div>
-                <div class="link-input-row">
-                  <input class="link-input" id="linkInput" type="url" placeholder="https://example.com" autocomplete="off" />
-                  <button class="link-action" id="confirmLink" type="button" title="添加链接" aria-label="添加链接">+</button>
-                  <button class="link-action" id="cancelLink" type="button" title="取消" aria-label="取消">×</button>
-                </div>
+                <input class="link-input" id="linkInput" type="url" placeholder="https://example.com" autocomplete="off" />
+                <button class="link-action" id="confirmLink" type="button" aria-label="添加链接">+</button>
+                <button class="link-action" id="cancelLink" type="button" aria-label="取消">×</button>
               </div>
-
+              <textarea class="message-input" id="messageInput" rows="2" placeholder="输入消息" autocomplete="off"></textarea>
               <div class="composer-toolbar">
                 <div class="toolbar-left">
-                  <button class="icon-button" id="openAddMenu" type="button" title="添加内容" aria-label="添加内容">+</button>
+                  <button class="icon-button" id="openAddMenu" type="button" aria-label="添加附件" title="添加附件">+</button>
                   <div class="add-menu" id="addMenu" hidden>
-                    <button class="menu-item" id="chooseImageButton" type="button"><span class="menu-icon">▣</span><span>上传图片</span></button>
-                    <button class="menu-item" type="button" data-link-type="image"><span class="menu-icon">◎</span><span>图片链接</span></button>
-                    <button class="menu-item" type="button" data-link-type="document"><span class="menu-icon">#</span><span>文档链接</span></button>
+                    <button class="menu-item" id="chooseImage" type="button">上传图片</button>
+                    <button class="menu-item" type="button" data-link-type="image">图片链接</button>
+                    <button class="menu-item" type="button" data-link-type="document">文档链接</button>
                   </div>
-                  <span class="attachment-note" id="attachmentNote">可追加图片或文档链接</span>
+                  <span class="attachment-note" id="attachmentNote">无附件</span>
                 </div>
-                <button class="send" id="send" type="submit" title="发送" aria-label="发送">↑</button>
+                <button class="send-button" id="send" type="submit" aria-label="发送" title="发送">↑</button>
                 <input class="file-input" id="imageFileInput" type="file" accept="image/*" multiple />
               </div>
             </div>
           </form>
-        </div>
+        </section>
 
-        <aside class="side">
-          <div class="metric">
-            <div class="label">模型别名</div>
-            <div class="value" id="model">chat-default</div>
-          </div>
-          <div class="metric">
-            <div class="label">最近耗时</div>
-            <div class="value" id="latency">-</div>
-          </div>
-          <div class="metric">
-            <div class="label">最近状态</div>
-            <div class="value" id="lastStatus">等待请求</div>
-          </div>
-          <div class="metric">
-            <div class="label">上下文</div>
-            <div class="value" id="contextCount">0 条消息</div>
-          </div>
-          <div class="metric">
-            <div class="label">图片输入</div>
-            <div class="value">上传图片或图片 URL</div>
-          </div>
-          <div class="metric">
-            <div class="label">文档链接</div>
-            <div class="value">作为文本链接传入</div>
-          </div>
-          <div class="metric prompts">
-            <button class="prompt" type="button" data-message="用三点总结 LiteLLM Proxy 的作用。">总结网关</button>
-            <button class="prompt" type="button" data-message="请分析这张图片里的主体、文字和可能的业务含义。">分析图片</button>
-            <button class="prompt" type="button" data-message="请基于这个文档链接总结重点；如果无法访问链接，请说明原因。">总结文档链接</button>
-            <button class="prompt" id="clearContext" type="button">清空上下文</button>
+        <aside class="panel inspector">
+          <div class="panel-header"><div class="panel-title">运行上下文</div></div>
+          <div class="metric"><div class="metric-label">模型</div><div class="metric-value" id="model">chat-default</div></div>
+          <div class="metric"><div class="metric-label">最近耗时</div><div class="metric-value" id="latency">-</div></div>
+          <div class="metric"><div class="metric-label">会话版本</div><div class="metric-value" id="conversationVersion">-</div></div>
+          <div class="metric"><div class="metric-label">记忆版本</div><div class="metric-value" id="memoryVersion">-</div></div>
+          <div class="metric"><div class="metric-label">压缩水位</div><div class="metric-value" id="memoryWatermark">-</div></div>
+          <div class="metric"><div class="metric-label">本轮 token</div><div class="metric-value" id="contextTokens">-</div></div>
+          <div class="memory-list" id="memoryList"></div>
+          <div class="actions">
+            <button class="command" type="button" data-prompt="总结当前目标、已完成事项和下一步。">总结当前状态</button>
+            <button class="command" type="button" data-prompt="列出当前仍然有效的关键约束和已做决定。">检查有效记忆</button>
+            <button class="command danger" id="closeConversation" type="button">结束会话</button>
           </div>
         </aside>
       </section>
-
-      <div class="footer">API Key 由本地 demo server 从 .env 读取；文档内图片需要单独上传或提供图片直链。</div>
     </main>
 
     <script>
-      const messages = document.querySelector("#messages");
-      const form = document.querySelector("#form");
-      const messageInput = document.querySelector("#messageInput");
-      const attachments = document.querySelector("#attachments");
-      const linkAdder = document.querySelector("#linkAdder");
-      const linkLabel = document.querySelector("#linkLabel");
-      const linkInput = document.querySelector("#linkInput");
-      const confirmLink = document.querySelector("#confirmLink");
-      const cancelLink = document.querySelector("#cancelLink");
-      const openAddMenu = document.querySelector("#openAddMenu");
-      const addMenu = document.querySelector("#addMenu");
-      const chooseImageButton = document.querySelector("#chooseImageButton");
-      const imageFileInput = document.querySelector("#imageFileInput");
-      const attachmentNote = document.querySelector("#attachmentNote");
-      const send = document.querySelector("#send");
-      const statusDot = document.querySelector("#statusDot");
-      const statusText = document.querySelector("#statusText");
-      const endpoint = document.querySelector("#endpoint");
-      const model = document.querySelector("#model");
-      const latency = document.querySelector("#latency");
-      const lastStatus = document.querySelector("#lastStatus");
-      const contextCount = document.querySelector("#contextCount");
-      const clearContext = document.querySelector("#clearContext");
-      const maxImageCount = 4;
-      const maxImageBytes = 5 * 1024 * 1024;
-      const maxRecentHistoryMessages = 8;
-      const maxRequestHistoryChars = 12000;
+      const elements = {
+        endpoint: document.querySelector("#endpoint"),
+        statusDot: document.querySelector("#statusDot"),
+        statusText: document.querySelector("#statusText"),
+        sessionList: document.querySelector("#sessionList"),
+        sessionCount: document.querySelector("#sessionCount"),
+        newConversation: document.querySelector("#newConversation"),
+        conversationTitle: document.querySelector("#conversationTitle"),
+        conversationStatus: document.querySelector("#conversationStatus"),
+        messages: document.querySelector("#messages"),
+        form: document.querySelector("#form"),
+        messageInput: document.querySelector("#messageInput"),
+        send: document.querySelector("#send"),
+        model: document.querySelector("#model"),
+        latency: document.querySelector("#latency"),
+        conversationVersion: document.querySelector("#conversationVersion"),
+        memoryVersion: document.querySelector("#memoryVersion"),
+        memoryWatermark: document.querySelector("#memoryWatermark"),
+        contextTokens: document.querySelector("#contextTokens"),
+        memoryList: document.querySelector("#memoryList"),
+        closeConversation: document.querySelector("#closeConversation"),
+        openAddMenu: document.querySelector("#openAddMenu"),
+        addMenu: document.querySelector("#addMenu"),
+        chooseImage: document.querySelector("#chooseImage"),
+        imageFileInput: document.querySelector("#imageFileInput"),
+        attachments: document.querySelector("#attachments"),
+        attachmentNote: document.querySelector("#attachmentNote"),
+        linkAdder: document.querySelector("#linkAdder"),
+        linkInput: document.querySelector("#linkInput"),
+        confirmLink: document.querySelector("#confirmLink"),
+        cancelLink: document.querySelector("#cancelLink"),
+      };
+
+      let conversations = [];
+      let currentConversation = null;
+      let currentConversationId = "";
+      let currentContext = null;
+      let eventSource = null;
+      let refreshTimer = null;
+      let activeLinkType = "image";
       let attachedImages = [];
       let attachedDocuments = [];
-      let conversationHistory = [];
-      let conversationSummary = "";
-      let isSummarizing = false;
-      let activeLinkType = "image";
-      let isComposing = false;
+      let sending = false;
 
-      /**
-       * 向对话区追加一条消息并滚动到最新内容。
-       *
-       * @param {string} role - 消息展示角色。
-       * @param {string} text - 消息正文。
-       * @returns {HTMLDivElement} 新建的消息节点。
-       */
-      function addMessage(role, text) {
+      /** 初始化网关状态、会话列表和周期性多端补偿刷新。 */
+      async function initialize() {
+        bindEvents();
+        await loadGatewayStatus();
+        await refreshConversationList(true);
+        setInterval(refreshConversationList, 5000);
+      }
+
+      /** 绑定页面所有静态交互。 */
+      function bindEvents() {
+        elements.newConversation.addEventListener("click", createConversation);
+        elements.form.addEventListener("submit", handleSubmit);
+        elements.closeConversation.addEventListener("click", closeCurrentConversation);
+        elements.openAddMenu.addEventListener("click", toggleAddMenu);
+        elements.chooseImage.addEventListener("click", openImagePicker);
+        elements.imageFileInput.addEventListener("change", handleImageSelection);
+        elements.confirmLink.addEventListener("click", confirmAttachmentLink);
+        elements.cancelLink.addEventListener("click", closeLinkAdder);
+        elements.messageInput.addEventListener("input", resizeInput);
+        for (const button of document.querySelectorAll("[data-link-type]")) button.addEventListener("click", openLinkAdder);
+        for (const button of document.querySelectorAll("[data-prompt]")) button.addEventListener("click", applyPrompt);
+      }
+
+      /** 查询模型网关健康状态。 */
+      async function loadGatewayStatus() {
+        try {
+          const data = await requestJson("/api/gateway/status");
+          elements.endpoint.textContent = data.gatewayBaseUrl;
+          elements.model.textContent = data.model;
+          setHealth(data.ok, data.ok ? "已连接" : "未连接");
+        } catch (error) {
+          setHealth(false, error.message);
+        }
+      }
+
+      /** 同步更新网关状态指示。 */
+      function setHealth(ok, text) {
+        elements.statusDot.className = `dot ${ok ? "ok" : "bad"}`;
+        elements.statusText.textContent = text;
+      }
+
+      /** 刷新会话列表；首次加载时自动创建或选择一个会话。 */
+      async function refreshConversationList(selectInitial = false) {
+        const data = await requestJson("/api/runtime/conversations");
+        conversations = data.conversations || [];
+        renderConversationList();
+        if (selectInitial && !currentConversationId) {
+          if (conversations.length === 0) await createConversation();
+          else await selectConversation(conversations[0].id);
+        }
+      }
+
+      /** 绘制会话列表和当前选中态。 */
+      function renderConversationList() {
+        elements.sessionList.textContent = "";
+        for (const conversation of conversations) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `session-item ${conversation.id === currentConversationId ? "active" : ""}`;
+          button.dataset.conversationId = conversation.id;
+          const title = document.createElement("span");
+          title.className = "session-title";
+          title.textContent = conversation.title;
+          const meta = document.createElement("span");
+          meta.className = "session-meta";
+          meta.innerHTML = `<span>${conversation.status === "active" ? "进行中" : "已结束"}</span><span>${conversation.messageCount} 条</span>`;
+          button.append(title, meta);
+          button.addEventListener("click", handleSessionSelection);
+          elements.sessionList.appendChild(button);
+        }
+        elements.sessionCount.textContent = `${conversations.length} 个会话`;
+      }
+
+      /** 从会话按钮 dataset 读取 ID 并切换会话。 */
+      async function handleSessionSelection(event) {
+        await selectConversation(event.currentTarget.dataset.conversationId);
+      }
+
+      /** 创建新会话并立即切换。 */
+      async function createConversation() {
+        const conversation = await requestJson("/api/runtime/conversations", { method: "POST", body: {} });
+        await refreshConversationList();
+        await selectConversation(conversation.id);
+        elements.messageInput.focus();
+      }
+
+      /** 加载选中会话、重建 SSE 订阅并刷新主视图。 */
+      async function selectConversation(conversationId) {
+        currentConversationId = conversationId;
+        currentContext = null;
+        await loadCurrentConversation();
+        subscribeCurrentConversation();
+        renderConversationList();
+      }
+
+      /** 从 Runtime 获取当前会话完整事实状态。 */
+      async function loadCurrentConversation() {
+        if (!currentConversationId) return;
+        currentConversation = await requestJson(`/api/runtime/conversations/${encodeURIComponent(currentConversationId)}`);
+        renderCurrentConversation();
+      }
+
+      /** 绘制消息、状态、结构化记忆和 Context Manifest。 */
+      function renderCurrentConversation() {
+        if (!currentConversation) return;
+        elements.conversationTitle.textContent = currentConversation.title;
+        elements.conversationStatus.textContent = currentConversation.status === "active" ? "进行中" : "已结束";
+        elements.messages.textContent = "";
+        if (currentConversation.messages.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "empty-state";
+          empty.textContent = "开始一段新对话";
+          elements.messages.appendChild(empty);
+        } else {
+          for (const message of currentConversation.messages) addMessage(message.role, message.displayContent);
+        }
+        elements.conversationVersion.textContent = `v${currentConversation.version} · seq ${currentConversation.lastSeq}`;
+        elements.memoryVersion.textContent = `v${currentConversation.memory.version}`;
+        elements.memoryWatermark.textContent = `已处理至 seq ${currentConversation.memory.summarizedThroughSeq}`;
+        const manifest = currentContext || currentConversation.lastRun?.contextManifest;
+        elements.contextTokens.textContent = manifest
+          ? `${manifest.countedTokens} / ${manifest.budget}`
+          : "等待下一次 Run";
+        elements.closeConversation.disabled = currentConversation.status !== "active";
+        elements.messageInput.disabled = currentConversation.status !== "active";
+        elements.send.disabled = currentConversation.status !== "active" || sending;
+        renderMemoryItems();
+        elements.messages.scrollTop = elements.messages.scrollHeight;
+      }
+
+      /** 显示当前 active 结构化记忆，隐藏 superseded 历史版本。 */
+      function renderMemoryItems() {
+        elements.memoryList.textContent = "";
+        const activeItems = currentConversation.memory.items.filter(isActiveMemory);
+        if (activeItems.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "metric-label";
+          empty.textContent = "暂无结构化记忆";
+          elements.memoryList.appendChild(empty);
+          return;
+        }
+        for (const item of activeItems.slice(0, 10)) {
+          const row = document.createElement("div");
+          row.className = "memory-item";
+          const key = document.createElement("div");
+          key.className = "memory-key";
+          key.textContent = `${item.type} · ${item.entity}.${item.key}`;
+          const value = document.createElement("div");
+          value.className = "memory-value";
+          value.textContent = typeof item.value === "string" ? item.value : JSON.stringify(item.value);
+          row.append(key, value);
+          elements.memoryList.appendChild(row);
+        }
+      }
+
+      /** 判断记忆项是否为当前有效版本。 */
+      function isActiveMemory(item) {
+        return item.status === "active";
+      }
+
+      /** 订阅当前会话 SQLite 事件游标，并在其他端更新后刷新。 */
+      function subscribeCurrentConversation() {
+        if (eventSource) eventSource.close();
+        eventSource = new EventSource(`/api/runtime/conversations/${encodeURIComponent(currentConversationId)}/events`);
+        eventSource.onmessage = scheduleRemoteRefresh;
+      }
+
+      /** 合并短时间内的多个 SSE 事件，避免重复请求详情。 */
+      function scheduleRemoteRefresh() {
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(refreshFromRemoteEvent, 120);
+      }
+
+      /** SSE 事件到达后同步当前会话和列表。 */
+      async function refreshFromRemoteEvent() {
+        await Promise.all([loadCurrentConversation(), refreshConversationList()]);
+      }
+
+      /** 创建并追加一条安全文本消息。 */
+      function addMessage(role, text, extraClass = "") {
         const node = document.createElement("div");
-        node.className = `message ${role}`;
+        node.className = `message ${role} ${extraClass}`.trim();
         node.textContent = text;
-        messages.appendChild(node);
-        messages.scrollTop = messages.scrollHeight;
+        elements.messages.appendChild(node);
+        elements.messages.scrollTop = elements.messages.scrollHeight;
         return node;
       }
 
-      // 同步更新连接状态指示点和可读状态文本。
-      function setHealth(ok, text) {
-        statusDot.className = `dot ${ok ? "ok" : "bad"}`;
-        statusText.textContent = text;
+      /** 处理表单发送并阻止空输入。 */
+      async function handleSubmit(event) {
+        event.preventDefault();
+        const payload = buildRunPayload();
+        if (!payload.message && payload.imageUrls.length === 0 && payload.documentUrls.length === 0) return;
+        await runConversation(payload);
       }
 
-      // 从 Demo Server 获取模型网关状态并刷新侧栏连接信息。
-      async function loadStatus() {
-        try {
-          const res = await fetch("/api/gateway/status");
-          const data = await res.json();
-          endpoint.textContent = data.gatewayBaseUrl;
-          model.textContent = data.model;
-          setHealth(data.ok, data.ok ? "已连接" : "未连接");
-          if (!data.ok && data.error) {
-            lastStatus.textContent = data.error;
-          }
-        } catch (error) {
-          setHealth(false, "未连接");
-          lastStatus.textContent = error.message;
-        }
-      }
-
-      // 将空白或逗号分隔的地址文本整理为去空、去重列表。
-      function parseUrlList(value) {
-        // 去除每个候选地址首尾的空白字符。
-        return [...new Set(value.split(/[\s,，]+/).map((url) => url.trim()).filter(Boolean))];
-      }
-
-      // 提取当前全部图片附件的可发送地址。
-      function getImageUrls() {
-        // 请求载荷只需要图片地址，不携带本地展示元数据。
-        return attachedImages.map((image) => image.url);
-      }
-
-      // 提取当前全部文档附件的可发送地址。
-      function getDocumentUrls() {
-        // 请求载荷只需要文档地址，不携带本地展示元数据。
-        return attachedDocuments.map((document) => document.url);
-      }
-
-      // 组合输入框、附件、摘要和预算内历史，生成 Runtime 聊天请求载荷。
-      function buildPayload() {
+      /** 构造只包含当前输入和幂等标识的 Run 请求。 */
+      function buildRunPayload() {
         return {
-          message: messageInput.value.trim(),
-          imageUrls: getImageUrls(),
-          documentUrls: getDocumentUrls(),
-          summary: conversationSummary,
-          history: selectHistoryForRequest(),
+          requestId: crypto.randomUUID(),
+          clientMessageId: crypto.randomUUID(),
+          message: elements.messageInput.value.trim(),
+          imageUrls: attachedImages.map(getAttachmentUrl),
+          documentUrls: attachedDocuments.map(getAttachmentUrl),
         };
       }
 
-      // 判断当前请求是否至少包含正文、图片或文档链接之一。
-      function hasPayloadContent(payload) {
-        return payload.message || payload.imageUrls.length > 0 || payload.documentUrls.length > 0;
+      /** 返回附件 URL，供当前 Run 载荷复用。 */
+      function getAttachmentUrl(item) {
+        return item.url;
       }
 
-      // 将用户本轮输入整理为适合在对话区展示和写入历史的纯文本。
-      function formatUserMessage(payload) {
+      /** 调用会话 Run API，并以服务端事实状态覆盖乐观 UI。 */
+      async function runConversation(payload) {
+        const startedAt = performance.now();
+        const display = formatDisplayInput(payload);
+        elements.messages.querySelector(".empty-state")?.remove();
+        addMessage("user", display);
+        const pending = addMessage("assistant", "请求中", "pending");
+        sending = true;
+        elements.send.disabled = true;
+        resetComposer();
+        try {
+          const data = await requestJson(
+            `/api/runtime/conversations/${encodeURIComponent(currentConversationId)}/runs`,
+            { method: "POST", body: payload },
+          );
+          currentConversation = data.conversation;
+          currentContext = data.context;
+          elements.latency.textContent = `${Math.round(performance.now() - startedAt)} ms`;
+          setHealth(true, data.replayed ? "已重放" : "已连接");
+          renderCurrentConversation();
+          await refreshConversationList();
+        } catch (error) {
+          await loadCurrentConversation();
+          pending.remove();
+          addMessage("error", error.message);
+          setHealth(false, "请求失败");
+        } finally {
+          sending = false;
+          elements.send.disabled = currentConversation?.status !== "active";
+          elements.messageInput.focus();
+        }
+      }
+
+      /** 将当前输入转换为乐观消息文本。 */
+      function formatDisplayInput(payload) {
         const sections = [];
         if (payload.message) sections.push(payload.message);
         if (payload.imageUrls.length > 0) sections.push(`图片：${payload.imageUrls.length} 个`);
-        if (payload.documentUrls.length > 0) {
-          // 将每个文档地址显示为独立列表项。
-          sections.push(`文档链接：\n${payload.documentUrls.map((url) => `- ${url}`).join("\n")}`);
-        }
+        if (payload.documentUrls.length > 0) sections.push(`参考文档链接：\n${payload.documentUrls.join("\n")}`);
         return sections.join("\n\n");
       }
 
-      // 清空已提交的输入和附件，并恢复编辑器初始状态。
-      function resetComposer() {
-        messageInput.value = "";
-        attachedImages = [];
-        attachedDocuments = [];
-        closeLinkAdder();
-        closeAddMenu();
-        renderAttachments();
+      /** 完成最终 checkpoint 并关闭当前会话。 */
+      async function closeCurrentConversation() {
+        if (!currentConversationId || !window.confirm("结束当前会话？")) return;
+        const data = await requestJson(
+          `/api/runtime/conversations/${encodeURIComponent(currentConversationId)}/close`,
+          { method: "POST", body: {} },
+        );
+        currentConversation = await requestJson(`/api/runtime/conversations/${encodeURIComponent(data.conversation.id)}`);
+        renderCurrentConversation();
+        await refreshConversationList();
+      }
+
+      /** 把快捷命令写入输入框。 */
+      function applyPrompt(event) {
+        elements.messageInput.value = event.currentTarget.dataset.prompt;
         resizeInput();
+        elements.messageInput.focus();
       }
 
-      /**
-       * 调用 Runtime 聊天接口，并同步消息区、历史、耗时和连接状态。
-       *
-       * @param {object} payload - 当前聊天请求载荷。
-       * @returns {Promise<void>}
-       */
-      async function ask(payload) {
-        const startedAt = performance.now();
-        const userText = formatUserMessage(payload);
-        addMessage("user", userText);
-        const pending = addMessage("assistant", "请求中...");
-        send.disabled = true;
-        lastStatus.textContent = "请求中";
-        latency.textContent = "-";
+      /** 打开或关闭附件菜单。 */
+      function toggleAddMenu() {
+        elements.addMenu.hidden = !elements.addMenu.hidden;
+      }
 
-        try {
-          const res = await fetch("/api/runtime/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const data = await res.json();
-          const elapsed = Math.round(performance.now() - startedAt);
-          latency.textContent = `${elapsed} ms`;
-          if (!res.ok) {
-            pending.className = "message error";
-            pending.textContent = data.error || "请求失败";
-            lastStatus.textContent = `HTTP ${res.status}`;
-            return;
-          }
+      /** 打开本地图片选择器。 */
+      function openImagePicker() {
+        elements.addMenu.hidden = true;
+        elements.imageFileInput.click();
+      }
 
-          const assistantText = data.content || "(空响应)";
-          pending.textContent = assistantText;
-          appendHistory("user", userText);
-          appendHistory("assistant", assistantText);
-          await compactHistoryIfNeeded();
-          lastStatus.textContent = "成功";
-          setHealth(true, "已连接");
-        } catch (error) {
-          pending.className = "message error";
-          pending.textContent = error.message;
-          lastStatus.textContent = "请求失败";
-          setHealth(false, "未连接");
-        } finally {
-          send.disabled = false;
-          messageInput.focus();
+      /** 读取选择的本地图片并添加为 data URL。 */
+      async function handleImageSelection(event) {
+        for (const file of event.target.files) {
+          if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024 || attachedImages.length >= 4) continue;
+          attachedImages.push({ id: crypto.randomUUID(), name: file.name, url: await readFileAsDataUrl(file) });
         }
-      }
-
-      // 根据输入内容高度调整文本框，并限制最大高度避免挤压页面。
-      function autoResize(field) {
-        field.style.height = "auto";
-        field.style.height = `${Math.min(field.scrollHeight, 160)}px`;
-      }
-
-      // 重新计算主消息输入框高度。
-      function resizeInput() {
-        autoResize(messageInput);
-      }
-
-      // 将已完成消息追加到近期上下文，并刷新上下文计数。
-      function appendHistory(role, content) {
-        conversationHistory.push({ role, content });
-        updateContextCount();
-      }
-
-      // 清空浏览器内维护的近期历史和摘要记忆。
-      function clearConversationContext() {
-        conversationHistory = [];
-        conversationSummary = "";
-        updateContextCount();
-        lastStatus.textContent = "上下文已清空";
-        messageInput.focus();
-      }
-
-      // 在侧栏展示近期消息数量及摘要是否存在。
-      function updateContextCount() {
-        const summaryText = conversationSummary ? "，有摘要" : "，无摘要";
-        contextCount.textContent = `${conversationHistory.length} 条近期消息${summaryText}`;
-      }
-
-      /**
-       * 从最近消息向前选择字符预算内的请求历史，优先保留最新上下文。
-       *
-       * @returns {Array<object>} 保持时间顺序的历史消息副本。
-       */
-      function selectHistoryForRequest() {
-        const selected = [];
-        let used = 0;
-
-        for (const item of conversationHistory.slice().reverse()) {
-          const cost = item.content.length;
-          if (used + cost > maxRequestHistoryChars) break;
-          selected.unshift(item);
-          used += cost;
-        }
-
-        return selected;
-      }
-
-      /**
-       * 将超出近期窗口的旧消息合并进摘要，并保留窗口内消息供后续请求使用。
-       *
-       * @returns {Promise<void>}
-       */
-      async function compactHistoryIfNeeded() {
-        if (isSummarizing || conversationHistory.length <= maxRecentHistoryMessages) return;
-
-        const overflowCount = conversationHistory.length - maxRecentHistoryMessages;
-        const messagesToSummarize = conversationHistory.slice(0, overflowCount);
-        const recentMessages = conversationHistory.slice(overflowCount);
-        isSummarizing = true;
-        lastStatus.textContent = "压缩上下文";
-
-        try {
-          const res = await fetch("/api/runtime/summaries", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              summary: conversationSummary,
-              messages: messagesToSummarize,
-            }),
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "上下文压缩失败");
-          conversationSummary = data.summary || conversationSummary;
-          conversationHistory = recentMessages;
-        } catch (error) {
-          addMessage("error", `上下文压缩失败：${error.message}`);
-        } finally {
-          isSummarizing = false;
-          updateContextCount();
-        }
-      }
-
-      // 根据当前附件数量更新编辑器底部提示。
-      function updateAttachmentNote() {
-        const imageCount = attachedImages.length;
-        const documentCount = attachedDocuments.length;
-        if (imageCount === 0 && documentCount === 0) {
-          attachmentNote.textContent = "可追加图片或文档链接";
-          return;
-        }
-        attachmentNote.textContent = `已追加图片 ${imageCount} 个，文档链接 ${documentCount} 个`;
-      }
-
-      /**
-       * 根据当前图片和文档状态重建附件列表，并绑定预览失败与移除交互。
-       *
-       * @returns {void}
-       */
-      function renderAttachments() {
-        const items = [
-          // 给图片展示项补充统一的附件类型标记。
-          ...attachedImages.map((image) => ({ ...image, type: "image" })),
-          // 给文档展示项补充统一的附件类型标记。
-          ...attachedDocuments.map((document) => ({ ...document, type: "document" })),
-        ];
-        attachments.textContent = "";
-        attachments.hidden = items.length === 0;
-
-        for (const item of items) {
-          const card = document.createElement("div");
-          card.className = "attachment-card";
-
-          const thumb = document.createElement("div");
-          thumb.className = "attachment-thumb";
-          if (item.type === "image") {
-            const image = document.createElement("img");
-            image.src = item.url;
-            image.alt = item.name;
-            // 图片预览加载失败时退化为稳定的文本占位符。
-            image.addEventListener("error", () => {
-              thumb.textContent = "IMG";
-            });
-            thumb.appendChild(image);
-          } else {
-            thumb.textContent = "DOC";
-          }
-
-          const meta = document.createElement("div");
-          meta.className = "attachment-meta";
-          const title = document.createElement("div");
-          title.className = "attachment-title";
-          title.textContent = item.name;
-          const subtitle = document.createElement("div");
-          subtitle.className = "attachment-subtitle";
-          subtitle.textContent = item.type === "image" ? formatImageSubtitle(item) : "文档链接";
-          meta.append(title, subtitle);
-
-          const remove = document.createElement("button");
-          remove.className = "remove-attachment";
-          remove.type = "button";
-          remove.textContent = "×";
-          remove.setAttribute("aria-label", `移除 ${item.name}`);
-          // 从对应附件集合移除当前项，并重建列表保持展示状态一致。
-          remove.addEventListener("click", () => {
-            if (item.type === "image") {
-              // 保留当前移除目标之外的图片附件。
-              attachedImages = attachedImages.filter((image) => image.id !== item.id);
-            } else {
-              // 保留当前移除目标之外的文档附件。
-              attachedDocuments = attachedDocuments.filter((document) => document.id !== item.id);
-            }
-            renderAttachments();
-          });
-
-          card.append(thumb, meta, remove);
-          attachments.appendChild(card);
-        }
-
-        updateAttachmentNote();
-      }
-
-      /**
-       * 校验本地图片数量、类型和体积，读取为 data URL 后加入附件集合。
-       *
-       * @param {File[]} files - 用户选择的本地文件。
-       * @returns {Promise<void>}
-       */
-      async function addImageFiles(files) {
-        // 只允许浏览器识别为图片 MIME 类型的文件进入读取流程。
-        const images = files.filter((file) => file.type.startsWith("image/"));
-        if (images.length !== files.length) {
-          addMessage("error", "只能上传图片文件。");
-        }
-        for (const file of images) {
-          if (attachedImages.length >= maxImageCount) {
-            addMessage("error", `最多上传 ${maxImageCount} 张图片。`);
-            break;
-          }
-          if (file.size > maxImageBytes) {
-            addMessage("error", `${file.name} 超过 5 MB，未添加。`);
-            continue;
-          }
-          const url = await readFileAsDataUrl(file);
-          attachedImages.push({
-            id: `${file.name}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
-            name: file.name,
-            size: file.size,
-            source: "file",
-            url,
-          });
-        }
+        event.target.value = "";
         renderAttachments();
       }
 
-      // 将输入框中的图片或文档地址转换为附件项，并刷新编辑器状态。
-      function addLink(type) {
-        const urls = parseUrlList(linkInput.value);
-        if (urls.length === 0) return;
-
-        if (type === "image") {
-          for (const url of urls) {
-            if (attachedImages.length >= maxImageCount) {
-              addMessage("error", `最多追加 ${maxImageCount} 张图片。`);
-              break;
-            }
-            attachedImages.push({
-              id: `image-url-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-              name: readableName(url, "图片链接"),
-              source: "url",
-              url,
-            });
-          }
-        } else {
-          for (const url of urls) {
-            attachedDocuments.push({
-              id: `document-url-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-              name: readableName(url, "文档链接"),
-              url,
-            });
-          }
-        }
-
-        closeLinkAdder();
-        renderAttachments();
-      }
-
-      /**
-       * 通过 FileReader 将本地文件异步读取为可随 JSON 请求发送的 data URL。
-       *
-       * @param {File} file - 待读取图片文件。
-       * @returns {Promise<string>} 文件 data URL。
-       */
+      /** 将本地文件异步读取为 data URL。 */
       function readFileAsDataUrl(file) {
-        // 将 FileReader 的事件接口转换为可等待的 Promise。
+        // FileReader 事件通过一次性 Promise 暴露给附件流程。
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
-          // 文件读取完成后统一返回字符串结果。
-          reader.onload = () => resolve(String(reader.result || ""));
-          // 文件读取失败时保留浏览器错误，缺失时提供可读兜底错误。
-          reader.onerror = () => reject(reader.error || new Error("图片读取失败"));
+          reader.addEventListener("load", handleLoad);
+          reader.addEventListener("error", reject);
+          /** 返回 FileReader 已完成的 data URL。 */
+          function handleLoad() { resolve(String(reader.result)); }
           reader.readAsDataURL(file);
         });
       }
 
-      // 将字节数格式化为附件列表使用的 KB 或 MB 文本。
-      function formatSize(size) {
-        if (!size) return "";
-        if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
-        return `${(size / 1024 / 1024).toFixed(1)} MB`;
+      /** 打开图片或文档链接输入行。 */
+      function openLinkAdder(event) {
+        activeLinkType = event.currentTarget.dataset.linkType;
+        elements.addMenu.hidden = true;
+        elements.linkAdder.hidden = false;
+        elements.linkInput.placeholder = activeLinkType === "image" ? "图片 URL" : "文档 URL";
+        elements.linkInput.focus();
       }
 
-      // 根据图片来源生成本地文件大小或远程链接说明。
-      function formatImageSubtitle(image) {
-        return image.source === "file" ? `本地图片 ${formatSize(image.size)}` : "图片链接";
+      /** 校验并添加当前链接附件。 */
+      function confirmAttachmentLink() {
+        const url = elements.linkInput.value.trim();
+        if (!/^https?:\/\//i.test(url)) return;
+        const item = { id: crypto.randomUUID(), name: url, url };
+        if (activeLinkType === "image") attachedImages.push(item);
+        else attachedDocuments.push(item);
+        closeLinkAdder();
+        renderAttachments();
       }
 
-      // 优先从 URL 路径提取可读文件名，解析失败时使用业务兜底名称。
-      function readableName(value, fallback) {
-        try {
-          const url = new URL(value);
-          const leaf = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || "");
-          return leaf || url.hostname || fallback;
-        } catch {
-          return fallback;
-        }
-      }
-
-      // 打开指定附件类型的链接输入区，并同步标签、占位符和焦点。
-      function openLinkAdder(type) {
-        activeLinkType = type;
-        closeAddMenu();
-        linkAdder.hidden = false;
-        linkLabel.textContent = type === "image" ? "追加图片链接" : "追加文档链接";
-        linkInput.placeholder = type === "image" ? "https://example.com/image.png" : "https://example.com/doc";
-        linkInput.value = "";
-        linkInput.focus();
-      }
-
-      // 关闭链接输入区并清理尚未确认的内容。
+      /** 关闭链接输入行并清空输入。 */
       function closeLinkAdder() {
-        linkAdder.hidden = true;
-        linkInput.value = "";
+        elements.linkInput.value = "";
+        elements.linkAdder.hidden = true;
       }
 
-      // 切换附件菜单显隐并同步无障碍展开状态。
-      function toggleAddMenu() {
-        addMenu.hidden = !addMenu.hidden;
-        openAddMenu.setAttribute("aria-expanded", String(!addMenu.hidden));
+      /** 绘制当前图片和文档附件。 */
+      function renderAttachments() {
+        elements.attachments.textContent = "";
+        const items = [
+          ...attachedImages.map(markImageAttachment),
+          ...attachedDocuments.map(markDocumentAttachment),
+        ];
+        for (const item of items) {
+          const row = document.createElement("div");
+          row.className = "attachment";
+          const name = document.createElement("span");
+          name.className = "attachment-name";
+          name.textContent = `${item.type === "image" ? "图片" : "文档"} · ${item.name}`;
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "attachment-remove";
+          remove.textContent = "×";
+          remove.dataset.attachmentId = item.id;
+          remove.dataset.attachmentType = item.type;
+          remove.addEventListener("click", removeAttachment);
+          row.append(name, remove);
+          elements.attachments.appendChild(row);
+        }
+        elements.attachments.hidden = items.length === 0;
+        elements.attachmentNote.textContent = items.length === 0 ? "无附件" : `${items.length} 个附件`;
       }
 
-      // 关闭附件菜单并重置无障碍展开状态。
-      function closeAddMenu() {
-        addMenu.hidden = true;
-        openAddMenu.setAttribute("aria-expanded", "false");
+      /** 给图片附件补充展示类型。 */
+      function markImageAttachment(item) { return { ...item, type: "image" }; }
+
+      /** 给文档附件补充展示类型。 */
+      function markDocumentAttachment(item) { return { ...item, type: "document" }; }
+
+      /** 从对应集合移除附件。 */
+      function removeAttachment(event) {
+        const { attachmentId, attachmentType } = event.currentTarget.dataset;
+        /** 保留当前移除目标之外的附件。 */
+        function keepAttachment(item) { return item.id !== attachmentId; }
+        if (attachmentType === "image") attachedImages = attachedImages.filter(keepAttachment);
+        else attachedDocuments = attachedDocuments.filter(keepAttachment);
+        renderAttachments();
       }
 
-      // 提交有效输入后立即重置编辑器，并异步发起聊天请求。
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        const payload = buildPayload();
-        if (!hasPayloadContent(payload)) return;
-        resetComposer();
-        ask(payload);
-      });
+      /** 清空已发送输入和附件。 */
+      function resetComposer() {
+        elements.messageInput.value = "";
+        attachedImages = [];
+        attachedDocuments = [];
+        closeLinkAdder();
+        elements.addMenu.hidden = true;
+        renderAttachments();
+        resizeInput();
+      }
 
-      // 为每个示例提示按钮绑定将预设内容写入输入框的交互。
-      document.querySelectorAll(".prompt").forEach((button) => {
-        // 清空按钮使用独立处理函数，其余按钮填充对应预设问题。
-        button.addEventListener("click", () => {
-          if (button.id === "clearContext") return;
-          messageInput.value = button.dataset.message || button.textContent.trim();
-          autoResize(messageInput);
-          messageInput.focus();
+      /** 根据内容自适应输入框高度并限制最大值。 */
+      function resizeInput() {
+        elements.messageInput.style.height = "auto";
+        elements.messageInput.style.height = `${Math.min(elements.messageInput.scrollHeight, 160)}px`;
+      }
+
+      /** 执行 JSON API 请求并把错误载荷转换为 Error。 */
+      async function requestJson(path, options = {}) {
+        const response = await fetch(path, {
+          method: options.method || "GET",
+          headers: options.body ? { "Content-Type": "application/json" } : undefined,
+          body: options.body ? JSON.stringify(options.body) : undefined,
         });
-      });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        return data;
+      }
 
-      messageInput.addEventListener("input", resizeInput);
-      // 标记输入法组合开始，防止中文候选确认时误提交表单。
-      messageInput.addEventListener("compositionstart", () => {
-        isComposing = true;
-      });
-      // 输入法组合结束后恢复 Enter 提交能力。
-      messageInput.addEventListener("compositionend", () => {
-        isComposing = false;
-      });
-      // 在非输入法组合状态下用 Enter 提交，Shift+Enter 保留换行。
-      messageInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && !event.shiftKey && !isComposing) {
-          event.preventDefault();
-          form.requestSubmit();
-        }
-      });
+      initialize().catch(handleInitializationError);
 
-      // 读取本次选择的图片，并在结束后清空控件以支持重复选择同一文件。
-      imageFileInput.addEventListener("change", async () => {
-        try {
-          await addImageFiles([...imageFileInput.files]);
-        } catch (error) {
-          addMessage("error", error.message || "图片读取失败");
-        } finally {
-          imageFileInput.value = "";
-        }
-      });
-
-      openAddMenu.addEventListener("click", toggleAddMenu);
-      clearContext.addEventListener("click", clearConversationContext);
-      // 关闭菜单后触发隐藏文件控件，进入本地图片选择流程。
-      chooseImageButton.addEventListener("click", () => {
-        closeAddMenu();
-        imageFileInput.click();
-      });
-      // 按按钮声明的附件类型绑定对应链接输入面板。
-      addMenu.querySelectorAll("[data-link-type]").forEach((button) => {
-        // 打开当前按钮所代表的图片或文档链接输入区。
-        button.addEventListener("click", () => {
-          openLinkAdder(button.dataset.linkType);
-        });
-      });
-      // 将输入地址按当前附件类型加入编辑器。
-      confirmLink.addEventListener("click", () => {
-        addLink(activeLinkType);
-      });
-      cancelLink.addEventListener("click", closeLinkAdder);
-      // 在链接输入区按 Enter 时确认当前地址，避免触发聊天表单提交。
-      linkInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          addLink(activeLinkType);
-        }
-      });
-      // 使用 Escape 同时关闭附件菜单和链接输入区。
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") {
-          closeAddMenu();
-          closeLinkAdder();
-        }
-      });
-
-      resizeInput();
-      updateAttachmentNote();
-      updateContextCount();
-      loadStatus();
+      /** 将初始化失败显示在连接状态和消息区。 */
+      function handleInitializationError(error) {
+        setHealth(false, "初始化失败");
+        elements.messages.textContent = "";
+        addMessage("error", error.message);
+      }
     </script>
   </body>
 </html>

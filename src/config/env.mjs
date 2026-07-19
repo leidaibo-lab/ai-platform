@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /**
  * 从项目环境文件生成 Demo Server、Runtime 和模型网关所需的分层配置。
@@ -9,7 +9,8 @@ import { join } from "node:path";
  * @returns {Promise<object>} 归一化后的 Demo 配置。
  */
 export async function loadDemoConfig(rootDir) {
-  const env = await loadEnv(join(rootDir, ".env"));
+  const fileEnv = await loadEnv(join(rootDir, ".env"));
+  const env = { ...fileEnv, ...process.env };
 
   return {
     port: readPositiveNumber(env.DEMO_PORT, 4010),
@@ -18,16 +19,23 @@ export async function loadDemoConfig(rootDir) {
       model: env.LITELLM_MODEL || "chat-default",
       apiKey: env.LITELLM_MASTER_KEY || "sk-local-admin-key",
     },
+    storage: {
+      databasePath: resolve(rootDir, env.DEMO_DATABASE_PATH || ".data/ai-platform.sqlite"),
+    },
     context: {
       maxContextTokens: readPositiveNumber(env.DEMO_MAX_CONTEXT_TOKENS, 12000),
       reservedOutputTokens: readPositiveNumber(env.DEMO_RESERVED_OUTPUT_TOKENS, 2000),
-      maxHistoryMessageTokens: readPositiveNumber(env.DEMO_MAX_HISTORY_MESSAGE_TOKENS, 1200),
-      maxSummaryTokens: readPositiveNumber(env.DEMO_MAX_SUMMARY_TOKENS, 1600),
+      safetyTokens: readPositiveNumber(env.DEMO_CONTEXT_SAFETY_TOKENS, 500),
+      highWatermarkRatio: readRatio(env.DEMO_CONTEXT_HIGH_WATERMARK_RATIO, 0.75),
+      lowWatermarkRatio: readRatio(env.DEMO_CONTEXT_LOW_WATERMARK_RATIO, 0.45),
+      hardWatermarkRatio: readRatio(env.DEMO_CONTEXT_HARD_WATERMARK_RATIO, 0.9),
+    },
+    memory: {
+      maxCompletionTokens: readPositiveNumber(env.DEMO_MEMORY_MAX_COMPLETION_TOKENS, 1200),
     },
     prompts: {
       demoSystemPrompt:
-        "你是 AI 应用基础平台 Demo 助手。请优先结合提供的对话摘要、最近上下文和当前用户消息回答。",
-      summarySystemPrompt: "你负责把历史对话压缩成可供下一轮模型理解的上下文摘要。",
+        "你是 AI 应用基础平台 Demo 助手。请优先结合 active 结构化记忆、相关历史片段、最近对话和当前用户消息回答；用户最新纠正优先。",
     },
   };
 }
@@ -72,4 +80,10 @@ export function trimTrailingSlash(value) {
 function readPositiveNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** 将环境变量转换为 0 到 1 之间的水位比例。 */
+function readRatio(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
 }

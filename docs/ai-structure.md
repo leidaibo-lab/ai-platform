@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | 渠道与体验层 | Demo、Web、IM、IDE、API 等入口适配；输入输出格式转换 | Agent 编排、工具执行、模型供应商密钥 | `demo/index.html`、`scripts/demo-server.mjs` 的静态页面和 HTTP 接入部分 |
 | 平台控制面 | 租户、用户、应用、Agent 定义、版本发布、配置和运营入口 | 执行单次 Agent 任务、直接调用上游模型 | 尚未实现；未来的大平台属于此区域，不只是更大的 Demo |
-| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有聊天、摘要、消息构造和上下文预算雏形 |
+| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner 和 token 水位 |
 | 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有工具注册预留，尚未接入真实工具和知识能力 |
 | 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default`、上游 key 收口和 gateway client |
 | 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 当前只有 OpenSpec、文档和 smoke test 的最小约束 |
@@ -240,17 +240,18 @@ Demo、正式 Web 平台、飞书、IDE 和 API Adapter 都应转换为统一的
 
 ## 当前代码映射
 
-当前处于 `V0.5`，还是一个集成式 Demo Runtime 加独立 LiteLLM Proxy，但代码已经可以映射到目标区域：
-
-![AI 应用基础平台当前 V0.5 落地图](./assets/ai-platform-current-v05.png)
+当前处于 `V0.6`，是带本地会话数据面的模块化 Demo Runtime 加独立 LiteLLM Proxy：
 
 ```mermaid
 flowchart LR
-  subgraph CurrentPlatform["AI 应用基础平台当前 V0.5 / ai-platform"]
+  subgraph CurrentPlatform["AI 应用基础平台当前 V0.6 / ai-platform"]
     subgraph CurrentProcess["当前 Demo Server 进程 :4010"]
       DemoUi["demo/index.html<br/>渠道与体验层"]
       HttpAdapter["scripts/demo-server.mjs<br/>HTTP Adapter"]
-      RuntimeCode["src/runtime<br/>Agent Runtime 雏形"]
+      RuntimeCode["Chat Runtime / Conversation Coordinator"]
+      ContextPlanner["Context Planner / 高低水位"]
+      MemoryManager["Memory Manager / MemoryDelta Reducer"]
+      ConversationStore["SQLite Conversation Store"]
       ToolRegistry["src/tools<br/>连接器注册预留"]
       GatewayClient["src/gateway<br/>模型网关客户端"]
       ConfigLoader["src/config<br/>本地配置装配"]
@@ -268,6 +269,13 @@ flowchart LR
 
   DemoUi --> HttpAdapter
   HttpAdapter --> RuntimeCode
+  RuntimeCode --> ContextPlanner
+  RuntimeCode --> MemoryManager
+  RuntimeCode --> ConversationStore
+  ContextPlanner --> ConversationStore
+  MemoryManager --> ConversationStore
+  MemoryManager --> GatewayClient
+  ContextPlanner --> GatewayClient
   RuntimeCode -.-> ToolRegistry
   RuntimeCode --> GatewayClient
   GatewayClient --> LiteLLM
@@ -284,7 +292,9 @@ flowchart LR
 | --- | --- | --- |
 | `demo/index.html` | 渠道与体验层 | 保留为开发 Demo；正式平台作为另一个调用方并存 |
 | `scripts/demo-server.mjs` | 渠道 HTTP Adapter 与本地装配入口 | 渠道路由留在 adapter；Runtime 通过稳定 API 或模块接口调用 |
-| `src/runtime/` | Agent Runtime | 去除 Demo 专属结构后可独立为 `agent-runtime` |
+| `src/runtime/chat-runtime.mjs`、`conversation-coordinator.mjs` | Agent Runtime | 稳定 Session/Run 契约后可独立为 `agent-runtime` |
+| `src/runtime/context-planner.mjs`、`memory-manager.mjs` | Agent Runtime | 上下文策略和结构化记忆保持 Runtime 所有 |
+| `src/storage/conversation-store.mjs` | Agent Runtime 数据面 | 本地 SQLite 可迁移到独立 Runtime 数据库 |
 | `src/tools/` | 连接器与知识层 | 增加真实 registry、executor 和 adapter 后可独立为 `connector-service` |
 | `src/gateway/litellm-client.mjs` | Runtime 到模型网关的客户端边界 | 保持为接口适配器，不承载模型网关服务端策略 |
 | `config.yaml`、`docker-compose.yml` | 模型网关 | LiteLLM 独立部署和治理 |
@@ -295,11 +305,14 @@ flowchart LR
 | API | 当前提供者 | 目标归属 |
 | --- | --- | --- |
 | `GET /api/gateway/status` | Demo Server | 渠道层的聚合状态接口；底层调用模型网关健康检查 |
-| `POST /api/runtime/chat` | Demo Server | Agent Runtime 的 Run API 雏形 |
-| `POST /api/runtime/summaries` | Demo Server | Agent Runtime 的上下文压缩能力 |
+| `GET/POST /api/runtime/conversations` | Demo Server | Agent Runtime 的 Session API |
+| `GET /api/runtime/conversations/{id}` | Demo Server | 会话、消息、结构化记忆和版本查询 |
+| `POST /api/runtime/conversations/{id}/runs` | Demo Server | 幂等 Run API |
+| `POST /api/runtime/conversations/{id}/close` | Demo Server | 会话结束和最终 checkpoint |
+| `GET /api/runtime/conversations/{id}/events` | Demo Server | SQLite 事件游标驱动的 SSE 增量同步 |
 | `POST /v1/chat/completions` | LiteLLM | 模型网关标准模型接口 |
 
-未来拆出服务时，先提供兼容 adapter 保留现有 Demo API，再让正式平台直接使用版本化 Runtime API，避免页面和服务同时迁移。
+未来拆出服务时，保持 Session/Run 契约不变，将 SQLite Store 替换为独立数据库和事件总线。
 
 ## 两条调用链
 
@@ -337,7 +350,7 @@ Demo / 正式平台 / IM / API Adapter
 | 模型别名、fallback、预算和限流策略 | 模型网关 | 平台控制面可以管理策略引用，但不直接持有 provider key |
 | Agent 提示词、工具集合、上下文策略 | 平台控制面 | 发布为不可变 `AgentDefinition`，Runtime 按版本读取 |
 | 业务 API 和 MCP 凭据引用 | 连接器与知识层 | Runtime 只传工具调用身份，不读取真实凭据 |
-| 会话、摘要、任务和确认状态 | Agent Runtime | 不写入模型网关或渠道本地存储作为事实源 |
+| 会话、原始消息、结构化记忆、任务和确认状态 | Agent Runtime | 不写入模型网关或渠道本地存储作为事实源 |
 
 ## 当前能力边界
 
@@ -347,7 +360,10 @@ Demo / 正式平台 / IM / API Adapter
 - 服务端上游密钥收口和单模型别名路由。
 - 浏览器 Demo 与分层 API。
 - 文本、图片 URL、图片 data URL 和文档链接输入。
-- 最近上下文、摘要记忆和估算 token 预算裁剪。
+- SQLite 持久化多会话、幂等 Run 和 SSE 多标签页增量同步。
+- 结构化 MemoryDelta、来源追溯、memoryVersion 乐观锁和最终 checkpoint。
+- Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
+- 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
 - Agent Runtime、连接器注册和模型网关客户端的模块边界雏形。
 - OpenSpec、文档和 smoke test 的最小治理。
 
@@ -357,7 +373,7 @@ Demo / 正式平台 / IM / API Adapter
 - 真实工具循环、MCP、业务 API 和人工确认。
 - 私有文档解析、知识索引、RAG、引用和知识权限。
 - 多用户 virtual key、预算、RPM/TPM 限流、调用统计和多上游 fallback。
-- 持久化会话、统一 trace、审计、评测和反馈闭环。
+- 多用户身份映射、跨主机数据库、统一 trace、审计和在线评测反馈闭环。
 
 ## 演进路线
 
@@ -368,17 +384,18 @@ Demo / 正式平台 / IM / API Adapter
 | 阶段 | 系统形态 | 重点成熟区域 | 进入下一阶段的条件 |
 | --- | --- | --- | --- |
 | V0 | 本地模型代理 + Demo | 渠道与体验、模型网关 | 模型代理链路和 Demo 可用 |
-| V0.5 当前 | 分层 Demo Runtime | Agent Runtime 模块边界、模型网关客户端 | 分层 API 稳定；确认第一个真实工具场景 |
+| V0.5 | 分层 Demo Runtime | Agent Runtime 模块边界、模型网关客户端 | 分层 API 稳定 |
+| V0.6 当前 | 持久化上下文 Runtime | 会话数据面、结构化记忆、Context Planner、并发和评测 | 上下文契约稳定；确认第一个真实工具场景 |
 | V1 | 单应用工具型 Agent | Agent Runtime、连接器与知识 | 至少一个工具闭环；能区分普通问答、工具请求和人工确认；失败有兜底 |
 | V2 | 团队级受控模型入口 | 模型网关、治理与可观测 | 多调用方身份可区分；预算、限流、路由和 fallback 可追踪 |
 | V3 | 企业知识增强服务 | 连接器与知识、Agent Runtime | 文档解析、检索、权限和引用链路稳定 |
 | V4 | AI 应用基础平台 | 平台控制面、渠道与体验、全链路治理 | 多项目复用 Runtime、连接器和模型网关；配置发布和运营闭环稳定 |
 
-实施原则：当前只做 V0.5 到 V1 的必要工作。未来大平台作为新的平台控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关；独立服务按复用和所有权需求逐个拆出，不把所有区域一次性平台化。
+实施原则：当前只做 V0.6 到 V1 的必要工作。未来大平台作为新的平台控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关；独立服务按复用和所有权需求逐个拆出，不把所有区域一次性平台化。
 
 ## OpenSpec 与文档边界
 
-- `openspec/specs/ai-platform/spec.md` 保留 V0.5 集成切片的稳定行为契约；路径随项目改名迁移，但现有 API 行为保持不变。
+- `openspec/specs/ai-platform/spec.md` 固化 V0.6 Session/Run、结构化记忆、并发和上下文水位契约。
 - 首次真正拆出服务时，按模型网关、Agent Runtime、连接器或平台控制面分别建立稳定 spec，并在兼容期说明旧 API 到新服务契约的映射。
 - 修改代理行为、鉴权、模型路由、Runtime API、上下文预算或多模态输入契约时，必须同步 OpenSpec。
 - 只调整架构归属、拆分建议、启动说明或示例文案且不改变运行行为时，只需更新 README、docs 和项目级约定。

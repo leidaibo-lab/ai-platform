@@ -19,7 +19,7 @@
 
 - LiteLLM Proxy 容器镜像：`ghcr.io/berriai/litellm:main-latest`
 - Docker Compose 本地启动
-- Node.js 原生 HTTP Demo Server
+- Node.js 原生 HTTP Demo Server 与内置 SQLite 会话存储
 - 静态 HTML Demo UI
 - Shell smoke test
 
@@ -55,7 +55,7 @@ Demo 浏览器页面不直接调用 LiteLLM 或上游中转站，而是通过 `s
 
 ## Constraints
 
-- 当前落地保持轻量试用切片，不默认引入数据库、后台管理或分布式服务。
+- 当前落地保持模块化单体和本地 SQLite，不默认引入后台管理或分布式服务。
 - 六个区域同时作为概念、代码和未来服务拆分边界；未实现的区域能力不得写成当前稳定能力。
 - 区域依赖保持为“渠道 -> Agent Runtime -> 连接器/模型网关”；平台控制面只发布版本化配置，治理与可观测通过统一事件和策略横切。
 - 模型网关不得保存会话、工具结果或业务知识；Agent Runtime 和平台控制面不得持有 provider key；渠道特有字段不得渗透到 Runtime 核心结构。
@@ -63,5 +63,5 @@ Demo 浏览器页面不直接调用 LiteLLM 或上游中转站，而是通过 `s
 - 每类事实数据只能有一个写入所有者；拆服务前先明确 API、事件和数据迁移边界，禁止多个服务共同写同一张表。
 - 不把 `.env` 中的真实值写入文档、OpenSpec 或日志说明。
 - 修改代理行为、鉴权、模型路由、Demo API、上下文预算或多模态输入契约时，先更新 OpenSpec 或同步补齐 OpenSpec。
-- 当前 `openspec/specs/ai-platform/spec.md` 保留 V0.5 集成切片契约；真正拆出服务时再按模型网关、Agent Runtime、连接器和平台控制面分别建立稳定 spec，并提供兼容映射。
+- 当前 `openspec/specs/ai-platform/spec.md` 描述 V0.6 持久化会话与结构化上下文切片；真正拆出服务时再按模型网关、Agent Runtime、连接器和平台控制面分别建立稳定 spec。
 - 若目录不是 Git 仓库，最终说明需要明确“无法通过 git diff 检索变更”，改用文件扫描和本次编辑清单说明。
