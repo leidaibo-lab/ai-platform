@@ -1,0 +1,4 @@
+interface:
+  display_name: "上下文记忆评测"
+  short_description: "创建并执行上下文记忆评测场景、真实模型回归、准确率与成本对比流程"
+  default_prompt: "使用 $docs-context-memory-evaluation 创建并运行一个上下文记忆评测场景。"

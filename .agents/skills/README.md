@@ -26,6 +26,12 @@
 | --- | --- | --- |
 | company-public-skill-governance | `company-public/skill-governance/SKILL.md` | Skill 创建、更新、迁移、目录治理和结构校验 |
 
+### 文档与评测类
+
+| Skill | 入口 | 适用场景 |
+| --- | --- | --- |
+| docs-context-memory-evaluation | `docs/context-memory-evaluation/SKILL.md` | 上下文记忆 fixture 设计、确定性或真实模型评测、指标对比和回归沉淀 |
+
 ## 更新要求
 
 - 新增、移动、删除 Skill 时，同步更新本索引。
