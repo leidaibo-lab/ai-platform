@@ -27,6 +27,7 @@ export function createLiteLlmClient({ baseUrl, model, apiKey }) {
   const gatewayBaseUrl = trimTrailingSlash(baseUrl || "http://localhost:4000");
   const modelAlias = model || "chat-default";
   const key = apiKey || "sk-local-admin-key";
+  let tokenCounterSupported = true;
 
   // 统一执行带鉴权、超时和错误映射的 LiteLLM JSON 请求。
   async function requestJson(path, { method = "GET", body, timeoutMs = 120000 } = {}) {
@@ -95,17 +96,46 @@ export function createLiteLlmClient({ baseUrl, model, apiKey }) {
      * @param {object} input - 对话请求参数。
      * @param {Array<object>} input.messages - OpenAI-compatible 消息列表。
      * @param {number} [input.temperature] - 可选采样温度。
+     * @param {number} [input.maxCompletionTokens] - 模型输出硬上限。
+     * @param {object} [input.responseFormat] - 可选结构化输出约束。
      * @returns {Promise<object>} LiteLLM 返回的原始对话结果。
      */
-    chatCompletions({ messages, temperature }) {
+    chatCompletions({ messages, temperature, maxCompletionTokens, responseFormat }) {
       return requestJson("/v1/chat/completions", {
         method: "POST",
         body: {
           model: modelAlias,
           messages,
           ...(temperature === undefined ? {} : { temperature }),
+          ...(maxCompletionTokens === undefined ? {} : { max_completion_tokens: maxCompletionTokens }),
+          ...(responseFormat === undefined ? {} : { response_format: responseFormat }),
         },
       });
+    },
+
+    /**
+     * 让 LiteLLM 根据实际模型别名计算完整消息 token；端点不可用时由 Runtime 回退本地估算。
+     *
+     * @param {object} input - 待计数消息。
+     * @param {Array<object>} input.messages - OpenAI-compatible 消息列表。
+     * @returns {Promise<{tokens: number, source: string, model: string}>} 网关计数结果。
+     */
+    async countTokens({ messages }) {
+      if (!tokenCounterSupported) throw new Error("LiteLLM token counter is unavailable");
+      let data;
+      try {
+        data = await requestJson("/utils/token_counter", {
+          method: "POST",
+          body: { model: modelAlias, messages },
+          timeoutMs: 10000,
+        });
+      } catch (error) {
+        if (error?.status === 404 || error?.status === 405) tokenCounterSupported = false;
+        throw error;
+      }
+      const tokens = Number(data?.total_tokens ?? data?.token_count ?? data?.tokens);
+      if (!Number.isFinite(tokens)) throw new Error("Model gateway did not return a token count");
+      return { tokens, source: "litellm", model: data?.model || modelAlias };
     },
   };
 }
