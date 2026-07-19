@@ -1,0 +1,152 @@
+{
+  "id": "message-queue-correction-100",
+  "title": "100 轮消息队列记忆评测",
+  "turnCount": 100,
+  "checkpointEvery": 10,
+  "defaultTurnTemplate": "第 {{turn}} 轮常规讨论：保持当前项目既有约束，不新增消息队列决定。",
+  "events": [
+    {
+      "turn": 1,
+      "message": "当前项目消息队列使用 RabbitMQ",
+      "memoryDelta": {
+        "upserts": [
+          {
+            "type": "fact",
+            "entity": "current-project",
+            "key": "message-queue",
+            "value": "RabbitMQ",
+            "reason": "",
+            "itemStatus": "active",
+            "priority": "high"
+          }
+        ],
+        "supersedes": []
+      }
+    },
+    {
+      "turn": 45,
+      "message": "更正：当前项目最终使用 Kafka，因为需要事件回放",
+      "memoryDelta": {
+        "upserts": [
+          {
+            "type": "fact",
+            "entity": "current-project",
+            "key": "message-queue",
+            "value": "Kafka",
+            "reason": "需要事件回放",
+            "itemStatus": "active",
+            "priority": "critical"
+          },
+          {
+            "type": "decision",
+            "entity": "current-project",
+            "key": "message-queue-choice",
+            "value": "Kafka",
+            "reason": "需要事件回放",
+            "itemStatus": "active",
+            "priority": "high"
+          }
+        ],
+        "supersedes": [
+          {
+            "type": "fact",
+            "entity": "current-project",
+            "key": "message-queue"
+          }
+        ]
+      }
+    },
+    {
+      "turn": 70,
+      "message": "Alpha 项目仍然使用 RabbitMQ，不要和当前项目混淆",
+      "memoryDelta": {
+        "upserts": [
+          {
+            "type": "fact",
+            "entity": "alpha-project",
+            "key": "message-queue",
+            "value": "RabbitMQ",
+            "reason": "",
+            "itemStatus": "active",
+            "priority": "normal"
+          }
+        ],
+        "supersedes": []
+      }
+    },
+    {
+      "turn": 80,
+      "message": "待办：补充 Kafka 主题权限配置",
+      "memoryDelta": {
+        "upserts": [
+          {
+            "type": "task",
+            "entity": "current-project",
+            "key": "topic-permission-config",
+            "value": "补充 Kafka 主题权限配置",
+            "reason": "",
+            "itemStatus": "pending",
+            "priority": "high"
+          }
+        ],
+        "supersedes": []
+      }
+    }
+  ],
+  "probe": {
+    "message": "当前项目最终使用什么消息队列？只回答产品名称。",
+    "expectedAnswer": "Kafka",
+    "memory": {
+      "entity": "current-project",
+      "key": "message-queue",
+      "value": "Kafka"
+    }
+  },
+  "metrics": [
+    {
+      "name": "correctedQueueRecall",
+      "type": "probe-and-memory",
+      "expectedAnswer": "Kafka",
+      "memory": {
+        "type": "fact",
+        "entity": "current-project",
+        "key": "message-queue",
+        "value": "Kafka"
+      }
+    },
+    {
+      "name": "oldFactLeakage",
+      "type": "memory-absent",
+      "memory": {
+        "type": "fact",
+        "entity": "current-project",
+        "key": "message-queue",
+        "value": "RabbitMQ"
+      }
+    },
+    {
+      "name": "entityIsolation",
+      "type": "memory",
+      "memory": {
+        "type": "fact",
+        "entity": "alpha-project",
+        "key": "message-queue",
+        "value": "RabbitMQ"
+      }
+    },
+    {
+      "name": "pendingTaskRecall",
+      "type": "memory",
+      "memory": {
+        "type": "task",
+        "entity": "current-project",
+        "key": "topic-permission-config",
+        "itemStatus": "pending"
+      }
+    },
+    {
+      "name": "sourceTraceability",
+      "type": "all-active-sources"
+    }
+  ]
+}

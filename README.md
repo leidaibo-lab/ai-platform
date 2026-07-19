@@ -1,6 +1,6 @@
 # AI 应用基础平台
 
-面向不同业务场景，按需组合渠道、Agent Runtime、连接器、知识、模型网关和治理能力的 AI 应用基础平台。当前实现使用 LiteLLM Proxy 收口上游 OpenAI-compatible 中转站 key，并提供本地客户端、脚本和 Demo 所需的模型入口与轻量 Agent Runtime。
+面向不同业务场景，按需组合渠道、Agent Runtime、连接器、知识、模型网关和治理能力的 AI 应用基础平台。当前实现使用 LiteLLM Proxy 收口上游 OpenAI-compatible 中转站 key，并提供带持久化会话、结构化记忆和上下文规划的本地 Agent Runtime。
 
 ## 项目定义
 
@@ -20,7 +20,7 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 - 小范围内部试用模型网关、Demo 接入和 Agent Runtime 的上下文处理能力。
 - 先验证上游中转站能否被统一代理，再逐步增加工具、知识和治理能力。
 - 客户端只使用统一 base url、访问 key 和模型别名，不接触上游真实 key。
-- 暂时不引入云厂商 AI Gateway、管理后台或数据库。
+- 使用 Node.js 内置 SQLite 保存本地会话，不引入外部数据库或管理后台。
 - 后续需要多人 key、预算、限流和统计时，再升级 LiteLLM virtual key、数据库和治理层能力。
 
 ## 当前工作方式
@@ -41,6 +41,8 @@ LiteLLM Proxy
 浏览器 Demo 不直接调用上游中转站；它只请求本地 Demo Server，由 Demo Server 使用服务端环境变量访问 LiteLLM。
 
 ## 本地启动
+
+本地需要 Node.js 22.5 或更高版本，以使用内置 `node:sqlite`。
 
 复制环境变量模板：
 
@@ -146,9 +148,11 @@ Demo 输入区支持：
 - 正文：直接输入问题或指令。
 - 图片：可以上传本地图片，也可以粘贴图片 URL；Demo Server 会按 OpenAI-compatible 的 `image_url` 多模态格式转发。
 - 文档链接：可以粘贴一个或多个链接，Demo Server 会把它们作为文本上下文附在用户消息里。
-- 上下文：浏览器会保存最近几轮用户/助手消息，并在下一次请求里随 `messages` 一起传给模型；侧边栏可以看到当前上下文条数，也可以清空上下文。
-- 摘要记忆：历史消息超过近期窗口后，Demo 会调用 `/api/runtime/summaries` 把旧对话压缩成摘要；后续请求按“摘要 + 最近消息 + 当前消息”发送。
-- Token 预算：Demo Server 会按 `DEMO_MAX_CONTEXT_TOKENS` 做兜底裁剪，优先保留当前消息、摘要和最近历史，超预算的旧消息不会发送给模型。
+- 多会话：Runtime 使用 SQLite 持久化会话和完整原始消息；刷新页面、切换标签页后仍能继续会话。
+- 多端同步：同一会话通过 SSE 事件游标增量刷新；客户端不再保存或提交历史事实源。
+- 结构化记忆：Memory Manager 提取目标、约束、偏好、事实、决策、任务和 Episode，用户纠正会废弃旧事实并保留来源消息。
+- Context Planner：按系统规则、当前输入、active 记忆、相关 Episode、最近消息的优先级装箱，并返回可解释 Context Manifest。
+- Token 水位：动态原始消息达到 75% 高水位后压缩到 45% 低水位；接近 90% 硬水位时先同步压缩再回答。
 
 注意：LiteLLM Proxy 只负责转发请求，不会自动打开文档链接、读取私有文档，也不会自动提取文档里的图片。如果要让模型处理文档里的图片，需要把图片单独上传，或提供可公开访问的图片直链，并确保当前上游模型支持视觉输入。
 
@@ -157,8 +161,42 @@ Demo Server API 按层级暴露：
 | API | 说明 |
 | --- | --- |
 | `GET /api/gateway/status` | 检查 LiteLLM 连接状态、gateway base url 和模型别名 |
-| `POST /api/runtime/chat` | 发送当前消息、图片、文档链接、摘要和历史，返回助手回复 |
-| `POST /api/runtime/summaries` | 将旧历史压缩成后续请求可复用的摘要 |
+| `GET /api/runtime/conversations` | 列出持久化会话 |
+| `POST /api/runtime/conversations` | 创建会话 |
+| `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆和版本状态 |
+| `POST /api/runtime/conversations/{id}/runs` | 发送当前输入并执行幂等 Run |
+| `POST /api/runtime/conversations/{id}/close` | 完成最终 checkpoint 并结束会话 |
+| `GET /api/runtime/conversations/{id}/events` | 订阅多端增量事件流 |
+
+Run 请求只包含当前输入和幂等标识：
+
+```json
+{
+  "requestId": "request-uuid",
+  "clientMessageId": "message-uuid",
+  "message": "当前问题",
+  "imageUrls": [],
+  "documentUrls": []
+}
+```
+
+## Runtime 验证
+
+运行会话、幂等、结构化记忆、乐观锁和关闭会话回归：
+
+```bash
+node scripts/test-runtime.mjs
+```
+
+运行 100 轮长期记忆评测：
+
+```bash
+node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eval.mjs
+```
+
+评测会在第 45 轮把当前项目消息队列从 RabbitMQ 更正为 Kafka，并验证 100 轮后仍能正确回答，同时隔离另一个仍使用 RabbitMQ 的项目。
+
+默认场景保存在 `.agents/skills/docs/context-memory-evaluation/assets/fixtures/message-queue-correction-100.json`。新增评测场景只增加 fixture，并通过 `--fixture <path>` 传给通用 runner，不修改脚本判分逻辑。
 
 ## 配置与密钥
 
@@ -167,6 +205,8 @@ Demo Server API 按层级暴露：
 - `UPSTREAM_API_BASE` 通常要带 `/v1`。
 - `UPSTREAM_API_KEY` 是中转站真实 key，只应放在服务端 `.env`。
 - `LITELLM_MASTER_KEY` 是 LiteLLM 当前对外访问 key，部署前请改成强随机值。
+- `DEMO_DATABASE_PATH` 是 Runtime SQLite 文件，默认 `.data/ai-platform.sqlite`。
+- `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
 
 ## 文档与规范
 
@@ -176,6 +216,7 @@ Demo Server API 按层级暴露：
 | AI 协作规则、文档路由、提交规范 | `AGENTS.md` |
 | Agent Skill 索引、目录规范、治理规则 | `.agents/skills/README.md` |
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |
+| 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |
 | 平台当前集成切片、Demo API、鉴权、模型别名、上下文预算等稳定契约 | `openspec/specs/ai-platform/spec.md` |

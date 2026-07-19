@@ -17,7 +17,7 @@
 
 当前项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。模型网关仍是平台内部区域，不得用 `ai-platform` 代替模型网关领域名称。
 
-当前代码只落地这个目标结构里的轻量切片：浏览器 Demo 和客户端接入、Agent Runtime 雏形、LiteLLM 调用封装、上下文预算与摘要记忆、连接器注册预留，以及 OpenSpec/docs/smoke test 的最小治理。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
+当前代码落地这个目标结构里的 V0.6 切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、连接器注册预留，以及 OpenSpec/docs/回归评测的最小治理。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
@@ -41,7 +41,7 @@ LiteLLM Proxy
 ```text
 浏览器 Demo
         |
-        | /api/runtime/chat
+        | /api/runtime/conversations/{conversationId}/runs
         v
 Demo Server 渠道 HTTP Adapter
         |
@@ -59,8 +59,9 @@ LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。
 - `docs/coding-standards.md`：函数注释、数据结构、设计模式和设计原则等编码规范。
 - `.agents/skills/README.md`：Agent Skill 索引和目录治理规则。
+- `.agents/skills/docs/context-memory-evaluation/SKILL.md`：上下文记忆评测场景、指标、脚本和回归治理流程。
 - `openspec/project.md`：项目级区域边界、依赖规则和技术约定。
-- `openspec/specs/ai-platform/spec.md`：稳定能力契约。修改代理行为、Demo API、鉴权方式、模型别名、上下文预算或密钥边界时，需要同步这里。
+- `openspec/specs/ai-platform/spec.md`：稳定能力契约。修改代理行为、Session/Run API、鉴权方式、模型别名、结构化记忆、上下文预算或密钥边界时，需要同步这里。
 
 ## 编码规范
 
@@ -93,11 +94,17 @@ LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `config.yaml`：LiteLLM Proxy 的模型别名、上游转发参数和 master key 配置。
 - `docker-compose.yml`：本地 LiteLLM 容器启动入口。
 - `scripts/test-chat.sh`：最小 chat completions smoke test。
-- `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责静态页面、分层 API 路由、JSON 收发和错误返回。
-- `demo/index.html`：浏览器交互页面。浏览器只调用 Demo Server，不直接接触上游真实 key。
+- `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、Run、SSE、静态页面、JSON 收发和错误返回。
+- `demo/index.html`：浏览器多会话交互页面。浏览器只提交当前输入和幂等标识，不保存会话事实源，也不直接接触上游真实 key。
 - `src/config/env.mjs`：Demo Server、runtime 和 gateway client 的配置加载入口。
-- `src/runtime/`：Agent Runtime 雏形，负责聊天运行、摘要压缩、上下文预算、消息构造和输入校验。
+- `src/storage/conversation-store.mjs`：SQLite 会话事实源，负责会话、消息、Run、MemoryDelta、版本和事件日志。
+- `src/runtime/chat-runtime.mjs`：Session/Run 应用服务，负责先落消息、上下文规划、模型调用、幂等重放和关闭会话。
+- `src/runtime/context-planner.mjs`：按优先级和 token 预算选择 active 记忆、相关 Episode 与最近消息，并输出 Context Manifest。
+- `src/runtime/memory-manager.mjs`：结构化记忆提取、高低水位压缩、MemoryDelta 校验和 memoryVersion 乐观锁。
+- `src/runtime/conversation-coordinator.mjs`：按 conversationId 串行同一进程内的 Run。
 - `src/gateway/litellm-client.mjs`：Agent Runtime 到模型网关的客户端边界，封装 LiteLLM `/v1/models` 和 `/v1/chat/completions` 调用。
 - `src/tools/tool-registry.mjs`：连接器与知识层的工具注册和工具意图判断预留入口，当前不启用真实工具循环。
 - `.agents/skills/company-public/skill-governance/SKILL.md`：Skill 创建、更新、迁移和校验规范。
 - `.agents/skills/company-public/skill-governance/scripts/validate-skills.mjs`：Skill 目录与 frontmatter 校验脚本。
+- `.agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eval.mjs`：100 轮上下文记忆确定性评测入口。
+- `.agents/skills/docs/context-memory-evaluation/assets/fixtures/`：上下文记忆评测的对话事件、标准答案和指标数据。
