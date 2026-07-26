@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { createLiteLlmClient } from "../src/gateway/litellm-client.mjs";
+import { createGatewayClient } from "../src/gateway/gateway-client.mjs";
 import { createChatRuntime } from "../src/runtime/chat-runtime.mjs";
 import { createConversationCoordinator } from "../src/runtime/conversation-coordinator.mjs";
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
@@ -268,9 +268,9 @@ test("closed conversations reject new runs", async () => {
   fixture.store.close();
 });
 
-// 验证 Gateway 客户端字段映射由独立单元测试环境覆盖导入边界。
-test("gateway client factory remains importable", () => {
-  const client = createLiteLlmClient({ baseUrl: "http://localhost:4000", model: "chat-default", apiKey: "test" });
+// 验证唯一 Gateway Client 可构造，并保持 Runtime 依赖的稳定字段。
+test("gateway client remains constructible", () => {
+  const client = createGatewayClient({ baseUrl: "http://localhost:4000", model: "chat-default", apiKey: "test" });
   assert.equal(client.model, "chat-default");
 });
 }
