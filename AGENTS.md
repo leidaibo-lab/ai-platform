@@ -102,7 +102,9 @@ LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `src/runtime/context-planner.mjs`：按优先级和 token 预算选择 active 记忆、相关 Episode 与最近消息，并输出 Context Manifest。
 - `src/runtime/memory-manager.mjs`：结构化记忆提取、高低水位压缩、MemoryDelta 校验和 memoryVersion 乐观锁。
 - `src/runtime/conversation-coordinator.mjs`：按 conversationId 串行同一进程内的 Run。
-- `src/gateway/litellm-client.mjs`：Agent Runtime 到模型网关的客户端边界，封装 LiteLLM `/v1/models` 和 `/v1/chat/completions` 调用。
+- `src/gateway/gateway-contract.mjs`：Runtime 依赖的 GatewayClient 数据契约和统一错误类型。
+- `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 调用 LiteLLM，并保持 Runtime 的 chat completions 契约。
+- `src/gateway/litellm-management-client.mjs`：LiteLLM 专属管理客户端，仅封装 `/v1/models` 和 token counter，不负责模型生成。
 - `src/tools/tool-registry.mjs`：连接器与知识层的工具注册和工具意图判断预留入口，当前不启用真实工具循环。
 - `.agents/skills/company-public/skill-governance/SKILL.md`：Skill 创建、更新、迁移和校验规范。
 - `.agents/skills/company-public/skill-governance/scripts/validate-skills.mjs`：Skill 目录与 frontmatter 校验脚本。

@@ -20,6 +20,7 @@
 - LiteLLM Proxy 容器镜像：`ghcr.io/berriai/litellm:main-latest`
 - Docker Compose 本地启动
 - Node.js 原生 HTTP Demo Server 与内置 SQLite 会话存储
+- AI SDK Core v7 与 `@ai-sdk/openai-compatible` Runtime 模型网关客户端
 - 静态 HTML Demo UI
 - Shell smoke test
 

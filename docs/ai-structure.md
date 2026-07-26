@@ -242,6 +242,10 @@ Demo、正式 Web 平台、飞书、IDE 和 API Adapter 都应转换为统一的
 
 当前处于 `V0.6`，是带本地会话数据面的模块化 Demo Runtime 加独立 LiteLLM Proxy：
 
+![AI 应用基础平台 V0.6 全局链路](./assets/ai-platform-global-chain-v2.png)
+
+全局链路图突出唯一 AI SDK 模型生成路径、LiteLLM 管理旁路和六个架构区域；[SVG 源文件](./assets/ai-platform-global-chain-v2.svg)用于后续节点调整。下面的 Mermaid 保留可检索的当前代码映射。
+
 ```mermaid
 flowchart LR
   subgraph CurrentPlatform["AI 应用基础平台当前 V0.6 / ai-platform"]
@@ -253,7 +257,7 @@ flowchart LR
       MemoryManager["Memory Manager / MemoryDelta Reducer"]
       ConversationStore["SQLite Conversation Store"]
       ToolRegistry["src/tools<br/>连接器注册预留"]
-      GatewayClient["src/gateway<br/>模型网关客户端"]
+      GatewayClient["src/gateway<br/>AI SDK 模型网关客户端"]
       ConfigLoader["src/config<br/>本地配置装配"]
     end
 
@@ -296,7 +300,7 @@ flowchart LR
 | `src/runtime/context-planner.mjs`、`memory-manager.mjs` | Agent Runtime | 上下文策略和结构化记忆保持 Runtime 所有 |
 | `src/storage/conversation-store.mjs` | Agent Runtime 数据面 | 本地 SQLite 可迁移到独立 Runtime 数据库 |
 | `src/tools/` | 连接器与知识层 | 增加真实 registry、executor 和 adapter 后可独立为 `connector-service` |
-| `src/gateway/litellm-client.mjs` | Runtime 到模型网关的客户端边界 | 保持为接口适配器，不承载模型网关服务端策略 |
+| `src/gateway/gateway-contract.mjs`、`gateway-client.mjs`、`litellm-management-client.mjs` | Runtime 到模型网关的 AI SDK 客户端边界 | 模型生成统一使用 AI SDK；LiteLLM 管理端点保持独立，不承载模型网关服务端策略 |
 | `config.yaml`、`docker-compose.yml` | 模型网关 | LiteLLM 独立部署和治理 |
 | `openspec/`、调用日志和未来评测 | 治理与可观测 | 按区域建立契约，统一事件模型 |
 
@@ -363,6 +367,7 @@ Demo / 正式平台 / IM / API Adapter
 - SQLite 持久化多会话、幂等 Run 和 SSE 多标签页增量同步。
 - 结构化 MemoryDelta、来源追溯、memoryVersion 乐观锁和最终 checkpoint。
 - Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
+- AI SDK Core v7 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端，禁用自动重试并保留现有请求语义。
 - 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
 - Agent Runtime、连接器注册和模型网关客户端的模块边界雏形。
 - OpenSpec、文档和 smoke test 的最小治理。
