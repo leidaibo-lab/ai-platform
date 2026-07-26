@@ -98,7 +98,7 @@
 
   <rect x="90" y="876" width="1620" height="120" rx="24" fill="#fff0ec" class="card"/>
   <text x="126" y="924" class="regionTitle">当前治理与可观测</text>
-  <text x="390" y="924" class="nodeText">OpenSpec / README / docs / smoke test</text>
+  <text x="390" y="924" class="nodeText">OpenSpec / README / docs / 回归评测</text>
   <text x="390" y="954" class="nodeText">尚未接入平台控制面、持久化会话、统一 trace、预算限流、审计和评测闭环</text>
 
   <path d="M900 876 C900 828 645 820 645 684" class="softLine"/>

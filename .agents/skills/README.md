@@ -24,7 +24,7 @@
 
 | Skill | 入口 | 适用场景 |
 | --- | --- | --- |
-| company-public-skill-governance | `company-public/skill-governance/SKILL.md` | Skill 创建、更新、迁移、目录治理和结构校验 |
+| company-public-skill-governance | `company-public/skill-governance/SKILL.md` | Skill 创建、更新、迁移、目录治理、结构校验和项目文档归属校验 |
 
 ### 文档与评测类
 
