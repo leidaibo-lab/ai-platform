@@ -2,49 +2,50 @@
 
 ## Purpose
 
-该规范描述 AI 应用基础平台当前 V0.6 集成切片的稳定能力边界：LiteLLM Proxy 作为模型网关对外暴露 OpenAI-compatible 接口，服务端保存上游密钥，Agent Runtime 持久化会话、原始消息和结构化记忆，Demo Server 提供浏览器交互入口和分层 Runtime API。
+该规范描述 AI 应用基础平台当前 V0.6 集成切片的稳定能力边界：LiteLLM Proxy 在内部模型网关边界提供 OpenAI-compatible 接口，供 Runtime GatewayClient 和模型连通性诊断使用；服务端保存上游密钥，Agent Runtime 持久化会话、原始消息和结构化记忆，Demo Server 提供浏览器交互入口和分层 Runtime API。
 
 ## Requirements
 
 ### Requirement: OpenAI-compatible proxy
 
-系统 SHALL 通过 LiteLLM Proxy 暴露 OpenAI-compatible API，并允许客户端使用 `LITELLM_MASTER_KEY` 访问本地 gateway。
+系统 SHALL 通过 LiteLLM Proxy 暴露 OpenAI-compatible API，供 Agent Runtime 和本地模型连通性诊断访问 gateway。
 
-#### Scenario: Client calls chat completions
+#### Scenario: Gateway receives chat completions
 
 - **GIVEN** LiteLLM Proxy 已启动
 - **AND** `.env` 提供了 `LITELLM_MASTER_KEY`、`UPSTREAM_API_BASE` 和 `UPSTREAM_API_KEY`
-- **WHEN** 客户端请求 `POST /v1/chat/completions`
+- **WHEN** Agent Runtime 或模型连通性测试请求 `POST /v1/chat/completions`
 - **AND** 请求使用 `Authorization: Bearer LITELLM_MASTER_KEY`
 - **THEN** 系统 SHALL 将请求转发到配置的上游 OpenAI-compatible API
 - **AND** 系统 SHALL 返回 OpenAI-compatible 响应
 
 ### Requirement: Model alias routing
 
-系统 SHALL 对客户端暴露稳定模型别名，并在服务端配置中映射到真实上游模型。
+系统 SHALL 向 Runtime GatewayClient 和模型连通性诊断提供稳定模型别名，并在模型网关服务端配置中映射到真实上游模型。
 
-#### Scenario: Client uses chat-default
+#### Scenario: Runtime or diagnostics uses chat-default
 
 - **GIVEN** `config.yaml` 中存在 `model_name: chat-default`
-- **WHEN** 客户端发送 `model: chat-default`
+- **WHEN** Runtime GatewayClient 或 `scripts/test-chat.sh` 发送 `model: chat-default`
 - **THEN** LiteLLM SHALL 使用 `litellm_params.model` 指定的真实模型调用上游
-- **AND** 客户端不需要知道真实上游模型名
+- **AND** Runtime 和诊断脚本不需要知道真实上游模型名
 
 ### Requirement: Server-side secret boundary
 
-系统 SHALL 将上游真实 key 保持在服务端环境变量中，不得暴露给浏览器 Demo 或客户端文档示例。
+系统 SHALL 将模型网关访问凭据和上游真实 key 保持在服务端环境变量中，不得暴露给浏览器、渠道或普通业务客户端。
 
 #### Scenario: Browser uses demo
 
 - **GIVEN** 浏览器打开 Demo 页面
 - **WHEN** 用户发送文本、图片或文档链接
 - **THEN** 浏览器 SHALL 只请求 Demo Server
-- **AND** Demo Server SHALL 使用服务端的 `LITELLM_MASTER_KEY` 调用 LiteLLM
+- **AND** Demo Server 装配的 Agent Runtime SHALL 通过 GatewayClient 使用服务端的 `LITELLM_MASTER_KEY` 调用 LiteLLM
+- **AND** 浏览器 SHALL NOT 获取 `LITELLM_MASTER_KEY`
 - **AND** 浏览器 SHALL NOT 获取 `UPSTREAM_API_KEY`
 
-### Requirement: Local smoke test
+### Requirement: Model connectivity smoke test
 
-系统 SHALL 提供最小 smoke test，用于验证本地 gateway 是否能完成 chat completions 调用。
+系统 SHALL 提供最小模型连通性 smoke test，用于验证本地 gateway 是否能完成 chat completions 调用；该脚本 SHALL NOT 构成业务 API 或客户端接入契约。
 
 #### Scenario: Operator runs test-chat script
 
@@ -53,6 +54,18 @@
 - **WHEN** 操作者执行 `bash scripts/test-chat.sh`
 - **THEN** 脚本 SHALL 请求 `/v1/chat/completions`
 - **AND** 请求体 SHALL 使用 `model: chat-default`
+- **AND** 脚本 SHALL 只使用 `LITELLM_MASTER_KEY`，不得读取或接触 `UPSTREAM_API_KEY`
+- **AND** 该调用 SHALL 仅作为 LiteLLM、模型配置和上游连通性的诊断证据
+
+### Requirement: Global business topology boundary
+
+系统 SHALL 将“渠道经过 Agent Runtime 调用模型”视为唯一平台业务主链，并将模型连通性测试链排除在全局能力规划之外。
+
+#### Scenario: Maintainer documents the global platform topology
+
+- **WHEN** 维护者更新全局链路、能力清单、服务蓝图或演进路线
+- **THEN** 文档 SHALL 只把渠道经过 Agent Runtime 的调用视为平台业务主链
+- **AND** `scripts/test-chat.sh -> LiteLLM -> 上游模型` SHALL NOT 被描述为业务入口、普通客户端接入方式或服务拆分依赖
 
 ### Requirement: Gateway status endpoint
 

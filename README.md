@@ -13,32 +13,31 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 5. 模型网关：LiteLLM、模型别名、provider key、virtual key、路由、fallback、预算和限流。
 6. 治理与可观测：身份上下文、审计、调用追踪、评测、反馈和安全策略。
 
-严格意义上的 AI Gateway 只指第 5 个区域。项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。当前代码落地的是开发 Demo、Agent Runtime 雏形、模型网关客户端、LiteLLM 模型网关和连接器注册预留；未来正式平台作为新的控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关。
+严格意义上的 AI Gateway 只指第 5 个区域。项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。当前代码落地的是开发 Demo、Agent Runtime 雏形及其 GatewayClient、LiteLLM 模型网关和连接器注册预留；未来正式平台作为新的控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关。
 
 ## 适用场景
 
 - 小范围内部试用模型网关、Demo 接入和 Agent Runtime 的上下文处理能力。
 - 先验证上游中转站能否被统一代理，再逐步增加工具、知识和治理能力。
-- 客户端只使用统一 base url、访问 key 和模型别名，不接触上游真实 key。
+- Runtime 只使用统一 base url、访问 key 和模型别名，不接触上游真实 key。
 - 使用 Node.js 内置 SQLite 保存本地会话，不引入外部数据库或管理后台。
 - 后续需要多人 key、预算、限流和统计时，再升级 LiteLLM virtual key、数据库和治理层能力。
 
 ## 当前工作方式
 
 ```text
-客户端 / Cursor / 内部脚本
-        |
-        | base_url = http://localhost:4000/v1
-        | api_key = LITELLM_MASTER_KEY
-        v
-LiteLLM Proxy
-        |
-        | UPSTREAM_API_BASE + UPSTREAM_API_KEY
-        v
-你的中转站 OpenAI-compatible API
+浏览器 Demo / 未来渠道
+  -> Demo Server 渠道 HTTP Adapter
+  -> Agent Runtime
+  -> GatewayClient
+  -> AI SDK Core + @ai-sdk/openai-compatible
+  -> LiteLLM Proxy
+  -> 上游 OpenAI-compatible API
 ```
 
-浏览器 Demo 不直接调用上游中转站；它只请求本地 Demo Server，由 Demo Server 使用服务端环境变量访问 LiteLLM。
+浏览器 Demo 不直接调用 LiteLLM 或上游中转站；它只请求本地 Demo Server，由 Agent Runtime 通过统一 GatewayClient 访问模型网关。
+
+`scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
 ## 本地启动
 
@@ -71,7 +70,7 @@ model_name: chat-default
 model: openai/你的模型名
 ```
 
-`chat-default` 是客户端使用的模型别名；`model` 是上游真实模型名，请改成你的中转站实际支持的模型。当前仓库配置以 `config.yaml` 为准。
+`chat-default` 是 Runtime GatewayClient 使用的逻辑模型别名；`scripts/test-chat.sh` 仅在连通性诊断时复用该别名。`model` 是上游真实模型名，请改成你的中转站实际支持的模型。当前仓库配置以 `config.yaml` 为准。
 
 启动：
 
@@ -102,7 +101,9 @@ Docker 直启方式查看日志：
 docker logs -f ai-platform-model-gateway
 ```
 
-## 验证
+## 模型连通性验证
+
+以下命令仅验证 LiteLLM、模型配置和上游是否正常，不代表平台业务调用方式。
 
 运行 smoke test：
 
@@ -123,15 +124,17 @@ curl http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-## 客户端接入
+## Runtime 模型网关配置
 
-如果客户端支持 OpenAI-compatible 配置：
+Agent Runtime 和模型连通性测试使用以下服务端配置：
 
 ```text
 Base URL: http://localhost:4000/v1
 API Key: 你的 LITELLM_MASTER_KEY
 Model: chat-default
 ```
+
+这些配置不用于浏览器或普通业务客户端直连；业务请求统一通过 Agent Runtime API 进入平台。
 
 ## 交互 Demo
 
@@ -147,7 +150,7 @@ npm run demo
 http://localhost:4010
 ```
 
-页面会请求本地 Demo Server，再由 Demo Server 使用 `.env` 里的 `LITELLM_MASTER_KEY` 调用 `http://localhost:4000/v1/chat/completions`。浏览器不会拿到 `UPSTREAM_API_KEY`。
+页面会请求本地 Demo Server，再由 Demo Server 装配的 Agent Runtime 通过 GatewayClient 和 AI SDK，使用 `.env` 里的 `LITELLM_MASTER_KEY` 调用 LiteLLM。浏览器不会拿到 `LITELLM_MASTER_KEY` 或 `UPSTREAM_API_KEY`。
 
 Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
 
@@ -190,10 +193,16 @@ Run 请求只包含当前输入和幂等标识：
 
 ## Runtime 验证
 
-运行 Gateway Client 协议兼容、会话、幂等、结构化记忆、乐观锁和关闭会话回归：
+运行 Gateway Client 协议兼容、会话、幂等、结构化记忆、乐观锁、关闭会话和架构边界回归：
 
 ```bash
 npm test
+```
+
+只检查全局架构边界：
+
+```bash
+npm run test:architecture
 ```
 
 运行 100 轮长期记忆评测：
@@ -208,11 +217,11 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 
 ## 配置与密钥
 
-- `chat-default` 是对外暴露的模型别名，客户端只需要知道这个名字。
+- `chat-default` 是 Runtime GatewayClient 使用的逻辑模型别名；模型连通性诊断复用该别名，浏览器和普通业务客户端不直接使用。
 - `model_list[].litellm_params.model` 是 LiteLLM 转发给中转站的真实模型名。中转站是 OpenAI-compatible 时，通常保留 `openai/` 前缀。
 - `UPSTREAM_API_BASE` 通常要带 `/v1`。
 - `UPSTREAM_API_KEY` 是中转站真实 key，只应放在服务端 `.env`。
-- `LITELLM_MASTER_KEY` 是 LiteLLM 当前对外访问 key，部署前请改成强随机值。
+- `LITELLM_MASTER_KEY` 是 Runtime 和模型连通性诊断访问内部模型网关的服务端凭据，不提供给浏览器或普通业务客户端；部署前请改成强随机值。
 - `LITELLM_BASE_URL` 是 Runtime 使用的 LiteLLM Proxy 根地址，默认 `http://localhost:4000`，不要追加 `/v1`。
 - `LITELLM_MODEL` 是 Runtime 请求的 LiteLLM 模型别名，默认 `chat-default`。
 - `DEMO_DATABASE_PATH` 是 Runtime SQLite 文件，默认 `.data/ai-platform.sqlite`。
@@ -222,7 +231,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 
 | 信息 | 放置位置 |
 | --- | --- |
-| 启动、验证、客户端接入 | `README.md` |
+| 启动、Runtime 配置、Demo 使用和模型连通性验证 | `README.md` |
 | AI 协作规则、文档路由、提交规范 | `AGENTS.md` |
 | Agent Skill 索引、目录规范、治理规则 | `.agents/skills/README.md` |
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |

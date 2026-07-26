@@ -33,7 +33,7 @@ metadata:
 
 ## 当前项目边界
 
-- AI Gateway 启动、验证、客户端接入说明放在 `README.md`。
+- Runtime 配置、Demo 使用和模型连通性验证说明放在 `README.md`；不得把诊断脚本写成普通客户端接入方式。
 - AI 调用链路、模块分层、配置边界和演进路线放在 `docs/ai-structure.md`。
 - Skill 目录规范、创建规则和治理流程放在 `.agents/skills/`。
 - 代理行为、Demo API、鉴权、模型别名、上下文预算等稳定契约放在 `openspec/`。
@@ -58,4 +58,3 @@ node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs
 ```
 
 若脚本失败，先修复结构、frontmatter 或命名问题，再继续处理业务文档或 OpenSpec。
-
