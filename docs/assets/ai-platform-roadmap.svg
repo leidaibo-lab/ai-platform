@@ -119,7 +119,7 @@
   <rect x="120" y="922" width="1560" height="58" rx="14" class="lane"/>
   <text x="146" y="958" class="laneTitle">治理与可观测</text>
   <rect x="360" y="932" width="310" height="38" rx="10" class="current"/>
-  <text x="382" y="957" class="laneText">当前 OpenSpec / docs / smoke</text>
+  <text x="382" y="957" class="laneText">当前 OpenSpec / docs / 回归评测</text>
   <rect x="850" y="932" width="790" height="38" rx="10" class="future"/>
   <text x="872" y="957" class="laneText">V2-V4 身份 / trace / 审计 / 评测 / 安全 / 反馈</text>
 

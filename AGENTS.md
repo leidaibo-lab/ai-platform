@@ -21,40 +21,31 @@
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
-核心链路：
+所有业务模型请求统一经过 Agent Runtime；GatewayClient、AI SDK 和 LiteLLM 只作为 Runtime 下游模型调用链，不得形成与 Runtime 并列的业务入口。
+
+全局业务主链：
 
 ```text
-客户端 / 内部脚本
-        |
-        | base_url = http://localhost:4000/v1
-        | api_key = LITELLM_MASTER_KEY
-        v
-LiteLLM Proxy
-        |
-        | UPSTREAM_API_BASE + UPSTREAM_API_KEY
-        v
-上游 OpenAI-compatible API
+浏览器 Demo / 未来渠道
+        -> Demo Server 渠道 HTTP Adapter
+        -> Agent Runtime
+        -> GatewayClient
+        -> AI SDK Core + @ai-sdk/openai-compatible
+        -> LiteLLM Proxy
+        -> 上游 OpenAI-compatible API
 ```
 
-浏览器 Demo 的链路是：
+模型连通性测试链：
 
 ```text
-浏览器 Demo
-        |
-        | /api/runtime/conversations/{conversationId}/runs
-        v
-Demo Server 渠道 HTTP Adapter
-        |
-        v
-Runtime 上下文与消息构造
-        |
-        v
-LiteLLM Proxy -> 上游 OpenAI-compatible API
+scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 ```
+
+模型连通性测试链仅用于本地 smoke test、CI 和排障，不属于全局能力规划、业务入口、普通客户端接入方式或服务拆分依赖。新增或更新全局架构图、能力清单、服务蓝图和演进路线时不得把该测试链画入业务主链。
 
 ## 文档路由
 
-- `README.md`：面向使用者的启动、测试、客户端配置说明。
+- `README.md`：面向使用者的启动、Runtime 配置和模型连通性测试说明。
 - `docs/README.md`：项目文档索引。
 - `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。
 - `docs/coding-standards.md`：函数注释、数据结构、设计模式和设计原则等编码规范。
@@ -93,7 +84,8 @@ LiteLLM Proxy -> 上游 OpenAI-compatible API
 
 - `config.yaml`：LiteLLM Proxy 的模型别名、上游转发参数和 master key 配置。
 - `docker-compose.yml`：本地 LiteLLM 容器启动入口。
-- `scripts/test-chat.sh`：最小 chat completions smoke test。
+- `scripts/test-chat.sh`：仅用于验证 LiteLLM 到上游模型连通性的最小 smoke test，不属于平台业务入口。
+- `scripts/test-architecture-boundaries.mjs`：全局架构图与治理契约的边界回归检查，防止模型诊断链重新进入平台能力规划。
 - `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、Run、SSE、静态页面、JSON 收发和错误返回。
 - `demo/index.html`：浏览器多会话交互页面。浏览器只提交当前输入和幂等标识，不保存会话事实源，也不直接接触上游真实 key。
 - `src/config/env.mjs`：Demo Server、runtime 和 gateway client 的配置加载入口。
