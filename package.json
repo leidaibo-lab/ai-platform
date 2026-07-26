@@ -1,0 +1,19 @@
+{
+  "name": "ai-platform",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "demo": "node scripts/demo-server.mjs",
+    "test": "node --test scripts/test-runtime.mjs scripts/test-gateway-client.mjs",
+    "test:gateway": "node --test scripts/test-gateway-client.mjs",
+    "test:runtime": "node --test scripts/test-runtime.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.14",
+    "ai": "7.0.37"
+  }
+}

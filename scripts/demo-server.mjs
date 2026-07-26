@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDemoConfig } from "../src/config/env.mjs";
-import { GatewayRequestError, createLiteLlmClient } from "../src/gateway/litellm-client.mjs";
+import { GatewayRequestError, createGatewayClient } from "../src/gateway/gateway-client.mjs";
 import { RuntimeInputError, createChatRuntime } from "../src/runtime/chat-runtime.mjs";
 import { createConversationCoordinator } from "../src/runtime/conversation-coordinator.mjs";
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
@@ -15,7 +15,7 @@ const rootDir = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
 const demoDir = join(rootDir, "demo");
 const config = await loadDemoConfig(rootDir);
 const store = createConversationStore(config.storage);
-const gatewayClient = createLiteLlmClient(config.gateway);
+const gatewayClient = createGatewayClient(config.gateway);
 const coordinator = createConversationCoordinator();
 const contextPlanner = createContextPlanner({
   store,

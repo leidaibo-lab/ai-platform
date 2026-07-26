@@ -65,6 +65,29 @@ Demo Server SHALL 提供状态检查接口，返回 LiteLLM 连接状态、gatew
 - **THEN** Demo Server SHALL 尝试请求 LiteLLM `/v1/models`
 - **AND** 响应 SHALL 包含 `ok`、`gatewayBaseUrl` 和 `model`
 
+### Requirement: AI SDK Runtime gateway client
+
+Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯一模型生成客户端，并通过稳定 GatewayClient Port 调用 LiteLLM。
+
+#### Scenario: Runtime calls the model through LiteLLM
+
+- **GIVEN** Runtime 已配置 LiteLLM 地址、模型别名和访问 key
+- **WHEN** Runtime 执行模型调用
+- **THEN** 系统 SHALL 使用 `@ai-sdk/openai-compatible` 请求 `LITELLM_BASE_URL/v1`
+- **AND** SHALL 继续使用 `LITELLM_MODEL` 模型别名和 `LITELLM_MASTER_KEY`
+- **AND** SHALL NOT 读取 `UPSTREAM_API_KEY` 或绕过 LiteLLM
+- **AND** SHALL 禁用 AI SDK 自动重试，以保持单次 Run 的调用和计费语义
+
+#### Scenario: Gateway client preserves the existing model contract
+
+- **GIVEN** Runtime 使用 GatewayClient 执行模型调用
+- **WHEN** Runtime 发送文本、多条系统消息、图片 URL、图片 data URL 或结构化输出约束
+- **THEN** GatewayClient SHALL 将现有消息转换为等价 AI SDK ModelMessage
+- **AND** SHALL 将图片 URL 原样转发给 LiteLLM，不得在 Runtime 提前下载
+- **AND** SHALL 保留 `max_completion_tokens` 和 `response_format` 请求语义
+- **AND** SHALL 将模型正文、实际模型、usage、finish reason 和 HTTP 错误映射回现有 GatewayClient 契约
+- **AND** `/utils/token_counter` 不可用时的本地估算回退 SHALL 保持不变
+
 ### Requirement: Runtime conversation lifecycle
 
 Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不得把本地历史或摘要作为会话事实源。

@@ -44,6 +44,12 @@ LiteLLM Proxy
 
 本地需要 Node.js 22.5 或更高版本，以使用内置 `node:sqlite`。
 
+安装 Demo Server 和 AI SDK Gateway Client 的锁定依赖：
+
+```bash
+npm ci
+```
+
 复制环境变量模板：
 
 ```bash
@@ -132,7 +138,7 @@ Model: chat-default
 启动本地 Demo 页面：
 
 ```bash
-node scripts/demo-server.mjs
+npm run demo
 ```
 
 浏览器打开：
@@ -142,6 +148,8 @@ http://localhost:4010
 ```
 
 页面会请求本地 Demo Server，再由 Demo Server 使用 `.env` 里的 `LITELLM_MASTER_KEY` 调用 `http://localhost:4000/v1/chat/completions`。浏览器不会拿到 `UPSTREAM_API_KEY`。
+
+Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
 
 Demo 输入区支持：
 
@@ -182,10 +190,10 @@ Run 请求只包含当前输入和幂等标识：
 
 ## Runtime 验证
 
-运行会话、幂等、结构化记忆、乐观锁和关闭会话回归：
+运行 Gateway Client 协议兼容、会话、幂等、结构化记忆、乐观锁和关闭会话回归：
 
 ```bash
-node scripts/test-runtime.mjs
+npm test
 ```
 
 运行 100 轮长期记忆评测：
@@ -205,6 +213,8 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 - `UPSTREAM_API_BASE` 通常要带 `/v1`。
 - `UPSTREAM_API_KEY` 是中转站真实 key，只应放在服务端 `.env`。
 - `LITELLM_MASTER_KEY` 是 LiteLLM 当前对外访问 key，部署前请改成强随机值。
+- `LITELLM_BASE_URL` 是 Runtime 使用的 LiteLLM Proxy 根地址，默认 `http://localhost:4000`，不要追加 `/v1`。
+- `LITELLM_MODEL` 是 Runtime 请求的 LiteLLM 模型别名，默认 `chat-default`。
 - `DEMO_DATABASE_PATH` 是 Runtime SQLite 文件，默认 `.data/ai-platform.sqlite`。
 - `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
 
