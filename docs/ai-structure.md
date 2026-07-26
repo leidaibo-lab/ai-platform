@@ -14,10 +14,10 @@
 | --- | --- | --- | --- |
 | 渠道与体验层 | Demo、Web、IM、IDE、API 等入口适配；输入输出格式转换 | Agent 编排、工具执行、模型供应商密钥 | `demo/index.html`、`scripts/demo-server.mjs` 的静态页面和 HTTP 接入部分 |
 | 平台控制面 | 租户、用户、应用、Agent 定义、版本发布、配置和运营入口 | 执行单次 Agent 任务、直接调用上游模型 | 尚未实现；未来的大平台属于此区域，不只是更大的 Demo |
-| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner 和 token 水位 |
+| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位和 GatewayClient Port / Facade |
 | 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有工具注册预留，尚未接入真实工具和知识能力 |
-| 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default`、上游 key 收口和 gateway client |
-| 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 当前只有 OpenSpec、文档和 smoke test 的最小约束 |
+| 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default` 和上游 key 收口 |
+| 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 当前只有 OpenSpec、文档、回归评测和架构边界检查的最小约束 |
 
 这六个区域是概念、代码和未来服务拆分的统一归属边界。MCP、RAG、预算、审计等不是新的平级平台：MCP 和 RAG 属于连接器与知识层，模型预算属于模型网关，工具审批和任务评测属于 Agent Runtime 与治理区域。
 
@@ -128,7 +128,7 @@ Agent Runtime
 必须守住这些边界：
 
 - 渠道只做协议和展示适配；正式平台与 Demo 可以并存，不需要互相替换。
-- 需要上下文、工具或工作流的请求必须经过 Agent Runtime；只有 Cursor、内部脚本等纯模型客户端可以直连模型网关。
+- 平台业务模型请求必须经过 Agent Runtime；`scripts/test-chat.sh` 直连模型网关仅用于连通性 smoke test，不属于平台业务入口或全局依赖。
 - Agent Runtime 只使用模型别名或逻辑模型能力，不读取 `UPSTREAM_API_KEY`，不依赖具体 provider。
 - 连接器执行外部能力，但不自行决定完整任务流程；工具选择、循环次数和人工确认由 Agent Runtime 控制。
 - 模型网关只处理模型调用，不保存业务会话、任务状态、工具结果或知识权限。
@@ -244,7 +244,7 @@ Demo、正式 Web 平台、飞书、IDE 和 API Adapter 都应转换为统一的
 
 ![AI 应用基础平台 V0.6 全局链路](./assets/ai-platform-global-chain-v2.png)
 
-全局链路图突出唯一 AI SDK 模型生成路径、LiteLLM 管理旁路和六个架构区域；[SVG 源文件](./assets/ai-platform-global-chain-v2.svg)用于后续节点调整。下面的 Mermaid 保留可检索的当前代码映射。
+全局链路图突出唯一 AI SDK 模型生成路径、LiteLLM 管理旁路和六个架构区域；模型连通性测试链被有意排除。[查看动态数据流图](./assets/ai-platform-data-flow-v3.html)，[SVG 源文件](./assets/ai-platform-global-chain-v2.svg)用于后续节点调整。下面的 Mermaid 保留可检索的当前代码映射。
 
 ```mermaid
 flowchart LR
@@ -266,7 +266,7 @@ flowchart LR
       GatewayConfig["config.yaml"]
     end
 
-    Contract["OpenSpec / docs / smoke test<br/>最小治理"]
+    Contract["OpenSpec / docs / 回归评测<br/>最小治理"]
   end
 
   Upstream["上游 OpenAI-compatible API"]
@@ -314,36 +314,37 @@ flowchart LR
 | `POST /api/runtime/conversations/{id}/runs` | Demo Server | 幂等 Run API |
 | `POST /api/runtime/conversations/{id}/close` | Demo Server | 会话结束和最终 checkpoint |
 | `GET /api/runtime/conversations/{id}/events` | Demo Server | SQLite 事件游标驱动的 SSE 增量同步 |
-| `POST /v1/chat/completions` | LiteLLM | 模型网关标准模型接口 |
+| `POST /v1/chat/completions` | LiteLLM | Runtime 使用的模型网关标准接口；`test-chat.sh` 仅作连通性诊断 |
 
 未来拆出服务时，保持 Session/Run 契约不变，将 SQLite Store 替换为独立数据库和事件总线。
 
-## 两条调用链
+## 业务主链与模型测试
 
-### 纯模型调用
+### 平台业务主链
 
-Cursor、内部脚本或只需要模型响应的项目可以直接复用模型网关：
-
-```text
-模型客户端
-  -> Model Gateway /v1/chat/completions
-  -> 模型别名、鉴权、路由、预算和限流
-  -> 上游模型
-```
-
-### Agent 调用
-
-需要会话、工具、知识或人工确认的项目必须经过 Agent Runtime：
+所有平台业务请求统一经过 Agent Runtime：
 
 ```text
 Demo / 正式平台 / IM / API Adapter
   -> Agent Runtime
       -> Connector / Knowledge
+      -> GatewayClient
+      -> AI SDK Core + OpenAI-compatible Provider
       -> Model Gateway
   -> 最终结果或确认状态
 ```
 
-这两条链路可以同时存在。模型网关是可独立复用的基础服务，Agent Runtime 是更高一层的执行服务，平台和渠道是它们的调用方。
+### 模型连通性测试（不属于全局链路）
+
+`scripts/test-chat.sh` 只用于确认 LiteLLM、模型配置和上游是否正常：
+
+```text
+scripts/test-chat.sh
+  -> LiteLLM /v1/chat/completions
+  -> 上游模型
+```
+
+该链路固定归入 smoke test、CI 和运维排障，不属于平台业务能力、普通客户端接入方式、全局架构依赖或未来服务拆分依据。全局链路图、能力组成图和演进路线不得把它画成与 Agent Runtime 并列的调用入口。
 
 ## 配置与密钥边界
 
@@ -369,8 +370,8 @@ Demo / 正式平台 / IM / API Adapter
 - Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
 - AI SDK Core v7 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端，禁用自动重试并保留现有请求语义。
 - 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
-- Agent Runtime、连接器注册和模型网关客户端的模块边界雏形。
-- OpenSpec、文档和 smoke test 的最小治理。
+- Agent Runtime 及其 GatewayClient、连接器注册和模型网关的模块边界雏形。
+- OpenSpec、文档、回归评测和自动化架构边界检查的最小治理。
 
 暂未覆盖：
 

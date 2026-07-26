@@ -1,0 +1,1583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>AI 应用基础平台上下游数据流</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;max-width:736px;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="AI 应用基础平台上下游数据流" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;AI 应用基础平台上下游数据流&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(--background) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: light-dark(rgb(255 255 255), rgb(24 24 24));
+  --foreground: light-dark(rgb(26 28 31), rgb(255 255 255));
+  --card: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --card-foreground: var(--foreground);
+  --popover: light-dark(rgb(255 255 255), rgb(45 45 45));
+  --popover-foreground: var(--foreground);
+  --primary: light-dark(rgb(51 156 255), rgb(131 195 255));
+  --primary-foreground: light-dark(rgb(255 255 255), rgb(13 13 13));
+  --secondary: light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%));
+  --secondary-foreground: var(--foreground);
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: light-dark(
+    rgb(26 28 31 / 49.4%),
+    rgb(255 255 255 / 49.8%)
+  );
+  --accent: light-dark(rgb(229 242 255), rgb(13 39 63));
+  --accent-foreground: var(--primary);
+  --destructive: light-dark(rgb(226 85 7), rgb(255 133 73));
+  --border: light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%));
+  --input: light-dark(
+    rgb(26 28 31 / 11.8%),
+    color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+  );
+  --ring: light-dark(rgb(51 156 255), rgb(131 195 255 / 76%));
+  --font-size-base: 14px;
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: 12.5px;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+  --color-background-primary: var(--background);
+  --color-text-primary: var(--foreground);
+  --color-border-secondary: var(--border);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--viz-font-weight-medium);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+    [aria-pressed=&quot;true&quot;],
+    [aria-selected=&quot;true&quot;],
+    .is-selected
+  ) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;ai-platform-flow-v3&quot; class=&quot;ai-flow-root&quot;&gt;
+  &lt;div class=&quot;viz-controls ai-flow-toolbar&quot; aria-label=&quot;链路图控制与图例&quot;&gt;
+    &lt;span class=&quot;ai-flow-legend&quot;&gt;&lt;span class=&quot;ai-flow-swatch request&quot;&gt;&lt;/span&gt;请求下行&lt;/span&gt;
+    &lt;span class=&quot;ai-flow-legend&quot;&gt;&lt;span class=&quot;ai-flow-swatch response&quot;&gt;&lt;/span&gt;结果上行&lt;/span&gt;
+    &lt;span class=&quot;ai-flow-legend&quot;&gt;&lt;span class=&quot;ai-flow-swatch manage&quot;&gt;&lt;/span&gt;管理往返&lt;/span&gt;
+    &lt;span class=&quot;ai-flow-legend&quot;&gt;&lt;span class=&quot;ai-flow-swatch future&quot;&gt;&lt;/span&gt;规划 / 治理&lt;/span&gt;
+    &lt;button type=&quot;button&quot; class=&quot;btn btn-ghost ai-flow-toggle&quot; aria-pressed=&quot;false&quot;&gt;
+      &lt;i data-lucide=&quot;pause&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
+      &lt;span&gt;暂停动效&lt;/span&gt;
+    &lt;/button&gt;
+  &lt;/div&gt;
+
+  &lt;svg class=&quot;ai-flow-diagram desktop&quot; viewBox=&quot;0 0 1200 840&quot; role=&quot;img&quot; aria-labelledby=&quot;ai-flow-title ai-flow-desc&quot;&gt;
+    &lt;title id=&quot;ai-flow-title&quot;&gt;AI 应用基础平台上下游数据流&lt;/title&gt;
+    &lt;desc id=&quot;ai-flow-desc&quot;&gt;模型请求从渠道向右流经 Runtime、GatewayClient、AI SDK、LiteLLM 到达上游，模型结果沿蓝色线路返回。LiteLLM 管理请求、工具链和治理事件位于独立旁路。&lt;/desc&gt;
+    &lt;defs&gt;
+      &lt;marker id=&quot;d-request-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-request&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+      &lt;marker id=&quot;d-response-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-response&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+      &lt;marker id=&quot;d-manage-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-manage&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+      &lt;marker id=&quot;d-muted-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;6&quot; markerHeight=&quot;6&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-muted&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+    &lt;/defs&gt;
+
+    &lt;g aria-label=&quot;平台控制面&quot;&gt;
+      &lt;rect class=&quot;region control&quot; x=&quot;15&quot; y=&quot;15&quot; width=&quot;1170&quot; height=&quot;100&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;35&quot; y=&quot;43&quot;&gt;2. 平台控制面&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;35&quot; y=&quot;67&quot;&gt;发布版本，不进入同步主链&lt;/text&gt;
+      &lt;rect class=&quot;node future-node&quot; x=&quot;210&quot; y=&quot;35&quot; width=&quot;180&quot; height=&quot;54&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;300&quot; y=&quot;68&quot;&gt;Agent 定义 / 版本&lt;/text&gt;
+      &lt;rect class=&quot;node future-node&quot; x=&quot;510&quot; y=&quot;35&quot; width=&quot;180&quot; height=&quot;54&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;600&quot; y=&quot;68&quot;&gt;工具与权限策略&lt;/text&gt;
+      &lt;rect class=&quot;node future-node&quot; x=&quot;810&quot; y=&quot;35&quot; width=&quot;180&quot; height=&quot;54&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;900&quot; y=&quot;68&quot;&gt;模型策略与发布&lt;/text&gt;
+      &lt;path class=&quot;future-line&quot; d=&quot;M300 89V128H300V150&quot; marker-end=&quot;url(#d-muted-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;future-line&quot; d=&quot;M600 89V128H650V575&quot; marker-end=&quot;url(#d-muted-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;future-line&quot; d=&quot;M900 89V128H925V150&quot; marker-end=&quot;url(#d-muted-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;/g&gt;
+
+    &lt;g aria-label=&quot;模型调用主链&quot;&gt;
+      &lt;rect class=&quot;region channel&quot; x=&quot;15&quot; y=&quot;135&quot; width=&quot;165&quot; height=&quot;280&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;28&quot; y=&quot;165&quot;&gt;1. 渠道与体验&lt;/text&gt;
+
+      &lt;rect class=&quot;region runtime&quot; x=&quot;195&quot; y=&quot;135&quot; width=&quot;630&quot; height=&quot;280&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;210&quot; y=&quot;165&quot;&gt;3. Agent Runtime&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;210&quot; y=&quot;188&quot;&gt;会话、上下文、记忆与唯一模型客户端&lt;/text&gt;
+
+      &lt;rect class=&quot;region gateway&quot; x=&quot;840&quot; y=&quot;135&quot; width=&quot;175&quot; height=&quot;280&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;855&quot; y=&quot;165&quot;&gt;5. 模型网关&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;855&quot; y=&quot;188&quot;&gt;严格安全边界&lt;/text&gt;
+
+      &lt;rect class=&quot;region external&quot; x=&quot;1030&quot; y=&quot;135&quot; width=&quot;155&quot; height=&quot;280&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;1045&quot; y=&quot;165&quot;&gt;外部上游&lt;/text&gt;
+
+      &lt;text class=&quot;flow-caption request-text&quot; x=&quot;410&quot; y=&quot;210&quot;&gt;模型请求下行 →&lt;/text&gt;
+      &lt;text class=&quot;flow-caption response-text&quot; x=&quot;665&quot; y=&quot;210&quot;&gt;← 模型结果上行&lt;/text&gt;
+
+      &lt;g aria-label=&quot;步骤一：渠道适配&quot;&gt;
+        &lt;rect class=&quot;node&quot; x=&quot;30&quot; y=&quot;220&quot; width=&quot;135&quot; height=&quot;135&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+        &lt;circle class=&quot;step&quot; cx=&quot;48&quot; cy=&quot;238&quot; r=&quot;12&quot;&gt;&lt;/circle&gt;
+        &lt;text class=&quot;step-text&quot; x=&quot;48&quot; y=&quot;244&quot;&gt;1&lt;/text&gt;
+        &lt;text class=&quot;node-title&quot; x=&quot;98&quot; y=&quot;252&quot;&gt;渠道 Adapter&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;98&quot; y=&quot;279&quot;&gt;Demo / Web&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;98&quot; y=&quot;302&quot;&gt;IM / IDE / API&lt;/text&gt;
+        &lt;text class=&quot;node-code&quot; x=&quot;98&quot; y=&quot;331&quot;&gt;Run API · SSE&lt;/text&gt;
+      &lt;/g&gt;
+
+      &lt;g aria-label=&quot;步骤二：Session 与 Run&quot;&gt;
+        &lt;rect class=&quot;node&quot; x=&quot;210&quot; y=&quot;220&quot; width=&quot;180&quot; height=&quot;135&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+        &lt;circle class=&quot;step&quot; cx=&quot;228&quot; cy=&quot;238&quot; r=&quot;12&quot;&gt;&lt;/circle&gt;
+        &lt;text class=&quot;step-text&quot; x=&quot;228&quot; y=&quot;244&quot;&gt;2&lt;/text&gt;
+        &lt;text class=&quot;node-title&quot; x=&quot;300&quot; y=&quot;252&quot;&gt;Session / Run&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;300&quot; y=&quot;279&quot;&gt;幂等 · 串行 · 生命周期&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;300&quot; y=&quot;302&quot;&gt;Context Planner&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;300&quot; y=&quot;325&quot;&gt;Memory Manager&lt;/text&gt;
+      &lt;/g&gt;
+
+      &lt;g aria-label=&quot;步骤三：GatewayClient&quot;&gt;
+        &lt;rect class=&quot;node active-node&quot; x=&quot;420&quot; y=&quot;220&quot; width=&quot;150&quot; height=&quot;135&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+        &lt;circle class=&quot;step active-step&quot; cx=&quot;438&quot; cy=&quot;238&quot; r=&quot;12&quot;&gt;&lt;/circle&gt;
+        &lt;text class=&quot;step-text&quot; x=&quot;438&quot; y=&quot;244&quot;&gt;3&lt;/text&gt;
+        &lt;text class=&quot;node-title&quot; x=&quot;495&quot; y=&quot;254&quot;&gt;GatewayClient&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;495&quot; y=&quot;283&quot;&gt;Port / Facade&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;495&quot; y=&quot;310&quot;&gt;统一 Runtime 契约&lt;/text&gt;
+        &lt;text class=&quot;node-code&quot; x=&quot;495&quot; y=&quot;334&quot;&gt;chatCompletions&lt;/text&gt;
+      &lt;/g&gt;
+
+      &lt;g aria-label=&quot;步骤四：AI SDK&quot;&gt;
+        &lt;rect class=&quot;node active-node&quot; x=&quot;600&quot; y=&quot;220&quot; width=&quot;210&quot; height=&quot;135&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+        &lt;circle class=&quot;step active-step&quot; cx=&quot;618&quot; cy=&quot;238&quot; r=&quot;12&quot;&gt;&lt;/circle&gt;
+        &lt;text class=&quot;step-text&quot; x=&quot;618&quot; y=&quot;244&quot;&gt;4&lt;/text&gt;
+        &lt;text class=&quot;node-title&quot; x=&quot;705&quot; y=&quot;252&quot;&gt;AI SDK Core&lt;/text&gt;
+        &lt;text class=&quot;node-code&quot; x=&quot;705&quot; y=&quot;279&quot;&gt;generateText&lt;/text&gt;
+        &lt;text class=&quot;node-code&quot; x=&quot;705&quot; y=&quot;302&quot;&gt;@ai-sdk/openai-compatible&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;705&quot; y=&quot;329&quot;&gt;唯一模型生成实现&lt;/text&gt;
+      &lt;/g&gt;
+
+      &lt;g aria-label=&quot;步骤五：LiteLLM 模型网关&quot;&gt;
+        &lt;rect class=&quot;node gateway-node&quot; x=&quot;855&quot; y=&quot;220&quot; width=&quot;145&quot; height=&quot;135&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+        &lt;circle class=&quot;step gateway-step&quot; cx=&quot;873&quot; cy=&quot;238&quot; r=&quot;12&quot;&gt;&lt;/circle&gt;
+        &lt;text class=&quot;step-text&quot; x=&quot;873&quot; y=&quot;244&quot;&gt;5&lt;/text&gt;
+        &lt;text class=&quot;node-title&quot; x=&quot;928&quot; y=&quot;252&quot;&gt;LiteLLM&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;928&quot; y=&quot;279&quot;&gt;模型别名 · Key&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;928&quot; y=&quot;302&quot;&gt;路由 · 限流 · 预算&lt;/text&gt;
+        &lt;text class=&quot;node-code&quot; x=&quot;928&quot; y=&quot;329&quot;&gt;:4000 /v1&lt;/text&gt;
+      &lt;/g&gt;
+
+      &lt;g aria-label=&quot;步骤六：上游模型&quot;&gt;
+        &lt;rect class=&quot;node&quot; x=&quot;1040&quot; y=&quot;220&quot; width=&quot;130&quot; height=&quot;135&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+        &lt;circle class=&quot;step&quot; cx=&quot;1058&quot; cy=&quot;238&quot; r=&quot;12&quot;&gt;&lt;/circle&gt;
+        &lt;text class=&quot;step-text&quot; x=&quot;1058&quot; y=&quot;244&quot;&gt;6&lt;/text&gt;
+        &lt;text class=&quot;node-title&quot; x=&quot;1105&quot; y=&quot;252&quot;&gt;上游模型&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;1105&quot; y=&quot;281&quot;&gt;OpenAI-&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;1105&quot; y=&quot;304&quot;&gt;compatible API&lt;/text&gt;
+        &lt;text class=&quot;node-subtitle&quot; x=&quot;1105&quot; y=&quot;330&quot;&gt;生成最终结果&lt;/text&gt;
+      &lt;/g&gt;
+
+      &lt;g aria-label=&quot;模型请求下行线路&quot;&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M165 250H210&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving request-flow delay-1&quot; d=&quot;M165 250H210&quot; marker-end=&quot;url(#d-request-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M390 250H420&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving request-flow delay-2&quot; d=&quot;M390 250H420&quot; marker-end=&quot;url(#d-request-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M570 250H600&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving request-flow delay-3&quot; d=&quot;M570 250H600&quot; marker-end=&quot;url(#d-request-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M810 250H855&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving request-flow delay-4&quot; d=&quot;M810 250H855&quot; marker-end=&quot;url(#d-request-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M1000 250H1040&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving request-flow delay-5&quot; d=&quot;M1000 250H1040&quot; marker-end=&quot;url(#d-request-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;/g&gt;
+
+      &lt;g aria-label=&quot;模型结果上行线路&quot;&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M210 320H165&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving response-flow delay-5&quot; d=&quot;M210 320H165&quot; marker-end=&quot;url(#d-response-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M420 320H390&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving response-flow delay-4&quot; d=&quot;M420 320H390&quot; marker-end=&quot;url(#d-response-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M600 320H570&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving response-flow delay-3&quot; d=&quot;M600 320H570&quot; marker-end=&quot;url(#d-response-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M855 320H810&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving response-flow delay-2&quot; d=&quot;M855 320H810&quot; marker-end=&quot;url(#d-response-arrow)&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-track&quot; d=&quot;M1040 320H1000&quot;&gt;&lt;/path&gt;
+        &lt;path class=&quot;flow-moving response-flow delay-1&quot; d=&quot;M1040 320H1000&quot; marker-end=&quot;url(#d-response-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;/g&gt;
+
+      &lt;rect class=&quot;mini-node&quot; x=&quot;230&quot; y=&quot;370&quot; width=&quot;140&quot; height=&quot;30&quot; rx=&quot;5&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;mini-text&quot; x=&quot;300&quot; y=&quot;391&quot;&gt;SQLite 会话事实源&lt;/text&gt;
+      &lt;path class=&quot;data-line&quot; d=&quot;M300 355V370&quot; marker-end=&quot;url(#d-muted-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;/g&gt;
+
+    &lt;g aria-label=&quot;LiteLLM 管理旁路&quot;&gt;
+      &lt;rect class=&quot;region management&quot; x=&quot;195&quot; y=&quot;435&quot; width=&quot;820&quot; height=&quot;110&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;210&quot; y=&quot;462&quot;&gt;管理旁路&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;325&quot; y=&quot;462&quot;&gt;只访问 LiteLLM，不进入上游模型生成&lt;/text&gt;
+
+      &lt;rect class=&quot;node compact&quot; x=&quot;220&quot; y=&quot;478&quot; width=&quot;190&quot; height=&quot;50&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;315&quot; y=&quot;501&quot;&gt;状态接口 / Context Planner&lt;/text&gt;
+      &lt;text class=&quot;node-code&quot; x=&quot;315&quot; y=&quot;520&quot;&gt;status · countTokens&lt;/text&gt;
+
+      &lt;rect class=&quot;node compact&quot; x=&quot;470&quot; y=&quot;478&quot; width=&quot;240&quot; height=&quot;50&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;590&quot; y=&quot;501&quot;&gt;LiteLLM Management Client&lt;/text&gt;
+      &lt;text class=&quot;node-code&quot; x=&quot;590&quot; y=&quot;520&quot;&gt;无模型生成能力&lt;/text&gt;
+
+      &lt;rect class=&quot;node compact gateway-node&quot; x=&quot;850&quot; y=&quot;478&quot; width=&quot;150&quot; height=&quot;50&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;925&quot; y=&quot;501&quot;&gt;LiteLLM&lt;/text&gt;
+      &lt;text class=&quot;node-code&quot; x=&quot;925&quot; y=&quot;520&quot;&gt;models · token_counter&lt;/text&gt;
+
+      &lt;path class=&quot;flow-track&quot; d=&quot;M410 489H470&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-moving manage-flow delay-1&quot; d=&quot;M410 489H470&quot; marker-end=&quot;url(#d-manage-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-track&quot; d=&quot;M710 489H850&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-moving manage-flow delay-2&quot; d=&quot;M710 489H850&quot; marker-end=&quot;url(#d-manage-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-track&quot; d=&quot;M850 518H710&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-moving manage-return delay-2&quot; d=&quot;M850 518H710&quot; marker-end=&quot;url(#d-manage-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-track&quot; d=&quot;M470 518H410&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-moving manage-return delay-1&quot; d=&quot;M470 518H410&quot; marker-end=&quot;url(#d-manage-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;/g&gt;
+
+    &lt;g aria-label=&quot;连接器与知识层&quot;&gt;
+      &lt;rect class=&quot;region connector&quot; x=&quot;195&quot; y=&quot;565&quot; width=&quot;820&quot; height=&quot;110&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;210&quot; y=&quot;592&quot;&gt;4. 连接器与知识层&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;410&quot; y=&quot;592&quot;&gt;当前 Registry 预留；真实执行链后续启用&lt;/text&gt;
+
+      &lt;rect class=&quot;node compact&quot; x=&quot;290&quot; y=&quot;610&quot; width=&quot;170&quot; height=&quot;48&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;375&quot; y=&quot;640&quot;&gt;Tool Registry&lt;/text&gt;
+      &lt;rect class=&quot;node compact future-node&quot; x=&quot;540&quot; y=&quot;610&quot; width=&quot;170&quot; height=&quot;48&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;625&quot; y=&quot;640&quot;&gt;Tool Executor / MCP&lt;/text&gt;
+      &lt;rect class=&quot;node compact future-node&quot; x=&quot;790&quot; y=&quot;610&quot; width=&quot;170&quot; height=&quot;48&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;875&quot; y=&quot;640&quot;&gt;搜索 / RAG / 知识权限&lt;/text&gt;
+      &lt;path class=&quot;future-line&quot; d=&quot;M460 634H540&quot; marker-end=&quot;url(#d-muted-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;future-line&quot; d=&quot;M710 634H790&quot; marker-end=&quot;url(#d-muted-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;/g&gt;
+
+    &lt;g aria-label=&quot;治理与可观测&quot;&gt;
+      &lt;rect class=&quot;region governance&quot; x=&quot;15&quot; y=&quot;695&quot; width=&quot;1170&quot; height=&quot;125&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;30&quot; y=&quot;724&quot;&gt;6. 治理与可观测&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;200&quot; y=&quot;724&quot;&gt;事件旁路采集，不成为模型请求同步单点&lt;/text&gt;
+      &lt;path class=&quot;future-line governance-bus&quot; d=&quot;M155 752H1045&quot;&gt;&lt;/path&gt;
+      &lt;circle class=&quot;producer&quot; cx=&quot;250&quot; cy=&quot;752&quot; r=&quot;5&quot;&gt;&lt;/circle&gt;
+      &lt;circle class=&quot;producer&quot; cx=&quot;500&quot; cy=&quot;752&quot; r=&quot;5&quot;&gt;&lt;/circle&gt;
+      &lt;circle class=&quot;producer&quot; cx=&quot;750&quot; cy=&quot;752&quot; r=&quot;5&quot;&gt;&lt;/circle&gt;
+      &lt;circle class=&quot;producer&quot; cx=&quot;1000&quot; cy=&quot;752&quot; r=&quot;5&quot;&gt;&lt;/circle&gt;
+      &lt;text class=&quot;bus-label&quot; x=&quot;250&quot; y=&quot;744&quot;&gt;渠道事件&lt;/text&gt;
+      &lt;text class=&quot;bus-label&quot; x=&quot;500&quot; y=&quot;744&quot;&gt;Runtime 事件&lt;/text&gt;
+      &lt;text class=&quot;bus-label&quot; x=&quot;750&quot; y=&quot;744&quot;&gt;模型调用事件&lt;/text&gt;
+      &lt;text class=&quot;bus-label&quot; x=&quot;1000&quot; y=&quot;744&quot;&gt;工具事件&lt;/text&gt;
+
+      &lt;rect class=&quot;node compact&quot; x=&quot;220&quot; y=&quot;770&quot; width=&quot;190&quot; height=&quot;36&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;315&quot; y=&quot;794&quot;&gt;统一身份上下文&lt;/text&gt;
+      &lt;rect class=&quot;node compact&quot; x=&quot;505&quot; y=&quot;770&quot; width=&quot;190&quot; height=&quot;36&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;600&quot; y=&quot;794&quot;&gt;Trace / Usage / Cost&lt;/text&gt;
+      &lt;rect class=&quot;node compact&quot; x=&quot;790&quot; y=&quot;770&quot; width=&quot;190&quot; height=&quot;36&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;885&quot; y=&quot;794&quot;&gt;Audit / Evaluation&lt;/text&gt;
+    &lt;/g&gt;
+  &lt;/svg&gt;
+
+  &lt;svg class=&quot;ai-flow-diagram mobile&quot; viewBox=&quot;0 0 560 1460&quot; role=&quot;img&quot; aria-labelledby=&quot;ai-flow-mobile-title ai-flow-mobile-desc&quot;&gt;
+    &lt;title id=&quot;ai-flow-mobile-title&quot;&gt;AI 应用基础平台移动端上下游数据流&lt;/title&gt;
+    &lt;desc id=&quot;ai-flow-mobile-desc&quot;&gt;左侧绿色轨道表示请求向下流动，右侧蓝色轨道表示结果向上返回。管理、工具和治理旁路排列在主链之后。&lt;/desc&gt;
+    &lt;defs&gt;
+      &lt;marker id=&quot;m-request-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-request&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+      &lt;marker id=&quot;m-response-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-response&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+      &lt;marker id=&quot;m-manage-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-manage&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+      &lt;marker id=&quot;m-muted-arrow&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;9&quot; refY=&quot;5&quot; markerWidth=&quot;6&quot; markerHeight=&quot;6&quot; orient=&quot;auto&quot;&gt;
+        &lt;path d=&quot;M0 0 10 5 0 10Z&quot; class=&quot;marker-muted&quot;&gt;&lt;/path&gt;
+      &lt;/marker&gt;
+    &lt;/defs&gt;
+
+    &lt;rect class=&quot;region control&quot; x=&quot;20&quot; y=&quot;15&quot; width=&quot;520&quot; height=&quot;92&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+    &lt;text class=&quot;region-title&quot; x=&quot;38&quot; y=&quot;47&quot;&gt;2. 平台控制面&lt;/text&gt;
+    &lt;text class=&quot;region-note&quot; x=&quot;38&quot; y=&quot;75&quot;&gt;Agent 版本 · 工具策略 · 模型策略&lt;/text&gt;
+
+    &lt;text class=&quot;flow-caption request-text&quot; x=&quot;30&quot; y=&quot;140&quot;&gt;请求下行 ↓&lt;/text&gt;
+    &lt;text class=&quot;flow-caption response-text&quot; x=&quot;530&quot; y=&quot;140&quot; text-anchor=&quot;end&quot;&gt;↑ 结果上行&lt;/text&gt;
+    &lt;path class=&quot;flow-track&quot; d=&quot;M72 155V915&quot;&gt;&lt;/path&gt;
+    &lt;path class=&quot;flow-moving request-flow&quot; d=&quot;M72 155V915&quot; marker-end=&quot;url(#m-request-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;path class=&quot;flow-track&quot; d=&quot;M488 915V155&quot;&gt;&lt;/path&gt;
+    &lt;path class=&quot;flow-moving response-flow&quot; d=&quot;M488 915V155&quot; marker-end=&quot;url(#m-response-arrow)&quot;&gt;&lt;/path&gt;
+
+    &lt;g aria-label=&quot;移动端模型主链&quot;&gt;
+      &lt;rect class=&quot;region channel&quot; x=&quot;95&quot; y=&quot;135&quot; width=&quot;370&quot; height=&quot;116&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;115&quot; y=&quot;164&quot;&gt;1. 渠道与体验层&lt;/text&gt;
+      &lt;rect class=&quot;node&quot; x=&quot;125&quot; y=&quot;178&quot; width=&quot;310&quot; height=&quot;55&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;circle class=&quot;step&quot; cx=&quot;148&quot; cy=&quot;205&quot; r=&quot;13&quot;&gt;&lt;/circle&gt;
+      &lt;text class=&quot;step-text&quot; x=&quot;148&quot; y=&quot;212&quot;&gt;1&lt;/text&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;201&quot;&gt;渠道 Adapter&lt;/text&gt;
+      &lt;text class=&quot;node-subtitle&quot; x=&quot;280&quot; y=&quot;222&quot;&gt;Run API · JSON · SSE&lt;/text&gt;
+
+      &lt;rect class=&quot;region runtime&quot; x=&quot;95&quot; y=&quot;270&quot; width=&quot;370&quot; height=&quot;430&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;115&quot; y=&quot;300&quot;&gt;3. Agent Runtime&lt;/text&gt;
+      &lt;rect class=&quot;node&quot; x=&quot;125&quot; y=&quot;318&quot; width=&quot;310&quot; height=&quot;82&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;circle class=&quot;step&quot; cx=&quot;148&quot; cy=&quot;344&quot; r=&quot;13&quot;&gt;&lt;/circle&gt;
+      &lt;text class=&quot;step-text&quot; x=&quot;148&quot; y=&quot;351&quot;&gt;2&lt;/text&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;346&quot;&gt;Session / Run&lt;/text&gt;
+      &lt;text class=&quot;node-subtitle&quot; x=&quot;280&quot; y=&quot;373&quot;&gt;幂等 · Context · Memory · Store&lt;/text&gt;
+
+      &lt;rect class=&quot;node active-node&quot; x=&quot;125&quot; y=&quot;430&quot; width=&quot;310&quot; height=&quot;82&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;circle class=&quot;step active-step&quot; cx=&quot;148&quot; cy=&quot;456&quot; r=&quot;13&quot;&gt;&lt;/circle&gt;
+      &lt;text class=&quot;step-text&quot; x=&quot;148&quot; y=&quot;463&quot;&gt;3&lt;/text&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;458&quot;&gt;GatewayClient Port / Facade&lt;/text&gt;
+      &lt;text class=&quot;node-subtitle&quot; x=&quot;280&quot; y=&quot;485&quot;&gt;Runtime 唯一模型客户端契约&lt;/text&gt;
+
+      &lt;rect class=&quot;node active-node&quot; x=&quot;125&quot; y=&quot;542&quot; width=&quot;310&quot; height=&quot;116&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;circle class=&quot;step active-step&quot; cx=&quot;148&quot; cy=&quot;568&quot; r=&quot;13&quot;&gt;&lt;/circle&gt;
+      &lt;text class=&quot;step-text&quot; x=&quot;148&quot; y=&quot;575&quot;&gt;4&lt;/text&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;570&quot;&gt;AI SDK Core · generateText&lt;/text&gt;
+      &lt;text class=&quot;node-code&quot; x=&quot;280&quot; y=&quot;600&quot;&gt;@ai-sdk/openai-compatible&lt;/text&gt;
+      &lt;text class=&quot;node-subtitle&quot; x=&quot;280&quot; y=&quot;630&quot;&gt;唯一模型生成实现&lt;/text&gt;
+
+      &lt;rect class=&quot;region gateway&quot; x=&quot;95&quot; y=&quot;720&quot; width=&quot;370&quot; height=&quot;120&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;115&quot; y=&quot;750&quot;&gt;5. 模型网关&lt;/text&gt;
+      &lt;rect class=&quot;node gateway-node&quot; x=&quot;125&quot; y=&quot;765&quot; width=&quot;310&quot; height=&quot;58&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;circle class=&quot;step gateway-step&quot; cx=&quot;148&quot; cy=&quot;794&quot; r=&quot;13&quot;&gt;&lt;/circle&gt;
+      &lt;text class=&quot;step-text&quot; x=&quot;148&quot; y=&quot;801&quot;&gt;5&lt;/text&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;790&quot;&gt;LiteLLM Proxy :4000&lt;/text&gt;
+      &lt;text class=&quot;node-subtitle&quot; x=&quot;280&quot; y=&quot;813&quot;&gt;别名 · Key · 路由 · 限流 · 预算&lt;/text&gt;
+
+      &lt;rect class=&quot;region external&quot; x=&quot;95&quot; y=&quot;860&quot; width=&quot;370&quot; height=&quot;90&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;115&quot; y=&quot;890&quot;&gt;外部上游&lt;/text&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;921&quot;&gt;6. OpenAI-compatible 模型 API&lt;/text&gt;
+
+      &lt;path class=&quot;data-line&quot; d=&quot;M72 205H125&quot; marker-end=&quot;url(#m-request-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;data-line&quot; d=&quot;M72 358H125&quot; marker-end=&quot;url(#m-request-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;data-line&quot; d=&quot;M72 470H125&quot; marker-end=&quot;url(#m-request-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;data-line&quot; d=&quot;M72 600H125&quot; marker-end=&quot;url(#m-request-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;data-line&quot; d=&quot;M72 794H125&quot; marker-end=&quot;url(#m-request-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;data-line&quot; d=&quot;M72 915H95&quot; marker-end=&quot;url(#m-request-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;response-link&quot; d=&quot;M435 915H488&quot; marker-end=&quot;url(#m-response-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;response-link&quot; d=&quot;M435 794H488&quot; marker-end=&quot;url(#m-response-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;response-link&quot; d=&quot;M435 600H488&quot; marker-end=&quot;url(#m-response-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;response-link&quot; d=&quot;M435 470H488&quot; marker-end=&quot;url(#m-response-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;response-link&quot; d=&quot;M435 358H488&quot; marker-end=&quot;url(#m-response-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;response-link&quot; d=&quot;M435 205H488&quot; marker-end=&quot;url(#m-response-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;/g&gt;
+
+    &lt;g aria-label=&quot;移动端管理旁路&quot;&gt;
+      &lt;rect class=&quot;region management&quot; x=&quot;20&quot; y=&quot;980&quot; width=&quot;520&quot; height=&quot;130&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;38&quot; y=&quot;1010&quot;&gt;管理旁路&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;38&quot; y=&quot;1037&quot;&gt;不进入上游模型生成&lt;/text&gt;
+      &lt;rect class=&quot;node compact&quot; x=&quot;55&quot; y=&quot;1053&quot; width=&quot;190&quot; height=&quot;40&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;150&quot; y=&quot;1079&quot;&gt;Management Client&lt;/text&gt;
+      &lt;rect class=&quot;node compact gateway-node&quot; x=&quot;315&quot; y=&quot;1053&quot; width=&quot;190&quot; height=&quot;40&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;410&quot; y=&quot;1079&quot;&gt;models / token_counter&lt;/text&gt;
+      &lt;path class=&quot;flow-track&quot; d=&quot;M245 1065H315&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-moving manage-flow&quot; d=&quot;M245 1065H315&quot; marker-end=&quot;url(#m-manage-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-track&quot; d=&quot;M315 1083H245&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;flow-moving manage-return&quot; d=&quot;M315 1083H245&quot; marker-end=&quot;url(#m-manage-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;/g&gt;
+
+    &lt;g aria-label=&quot;移动端连接器与知识层&quot;&gt;
+      &lt;rect class=&quot;region connector&quot; x=&quot;20&quot; y=&quot;1135&quot; width=&quot;520&quot; height=&quot;120&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;38&quot; y=&quot;1165&quot;&gt;4. 连接器与知识层&lt;/text&gt;
+      &lt;rect class=&quot;node compact&quot; x=&quot;55&quot; y=&quot;1186&quot; width=&quot;130&quot; height=&quot;44&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;120&quot; y=&quot;1214&quot;&gt;Tool Registry&lt;/text&gt;
+      &lt;rect class=&quot;node compact future-node&quot; x=&quot;215&quot; y=&quot;1186&quot; width=&quot;130&quot; height=&quot;44&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;1214&quot;&gt;Executor / MCP&lt;/text&gt;
+      &lt;rect class=&quot;node compact future-node&quot; x=&quot;375&quot; y=&quot;1186&quot; width=&quot;130&quot; height=&quot;44&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;440&quot; y=&quot;1214&quot;&gt;搜索 / RAG&lt;/text&gt;
+      &lt;path class=&quot;future-line&quot; d=&quot;M185 1208H215&quot; marker-end=&quot;url(#m-muted-arrow)&quot;&gt;&lt;/path&gt;
+      &lt;path class=&quot;future-line&quot; d=&quot;M345 1208H375&quot; marker-end=&quot;url(#m-muted-arrow)&quot;&gt;&lt;/path&gt;
+    &lt;/g&gt;
+
+    &lt;g aria-label=&quot;移动端治理与可观测&quot;&gt;
+      &lt;rect class=&quot;region governance&quot; x=&quot;20&quot; y=&quot;1280&quot; width=&quot;520&quot; height=&quot;150&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;region-title&quot; x=&quot;38&quot; y=&quot;1310&quot;&gt;6. 治理与可观测&lt;/text&gt;
+      &lt;text class=&quot;region-note&quot; x=&quot;38&quot; y=&quot;1337&quot;&gt;身份、Trace、Usage、Cost、Audit、Evaluation&lt;/text&gt;
+      &lt;path class=&quot;future-line governance-bus&quot; d=&quot;M70 1360H490&quot;&gt;&lt;/path&gt;
+      &lt;rect class=&quot;node compact&quot; x=&quot;55&quot; y=&quot;1380&quot; width=&quot;130&quot; height=&quot;34&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;120&quot; y=&quot;1403&quot;&gt;身份上下文&lt;/text&gt;
+      &lt;rect class=&quot;node compact&quot; x=&quot;215&quot; y=&quot;1380&quot; width=&quot;130&quot; height=&quot;34&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;280&quot; y=&quot;1403&quot;&gt;Trace / Cost&lt;/text&gt;
+      &lt;rect class=&quot;node compact&quot; x=&quot;375&quot; y=&quot;1380&quot; width=&quot;130&quot; height=&quot;34&quot; rx=&quot;6&quot;&gt;&lt;/rect&gt;
+      &lt;text class=&quot;node-title&quot; x=&quot;440&quot; y=&quot;1403&quot;&gt;Audit / Eval&lt;/text&gt;
+    &lt;/g&gt;
+  &lt;/svg&gt;
+&lt;/div&gt;
+
+&lt;style&gt;
+  #ai-platform-flow-v3 {
+    --request-flow: var(--viz-series-1, AccentColor);
+    --response-flow: var(--viz-series-2, LinkText);
+    --manage-flow: var(--viz-series-3, AccentColor);
+    --future-flow: var(--muted-foreground, GrayText);
+    color: var(--foreground, CanvasText);
+    width: 100%;
+  }
+
+  #ai-platform-flow-v3 .ai-flow-toolbar {
+    justify-content: flex-start;
+    gap: 14px;
+    margin-bottom: 10px;
+  }
+
+  #ai-platform-flow-v3 .ai-flow-toggle {
+    margin-inline-start: auto;
+  }
+
+  #ai-platform-flow-v3 .ai-flow-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted-foreground, GrayText);
+    font-weight: 400;
+    white-space: nowrap;
+  }
+
+  #ai-platform-flow-v3 .ai-flow-swatch {
+    display: inline-block;
+    width: 22px;
+    height: 3px;
+    background: var(--future-flow);
+  }
+
+  #ai-platform-flow-v3 .ai-flow-swatch.request { background: var(--request-flow); }
+  #ai-platform-flow-v3 .ai-flow-swatch.response { background: var(--response-flow); }
+  #ai-platform-flow-v3 .ai-flow-swatch.manage { background: var(--manage-flow); }
+  #ai-platform-flow-v3 .ai-flow-swatch.future {
+    height: 0;
+    border-top: 2px dashed var(--future-flow);
+    background: transparent;
+  }
+
+  #ai-platform-flow-v3 .ai-flow-diagram {
+    display: block;
+    width: 100%;
+    height: auto;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, &quot;PingFang SC&quot;, &quot;Microsoft YaHei&quot;, sans-serif;
+  }
+
+  #ai-platform-flow-v3 .ai-flow-diagram.mobile { display: none; }
+  #ai-platform-flow-v3 .region { stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  #ai-platform-flow-v3 .region.control {
+    fill: color-mix(in srgb, var(--viz-series-4, AccentColor) 9%, transparent);
+    stroke: color-mix(in srgb, var(--viz-series-4, AccentColor) 55%, var(--border, GrayText));
+  }
+  #ai-platform-flow-v3 .region.channel {
+    fill: color-mix(in srgb, var(--viz-series-2, LinkText) 9%, transparent);
+    stroke: color-mix(in srgb, var(--viz-series-2, LinkText) 55%, var(--border, GrayText));
+  }
+  #ai-platform-flow-v3 .region.runtime {
+    fill: color-mix(in srgb, var(--viz-series-1, AccentColor) 8%, transparent);
+    stroke: color-mix(in srgb, var(--viz-series-1, AccentColor) 48%, var(--border, GrayText));
+  }
+  #ai-platform-flow-v3 .region.gateway {
+    fill: color-mix(in srgb, var(--viz-series-3, AccentColor) 10%, transparent);
+    stroke: color-mix(in srgb, var(--viz-series-3, AccentColor) 55%, var(--border, GrayText));
+  }
+  #ai-platform-flow-v3 .region.external {
+    fill: color-mix(in srgb, var(--muted, Canvas) 70%, transparent);
+    stroke: var(--border, GrayText);
+  }
+  #ai-platform-flow-v3 .region.management {
+    fill: color-mix(in srgb, var(--viz-series-3, AccentColor) 7%, transparent);
+    stroke: color-mix(in srgb, var(--viz-series-3, AccentColor) 45%, var(--border, GrayText));
+  }
+  #ai-platform-flow-v3 .region.connector {
+    fill: color-mix(in srgb, var(--viz-series-5, Mark) 8%, transparent);
+    stroke: color-mix(in srgb, var(--viz-series-5, MarkText) 45%, var(--border, GrayText));
+  }
+  #ai-platform-flow-v3 .region.governance {
+    fill: color-mix(in srgb, var(--muted, Canvas) 65%, transparent);
+    stroke: var(--border, GrayText);
+  }
+
+  #ai-platform-flow-v3 .node,
+  #ai-platform-flow-v3 .mini-node {
+    fill: var(--card, Canvas);
+    stroke: var(--border, GrayText);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+  }
+  #ai-platform-flow-v3 .active-node {
+    fill: color-mix(in srgb, var(--request-flow) 13%, var(--card, Canvas));
+    stroke: var(--request-flow);
+    stroke-width: 2;
+  }
+  #ai-platform-flow-v3 .gateway-node {
+    fill: color-mix(in srgb, var(--manage-flow) 15%, var(--card, Canvas));
+    stroke: var(--manage-flow);
+    stroke-width: 2;
+  }
+  #ai-platform-flow-v3 .future-node {
+    stroke-dasharray: 6 5;
+    fill: color-mix(in srgb, var(--muted, Canvas) 40%, var(--card, Canvas));
+  }
+  #ai-platform-flow-v3 .region-title,
+  #ai-platform-flow-v3 .node-title,
+  #ai-platform-flow-v3 .node-subtitle,
+  #ai-platform-flow-v3 .node-code,
+  #ai-platform-flow-v3 .region-note,
+  #ai-platform-flow-v3 .flow-caption,
+  #ai-platform-flow-v3 .mini-text,
+  #ai-platform-flow-v3 .bus-label {
+    fill: var(--foreground, CanvasText);
+    letter-spacing: 0;
+  }
+  #ai-platform-flow-v3 .region-title { font-size: 18px; font-weight: 500; }
+  #ai-platform-flow-v3 .region-note { font-size: 14px; font-weight: 400; fill: var(--muted-foreground, GrayText); }
+  #ai-platform-flow-v3 .node-title { font-size: 16px; font-weight: 500; text-anchor: middle; }
+  #ai-platform-flow-v3 .node-subtitle { font-size: 14px; font-weight: 400; text-anchor: middle; fill: var(--muted-foreground, GrayText); }
+  #ai-platform-flow-v3 .node-code { font-size: 12px; font-weight: 400; text-anchor: middle; fill: var(--muted-foreground, GrayText); }
+  #ai-platform-flow-v3 .flow-caption { font-size: 15px; font-weight: 500; text-anchor: middle; }
+  #ai-platform-flow-v3 .request-text { fill: var(--request-flow); }
+  #ai-platform-flow-v3 .response-text { fill: var(--response-flow); }
+  #ai-platform-flow-v3 .mini-text { font-size: 12px; font-weight: 500; text-anchor: middle; }
+  #ai-platform-flow-v3 .bus-label { font-size: 11px; font-weight: 400; text-anchor: middle; fill: var(--muted-foreground, GrayText); }
+
+  #ai-platform-flow-v3 .step { fill: var(--secondary, ButtonFace); stroke: var(--border, GrayText); stroke-width: 1; }
+  #ai-platform-flow-v3 .active-step { fill: var(--request-flow); stroke: var(--request-flow); }
+  #ai-platform-flow-v3 .gateway-step { fill: var(--manage-flow); stroke: var(--manage-flow); }
+  #ai-platform-flow-v3 .step-text {
+    fill: var(--secondary-foreground, ButtonText);
+    font-size: 12px;
+    font-weight: 500;
+    text-anchor: middle;
+  }
+  #ai-platform-flow-v3 .active-step + .step-text,
+  #ai-platform-flow-v3 .gateway-step + .step-text { fill: var(--primary-foreground, HighlightText); }
+
+  #ai-platform-flow-v3 .marker-request { fill: var(--request-flow); }
+  #ai-platform-flow-v3 .marker-response { fill: var(--response-flow); }
+  #ai-platform-flow-v3 .marker-manage { fill: var(--manage-flow); }
+  #ai-platform-flow-v3 .marker-muted { fill: var(--future-flow); }
+  #ai-platform-flow-v3 .flow-track {
+    fill: none;
+    stroke: var(--border, GrayText);
+    stroke-width: 4;
+    opacity: 0.55;
+    vector-effect: non-scaling-stroke;
+  }
+  #ai-platform-flow-v3 .flow-moving {
+    fill: none;
+    stroke-width: 4;
+    stroke-linecap: round;
+    stroke-dasharray: 4 11;
+    vector-effect: non-scaling-stroke;
+    animation: ai-flow-forward 1.15s linear infinite;
+  }
+  #ai-platform-flow-v3 .request-flow { stroke: var(--request-flow); }
+  #ai-platform-flow-v3 .response-flow {
+    stroke: var(--response-flow);
+    animation-name: ai-flow-backward;
+  }
+  #ai-platform-flow-v3 .manage-flow { stroke: var(--manage-flow); animation-duration: 1.4s; }
+  #ai-platform-flow-v3 .manage-return {
+    stroke: var(--manage-flow);
+    animation-name: ai-flow-backward;
+    animation-duration: 1.4s;
+  }
+  #ai-platform-flow-v3 .delay-1 { animation-delay: 0s; }
+  #ai-platform-flow-v3 .delay-2 { animation-delay: -0.18s; }
+  #ai-platform-flow-v3 .delay-3 { animation-delay: -0.36s; }
+  #ai-platform-flow-v3 .delay-4 { animation-delay: -0.54s; }
+  #ai-platform-flow-v3 .delay-5 { animation-delay: -0.72s; }
+  #ai-platform-flow-v3 .future-line,
+  #ai-platform-flow-v3 .data-line,
+  #ai-platform-flow-v3 .response-link {
+    fill: none;
+    stroke: var(--future-flow);
+    stroke-width: 1.5;
+    stroke-dasharray: 6 6;
+    vector-effect: non-scaling-stroke;
+  }
+  #ai-platform-flow-v3 .data-line { stroke: var(--request-flow); stroke-dasharray: none; }
+  #ai-platform-flow-v3 .response-link { stroke: var(--response-flow); stroke-dasharray: none; }
+  #ai-platform-flow-v3 .governance-bus { stroke-dasharray: 4 5; }
+  #ai-platform-flow-v3 .producer { fill: var(--future-flow); }
+
+  #ai-platform-flow-v3.is-paused .flow-moving { animation-play-state: paused; }
+
+  @keyframes ai-flow-forward {
+    to { stroke-dashoffset: -30; }
+  }
+  @keyframes ai-flow-backward {
+    to { stroke-dashoffset: 30; }
+  }
+
+  @media (max-width: 600px) {
+    #ai-platform-flow-v3 .ai-flow-toolbar { gap: 8px 12px; }
+    #ai-platform-flow-v3 .ai-flow-toggle { margin-inline-start: 0; }
+    #ai-platform-flow-v3 .ai-flow-diagram.desktop { display: none; }
+    #ai-platform-flow-v3 .ai-flow-diagram.mobile { display: block; }
+    #ai-platform-flow-v3 .region-title { font-size: 20px; }
+    #ai-platform-flow-v3 .region-note { font-size: 16px; }
+    #ai-platform-flow-v3 .node-title { font-size: 18px; }
+    #ai-platform-flow-v3 .node-subtitle { font-size: 16px; }
+    #ai-platform-flow-v3 .node-code { font-size: 15px; }
+    #ai-platform-flow-v3 .flow-caption { font-size: 18px; }
+    #ai-platform-flow-v3 .mobile .request-text { text-anchor: start; }
+    #ai-platform-flow-v3 .mobile .response-text { text-anchor: end; }
+    #ai-platform-flow-v3 .step-text { font-size: 14px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #ai-platform-flow-v3 .flow-moving {
+      animation: none;
+      stroke-dasharray: none;
+    }
+  }
+&lt;/style&gt;
+
+&lt;script&gt;
+  (() =&gt; {
+    const root = document.getElementById(&quot;ai-platform-flow-v3&quot;);
+    const button = root?.querySelector(&quot;.ai-flow-toggle&quot;);
+    const label = button?.querySelector(&quot;span&quot;);
+    const icon = button?.querySelector(&quot;i&quot;);
+    if (!root || !button || !label || !icon) return;
+
+    /** 切换数据流动画，并同步按钮的可访问状态和图标。 */
+    button.addEventListener(&quot;click&quot;, () =&gt; {
+      const paused = root.classList.toggle(&quot;is-paused&quot;);
+      button.setAttribute(&quot;aria-pressed&quot;, String(paused));
+      label.textContent = paused ? &quot;继续动效&quot; : &quot;暂停动效&quot;;
+      icon.setAttribute(&quot;data-lucide&quot;, paused ? &quot;play&quot; : &quot;pause&quot;);
+      globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+    });
+  })();
+&lt;/script&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handleLeave = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>
