@@ -38,7 +38,7 @@ export function createMemoryManager({ store, gatewayClient, contextOptions, memo
         if (eligibleMessages.length === 0) return { status: "skipped", reason: "no-messages" };
 
         const thresholds = calculateContextThresholds(options, runOptions.fixedInputTokens || 0);
-        const dynamicTokens = await countMessages(gatewayClient, eligibleMessages);
+        const dynamicTokens = await countMessages(gatewayClient, eligibleMessages, runOptions.resilienceContext);
         if (!runOptions.force && dynamicTokens < thresholds.high) {
           return { status: "skipped", reason: "below-high-watermark", dynamicTokens, thresholds };
         }
@@ -53,6 +53,7 @@ export function createMemoryManager({ store, gatewayClient, contextOptions, memo
           memoryItems: snapshot.memoryItems,
           messages: selected,
           maxCompletionTokens,
+          resilienceContext: runOptions.resilienceContext,
         });
         const nextThroughSeq = selected[selected.length - 1].seq;
         const applyResult = store.applyMemoryDelta({
@@ -121,7 +122,7 @@ export function selectCompactionRange(messages, lowTokenBudget) {
 }
 
 /** 调用模型提取 MemoryDelta，并在响应格式不兼容时退回纯 JSON 提示。 */
-async function extractMemoryDelta({ gatewayClient, memoryItems, messages, maxCompletionTokens }) {
+async function extractMemoryDelta({ gatewayClient, memoryItems, messages, maxCompletionTokens, resilienceContext }) {
   const prompt = buildExtractionPrompt(memoryItems, messages);
   const request = {
     messages: [
@@ -135,6 +136,8 @@ async function extractMemoryDelta({ gatewayClient, memoryItems, messages, maxCom
     temperature: 0.1,
     maxCompletionTokens,
     responseFormat: buildMemoryResponseFormat(),
+    resilienceContext,
+    operation: "memory.compact",
   };
 
   let data;
@@ -346,14 +349,17 @@ function getMessageId(message) {
 }
 
 /** 优先使用模型网关 token counter，失败时回退本地估算。 */
-async function countMessages(gatewayClient, messages) {
+async function countMessages(gatewayClient, messages, resilienceContext) {
   const modelMessages = [];
   for (const message of messages) {
     modelMessages.push({ role: message.role, content: message.content });
   }
   if (typeof gatewayClient?.countTokens === "function") {
     try {
-      const result = await gatewayClient.countTokens({ messages: modelMessages });
+      const result = await gatewayClient.countTokens({
+        messages: modelMessages,
+        deadlineAt: resilienceContext?.deadlineAt,
+      });
       if (Number.isFinite(result?.tokens)) return result.tokens;
     } catch {
       // 网关计数是优化能力，失败不得阻断上下文管理。

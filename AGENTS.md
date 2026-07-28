@@ -87,16 +87,17 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `docker-compose.yml`：本地 LiteLLM 容器启动入口。
 - `scripts/test-chat.sh`：仅用于验证 LiteLLM 到上游模型连通性的最小 smoke test，不属于平台业务入口。
 - `scripts/test-architecture-boundaries.mjs`：全局架构图与治理契约的边界回归检查，防止模型诊断链重新进入平台能力规划。
-- `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、Run、SSE、静态页面、JSON 收发和错误返回。
-- `demo/index.html`：浏览器多会话交互页面。浏览器只提交当前输入和幂等标识，不保存会话事实源，也不直接接触上游真实 key。
+- `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、JSON Run、POST SSE 模型文本流、会话事件流、静态页面和错误返回。
+- `demo/index.html`：浏览器多会话交互页面。浏览器只提交当前输入和幂等标识，通过 POST SSE 增量渲染模型文本，不保存会话事实源，也不直接接触上游真实 key。
 - `src/config/env.mjs`：Demo Server、runtime 和 gateway client 的配置加载入口。
 - `src/storage/conversation-store.mjs`：SQLite 会话事实源，负责会话、消息、Run、MemoryDelta、版本和事件日志。
-- `src/runtime/chat-runtime.mjs`：Session/Run 应用服务，负责先落消息、上下文规划、模型调用、幂等重放和关闭会话。
+- `src/runtime/chat-runtime.mjs`：Session/Run 应用服务，负责先落消息、上下文规划、模型调用、文本增量透传、最终结果落库、幂等重放和关闭会话。
 - `src/runtime/context-planner.mjs`：按优先级和 token 预算选择 active 记忆、相关 Episode 与最近消息，并输出 Context Manifest。
 - `src/runtime/memory-manager.mjs`：结构化记忆提取、高低水位压缩、MemoryDelta 校验和 memoryVersion 乐观锁。
 - `src/runtime/conversation-coordinator.mjs`：按 conversationId 串行同一进程内的 Run。
+- `src/resilience/retry-executor.mjs`：共同底座的统一重试执行器和 `ResilienceContext`，负责共享截止时间、局部尝试、退避和逐尝试证据。
 - `src/gateway/gateway-contract.mjs`：Runtime 依赖的 GatewayClient 数据契约和统一错误类型。
-- `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 调用 LiteLLM，并保持 Runtime 的 chat completions 契约。
+- `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 的 `generateText` / `streamText` 和 `@ai-sdk/openai-compatible` 调用 LiteLLM，并保持 Runtime 的 chat completions 契约。
 - `src/gateway/litellm-management-client.mjs`：LiteLLM 专属管理客户端，仅封装 `/v1/models` 和 token counter，不负责模型生成。
 - `src/tools/tool-registry.mjs`：连接器与知识层的工具注册和工具意图判断预留入口，当前不启用真实工具循环。
 - `.agents/skills/company-public/skill-governance/SKILL.md`：Skill 创建、更新、迁移和校验规范。

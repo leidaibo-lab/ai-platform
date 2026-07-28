@@ -37,6 +37,7 @@ const chatRuntime = createChatRuntime({
   coordinator,
   contextPlanner,
   memoryManager,
+  resilienceOptions: config.resilience,
 });
 
 const mimeTypes = {
@@ -110,6 +111,10 @@ async function handleConversationRoute(req, res, url, route) {
     sendJson(res, 200, await chatRuntime.runConversation(route.conversationId, await readJson(req)));
     return;
   }
+  if (route.action === "runs/stream" && req.method === "POST") {
+    await streamConversationRun(req, res, route.conversationId);
+    return;
+  }
   if (route.action === "close" && req.method === "POST") {
     sendJson(res, 200, await chatRuntime.closeConversation(route.conversationId));
     return;
@@ -123,9 +128,55 @@ async function handleConversationRoute(req, res, url, route) {
 
 /** 将会话资源 URL 解析为 conversationId 和动作。 */
 function parseConversationRoute(pathname) {
-  const match = pathname.match(/^\/api\/runtime\/conversations\/([^/]+)(?:\/(runs|close|events))?$/);
+  const match = pathname.match(/^\/api\/runtime\/conversations\/([^/]+)(?:\/(runs\/stream|runs|close|events))?$/);
   if (!match) return null;
   return { conversationId: decodeURIComponent(match[1]), action: match[2] || "" };
+}
+
+/**
+ * 通过 POST SSE 交付模型文本增量，Runtime 完成后再发送持久化最终结果。
+ *
+ * @param {import("node:http").IncomingMessage} req - HTTP 请求。
+ * @param {import("node:http").ServerResponse} res - HTTP 响应。
+ * @param {string} conversationId - 会话 ID。
+ */
+async function streamConversationRun(req, res, conversationId) {
+  const body = await readJson(req);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.write(": connected\n\n");
+
+  /** 将已创建或幂等命中的 Run 身份发送给渠道。 */
+  function sendRunStarted({ run, replayed }) {
+    writeSseEvent(res, "run-started", {
+      runId: run.id,
+      requestId: run.requestId,
+      status: run.status,
+      replayed,
+    });
+  }
+
+  /** 把单个模型文本增量立即写入当前 HTTP 响应。 */
+  function sendTextDelta(delta) {
+    writeSseEvent(res, "text-delta", { delta });
+  }
+
+  try {
+    const result = await chatRuntime.runConversation(conversationId, body, {
+      onRunStarted: sendRunStarted,
+      onTextDelta: sendTextDelta,
+    });
+    writeSseEvent(res, "completed", result);
+  } catch (error) {
+    const mapped = mapHttpError(error);
+    writeSseEvent(res, "error", { ...mapped.payload, status: mapped.statusCode });
+  } finally {
+    if (!res.writableEnded) res.end();
+  }
 }
 
 /**
@@ -192,19 +243,27 @@ function sendError(res, error) {
     res.end();
     return;
   }
-  if (error instanceof RuntimeInputError) {
-    sendJson(res, error.status, error.payload);
-    return;
-  }
+  const mapped = mapHttpError(error);
+  sendJson(res, mapped.statusCode, mapped.payload);
+}
+
+/** 将 Runtime、存储、网关和未知错误统一映射为 HTTP 状态与公开载荷。 */
+function mapHttpError(error) {
+  if (error instanceof RuntimeInputError) return { statusCode: error.status, payload: error.payload };
   if (error instanceof ConversationStoreError) {
-    sendJson(res, error.status, { error: error.message, code: error.code });
-    return;
+    return { statusCode: error.status, payload: { error: error.message, code: error.code } };
   }
   if (error instanceof GatewayRequestError) {
-    sendJson(res, error.status, { error: error.message, status: error.status });
-    return;
+    return { statusCode: error.status, payload: { error: error.message, status: error.status } };
   }
-  sendJson(res, 500, { error: error.message || "Unexpected error" });
+  return { statusCode: 500, payload: { error: error.message || "Unexpected error" } };
+}
+
+/** 写入一个 JSON SSE 事件；客户端断开后保持 Run 在服务端继续完成。 */
+function writeSseEvent(res, eventName, payload) {
+  if (res.destroyed || res.writableEnded) return;
+  res.write(`event: ${eventName}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
 /** 写入禁用缓存的 JSON 结果。 */

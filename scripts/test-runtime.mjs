@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { createGatewayClient } from "../src/gateway/gateway-client.mjs";
@@ -202,6 +206,96 @@ test("concurrent runs in one conversation are serialized", async () => {
   fixture.store.close();
 });
 
+// 验证 Runtime 透传文本增量，同时只把完整助手消息持久化一次。
+test("streamed runs emit deltas and persist one final assistant message", async () => {
+  const fixture = createTestRuntime({ gatewayClient: createStreamingGateway() });
+  const conversation = fixture.runtime.createConversation();
+  const runEvents = [];
+  const deltas = [];
+  /** 收集 Runtime 创建的稳定 Run 身份。 */
+  function collectRunStarted(event) {
+    runEvents.push(event);
+  }
+  /** 收集 Runtime 透传的模型文本增量。 */
+  function collectTextDelta(delta) {
+    deltas.push(delta);
+  }
+
+  const response = await fixture.runtime.runConversation(
+    conversation.id,
+    {
+      requestId: "stream-request-1",
+      clientMessageId: "stream-client-1",
+      message: "验证流式输出",
+      imageUrls: [],
+      documentUrls: [],
+    },
+    { onRunStarted: collectRunStarted, onTextDelta: collectTextDelta },
+  );
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.deepEqual(deltas, ["逐段", "回复"]);
+  assert.equal(runEvents.length, 1);
+  assert.equal(runEvents[0].run.id, detail.latestRun.id);
+  assert.equal(response.content, "逐段回复");
+  assert.deepEqual(detail.messages.map(getMessageRole), ["user", "assistant"]);
+  assert.equal(detail.messages[1].displayContent, "逐段回复");
+  assert.equal(detail.latestRun.resilience.outputStarted, true);
+  fixture.store.close();
+});
+
+// 验证成功模型调用的逐尝试证据随同一个 Run 持久化并返回渠道。
+test("completed runs persist model retry evidence", async () => {
+  const fixture = createTestRuntime({ gatewayClient: createRetryTraceGateway() });
+  const conversation = fixture.runtime.createConversation();
+  const response = await run(fixture.runtime, conversation.id, 1, "验证重试证据");
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.equal(response.resilience.attemptCount, 2);
+  assert.equal(detail.lastRun.resilience.attempts[0].status, "failed");
+  assert.equal(detail.lastRun.resilience.attempts[1].status, "completed");
+  assert.equal(detail.messages.length, 2);
+  fixture.store.close();
+});
+
+// 验证模型最终失败时保留用户消息，并把失败尝试证据写回原 Run。
+test("failed runs persist model retry evidence without duplicate messages", async () => {
+  const fixture = createTestRuntime({ gatewayClient: createRetryTraceGateway({ fail: true }) });
+  const conversation = fixture.runtime.createConversation();
+
+  await assert.rejects(run(fixture.runtime, conversation.id, 1, "验证失败证据"), isScriptedModelFailure);
+  const detail = fixture.runtime.getConversation(conversation.id);
+  assert.equal(detail.lastRun, null);
+  assert.equal(detail.latestRun.status, "failed");
+  assert.equal(detail.latestRun.resilience.attemptCount, 3);
+  assert.equal(detail.messages.length, 1);
+  fixture.store.close();
+});
+
+// 验证既有 SQLite runs 表在启动时增量增加韧性证据列。
+test("conversation store migrates retry evidence column for existing databases", () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "ai-platform-resilience-"));
+  const databasePath = join(temporaryDirectory, "legacy.sqlite");
+  let hasResilienceColumn = false;
+  try {
+    const legacyDatabase = new DatabaseSync(databasePath);
+    legacyDatabase.exec("CREATE TABLE runs (id TEXT PRIMARY KEY)");
+    legacyDatabase.close();
+
+    const store = createConversationStore({ databasePath });
+    store.close();
+    const migratedDatabase = new DatabaseSync(databasePath);
+    const columns = migratedDatabase.prepare("PRAGMA table_info(runs)").all();
+    for (const column of columns) {
+      if (column.name === "resilience_json") hasResilienceColumn = true;
+    }
+    migratedDatabase.close();
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+  assert.equal(hasResilienceColumn, true);
+});
+
 // 验证用户纠正会废弃旧事实，Context Planner 只发送 active 最新值。
 test("structured memory keeps the latest corrected fact", async () => {
   const fixture = createTestRuntime();
@@ -300,4 +394,121 @@ function getMessageRole(message) {
 /** 返回持久化消息展示内容，供顺序断言复用。 */
 function getDisplayContent(message) {
   return message.displayContent;
+}
+
+/** 创建返回成功或最终失败重试证据的脚本化 Gateway。 */
+function createRetryTraceGateway({ fail = false } = {}) {
+  const resilience = buildRetryTraceFixture(fail ? "failed" : "completed");
+  return {
+    model: "retry-trace-model",
+    /** 返回固定 token 数，避免测试依赖真实管理端点。 */
+    async countTokens() {
+      return { tokens: 10, source: "scripted", model: this.model };
+    },
+    /** 返回或抛出携带同一 Run 尝试证据的模型结果。 */
+    async chatCompletions() {
+      if (fail) {
+        const error = new Error("scripted model failure");
+        error.resilience = resilience;
+        throw error;
+      }
+      return {
+        model: this.model,
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        choices: [{ message: { content: "重试后成功" } }],
+        resilience,
+      };
+    },
+  };
+}
+
+/** 创建逐段回调并返回单个完整结果的脚本化流式 Gateway。 */
+function createStreamingGateway() {
+  return {
+    model: "streaming-test-model",
+    /** 返回固定 token 数，避免测试依赖真实管理端点。 */
+    async countTokens() {
+      return { tokens: 10, source: "scripted", model: this.model };
+    },
+    /** 向 Runtime 交付两个文本增量，随后返回完整 completion。 */
+    async chatCompletions({ onTextDelta }) {
+      await onTextDelta("逐段");
+      await onTextDelta("回复");
+      return {
+        model: this.model,
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        choices: [{ message: { content: "逐段回复" } }],
+        resilience: {
+          operation: "model.generate",
+          maxAttempts: 3,
+          attemptCount: 1,
+          outputStarted: true,
+          attempts: [{ attempt: 1, status: "completed", retryable: false, willRetry: false }],
+        },
+      };
+    },
+  };
+}
+
+/** 构造不含业务正文的成功或失败模型尝试证据。 */
+function buildRetryTraceFixture(finalStatus) {
+  const attempts = [
+    {
+      attempt: 1,
+      status: "failed",
+      errorType: "provider_unavailable",
+      statusCode: 503,
+      retryable: true,
+      willRetry: true,
+      backoffMs: 500,
+      stopReason: "retrying",
+    },
+  ];
+  if (finalStatus === "completed") {
+    attempts.push({
+      attempt: 2,
+      status: "completed",
+      errorType: null,
+      statusCode: null,
+      retryable: false,
+      willRetry: false,
+      backoffMs: 0,
+      stopReason: "completed",
+    });
+  } else {
+    attempts.push(
+      {
+        attempt: 2,
+        status: "failed",
+        errorType: "provider_unavailable",
+        statusCode: 503,
+        retryable: true,
+        willRetry: true,
+        backoffMs: 1000,
+        stopReason: "retrying",
+      },
+      {
+        attempt: 3,
+        status: "failed",
+        errorType: "provider_unavailable",
+        statusCode: 503,
+        retryable: true,
+        willRetry: false,
+        backoffMs: 0,
+        stopReason: "max-attempts",
+      },
+    );
+  }
+  return {
+    operation: "model.generate",
+    maxAttempts: 3,
+    attemptCount: attempts.length,
+    outputStarted: false,
+    attempts,
+  };
+}
+
+/** 判断异常是否为脚本化模型最终失败。 */
+function isScriptedModelFailure(error) {
+  return error?.message === "scripted model failure";
 }
