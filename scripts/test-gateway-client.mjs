@@ -108,6 +108,8 @@ async function testAiSdkProtocolMapping() {
     completion_tokens: 5,
     total_tokens: 22,
   });
+  assert.equal(result.resilience.attemptCount, 1);
+  assert.equal(result.resilience.attempts[0].status, "completed");
 }
 
 test("gateway client preserves LiteLLM request and response semantics", testAiSdkProtocolMapping);
@@ -135,48 +137,274 @@ function handleSuccessfulGatewayRequest(request) {
   });
 }
 
-/** 验证 AI SDK API 错误映射为原有 GatewayRequestError 且不会自动重试。 */
-async function testAiSdkErrorMapping() {
+/** 验证平台在 AI SDK 内建重试关闭时，仍按统一预算重试 429 并保留尝试证据。 */
+async function testPlatformRetriesRateLimit() {
   const requests = [];
-  /** 始终返回限流错误，供单次调用和状态码断言。 */
+  let attempts = 0;
+  /** 前两次返回无等待限流错误，第三次返回成功结果。 */
   function handleRateLimitedRequest() {
-    return jsonResponse({ error: "plain rate limit" }, 429);
+    attempts += 1;
+    if (attempts < 3) return jsonResponse({ error: "plain rate limit" }, 429, { "Retry-After-Ms": "0" });
+    return handleSuccessfulGatewayRequest({ url: "http://gateway.test/v1/chat/completions" });
   }
   const client = createGatewayClient({
     baseUrl: "http://gateway.test",
     model: "chat-default",
     apiKey: "test-key",
+    retryBaseDelayMs: 0,
     fetchImplementation: createFakeFetch(requests, handleRateLimitedRequest),
+  });
+
+  const result = await client.chatCompletions({ messages: [{ role: "user", content: "hello" }] });
+  assert.equal(requests.length, 3);
+  assert.equal(result.resilience.attemptCount, 3);
+  assert.deepEqual(result.resilience.attempts.map(readAttemptStatus), ["failed", "failed", "completed"]);
+  assert.equal(result.resilience.attempts[0].errorType, "rate_limit");
+}
+
+test("gateway client owns retry budget while AI SDK retries stay disabled", testPlatformRetriesRateLimit);
+
+/** 验证 GatewayClient 逐段交付 AI SDK 文本流，并在结束后恢复既有 completion 结果。 */
+async function testGatewayStreamsTextDeltas() {
+  const deltas = [];
+  let sdkInput = null;
+  /** 返回两个确定性文本增量和完整结果元数据。 */
+  function streamTextImplementation(input) {
+    sdkInput = input;
+    return createStreamTextResult(streamValues("流式", "回复"));
+  }
+  /** 收集 Runtime 可见的文本增量。 */
+  function collectDelta(delta) {
+    deltas.push(delta);
+  }
+  const client = createGatewayClient(
+    {
+      baseUrl: "http://gateway.test",
+      model: "chat-default",
+      apiKey: "test-key",
+    },
+    { streamTextImplementation },
+  );
+
+  const result = await client.chatCompletions({
+    messages: [{ role: "user", content: "hello" }],
+    onTextDelta: collectDelta,
+  });
+
+  assert.deepEqual(deltas, ["流式", "回复"]);
+  assert.equal(sdkInput.maxRetries, 0);
+  assert.equal(result.choices[0].message.content, "流式回复");
+  assert.equal(result.choices[0].finish_reason, "stop");
+  assert.equal(result.resilience.attemptCount, 1);
+  assert.equal(result.resilience.outputStarted, true);
+}
+
+test("gateway client streams text deltas and preserves the completion contract", testGatewayStreamsTextDeltas);
+
+/** 验证首个文本增量前的瞬时错误仍可由平台统一预算重试。 */
+async function testGatewayRetriesBeforeFirstTextDelta() {
+  const deltas = [];
+  let attempts = 0;
+  /** 第一次在输出前超时，第二次返回有效文本流。 */
+  function streamTextImplementation() {
+    attempts += 1;
+    return createStreamTextResult(attempts === 1 ? failBeforeOutput() : streamValues("恢复成功"));
+  }
+  /** 收集重试成功后的唯一文本增量。 */
+  function collectDelta(delta) {
+    deltas.push(delta);
+  }
+  const client = createGatewayClient(
+    {
+      baseUrl: "http://gateway.test",
+      model: "chat-default",
+      apiKey: "test-key",
+      retryBaseDelayMs: 0,
+    },
+    { streamTextImplementation },
+  );
+
+  const result = await client.chatCompletions({
+    messages: [{ role: "user", content: "hello" }],
+    onTextDelta: collectDelta,
+  });
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(deltas, ["恢复成功"]);
+  assert.equal(result.resilience.attemptCount, 2);
+  assert.deepEqual(result.resilience.attempts.map(readAttemptStatus), ["failed", "completed"]);
+  assert.equal(result.resilience.outputStarted, true);
+}
+
+test("gateway client retries a stream failure before the first text delta", testGatewayRetriesBeforeFirstTextDelta);
+
+/** 验证已经交付文本后发生瞬时错误时立即失败，避免把两次回答拼接到一起。 */
+async function testGatewayDoesNotRetryAfterTextDelta() {
+  const deltas = [];
+  let attempts = 0;
+  /** 返回先产生文本、随后超时的模型流。 */
+  function streamTextImplementation() {
+    attempts += 1;
+    return createStreamTextResult(failAfterOutput("部分回复"));
+  }
+  /** 收集失败前已交付的文本。 */
+  function collectDelta(delta) {
+    deltas.push(delta);
+  }
+  const client = createGatewayClient(
+    {
+      baseUrl: "http://gateway.test",
+      model: "chat-default",
+      apiKey: "test-key",
+      retryBaseDelayMs: 0,
+    },
+    { streamTextImplementation },
+  );
+
+  await assert.rejects(
+    client.chatCompletions({
+      messages: [{ role: "user", content: "hello" }],
+      onTextDelta: collectDelta,
+    }),
+    isPostOutputStreamError,
+  );
+  assert.equal(attempts, 1);
+  assert.deepEqual(deltas, ["部分回复"]);
+}
+
+test("gateway client does not retry after the first text delta", testGatewayDoesNotRetryAfterTextDelta);
+
+/** 验证参数类 400 错误不会进入平台自动重试。 */
+async function testPlatformDoesNotRetryPermanentError() {
+  const requests = [];
+  /** 始终返回参数错误。 */
+  function handleBadRequest() {
+    return jsonResponse({ error: "invalid request" }, 400);
+  }
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    apiKey: "test-key",
+    retryBaseDelayMs: 0,
+    fetchImplementation: createFakeFetch(requests, handleBadRequest),
   });
 
   await assert.rejects(
     client.chatCompletions({ messages: [{ role: "user", content: "hello" }] }),
-    isRateLimitGatewayError,
+    isPermanentGatewayError,
   );
   assert.equal(requests.length, 1);
 }
 
-test("gateway client maps API status without automatic retries", testAiSdkErrorMapping);
+test("gateway client does not retry permanent API errors", testPlatformDoesNotRetryPermanentError);
 
-/** 判断异常是否为映射后的 429 GatewayRequestError。 */
-function isRateLimitGatewayError(error) {
-  return error instanceof GatewayRequestError && error.status === 429 && error.message === "plain rate limit";
+/** 判断异常是否为只尝试一次的永久网关错误。 */
+function isPermanentGatewayError(error) {
+  return (
+    error instanceof GatewayRequestError &&
+    error.status === 400 &&
+    error.resilience?.attemptCount === 1 &&
+    error.resilience.attempts[0].retryable === false
+  );
+}
+
+/** 创建与 AI SDK StreamTextResult 最小兼容的测试结果。 */
+function createStreamTextResult(textStream) {
+  return {
+    textStream,
+    usage: Promise.resolve({ inputTokens: 9, outputTokens: 3, totalTokens: 12 }),
+    finishReason: Promise.resolve("stop"),
+    response: Promise.resolve({
+      id: "stream-test",
+      modelId: "resolved-stream-model",
+      timestamp: new Date("2026-07-28T00:00:00.000Z"),
+    }),
+  };
+}
+
+/** 依次产生调用方给定的文本增量。 */
+async function* streamValues(...values) {
+  for (const value of values) yield value;
+}
+
+/** 在产生首个文本增量前模拟模型流超时。 */
+async function* failBeforeOutput() {
+  throw new DOMException("timed out before output", "TimeoutError");
+}
+
+/** 先产生一个文本增量，再模拟模型流超时。 */
+async function* failAfterOutput(value) {
+  yield value;
+  throw new DOMException("timed out after output", "TimeoutError");
+}
+
+/** 判断异常是否为输出已开始且明确停止重试的流式超时。 */
+function isPostOutputStreamError(error) {
+  return (
+    error instanceof GatewayRequestError &&
+    error.status === 504 &&
+    error.resilience?.attemptCount === 1 &&
+    error.resilience.outputStarted === true &&
+    error.resilience.attempts[0].retryable === false
+  );
+}
+
+/** 验证普通 SDK 或编程异常即使对外映射为 502，也不会被误判为瞬时故障。 */
+async function testPlatformDoesNotRetryUnknownSdkError() {
+  let attempts = 0;
+  /** 模拟不带网络或 HTTP 瞬时故障语义的普通异常。 */
+  async function throwUnknownError() {
+    attempts += 1;
+    throw new Error("unexpected sdk failure");
+  }
+  const client = createGatewayClient(
+    {
+      baseUrl: "http://gateway.test",
+      model: "chat-default",
+      apiKey: "test-key",
+      retryBaseDelayMs: 0,
+    },
+    { generateTextImplementation: throwUnknownError },
+  );
+
+  await assert.rejects(
+    client.chatCompletions({ messages: [{ role: "user", content: "hello" }] }),
+    isUnknownSdkGatewayError,
+  );
+  assert.equal(attempts, 1);
+}
+
+test("gateway client does not retry unknown SDK errors mapped to 502", testPlatformDoesNotRetryUnknownSdkError);
+
+/** 判断异常是否为只尝试一次且明确不可重试的未知 SDK 错误。 */
+function isUnknownSdkGatewayError(error) {
+  return (
+    error instanceof GatewayRequestError &&
+    error.status === 502 &&
+    error.resilience?.attemptCount === 1 &&
+    error.resilience.attempts[0].retryable === false
+  );
 }
 
 /** 验证 SDK 超时和调用方取消映射为稳定的 GatewayRequestError 状态。 */
 async function testAiSdkCancellationMapping() {
+  let timeoutAttempts = 0;
+  let abortAttempts = 0;
   /** 模拟 AI SDK 总超时。 */
   async function throwTimeout() {
+    timeoutAttempts += 1;
     throw new DOMException("timed out", "TimeoutError");
   }
   /** 模拟调用方取消后 AI SDK 抛出的 AbortError。 */
   async function throwAbort() {
+    abortAttempts += 1;
     throw new DOMException("aborted", "AbortError");
   }
   const baseOptions = {
     baseUrl: "http://gateway.test",
     model: "chat-default",
     apiKey: "test-key",
+    retryBaseDelayMs: 0,
   };
   const timeoutClient = createGatewayClient(baseOptions, {
     generateTextImplementation: throwTimeout,
@@ -198,18 +426,20 @@ async function testAiSdkCancellationMapping() {
     }),
     isGatewayAbortError,
   );
+  assert.equal(timeoutAttempts, 3);
+  assert.equal(abortAttempts, 0);
 }
 
 test("gateway client maps timeout and caller cancellation", testAiSdkCancellationMapping);
 
 /** 判断异常是否为 504 网关超时。 */
 function isGatewayTimeoutError(error) {
-  return error instanceof GatewayRequestError && error.status === 504;
+  return error instanceof GatewayRequestError && error.status === 504 && error.resilience?.attemptCount === 3;
 }
 
 /** 判断异常是否为调用方取消状态。 */
 function isGatewayAbortError(error) {
-  return error instanceof GatewayRequestError && error.status === 499;
+  return error instanceof GatewayRequestError && error.status === 499 && error.resilience?.attemptCount === 0;
 }
 
 /** 验证 Gateway Client 组合 LiteLLM 状态和 token counter 管理端点。 */
@@ -330,10 +560,15 @@ function createFakeFetch(requests, handler) {
   return fakeFetch;
 }
 
-/** 创建带 JSON content type 的标准 Response。 */
-function jsonResponse(body, status = 200) {
+/** 创建带 JSON content type 和可选响应头的标准 Response。 */
+function jsonResponse(body, status = 200, headers = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
+}
+
+/** 返回尝试状态，供平台重试顺序断言复用。 */
+function readAttemptStatus(attempt) {
+  return attempt.status;
 }

@@ -77,16 +77,17 @@ export function createLiteLlmManagementClient({ baseUrl, model, apiKey, fetchImp
      *
      * @param {object} input - 待计数消息。
      * @param {Array<object>} input.messages - OpenAI-compatible 消息列表。
+     * @param {number} [input.deadlineAt] - 当前 Run 共享的绝对截止时间。
      * @returns {Promise<{tokens: number, source: string, model: string}>} 网关计数结果。
      */
-    async countTokens({ messages }) {
+    async countTokens({ messages, deadlineAt }) {
       if (!tokenCounterSupported) throw new Error("LiteLLM token counter is unavailable");
       let data;
       try {
         data = await requestJson("/utils/token_counter", {
           method: "POST",
           body: { model: modelAlias, messages },
-          timeoutMs: 10000,
+          timeoutMs: calculateRequestTimeout(deadlineAt, 10000),
         });
       } catch (error) {
         if (error?.status === 404 || error?.status === 405) tokenCounterSupported = false;
@@ -97,6 +98,12 @@ export function createLiteLlmManagementClient({ baseUrl, model, apiKey, fetchImp
       return { tokens, source: "litellm", model: data?.model || modelAlias };
     },
   };
+}
+
+/** 让管理请求服从 Run 剩余时间，同时保留自身较短的超时上限。 */
+function calculateRequestTimeout(deadlineAt, fallbackMs) {
+  if (!Number.isFinite(deadlineAt)) return fallbackMs;
+  return Math.max(1, Math.min(fallbackMs, Math.floor(deadlineAt - Date.now())));
 }
 
 /** 尝试解析网关响应；非 JSON 内容保留为 error 字段以便上层展示真实错误。 */

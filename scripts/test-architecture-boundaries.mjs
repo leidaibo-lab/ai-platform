@@ -85,11 +85,17 @@ async function testGovernanceKeepsRuntimeBoundary() {
 
 test("governance keeps Agent Runtime as the sole business model path", testGovernanceKeepsRuntimeBoundary);
 
-/** 验证场景治理文档没有把共同底座误写为七场景完成态，并明确当前只聚焦 C1。 */
+/** 验证场景治理文档没有把共同底座误写为完成态，并保留 C1 焦点和分阶段恢复边界。 */
 async function testScenarioChainsKeepCurrentFocus() {
   const content = await readProjectText("docs/scenario-interaction-chains.md");
 
   assert.match(content, /共同底座是七条场景链路的必要条件，但不是充分条件/);
+  assert.match(content, /重试是共同底座的横切稳定性能力/);
+  assert.match(content, /不等于任何失败都从浏览器输入开始完整重跑/);
+  assert.match(content, /默认 `maxAttempts: 3`，即首次调用加两次重试/);
+  assert.match(content, /`POST \.\.\.\/runs\/stream` 通过 SSE 交付 AI SDK 文本增量/);
+  assert.match(content, /开始输出后不静默重生成/);
+  assert.match(content, /C1 不逐 Token 写 SQLite，也不保存回答 checkpoint/);
   assert.match(content, /当前建设焦点：C1 对话链路基线化/);
   assert.match(content, /在 C1 达到退出条件之前，不横向扩展场景实现/);
   for (const label of SCENARIO_CHAIN_LABELS) {

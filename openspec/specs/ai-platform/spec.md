@@ -89,7 +89,32 @@ Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯
 - **THEN** 系统 SHALL 使用 `@ai-sdk/openai-compatible` 请求 `LITELLM_BASE_URL/v1`
 - **AND** SHALL 继续使用 `LITELLM_MODEL` 模型别名和 `LITELLM_MASTER_KEY`
 - **AND** SHALL NOT 读取 `UPSTREAM_API_KEY` 或绕过 LiteLLM
-- **AND** SHALL 禁用 AI SDK 自动重试，以保持单次 Run 的调用和计费语义
+- **AND** SHALL 禁用 AI SDK 内建自动重试，由平台统一重试执行器拥有唯一模型尝试预算
+- **AND** 默认一次模型生成 SHALL 最多尝试三次，包含首次调用和两次自动重试
+- **AND** 所有尝试 SHALL 复用同一个 Run 和绝对截止时间，不得重复持久化用户消息
+- **AND** Runtime SHALL 持久化逐尝试结果、错误分类、退避和最终重试判定
+- **AND** 流式 Run SHALL 使用 AI SDK `streamText`，非流式 Run SHALL 保持既有 `generateText` 契约
+
+#### Scenario: Runtime retries a transient model failure
+
+- **GIVEN** 模型尚未产生首个有效输出
+- **WHEN** GatewayClient 遇到瞬时网络错误、408、429、500、502、503 或 504
+- **THEN** 平台重试执行器 SHALL 在 Run 绝对截止时间内按指数退避和抖动执行下一次尝试
+- **AND** 429 响应存在 `Retry-After` 时 SHALL 优先遵守该等待时间
+- **AND** 最终 SHALL 只持久化一条助手消息或一个失败 Run
+
+#### Scenario: Runtime does not retry a permanent model failure
+
+- **WHEN** GatewayClient 遇到参数、鉴权、权限、上下文长度或内容安全等不可重试错误
+- **THEN** Runtime SHALL 立即结束模型尝试并持久化失败状态
+- **AND** 调用方取消 SHALL NOT 触发自动重试
+
+#### Scenario: Runtime stops retrying after text output starts
+
+- **GIVEN** 流式模型尝试已经产生首个非空文本增量
+- **WHEN** 当前模型流随后遇到原本可重试的超时、网络或服务端错误
+- **THEN** 平台重试执行器 SHALL 立即终止该 Run，不得静默发起新的模型尝试
+- **AND** 韧性证据 SHALL 将 `outputStarted` 记录为 `true`
 
 #### Scenario: Gateway client preserves the existing model contract
 
@@ -112,6 +137,7 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 - **THEN** Runtime SHALL 创建持久化会话并返回 `conversationId`
 - **WHEN** 浏览器请求 `GET /api/runtime/conversations` 或 `GET /api/runtime/conversations/{conversationId}`
 - **THEN** Runtime SHALL 返回会话列表或完整消息、结构化记忆和版本状态
+- **AND** 会话详情 SHALL 通过 `lastRun` 保留最近完成结果，并通过 `latestRun` 暴露最近运行中、完成或失败 Run 的状态与韧性证据
 
 #### Scenario: User closes a conversation
 
@@ -122,7 +148,7 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 
 ### Requirement: Conversation run endpoint
 
-Demo Server SHALL 提供 `POST /api/runtime/conversations/{conversationId}/runs`，支持文本、图片 URL、图片 data URL 和文档链接。
+Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，两者均支持文本、图片 URL、图片 data URL 和文档链接。
 
 #### Scenario: User sends mixed content
 
@@ -133,7 +159,17 @@ Demo Server SHALL 提供 `POST /api/runtime/conversations/{conversationId}/runs`
 - **AND** 图片 SHALL 使用 `image_url` 多模态格式
 - **AND** 文档链接 SHALL 作为文本上下文附加
 - **AND** Runtime SHALL 将请求转发到 LiteLLM `/v1/chat/completions`
-- **AND** Runtime SHALL 持久化助手消息、Run 状态、usage 和上下文清单
+- **AND** Runtime SHALL 持久化助手消息、Run 状态、usage、上下文清单和模型逐尝试韧性证据
+
+#### Scenario: Browser receives a streamed answer
+
+- **GIVEN** 浏览器通过 `/runs/stream` 提交带幂等标识的当前输入
+- **WHEN** Runtime 创建或命中 Run 并调用流式模型生成
+- **THEN** Demo Server SHALL 以 SSE 依次发送 `run-started`、零到多个 `text-delta`，以及一个 `completed` 或 `error` 终止事件
+- **AND** `text-delta` SHALL 只在内存和网络层传递，不得逐 Token 写入 SQLite
+- **AND** 成功完成后 Runtime SHALL 在同一事务中只持久化一条完整助手消息和 Run 最终状态
+- **AND** 浏览器断线 SHALL NOT 创建回答 checkpoint 或 Token 级续传状态
+- **AND** 渠道 SHALL 能通过会话详情中的 `latestRun` 查询最终状态
 
 #### Scenario: Request is retried
 
