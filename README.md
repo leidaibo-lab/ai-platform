@@ -39,6 +39,8 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 
 `scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
+当前交付聚焦 C1 对话问答链路基线化：先基于现有 Runtime 建立完整 `ChainTrace` 和准确度、实时性、稳定性、Token 四维基线，再进入其他场景。共同底座只提供七条场景可复用的执行骨架，不代表图片、文档、业务查询、实时事件、操作执行和批量分析已经完成；具体边界与退出条件见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
+
 ## 本地启动
 
 本地需要 Node.js 22.5 或更高版本，以使用内置 `node:sqlite`。
@@ -235,6 +237,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | AI 协作规则、文档路由、提交规范 | `AGENTS.md` |
 | Agent Skill 索引、目录规范、治理规则 | `.agents/skills/README.md` |
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |
+| 共同底座边界、七条场景链路、当前 C1 焦点、质量指标和建设顺序 | `docs/scenario-interaction-chains.md` |
 | 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |
