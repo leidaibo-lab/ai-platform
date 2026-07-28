@@ -27,7 +27,7 @@ export function createContextPlanner({ store, gatewayClient, contextOptions, sys
      * @param {object} input - 当前会话和用户消息。
      * @returns {Promise<object>} 模型消息、预算状态和可解释清单。
      */
-    async plan({ conversationId, currentMessageId, currentContent, currentDisplayContent }) {
+    async plan({ conversationId, currentMessageId, currentContent, currentDisplayContent, resilienceContext }) {
       const snapshot = store.getContextSnapshot(conversationId);
       let currentMessage = null;
       for (const message of snapshot.messages) {
@@ -67,7 +67,7 @@ export function createContextPlanner({ store, gatewayClient, contextOptions, sys
         userMessage,
       ];
       const estimatedTokens = estimateMessagesTokens(messages);
-      const gatewayCount = await countWithGateway(gatewayClient, messages);
+      const gatewayCount = await countWithGateway(gatewayClient, messages, resilienceContext);
       const dynamicTokens = estimateMessagesTokens(historyCandidates.map(toModelMessage));
 
       return {
@@ -209,10 +209,10 @@ function toModelMessage(message) {
 }
 
 /** 尝试使用模型网关的实际路由 tokenizer；不可用时返回 null。 */
-async function countWithGateway(gatewayClient, messages) {
+async function countWithGateway(gatewayClient, messages, resilienceContext) {
   if (typeof gatewayClient?.countTokens !== "function") return null;
   try {
-    return await gatewayClient.countTokens({ messages });
+    return await gatewayClient.countTokens({ messages, deadlineAt: resilienceContext?.deadlineAt });
   } catch {
     return null;
   }

@@ -91,6 +91,9 @@ export function createConversationStore({ databasePath }) {
       const lastRunRow = database
         .prepare("SELECT * FROM runs WHERE conversation_id = ? AND status = 'completed' ORDER BY updated_at DESC LIMIT 1")
         .get(conversationId);
+      const latestRunRow = database
+        .prepare("SELECT * FROM runs WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1")
+        .get(conversationId);
 
       return {
         ...mapConversationRow(conversation),
@@ -104,6 +107,7 @@ export function createConversationStore({ databasePath }) {
           episodes,
         },
         lastRun: lastRunRow ? mapRunRow(lastRunRow) : null,
+        latestRun: latestRunRow ? mapRunRow(latestRunRow) : null,
       };
     },
 
@@ -166,8 +170,8 @@ export function createConversationStore({ databasePath }) {
       });
     },
 
-    /** 在同一事务中写入助手消息、usage、Context Manifest 并完成 Run。 */
-    completeRun({ runId, content, displayContent, usage, contextManifest, model }) {
+    /** 在同一事务中写入助手消息、usage、Context Manifest、韧性证据并完成 Run。 */
+    completeRun({ runId, content, displayContent, usage, contextManifest, model, resilience }) {
       // 助手消息和完成状态必须在同一事务提交。
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
@@ -192,10 +196,18 @@ export function createConversationStore({ databasePath }) {
           .prepare(
             `UPDATE runs
              SET assistant_message_id = ?, status = 'completed', model = ?, usage_json = ?,
-                 context_manifest_json = ?, updated_at = ?
+                 context_manifest_json = ?, resilience_json = ?, updated_at = ?
              WHERE id = ?`,
           )
-          .run(messageId, model, jsonOrNull(usage), JSON.stringify(contextManifest), now, runId);
+          .run(
+            messageId,
+            model,
+            jsonOrNull(usage),
+            JSON.stringify(contextManifest),
+            jsonOrNull(resilience),
+            now,
+            runId,
+          );
         database
           .prepare("UPDATE conversations SET next_seq = ?, version = version + 1, updated_at = ? WHERE id = ?")
           .run(seq, now, run.conversation_id);
@@ -212,8 +224,8 @@ export function createConversationStore({ databasePath }) {
         if (run.status !== "running") return buildRunResult(database, run, false);
         const now = new Date().toISOString();
         database
-          .prepare("UPDATE runs SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
-          .run(String(error?.message || error || "Run failed"), now, runId);
+          .prepare("UPDATE runs SET status = 'failed', error = ?, resilience_json = ?, updated_at = ? WHERE id = ?")
+          .run(String(error?.message || error || "Run failed"), jsonOrNull(error?.resilience), now, runId);
         insertEvent(database, run.conversation_id, "run.failed", { runId });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
@@ -413,6 +425,7 @@ function migrate(database) {
       model TEXT,
       usage_json TEXT,
       context_manifest_json TEXT,
+      resilience_json TEXT,
       error TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -482,6 +495,16 @@ function migrate(database) {
       created_at TEXT NOT NULL
     );
   `);
+  ensureColumn(database, "runs", "resilience_json", "TEXT");
+}
+
+/** 为既有 SQLite 数据库补充缺失列；表名、列名和定义只允许由迁移代码常量传入。 */
+function ensureColumn(database, tableName, columnName, definition) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  for (const column of columns) {
+    if (column.name === columnName) return;
+  }
+  database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }
 
 /** 在 BEGIN IMMEDIATE 事务中执行同步存储操作并统一回滚异常。 */
@@ -617,6 +640,7 @@ function mapRunRow(row) {
     model: row.model,
     usage: parseJson(row.usage_json),
     contextManifest: parseJson(row.context_manifest_json),
+    resilience: parseJson(row.resilience_json),
     error: row.error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

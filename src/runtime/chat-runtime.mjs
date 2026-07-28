@@ -1,6 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { createResilienceContext } from "../resilience/retry-executor.mjs";
 import { normalizeContextOptions } from "./context-budget.mjs";
 import { buildDisplayContent, buildUserContent, normalizeRunInput, validateRunInput } from "./message-builder.mjs";
 import { createToolRegistry } from "../tools/tool-registry.mjs";
+
+const DEFAULT_RUN_TIMEOUT_MS = 120000;
 
 export class RuntimeInputError extends Error {
   /**
@@ -31,9 +35,11 @@ export function createChatRuntime({
   contextPlanner,
   memoryManager,
   toolRegistry,
+  resilienceOptions = {},
 }) {
   const options = normalizeContextOptions(contextOptions);
   const registry = toolRegistry || createToolRegistry();
+  const runTimeoutMs = normalizeRunTimeout(resilienceOptions.runTimeoutMs);
 
   return {
     /** 创建由 Runtime 持久化的新会话。 */
@@ -56,12 +62,18 @@ export function createChatRuntime({
      *
      * @param {string} conversationId - 目标会话 ID。
      * @param {unknown} body - 当前 Run 请求体。
+     * @param {object} [delivery] - 可选运行状态和模型文本增量消费者。
+     * @param {(input: object) => Promise<void>|void} [delivery.onRunStarted] - Run 创建或幂等命中通知。
+     * @param {(delta: string) => Promise<void>|void} [delivery.onTextDelta] - 模型文本增量消费者。
+     * @param {AbortSignal} [delivery.abortSignal] - 可选调用方取消信号。
      * @returns {Promise<object>} 回复、会话状态、usage 和 Context Manifest。
      */
-    async runConversation(conversationId, body) {
+    async runConversation(conversationId, body, delivery = {}) {
       const input = normalizeRunInput(body);
       const validationError = validateRunInput(input);
       if (validationError) throw new RuntimeInputError(validationError);
+      const traceId = randomUUID();
+      const deadlineAt = Date.now() + runTimeoutMs;
 
       // 同一会话必须按提交顺序生成回复，避免第二个 Run 看不到第一个 Run 的结果。
       return coordinator.runExclusive(conversationId, async () => {
@@ -75,32 +87,53 @@ export function createChatRuntime({
           content,
           displayContent,
         });
+        if (typeof delivery.onRunStarted === "function") {
+          await delivery.onRunStarted({ run: started.run, replayed: started.replayed });
+        }
 
         if (started.replayed) return replayRun(started, store.getConversation(conversationId));
         const runId = started.run.id;
+        const resilienceContext = createResilienceContext({
+          traceId,
+          requestId: input.requestId,
+          conversationId,
+          runId,
+          deadlineAt,
+          stage: "run",
+          lastCommittedStage: "user-message-committed",
+          idempotencyKey: input.requestId,
+          outputStarted: false,
+        });
         try {
           let plan = await contextPlanner.plan({
             conversationId,
             currentMessageId: started.userMessage.id,
             currentContent: content,
             currentDisplayContent: displayContent,
+            resilienceContext,
           });
           if (plan.manifest.hardLimitReached) {
             await memoryManager.compactIfNeeded(conversationId, {
               force: true,
               excludeSeq: started.userMessage.seq,
+              resilienceContext,
             });
             plan = await contextPlanner.plan({
               conversationId,
               currentMessageId: started.userMessage.id,
               currentContent: content,
               currentDisplayContent: displayContent,
+              resilienceContext,
             });
           }
 
           const data = await gatewayClient.chatCompletions({
             messages: plan.messages,
             maxCompletionTokens: options.reservedOutputTokens,
+            resilienceContext,
+            operation: "model.generate",
+            onTextDelta: delivery.onTextDelta,
+            abortSignal: delivery.abortSignal,
           });
           const assistantContent = data?.choices?.[0]?.message?.content || "";
           const completed = store.completeRun({
@@ -110,6 +143,7 @@ export function createChatRuntime({
             usage: data?.usage || null,
             contextManifest: plan.manifest,
             model: data?.model || gatewayClient.model,
+            resilience: data?.resilience || null,
           });
           if (plan.manifest.highWatermarkReached) memoryManager.schedule(conversationId);
 
@@ -118,6 +152,7 @@ export function createChatRuntime({
             usage: completed.run.usage,
             model: completed.run.model,
             context: completed.run.contextManifest,
+            resilience: completed.run.resilience,
             conversation: store.getConversation(conversationId),
             replayed: false,
           };
@@ -160,7 +195,14 @@ function replayRun(result, conversation) {
     usage: result.run.usage,
     model: result.run.model,
     context: result.run.contextManifest,
+    resilience: result.run.resilience,
     conversation,
     replayed: true,
   };
+}
+
+/** 将 Runtime 总时限规范为正数，避免配置错误产生无界或立即过期的 Run。 */
+function normalizeRunTimeout(value) {
+  const timeoutMs = Number(value);
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_RUN_TIMEOUT_MS;
 }
