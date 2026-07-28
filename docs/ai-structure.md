@@ -312,8 +312,9 @@ flowchart LR
 | `GET/POST /api/runtime/conversations` | Demo Server | Agent Runtime 的 Session API |
 | `GET /api/runtime/conversations/{id}` | Demo Server | 会话、消息、结构化记忆和版本查询 |
 | `POST /api/runtime/conversations/{id}/runs` | Demo Server | 幂等 Run API |
+| `POST /api/runtime/conversations/{id}/runs/stream` | Demo Server | POST SSE 模型文本增量；完成后返回同一 Run 的持久化最终结果 |
 | `POST /api/runtime/conversations/{id}/close` | Demo Server | 会话结束和最终 checkpoint |
-| `GET /api/runtime/conversations/{id}/events` | Demo Server | SQLite 事件游标驱动的 SSE 增量同步 |
+| `GET /api/runtime/conversations/{id}/events` | Demo Server | SQLite 事件游标驱动的持久化事实 SSE 增量同步 |
 | `POST /v1/chat/completions` | LiteLLM | Runtime 使用的模型网关标准接口；`test-chat.sh` 仅作连通性诊断 |
 
 未来拆出服务时，保持 Session/Run 契约不变，将 SQLite Store 替换为独立数据库和事件总线。
@@ -369,10 +370,10 @@ scripts/test-chat.sh
 - 服务端上游密钥收口和单模型别名路由。
 - 浏览器 Demo 与分层 API。
 - 文本、图片 URL、图片 data URL 和文档链接输入。
-- SQLite 持久化多会话、幂等 Run 和 SSE 多标签页增量同步。
+- SQLite 持久化多会话、幂等 Run、POST SSE 模型文本流和独立的 SSE 多标签页事实同步。
 - 结构化 MemoryDelta、来源追溯、memoryVersion 乐观锁和最终 checkpoint。
 - Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
-- AI SDK Core v7 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端，禁用自动重试并保留现有请求语义。
+- AI SDK Core v7 的 `generateText` / `streamText` 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端；AI SDK 内建重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
 - 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
 - Agent Runtime 及其 GatewayClient、连接器注册和模型网关的模块边界雏形。
 - OpenSpec、文档、回归评测和自动化架构边界检查的最小治理。

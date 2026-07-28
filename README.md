@@ -162,7 +162,8 @@ Demo 输入区支持：
 - 图片：可以上传本地图片，也可以粘贴图片 URL；Demo Server 会按 OpenAI-compatible 的 `image_url` 多模态格式转发。
 - 文档链接：可以粘贴一个或多个链接，Demo Server 会把它们作为文本上下文附在用户消息里。
 - 多会话：Runtime 使用 SQLite 持久化会话和完整原始消息；刷新页面、切换标签页后仍能继续会话。
-- 多端同步：同一会话通过 SSE 事件游标增量刷新；客户端不再保存或提交历史事实源。
+- 模型文本流：浏览器通过 POST SSE 接收 AI SDK `streamText` 文本增量，完整回答结束后才一次性落库。
+- 多端同步：同一会话通过独立的 SSE 事件游标刷新已持久化事实；客户端不再保存或提交历史事实源。
 - 结构化记忆：Memory Manager 提取目标、约束、偏好、事实、决策、任务和 Episode，用户纠正会废弃旧事实并保留来源消息。
 - Context Planner：按系统规则、当前输入、active 记忆、相关 Episode、最近消息的优先级装箱，并返回可解释 Context Manifest。
 - Token 水位：动态原始消息达到 75% 高水位后压缩到 45% 低水位；接近 90% 硬水位时先同步压缩再回答。
@@ -178,6 +179,7 @@ Demo Server API 按层级暴露：
 | `POST /api/runtime/conversations` | 创建会话 |
 | `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆和版本状态 |
 | `POST /api/runtime/conversations/{id}/runs` | 发送当前输入并执行幂等 Run |
+| `POST /api/runtime/conversations/{id}/runs/stream` | 通过 SSE 接收 `run-started`、`text-delta`、`completed` 或 `error` 事件 |
 | `POST /api/runtime/conversations/{id}/close` | 完成最终 checkpoint 并结束会话 |
 | `GET /api/runtime/conversations/{id}/events` | 订阅多端增量事件流 |
 
@@ -228,6 +230,8 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 - `LITELLM_MODEL` 是 Runtime 请求的 LiteLLM 模型别名，默认 `chat-default`。
 - `DEMO_DATABASE_PATH` 是 Runtime SQLite 文件，默认 `.data/ai-platform.sqlite`。
 - `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
+- `DEMO_RUN_TIMEOUT_MS` 是排队、上下文规划和全部模型尝试共享的 Run 总时限，默认 `120000` 毫秒。
+- `DEMO_MODEL_MAX_ATTEMPTS` 默认 `3`，包含首次调用；退避由 `DEMO_MODEL_RETRY_BASE_DELAY_MS` 和 `DEMO_MODEL_RETRY_MAX_DELAY_MS` 控制。
 
 ## 文档与规范
 
@@ -237,7 +241,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | AI 协作规则、文档路由、提交规范 | `AGENTS.md` |
 | Agent Skill 索引、目录规范、治理规则 | `.agents/skills/README.md` |
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |
-| 共同底座边界、七条场景链路、当前 C1 焦点、质量指标和建设顺序 | `docs/scenario-interaction-chains.md` |
+| 共同底座边界、重试与恢复策略、七条场景链路、当前 C1 焦点、质量指标和建设顺序 | `docs/scenario-interaction-chains.md` |
 | 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |

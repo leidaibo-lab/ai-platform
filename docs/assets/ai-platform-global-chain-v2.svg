@@ -129,7 +129,7 @@
 
   <rect class="node-accent" x="1270" y="800" width="260" height="136"/>
   <text class="node-title" x="1400" y="839">AI SDK Core</text>
-  <text class="node-code" x="1400" y="868">generateText</text>
+  <text class="node-code" x="1400" y="868">streamText / generateText</text>
   <text class="node-code" x="1400" y="894">@ai-sdk/openai-compatible</text>
   <text class="node-subtitle" x="1400" y="920">唯一模型生成路径</text>
 

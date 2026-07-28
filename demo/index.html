@@ -147,8 +147,21 @@
       .message.user { align-self: flex-end; border-color: #b9d8ce; background: var(--accent-soft); }
       .message.assistant { align-self: flex-start; }
       .message.pending { color: var(--muted); }
+      .message.streaming::after {
+        display: inline-block;
+        width: 2px;
+        height: 1em;
+        margin-left: 3px;
+        background: var(--accent);
+        vertical-align: -0.12em;
+        content: "";
+        animation: stream-caret 0.9s steps(1) infinite;
+      }
       .message.error { align-self: flex-start; border-color: #ecc0b1; background: var(--danger-soft); color: var(--danger); }
       .empty-state { margin: auto; color: var(--muted); font-size: 13px; }
+
+      @keyframes stream-caret { 50% { opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) { .message.streaming::after { animation: none; } }
 
       .composer { position: relative; min-width: 0; padding: 12px; border-top: 1px solid var(--line); background: var(--panel-muted); }
       .composer-box { display: grid; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
@@ -502,12 +515,14 @@
 
       /** 合并短时间内的多个 SSE 事件，避免重复请求详情。 */
       function scheduleRemoteRefresh() {
+        if (sending) return;
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(refreshFromRemoteEvent, 120);
       }
 
       /** SSE 事件到达后同步当前会话和列表。 */
       async function refreshFromRemoteEvent() {
+        if (sending) return;
         await Promise.all([loadCurrentConversation(), refreshConversationList()]);
       }
 
@@ -545,31 +560,52 @@
         return item.url;
       }
 
-      /** 调用会话 Run API，并以服务端事实状态覆盖乐观 UI。 */
+      /** 调用流式 Run API，增量更新助手消息并在完成后以服务端事实状态收口。 */
       async function runConversation(payload) {
         const startedAt = performance.now();
+        const runConversationId = currentConversationId;
         const display = formatDisplayInput(payload);
+        sending = true;
         elements.messages.querySelector(".empty-state")?.remove();
         addMessage("user", display);
         const pending = addMessage("assistant", "请求中", "pending");
-        sending = true;
         elements.send.disabled = true;
         resetComposer();
+        let receivedText = false;
+
+        /** 把新文本追加到同一个助手消息节点，避免增量之间重建布局。 */
+        function renderTextDelta(delta) {
+          if (!pending.isConnected || currentConversationId !== runConversationId) return;
+          if (!receivedText) {
+            receivedText = true;
+            pending.textContent = "";
+            pending.classList.remove("pending");
+            pending.classList.add("streaming");
+          }
+          pending.textContent += delta;
+          elements.messages.scrollTop = elements.messages.scrollHeight;
+        }
+
         try {
-          const data = await requestJson(
-            `/api/runtime/conversations/${encodeURIComponent(currentConversationId)}/runs`,
-            { method: "POST", body: payload },
+          const data = await requestRunStream(
+            `/api/runtime/conversations/${encodeURIComponent(runConversationId)}/runs/stream`,
+            payload,
+            { onTextDelta: renderTextDelta },
           );
-          currentConversation = data.conversation;
-          currentContext = data.context;
           elements.latency.textContent = `${Math.round(performance.now() - startedAt)} ms`;
           setHealth(true, data.replayed ? "已重放" : "已连接");
-          renderCurrentConversation();
+          if (currentConversationId === runConversationId) {
+            currentConversation = data.conversation;
+            currentContext = data.context;
+            renderCurrentConversation();
+          }
           await refreshConversationList();
         } catch (error) {
-          await loadCurrentConversation();
           pending.remove();
-          addMessage("error", error.message);
+          if (currentConversationId === runConversationId) {
+            await loadCurrentConversation();
+            addMessage("error", error.message);
+          }
           setHealth(false, "请求失败");
         } finally {
           sending = false;
@@ -724,6 +760,82 @@
       function resizeInput() {
         elements.messageInput.style.height = "auto";
         elements.messageInput.style.height = `${Math.min(elements.messageInput.scrollHeight, 160)}px`;
+      }
+
+      /** 执行 POST SSE Run，并返回 completed 事件中的最终持久化结果。 */
+      async function requestRunStream(path, body, handlers = {}) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "Accept": "text/event-stream", "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) throw new Error(await readResponseError(response));
+        if (!response.body) throw new Error("浏览器未提供流式响应体");
+        let completed = null;
+
+        /** 分发模型文本、完成和错误事件。 */
+        async function handleRunEvent(event) {
+          if (event.name === "text-delta") {
+            await handlers.onTextDelta?.(String(event.data.delta || ""));
+            return;
+          }
+          if (event.name === "completed") {
+            completed = event.data;
+            return;
+          }
+          if (event.name === "error") throw new Error(event.data.error || "流式请求失败");
+        }
+
+        await readJsonEventStream(response.body, handleRunEvent);
+        if (!completed) throw new Error("流式请求未返回最终结果");
+        return completed;
+      }
+
+      /** 按 SSE 空行边界读取任意分块的 UTF-8 响应。 */
+      async function readJsonEventStream(stream, handleEvent) {
+        const reader = stream.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          while (true) {
+            const result = await reader.read();
+            if (result.done) break;
+            buffer += decoder.decode(result.value, { stream: true });
+            let boundary = /\r?\n\r?\n/.exec(buffer);
+            while (boundary) {
+              const block = buffer.slice(0, boundary.index);
+              buffer = buffer.slice(boundary.index + boundary[0].length);
+              await dispatchJsonEvent(block, handleEvent);
+              boundary = /\r?\n\r?\n/.exec(buffer);
+            }
+          }
+          buffer += decoder.decode();
+          if (buffer.trim()) await dispatchJsonEvent(buffer, handleEvent);
+        } finally {
+          reader.releaseLock();
+        }
+      }
+
+      /** 解析单个 SSE block，并把 JSON data 交给调用方。 */
+      async function dispatchJsonEvent(block, handleEvent) {
+        let name = "message";
+        const dataLines = [];
+        for (const line of block.split(/\r?\n/)) {
+          if (line.startsWith("event:")) name = line.slice(6).trim();
+          if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+        }
+        if (dataLines.length === 0) return;
+        await handleEvent({ name, data: JSON.parse(dataLines.join("\n")) });
+      }
+
+      /** 从非 SSE 错误响应中读取公开错误消息。 */
+      async function readResponseError(response) {
+        try {
+          const data = await response.json();
+          return data.error || `HTTP ${response.status}`;
+        } catch {
+          return `HTTP ${response.status}`;
+        }
       }
 
       /** 执行 JSON API 请求并把错误载荷转换为 Error。 */

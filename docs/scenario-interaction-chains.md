@@ -50,6 +50,53 @@
 
 因此，“输入被拼入 Prompt 且模型返回内容”不能作为一个场景完成的定义。只有场景专属节点和四维验收证据同时具备，才可以声明该场景达到基础可用。
 
+## 共同底座的重试与恢复边界
+
+重试是共同底座的横切稳定性能力，七条场景链路都应复用统一的幂等、总时间预算、错误分类、退避和观测语义。但是，“整条链路具备重试能力”不等于任何失败都从浏览器输入开始完整重跑；每个阶段必须从最近一个已提交的稳定状态恢复，避免重复写消息、重复调用模型或重复产生外部副作用。
+
+当前已具备 `requestId` 幂等重放、同进程同会话串行、SQLite 事件游标、Memory Manager 乐观锁重试、Token Counter 本地估算回退，以及由平台统一重试执行器控制的模型重试。AI SDK 内建自动重试仍保持关闭，避免与 Runtime 或 LiteLLM 的策略叠乘；当前实现覆盖 C1 模型调用，其他场景阶段仍按下表逐步接入。
+
+### 统一韧性上下文
+
+一次 Run 应共享一个 `ResilienceContext`，由 Runtime 持有并向各阶段传递最小恢复信息：
+
+| 字段 | 语义 |
+| --- | --- |
+| `traceId`、`requestId`、`conversationId`、`runId` | 关联同一次业务请求、幂等重放和全部阶段尝试 |
+| `deadlineAt` | 整个 Run 的绝对截止时间；所有阶段和重试共享，不能逐层重新获得完整超时 |
+| `stage`、`lastCommittedStage` | 当前执行位置和最近已提交的稳定状态，用于局部恢复而不是整链重跑 |
+| `outputStarted` | 是否已经向用户交付有效输出；开始输出后不得静默重新生成并拼接回答 |
+| `idempotencyKey` | 当前操作的幂等键；写操作没有业务幂等和结果回读时不得自动重试 |
+
+每类操作通过 `RetryPolicy` 表达 `operation`、`maxAttempts`、`retryableErrors` 和 `backoff`；执行器为单次尝试提供 `attempt` 和 `maxAttempts`，并与 `ResilienceContext` 中的截止时间、幂等键和输出状态共同完成判定。统一的是字段、判定顺序、总预算和 trace，不是让所有阶段使用相同的重试次数。
+
+### 分阶段恢复策略
+
+| 阶段 | 当前能力 | 恢复或重试边界 |
+| --- | --- | --- |
+| 浏览器到 Adapter | `[当前]` 浏览器为每次提交生成 `requestId` 和 `clientMessageId` | 网络结果不确定时使用原标识查询或重发，不创建第二条用户消息 |
+| Run 与消息落库 | `[当前]` 事务、唯一约束和 SQLite `busy_timeout` | 只对锁冲突等明确瞬时存储错误做短重试；已提交后返回既有状态 |
+| Context Planner | `[当前]` 从 SQLite 事实源读取快照 | 状态冲突时重读快照并重新规划，不重写已提交消息 |
+| Token Counter | `[当前]` LiteLLM 计数失败后使用本地估算 | 属于可降级优化，不持续重试并阻断主回答 |
+| Memory Manager | `[当前]` `memoryVersion` 冲突后重读并重算，最多尝试三次 | 只重算尚未压缩的连续区间，不回滚原始消息或主 Run |
+| 模型生成 | `[当前]` AI SDK `maxRetries: 0`，平台统一重试执行器拥有唯一尝试预算并将证据写入 Run | 默认 `maxAttempts: 3`，即首次调用加两次重试；只处理瞬时网络错误、408、429、500、502、503、504，并遵守 `Retry-After` |
+| 流式交付 | `[当前]` `POST .../runs/stream` 通过 SSE 交付 AI SDK 文本增量；独立事件流按 SQLite 游标同步已落库事实 | 首个有效文本增量前可重试模型；开始输出后不静默重生成。浏览器断线后查询 Run 最终状态，不要求 Token 级断点续传 |
+| 未来只读 Connector | `[目标]` 尚未实现 | 只有操作本身幂等、错误明确可重试且仍在 Run 总预算内时才自动重试 |
+| 未来写操作 | `[目标]` 尚未实现 | 必须具备业务幂等键、结果回读和不确定状态处理；未知结果不得自动重放 |
+
+### C1 当前模型重试策略
+
+```text
+maxAttempts: 3
+maxRetries: 2
+totalDeadline: 120s
+backoff: exponential + jitter
+retryBoundary: before-first-valid-output
+durability: one Run + one final assistant message
+```
+
+总时间预算覆盖接入、排队、上下文规划、所有模型尝试、持久化和结果交付，不能把 120 秒分别分配给每次模型尝试。Runtime、AI SDK 和 LiteLLM 只能有一层拥有主要尝试预算，防止多层重试次数相乘。模型文本增量只在内存和网络层传递，最终回答完成后一次性事务落库；C1 不逐 Token 写 SQLite，也不保存回答 checkpoint，断线时恢复 Run 最终状态而不是续传缺失 Token。
+
 ## 场景清单
 
 | 链路 | 输入源 | 期望输出 | 当前状态 | 首个建设目标 |
@@ -58,7 +105,7 @@
 | C2 图片理解 | 图片 URL、图片 data URL | 图片分析、问答或结构化识别结果 | 已透传到视觉模型，缺少媒体治理 | 补媒体校验、能力路由和视觉评测 |
 | C3 文档知识问答 | 文档链接、文件、知识库 | 带引用和时效说明的回答 | 当前只把 URL 当文本，不读取文档 | 跑通单一文档源的解析、检索、引用 |
 | C4 业务数据查询 | 业务 API、数据库、MCP、搜索 | 基于实时业务事实的可验证回答 | 只有 Tool Registry 预留 | 跑通一个真实只读工具闭环 |
-| C5 实时事件处理 | Webhook、IM 事件、消息队列、告警 | 分类、摘要、建议或及时通知 | 未实现；当前 SSE 仅用于结果同步 | 跑通单一事件源的去重、富化和通知 |
+| C5 实时事件处理 | Webhook、IM 事件、消息队列、告警 | 分类、摘要、建议或及时通知 | 未实现；当前 SSE 仅用于模型文本交付和会话事实同步 | 跑通单一事件源的去重、富化和通知 |
 | C6 操作执行 | 用户指令、审批动作、Agent 计划 | 可确认、可审计、可验证的业务操作 | 未实现真实工具循环和人工确认 | 在只读工具稳定后增加一项低风险写操作 |
 | C7 批量分析 | 多文件、表格、历史记录、离线任务 | 完整报告、清单或结构化结果集 | 未实现 | 建立可分片、可恢复、可控预算的异步任务 |
 
@@ -75,7 +122,8 @@
 | 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行 | 把重复、并发、失败和恢复结果统一纳入链路证据 |
 | 上下文与记忆 | 结构化记忆、Context Planner、Context Manifest、token 高低水位 | 用真实模型验证纠正、实体隔离、任务状态和来源追溯 |
 | 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通并保存 usage | 固定模型、Prompt、fixture 和参数，建立可重复比较的四维基线 |
-| 结果交付 | 同步 Run 返回、助手消息落库和基于事件游标的 SSE 多端同步 | 明确首个有效状态、最终结果以及断连后的恢复语义 |
+| 结果交付 | JSON Run、POST SSE 模型文本流、助手消息最终单次落库和基于事件游标的 SSE 多端同步 | 补齐首文本增量、最终结果和断连恢复的分阶段耗时证据 |
+| 重试与恢复 | `requestId` 幂等重放、首增量前模型重试、输出后停止重试、SSE 游标重连、记忆版本冲突重试、Token Counter 回退和逐尝试证据 | 把统一策略继续接入后续场景节点，并纳入完整逐阶段 `ChainTrace` |
 | 可观测 | Run usage 和 Context Manifest 可作为起点 | 补齐覆盖接入、排队、规划、模型、持久化和交付阶段的 C1 `ChainTrace` |
 
 ### C1 完成定义
@@ -85,7 +133,7 @@
 | 功能闭环 | 浏览器纯文本输入可以稳定完成多轮对话、纠正、恢复、幂等重放和会话关闭 | API 回归、浏览器链路验证、会话与 Run 状态记录 |
 | 准确度 | 固定真实模型 fixture 能验证最新纠正、旧事实不泄漏、实体隔离、任务状态和来源有效性 | 通过数/总数、准确率或泄漏率、失败案例；样本不足 30 时只报告观察结果 |
 | 实时性 | 接入、排队、Context Planner、模型、持久化和交付耗时可区分 | 单阶段耗时、端到端 P50/P95、实际模型和测试时间 |
-| 稳定性 | 输入错误、重复请求、同会话并发、模型超时、网关错误、空响应和 SSE 断连都有确定状态 | 自动化测试、错误分类、幂等重放和恢复记录 |
+| 稳定性 | 输入错误、重复请求、同会话并发、模型超时、网关错误、空响应和 SSE 断连都有确定状态；模型在首次有效输出前按统一预算自动重试 | 自动化测试、错误分类、逐尝试 trace、幂等重放和恢复记录 |
 | Token 合理性 | 能解释系统规则、当前输入、记忆、Episode、历史和输出分别占用多少，以及哪些候选被排除 | 分段 token、provider usage、Context Manifest、压缩前后对比 |
 | 可追踪性 | 一次请求可用 `requestId + conversationId + runId` 关联输入、上下文选择、模型调用、结果和错误 | 完整 C1 `ChainTrace`，敏感正文默认不进入 trace |
 | 回归能力 | 确定性 Runtime 回归与真实模型评测分开执行和报告 | fixture 版本、模型别名、实际模型、Prompt 版本、参数、token、费用和延迟 |
@@ -118,17 +166,18 @@ flowchart LR
   Runtime["[当前] Agent Runtime<br/>幂等 Run / 同会话串行"]
   StoreIn["[当前] SQLite 先写用户消息"]
   Planner["[当前] Context Planner<br/>记忆 / Episode / 最近消息"]
-  Gateway["[当前] GatewayClient"]
+  Gateway["[当前] GatewayClient<br/>平台统一重试执行器"]
   AiSdk["[当前] AI SDK"]
   LiteLLM["[当前] LiteLLM"]
   Model["[当前] 上游模型"]
   StoreOut["[当前] 写回答 / usage / Context Manifest"]
-  Delivery["[当前] 页面结果与 SSE 同步<br/>[目标] 流式进度 / 引用 / 反馈"]
+  Delivery["[当前] POST SSE 文本流 / 事实同步<br/>[目标] 引用 / 反馈"]
   Memory["[当前] Memory Manager 异步压缩"]
 
   Source --> Adapter --> Normalize --> Runtime --> StoreIn --> Planner
   Planner --> Gateway --> AiSdk --> LiteLLM --> Model
-  Model --> StoreOut --> Delivery
+  Model -->|文本增量| Delivery
+  Model -->|最终结果| StoreOut -->|completed / 事实同步| Delivery
   StoreOut -.-> Memory
   Memory -.-> Planner
 ```
@@ -136,7 +185,7 @@ flowchart LR
 | 质量维度 | 本链路控制点 |
 | --- | --- |
 | 准确度 | 验证最新纠正优先、实体隔离、未完成任务和来源追溯；增加真实模型固定 fixture，而不只检查响应非空 |
-| 实时性 | 分开记录 Adapter、排队、Context Planner、模型调用和持久化耗时；当前非流式调用先以端到端延迟为基线 |
+| 实时性 | 分开记录 Adapter、排队、Context Planner、首文本增量、模型完成、持久化和最终交付耗时 |
 | 稳定性 | 保留 `requestId` 和 `clientMessageId` 幂等；区分输入错误、Run 冲突、模型超时、网关错误和空响应 |
 | Token 合理性 | 记录系统规则、当前输入、结构化记忆、Episode、历史消息和输出的分段 token；检查被排除内容是否符合优先级 |
 
@@ -364,7 +413,7 @@ flowchart LR
 | `partial` | 部分数据或步骤成功 | 成功范围、失败范围、是否可继续或重试 |
 | `failed` | 未产生可信结果 | 失败阶段、可否重试、是否可能存在外部副作用 |
 
-当前 V0.6 仍以同步 Run 返回为主，上表是后续多场景需要收敛的目标状态模型，不是现有 API 声明。
+当前 V0.6 已同时提供 JSON Run 和 C1 POST SSE 文本流，但尚未把上表全部状态固化为跨场景 API；该表仍是后续多场景需要收敛的目标状态模型。
 
 ## 统一观测结构
 
@@ -377,7 +426,7 @@ flowchart LR
 | 执行版本 | `agentId`、`agentVersion`、工具版本、检索策略版本、模型策略和实际模型 |
 | 阶段耗时 | 接入、排队、归一化、检索或工具、Context Planner、模型、校验、持久化、投递 |
 | Token 与费用 | 固定规则、当前输入、记忆、历史、检索或工具结果、输出的 token，以及 provider usage 和费用 |
-| 结果状态 | 成功、部分成功、失败阶段、错误分类、重试、fallback、幂等重放、外部副作用状态 |
+| 结果状态 | 成功、部分成功、失败阶段、错误分类、`attempt`、`maxAttempts`、退避、重试判定、fallback、幂等重放、`outputStarted`、外部副作用状态 |
 | 准确度证据 | fixture 或反馈标签、引用列表、schema 校验结果、事实冲突、人工纠正和任务结果 |
 
 当前 Context Manifest 和 Run usage 可以作为 C1 的起点，但它们还不是完整的跨场景 ChainTrace。

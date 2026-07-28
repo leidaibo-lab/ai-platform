@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 export async function loadDemoConfig(rootDir) {
   const fileEnv = await loadEnv(join(rootDir, ".env"));
   const env = { ...fileEnv, ...process.env };
+  const runTimeoutMs = readPositiveNumber(env.DEMO_RUN_TIMEOUT_MS, 120000);
 
   return {
     port: readPositiveNumber(env.DEMO_PORT, 4010),
@@ -18,7 +19,12 @@ export async function loadDemoConfig(rootDir) {
       baseUrl: trimTrailingSlash(env.LITELLM_BASE_URL || "http://localhost:4000"),
       model: env.LITELLM_MODEL || "chat-default",
       apiKey: env.LITELLM_MASTER_KEY || "sk-local-admin-key",
+      timeoutMs: runTimeoutMs,
+      maxAttempts: readPositiveInteger(env.DEMO_MODEL_MAX_ATTEMPTS, 3),
+      retryBaseDelayMs: readNonNegativeNumber(env.DEMO_MODEL_RETRY_BASE_DELAY_MS, 500),
+      retryMaxDelayMs: readNonNegativeNumber(env.DEMO_MODEL_RETRY_MAX_DELAY_MS, 5000),
     },
+    resilience: { runTimeoutMs },
     storage: {
       databasePath: resolve(rootDir, env.DEMO_DATABASE_PATH || ".data/ai-platform.sqlite"),
     },
@@ -80,6 +86,18 @@ export function trimTrailingSlash(value) {
 function readPositiveNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** 将环境变量转换为正整数配置，无效值回退到调用方提供的默认值。 */
+function readPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** 将环境变量转换为非负数配置，无效值回退到调用方提供的默认值。 */
+function readNonNegativeNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 /** 将环境变量转换为 0 到 1 之间的水位比例。 */

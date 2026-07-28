@@ -23,5 +23,8 @@ export class GatewayRequestError extends Error {
     this.name = "GatewayRequestError";
     this.status = status;
     this.data = data;
+    this.retryAfterMs = null;
+    this.retryable = null;
+    this.resilience = null;
   }
 }
