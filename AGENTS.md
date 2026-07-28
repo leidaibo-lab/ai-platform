@@ -48,6 +48,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `README.md`：面向使用者的启动、Runtime 配置和模型连通性测试说明。
 - `docs/README.md`：项目文档索引。
 - `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。
+- `docs/scenario-interaction-chains.md`：定义共同底座与场景能力边界，按输入场景拆分业务链路；当前聚焦 C1 对话链路基线化，并按准确度、实时性、稳定性和 Token 逐链路验收。
 - `docs/coding-standards.md`：函数注释、数据结构、设计模式和设计原则等编码规范。
 - `.agents/skills/README.md`：Agent Skill 索引和目录治理规则。
 - `.agents/skills/docs/context-memory-evaluation/SKILL.md`：上下文记忆评测场景、指标、脚本和回归治理流程。

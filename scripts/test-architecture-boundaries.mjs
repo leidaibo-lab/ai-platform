@@ -33,9 +33,23 @@ const GLOBAL_ARCHITECTURE_ASSETS = Object.freeze([
     path: "docs/assets/ai-platform-data-flow-v3.html",
     requiredLabels: ["Agent Runtime", "GatewayClient", "AI SDK", "LiteLLM", "上游"],
   },
+  {
+    path: "docs/scenario-interaction-chains.md",
+    requiredLabels: ["Agent Runtime", "GatewayClient", "AI SDK", "LiteLLM", "上游"],
+  },
   { path: "docs/assets/ai-platform-architecture.svg" },
   { path: "docs/assets/ai-platform-roadmap.svg" },
   { path: "docs/assets/ai-platform-current-v05.svg" },
+]);
+
+const SCENARIO_CHAIN_LABELS = Object.freeze([
+  "C1 对话问答",
+  "C2 图片理解",
+  "C3 文档知识问答",
+  "C4 业务数据查询",
+  "C5 实时事件处理",
+  "C6 操作执行",
+  "C7 批量分析",
 ]);
 
 /** 读取项目内文本资产，统一使用 UTF-8 供架构契约断言。 */
@@ -70,3 +84,17 @@ async function testGovernanceKeepsRuntimeBoundary() {
 }
 
 test("governance keeps Agent Runtime as the sole business model path", testGovernanceKeepsRuntimeBoundary);
+
+/** 验证场景治理文档没有把共同底座误写为七场景完成态，并明确当前只聚焦 C1。 */
+async function testScenarioChainsKeepCurrentFocus() {
+  const content = await readProjectText("docs/scenario-interaction-chains.md");
+
+  assert.match(content, /共同底座是七条场景链路的必要条件，但不是充分条件/);
+  assert.match(content, /当前建设焦点：C1 对话链路基线化/);
+  assert.match(content, /在 C1 达到退出条件之前，不横向扩展场景实现/);
+  for (const label of SCENARIO_CHAIN_LABELS) {
+    assert.match(content, new RegExp(label), `场景治理文档缺少链路：${label}`);
+  }
+}
+
+test("scenario chains keep C1 as the current delivery focus", testScenarioChainsKeepCurrentFocus);
