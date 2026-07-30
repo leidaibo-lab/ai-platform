@@ -122,7 +122,8 @@ export function createGatewayClient(
       });
 
       /** 执行一次 AI SDK 模型调用，并把 SDK 内建重试固定为关闭。 */
-      async function generateAttempt({ remainingMs, markOutputStarted }) {
+      async function generateAttempt({ attempt, remainingMs, markOutputStarted }) {
+        const telemetryInput = createAiSdkTelemetryInput(context, attempt, operation);
         try {
           if (typeof onTextDelta === "function") {
             return await streamGenerateAttempt({
@@ -136,6 +137,7 @@ export function createGatewayClient(
               markOutputStarted,
               streamTextImplementation,
               fallbackModel: modelAlias,
+              ...telemetryInput,
             });
           }
           const result = await generateTextImplementation({
@@ -147,6 +149,7 @@ export function createGatewayClient(
             maxRetries: 0,
             timeout: Math.max(1, remainingMs),
             ...(abortSignal === undefined ? {} : { abortSignal }),
+            ...telemetryInput,
           });
           return mapGenerateTextResult(result, modelAlias);
         } catch (error) {
@@ -289,6 +292,8 @@ async function streamGenerateAttempt({
   markOutputStarted,
   streamTextImplementation,
   fallbackModel,
+  telemetry,
+  runtimeContext,
 }) {
   const result = await streamTextImplementation({
     model: requestModel,
@@ -299,6 +304,8 @@ async function streamGenerateAttempt({
     maxRetries: 0,
     timeout: Math.max(1, remainingMs),
     ...(abortSignal === undefined ? {} : { abortSignal }),
+    telemetry,
+    runtimeContext,
   });
   let text = "";
   for await (const delta of result.textStream) {
@@ -313,6 +320,36 @@ async function streamGenerateAttempt({
     result.response,
   ]);
   return mapGenerateTextResult({ text, usage, finishReason, response }, fallbackModel);
+}
+
+/** 为一次平台重试尝试构造只包含安全业务 ID 的 AI SDK Telemetry 输入。 */
+function createAiSdkTelemetryInput(context, attempt, operation) {
+  const runtimeContext = {
+    chainTraceId: context.traceId || undefined,
+    requestId: context.requestId || undefined,
+    conversationId: context.conversationId || undefined,
+    runId: context.runId || undefined,
+    attempt,
+    scenarioId: "C1",
+    operation,
+  };
+  return {
+    runtimeContext,
+    telemetry: {
+      functionId: operation === "memory.compact" ? "c1.memory.compact" : "c1.model.generate",
+      recordInputs: false,
+      recordOutputs: false,
+      includeRuntimeContext: {
+        chainTraceId: true,
+        requestId: true,
+        conversationId: true,
+        runId: true,
+        attempt: true,
+        scenarioId: true,
+        operation: true,
+      },
+    },
+  };
 }
 
 /** 把 AI SDK finish reason 转换为 OpenAI-compatible 命名。 */

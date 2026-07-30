@@ -23,6 +23,8 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-07-29 | [C1 渠道体验采用 Ant Design X](./2026-07-29-c1-channel-experience-ant-design-x.md) | 接受 | 适配 Ant Design X 与 X Markdown，保留现有 Runtime/SSE 事实边界，并先固化取消和分类型引用契约 |
+| 2026-07-29 | [C1 ChainTrace 优先级与 OpenTelemetry 实施路径](./2026-07-29-c1-chaintrace-priority-and-otel-path.md) | 接受 | 先完成 C1 ChainTrace；按 OTel PoC、双后端对比、最终决策和正式接入推进，再进入其他场景 |
 | 2026-07-29 | [存量能力选型审计](./2026-07-29-existing-capability-selection-audit.md) | 接受 | 保留模型主链和业务事实；封装记忆与有限重试；迁移到 OTel；停止自研工具循环、协议、工作流引擎和 Trace 后端 |
 
 没有单独决策证据的存量实现仍按照 [`方案选型与复用治理`](../solution-selection-governance.md) 审计，不能因为本次总审计存在就自动视为已经通过选型。后续 PoC、迁移和重要依赖引入继续建立独立记录。

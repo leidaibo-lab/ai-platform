@@ -140,7 +140,9 @@ Model: chat-default
 
 ## 交互 Demo
 
-启动本地 Demo 页面：
+渠道页面使用 React 19、Ant Design X 2.9.0 和 X Markdown 2.9.0，通过 `demo/src/runtime-adapter.js` 适配既有 Runtime JSON/SSE API。页面不使用 Ant Design X SDK，不持有会话事实，也不改变 Agent Runtime、GatewayClient 或 LiteLLM 主链。
+
+构建渠道页面并启动本地 Demo Server：
 
 ```bash
 npm run demo
@@ -152,6 +154,15 @@ npm run demo
 http://localhost:4010
 ```
 
+开发渠道页面时，可以分别启动 Runtime API 和 Vite 开发服务器：
+
+```bash
+npm run demo:server
+npm run demo:ui
+```
+
+此时通过 `http://localhost:5173` 访问页面，Vite 会把 `/api` 请求转发到 `http://localhost:4010`。修改前端后可执行 `npm run demo:build` 生成 `demo/dist/` 静态产物。
+
 页面会请求本地 Demo Server，再由 Demo Server 装配的 Agent Runtime 通过 GatewayClient 和 AI SDK，使用 `.env` 里的 `LITELLM_MASTER_KEY` 调用 LiteLLM。浏览器不会拿到 `LITELLM_MASTER_KEY` 或 `UPSTREAM_API_KEY`。
 
 Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
@@ -161,12 +172,19 @@ Demo 输入区支持：
 - 正文：直接输入问题或指令。
 - 图片：可以上传本地图片，也可以粘贴图片 URL；Demo Server 会按 OpenAI-compatible 的 `image_url` 多模态格式转发。
 - 文档链接：可以粘贴一个或多个链接，Demo Server 会把它们作为文本上下文附在用户消息里。
-- 多会话：Runtime 使用 SQLite 持久化会话和完整原始消息；刷新页面、切换标签页后仍能继续会话。
-- 模型文本流：浏览器通过 POST SSE 接收 AI SDK `streamText` 文本增量，完整回答结束后才一次性落库。
+- 消息引用：可以引用当前会话中的用户或助手消息；渠道只提交稳定 `messageId`，Runtime 从 SQLite 事实源解析正文。
+- 多会话：Runtime 使用 SQLite 持久化会话和完整原始消息；刷新页面、切换标签页后仍能继续会话。会话生命周期显示为“可继续 / 已结束”，只在存在活动 Run 时显示“生成中 / 正在停止”。
+- 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK `streamText` 文本增量，由 X Markdown 渲染；完整回答结束后才一次性落库。
+- 停止生成：生成期间调用 Runtime 取消端点，中止模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
+- 发送门禁：模型网关未确认在线时保留可编辑草稿和附件，但禁止提交无效 Run；页面提供显式重新检测入口。
+- 失败恢复：最近一次失败 Run 会在对应用户消息后保留渠道安全提示，可恢复正文、图片、文档链接和消息引用后调整再发送；恢复不会复用原有幂等标识。
 - 多端同步：同一会话通过独立的 SSE 事件游标刷新已持久化事实；客户端不再保存或提交历史事实源。
+- 消息操作：已持久化消息只提供复制和引用，不提供删除或原位编辑；桌面显示快捷操作，移动端收敛为单一操作菜单，用户纠正通过追加新消息表达。
 - 结构化记忆：Memory Manager 提取目标、约束、偏好、事实、决策、任务和 Episode，用户纠正会废弃旧事实并保留来源消息。
-- Context Planner：按系统规则、当前输入、active 记忆、相关 Episode、最近消息的优先级装箱，并返回可解释 Context Manifest。
+- 运行上下文：桌面默认收起 Inspector，按需展开；移动端通过 Drawer 展示 Context Manifest、Token 装箱结果与 active 结构化记忆。引用预览可按稳定 `messageId` 定位并高亮原消息。
 - Token 水位：动态原始消息达到 75% 高水位后压缩到 45% 低水位；接近 90% 硬水位时先同步压缩再回答。
+
+当前服务端还没有工具调用或可验证处理阶段事件，因此页面不展示 `Think` 或 `ThoughtChain`，也不会把模型原始思维链作为体验数据。后续只有在 Runtime 提供真实阶段、工具和来源证据后，才增加相应展示。
 
 注意：LiteLLM Proxy 只负责转发请求，不会自动打开文档链接、读取私有文档，也不会自动提取文档里的图片。如果要让模型处理文档里的图片，需要把图片单独上传，或提供可公开访问的图片直链，并确保当前上游模型支持视觉输入。
 
@@ -179,7 +197,8 @@ Demo Server API 按层级暴露：
 | `POST /api/runtime/conversations` | 创建会话 |
 | `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆和版本状态 |
 | `POST /api/runtime/conversations/{id}/runs` | 发送当前输入并执行幂等 Run |
-| `POST /api/runtime/conversations/{id}/runs/stream` | 通过 SSE 接收 `run-started`、`text-delta`、`completed` 或 `error` 事件 |
+| `POST /api/runtime/conversations/{id}/runs/stream` | 通过 SSE 接收 `run-started`、`text-delta` 和 `completed`、`cancelled` 或 `error` 终止事件 |
+| `POST /api/runtime/conversations/{id}/runs/{runId}/cancel` | 主动取消模型调用与后续重试，并返回最终 Run 和可选中断消息 |
 | `POST /api/runtime/conversations/{id}/close` | 完成最终 checkpoint 并结束会话 |
 | `GET /api/runtime/conversations/{id}/events` | 订阅多端增量事件流 |
 
@@ -191,9 +210,17 @@ Run 请求只包含当前输入和幂等标识：
   "clientMessageId": "message-uuid",
   "message": "当前问题",
   "imageUrls": [],
-  "documentUrls": []
+  "documentUrls": [],
+  "references": [
+    {
+      "type": "conversation_message",
+      "messageId": "当前会话中的消息 ID"
+    }
+  ]
 }
 ```
+
+当前只开放 `conversation_message` 引用。Runtime 会校验消息属于当前会话，并从 SQLite 事实源读取正文；渠道重复提交的引用正文不会被信任。显式取消后，Run 进入 `cancelled`：已有文本增量时最多保存一条 `interrupted` 助手消息，没有增量时不创建空消息。关闭浏览器或 SSE 断线不等于取消。
 
 ## Runtime 验证
 
@@ -207,6 +234,12 @@ npm test
 
 ```bash
 npm run test:architecture
+```
+
+只验证 C1 ChainTrace 的 JSON/SSE Span 树、重试关联、失败脱敏、幂等重放和 Token 分段：
+
+```bash
+npm run test:telemetry
 ```
 
 运行 100 轮长期记忆评测：
@@ -232,6 +265,10 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 - `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
 - `DEMO_RUN_TIMEOUT_MS` 是排队、上下文规划和全部模型尝试共享的 Run 总时限，默认 `120000` 毫秒。
 - `DEMO_MODEL_MAX_ATTEMPTS` 默认 `3`，包含首次调用；退避由 `DEMO_MODEL_RETRY_BASE_DELAY_MS` 和 `DEMO_MODEL_RETRY_MAX_DELAY_MS` 控制。
+- `OTEL_ENABLED` 控制 C1 ChainTrace OpenTelemetry PoC，默认 `false`；禁用时不初始化 SDK、Exporter 或 AI SDK Telemetry。
+- `OTEL_EXPORTER_OTLP_ENDPOINT` 是 OTLP HTTP 基础地址，默认 `http://localhost:4318`；也可用 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 提供完整 `/v1/traces` 地址。
+- `OTEL_SERVICE_NAME` 默认 `ai-platform-demo`；`OTEL_TRACES_SAMPLER_ARG` 是 `parentbased_traceidratio` 的根 Trace 采样比例，范围为 `0` 到 `1`。
+- PoC 只旁路导出 Span，不向 SQLite 增加 Trace 副本；Langfuse/Phoenix 最终后端、保留期和权限模型仍需后续决策记录接受。
 
 ## 文档与规范
 

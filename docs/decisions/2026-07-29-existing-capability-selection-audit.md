@@ -21,7 +21,7 @@
 | 迁移 | 遥测采集迁移到 OpenTelemetry 语义 | 先做 AI SDK 官方遥测接入 PoC，再选择 Langfuse 或 Phoenix 等后端 |
 | 停止扩展 | 自研工具循环、自研 MCP 协议、自研工作流引擎、自研 Trace 查询后端 | 新需求先验证 AI SDK、MCP、LangGraph 或 Temporal，不得直接增加通用框架代码 |
 
-下一项正式能力不是继续完善 `Tool Registry` 预留，而是用当前已经依赖的 AI SDK `ToolLoopAgent` 完成一个只读工具闭环 PoC；MCP 通过独立的 `@ai-sdk/mcp` 或 MCP 官方 SDK 接入，不在项目内重写协议。
+当前先完成 C1 ChainTrace 和其余退出条件，再进入其他场景。ChainTrace 按“决策记录消除冲突 -> AI SDK Telemetry + OpenTelemetry PoC -> 对比 Langfuse/Phoenix -> 接受最终后端决策 -> 正式接入”的顺序推进；AI SDK `ToolLoopAgent` 只读工具 PoC 延后到 C1 退出之后。MCP 仍通过独立的 `@ai-sdk/mcp` 或 MCP 官方 SDK 接入，不在项目内重写协议。
 
 ## 审计口径与证据边界
 
@@ -213,13 +213,14 @@ AI SDK 官方 MCP 集成使用独立的 `@ai-sdk/mcp` 包；生产建议使用 S
 
 | 优先级 | 动作 | 完成证据 | 是否改变当前契约 |
 | --- | --- | --- | --- |
+| P0 | 完成 C1 ChainTrace OTel PoC，对比 Langfuse/Phoenix 并接受最终后端决策 | 相同 Trace 可导出和检索、敏感正文受控、查询与成本对比、正式接入边界明确 | PoC 否；正式默认启用前复核观测安全边界 |
 | P0 | 固定 LiteLLM 版本或 digest | 固定版本、smoke test、升级与回退说明 | 否，若模型行为不变 |
-| P0 | AI SDK `ToolLoopAgent` 单一只读工具 PoC | 主路径、工具异常、停止条件、审批边界和 Run 事件映射 | PoC 否；正式开放工具行为前需要 OpenSpec |
-| P1 | AI SDK Telemetry + OTel PoC，对比 Langfuse/Phoenix | 相同 Trace 可导出、敏感正文受控、查询与成本对比 | 可能涉及观测安全边界，正式启用前复核 OpenSpec |
+| P1 | 完成 C1 真实模型基线、异常/并发/断连回归和验收阈值 | 满足 `docs/scenario-interaction-chains.md` 的全部 C1 退出条件 | 仅内部评测否；改变稳定行为时需要 OpenSpec |
 | P1 | Memory Port 与 Provider Benchmark 设计 | 当前实现和候选使用同 fixture、指标和真实模型 | Port 本身否；替换行为前需要 OpenSpec |
-| P2 | 达到触发条件后评估 LangGraph/Temporal | 真实中断恢复或副作用用例，不使用 Hello World | 是 |
+| P2 | C1 退出后执行 AI SDK `ToolLoopAgent` 单一只读工具 PoC | 主路径、工具异常、停止条件、审批边界和 Run 事件映射 | PoC 否；正式开放工具行为前需要 OpenSpec |
+| P3 | 达到触发条件后评估 LangGraph/Temporal | 真实中断恢复或副作用用例，不使用 Hello World | 是 |
 
-在 P0、P1 PoC 结论形成新的接受记录前，不把候选依赖加入生产主链。
+在 C1 ChainTrace PoC、最终后端决策和其余 C1 退出条件完成前，不横向扩展其他场景实现，也不把候选依赖加入生产主链。
 
 ## 风险与退出路径
 

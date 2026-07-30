@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createNullChainTracer } from "../observability/chain-tracer.mjs";
 import { createResilienceContext } from "../resilience/retry-executor.mjs";
 import { normalizeContextOptions } from "./context-budget.mjs";
 import { buildDisplayContent, buildUserContent, normalizeRunInput, validateRunInput } from "./message-builder.mjs";
@@ -35,11 +36,39 @@ export function createChatRuntime({
   contextPlanner,
   memoryManager,
   toolRegistry,
+  chainTracer = createNullChainTracer(),
   resilienceOptions = {},
 }) {
   const options = normalizeContextOptions(contextOptions);
   const registry = toolRegistry || createToolRegistry();
   const runTimeoutMs = normalizeRunTimeout(resilienceOptions.runTimeoutMs);
+  const activeRuns = new Map();
+
+  /**
+   * 主动终止当前 Runtime 实例中的模型调用，并原子收口 Run 与可选部分消息。
+   *
+   * @param {string} conversationId - Run 所属会话。
+   * @param {string} runId - 渠道从 run-started 获得的稳定 Run ID。
+   * @returns {object} 当前 Run 终止事实和会话快照。
+   */
+  function cancelConversationRun(conversationId, runId) {
+    const active = activeRuns.get(runId);
+    const ownedActive = active?.conversationId === conversationId ? active : null;
+    if (ownedActive && !ownedActive.controller.signal.aborted) {
+      ownedActive.controller.abort(new DOMException("Run was cancelled by user", "AbortError"));
+    }
+    const cancelled = store.cancelRun({
+      conversationId,
+      runId,
+      partialContent: ownedActive?.partialText || "",
+      contextManifest: ownedActive?.contextManifest || null,
+      model: ownedActive?.model || null,
+      resilience: ownedActive
+        ? buildCancellationResilience(ownedActive.resilienceContext, ownedActive.partialText.length > 0)
+        : null,
+    });
+    return { ...cancelled, conversation: store.getConversation(conversationId) };
+  }
 
   return {
     /** 创建由 Runtime 持久化的新会话。 */
@@ -57,6 +86,8 @@ export function createChatRuntime({
       return store.getConversation(conversationId);
     },
 
+    cancelConversationRun,
+
     /**
      * 串行执行一次会话 Run，先落用户消息，再调用模型并持久化助手结果。
      *
@@ -64,6 +95,7 @@ export function createChatRuntime({
      * @param {unknown} body - 当前 Run 请求体。
      * @param {object} [delivery] - 可选运行状态和模型文本增量消费者。
      * @param {(input: object) => Promise<void>|void} [delivery.onRunStarted] - Run 创建或幂等命中通知。
+     * @param {(input: object) => Promise<void>|void} [delivery.onChainTraceStarted] - 业务 Chain ID 创建通知。
      * @param {(delta: string) => Promise<void>|void} [delivery.onTextDelta] - 模型文本增量消费者。
      * @param {AbortSignal} [delivery.abortSignal] - 可选调用方取消信号。
      * @returns {Promise<object>} 回复、会话状态、usage 和 Context Manifest。
@@ -72,29 +104,51 @@ export function createChatRuntime({
       const input = normalizeRunInput(body);
       const validationError = validateRunInput(input);
       if (validationError) throw new RuntimeInputError(validationError);
-      const traceId = randomUUID();
+      const chainTraceId = randomUUID();
       const deadlineAt = Date.now() + runTimeoutMs;
+      if (typeof delivery.onChainTraceStarted === "function") {
+        await delivery.onChainTraceStarted({ chainTraceId });
+      }
+      const queueSpan = chainTracer.startSpan("runtime.queue", {
+        ...buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
+      });
 
       // 同一会话必须按提交顺序生成回复，避免第二个 Run 看不到第一个 Run 的结果。
       return coordinator.runExclusive(conversationId, async () => {
+        queueSpan.end();
+        const referencedMessages = store.resolveMessageReferences(conversationId, input.references);
         const content = buildUserContent(input);
         const displayContent = buildDisplayContent(input);
         registry.resolveToolIntent(input);
-        const started = store.startRun({
-          conversationId,
-          requestId: input.requestId,
-          clientMessageId: input.clientMessageId,
-          content,
-          displayContent,
-        });
-        if (typeof delivery.onRunStarted === "function") {
-          await delivery.onRunStarted({ run: started.run, replayed: started.replayed });
+        const started = await chainTracer.withSpan(
+          "storage.start_run",
+          buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
+          /** 在独立存储阶段幂等创建 Run 和用户消息。 */
+          () =>
+            store.startRun({
+              conversationId,
+              requestId: input.requestId,
+              clientMessageId: input.clientMessageId,
+              content,
+              displayContent,
+              references: input.references,
+            }),
+        );
+        const effectiveChainTraceId = started.run.resilience?.traceId || chainTraceId;
+        if (started.replayed) {
+          if (typeof delivery.onRunStarted === "function") {
+            await delivery.onRunStarted({
+              run: started.run,
+              replayed: true,
+              chainTraceId: effectiveChainTraceId,
+            });
+          }
+          return replayRun(started, store.getConversation(conversationId));
         }
 
-        if (started.replayed) return replayRun(started, store.getConversation(conversationId));
         const runId = started.run.id;
         const resilienceContext = createResilienceContext({
-          traceId,
+          traceId: effectiveChainTraceId,
           requestId: input.requestId,
           conversationId,
           runId,
@@ -104,27 +158,92 @@ export function createChatRuntime({
           idempotencyKey: input.requestId,
           outputStarted: false,
         });
+        const controller = new AbortController();
+        const abortSignal = combineAbortSignals(controller.signal, delivery.abortSignal);
+        const activeRun = {
+          conversationId,
+          controller,
+          partialText: "",
+          contextManifest: null,
+          model: gatewayClient.model,
+          resilienceContext,
+        };
+        activeRuns.set(runId, activeRun);
+        const traceAttributes = buildTraceAttributes({
+          chainTraceId: effectiveChainTraceId,
+          requestId: input.requestId,
+          conversationId,
+          runId,
+        });
         try {
-          let plan = await contextPlanner.plan({
-            conversationId,
-            currentMessageId: started.userMessage.id,
-            currentContent: content,
-            currentDisplayContent: displayContent,
-            resilienceContext,
-          });
+          if (typeof delivery.onRunStarted === "function") {
+            await delivery.onRunStarted({
+              run: started.run,
+              replayed: false,
+              chainTraceId: effectiveChainTraceId,
+            });
+          }
+          throwIfAborted(abortSignal);
+          let plan = await chainTracer.withSpan(
+            "runtime.context.plan",
+            traceAttributes,
+            /** 规划上下文并把内部 Token 分段写入当前阶段 Span。 */
+            async (span) => {
+              const result = await contextPlanner.plan({
+                conversationId,
+                currentMessageId: started.userMessage.id,
+                currentContent: content,
+                currentDisplayContent: displayContent,
+                referencedMessages,
+                resilienceContext,
+              });
+              span.setAttributes(buildContextTokenAttributes(result.observability));
+              return result;
+            },
+          );
           if (plan.manifest.hardLimitReached) {
-            await memoryManager.compactIfNeeded(conversationId, {
-              force: true,
-              excludeSeq: started.userMessage.seq,
-              resilienceContext,
-            });
-            plan = await contextPlanner.plan({
-              conversationId,
-              currentMessageId: started.userMessage.id,
-              currentContent: content,
-              currentDisplayContent: displayContent,
-              resilienceContext,
-            });
+            await chainTracer.withSpan(
+              "runtime.memory.compact",
+              traceAttributes,
+              /** 在硬水位时同步压缩旧消息，并记录脱敏结果状态。 */
+              async (span) => {
+                const result = await memoryManager.compactIfNeeded(conversationId, {
+                  force: true,
+                  excludeSeq: started.userMessage.seq,
+                  resilienceContext,
+                });
+                span.setAttribute("ai.platform.memory.compaction.status", result.status);
+                return result;
+              },
+            );
+            plan = await chainTracer.withSpan(
+              "runtime.context.plan",
+              { ...traceAttributes, "ai.platform.context.replanned": true },
+              /** 压缩后重新规划上下文并刷新 Token 分段。 */
+              async (span) => {
+                const result = await contextPlanner.plan({
+                  conversationId,
+                  currentMessageId: started.userMessage.id,
+                  currentContent: content,
+                  currentDisplayContent: displayContent,
+                  referencedMessages,
+                  resilienceContext,
+                });
+                span.setAttributes(buildContextTokenAttributes(result.observability));
+                return result;
+              },
+            );
+          }
+          activeRun.contextManifest = plan.manifest;
+          throwIfAborted(abortSignal);
+
+          /** 累积服务端已交付正文，并继续把文本增量透传给当前渠道。 */
+          async function handleTextDelta(delta) {
+            if (abortSignal.aborted) return;
+            const text = String(delta || "");
+            if (text.length === 0) return;
+            activeRun.partialText += text;
+            await delivery.onTextDelta(text);
           }
 
           const data = await gatewayClient.chatCompletions({
@@ -132,19 +251,25 @@ export function createChatRuntime({
             maxCompletionTokens: options.reservedOutputTokens,
             resilienceContext,
             operation: "model.generate",
-            onTextDelta: delivery.onTextDelta,
-            abortSignal: delivery.abortSignal,
+            onTextDelta: typeof delivery.onTextDelta === "function" ? handleTextDelta : undefined,
+            abortSignal,
           });
           const assistantContent = data?.choices?.[0]?.message?.content || "";
-          const completed = store.completeRun({
-            runId,
-            content: assistantContent,
-            displayContent: assistantContent || "(空响应)",
-            usage: data?.usage || null,
-            contextManifest: plan.manifest,
-            model: data?.model || gatewayClient.model,
-            resilience: data?.resilience || null,
-          });
+          const completed = await chainTracer.withSpan(
+            "storage.complete_run",
+            traceAttributes,
+            /** 原子持久化助手消息、usage、Context Manifest 和 Run 完成状态。 */
+            () =>
+              store.completeRun({
+                runId,
+                content: assistantContent,
+                displayContent: assistantContent || "(空响应)",
+                usage: data?.usage || null,
+                contextManifest: plan.manifest,
+                model: data?.model || gatewayClient.model,
+                resilience: data?.resilience || null,
+              }),
+          );
           if (plan.manifest.highWatermarkReached) memoryManager.schedule(conversationId);
 
           return {
@@ -157,8 +282,34 @@ export function createChatRuntime({
             replayed: false,
           };
         } catch (error) {
-          store.failRun(runId, error);
+          if (isCancellationError(error, abortSignal)) {
+            const cancelled = await chainTracer.withSpan(
+              "storage.cancel_run",
+              traceAttributes,
+              /** 幂等收口主动取消，并只在已有文本增量时保存中断助手消息。 */
+              () =>
+                store.cancelRun({
+                  conversationId,
+                  runId,
+                  partialContent: activeRun.partialText,
+                  contextManifest: activeRun.contextManifest,
+                  model: activeRun.model,
+                  resilience:
+                    error?.resilience ||
+                    buildCancellationResilience(resilienceContext, activeRun.partialText.length > 0),
+                }),
+            );
+            return buildCancelledRunResponse(cancelled, store.getConversation(conversationId));
+          }
+          await chainTracer.withSpan(
+            "storage.fail_run",
+            traceAttributes,
+            /** 持久化失败状态，但不把原始错误响应写入 Trace 属性。 */
+            () => store.failRun(runId, error),
+          );
           throw error;
+        } finally {
+          if (activeRuns.get(runId) === activeRun) activeRuns.delete(runId);
         }
       });
     },
@@ -185,8 +336,14 @@ export function createChatRuntime({
 /** 将完成的幂等 Run 恢复为标准响应；运行中或失败 Run 返回冲突。 */
 function replayRun(result, conversation) {
   if (result.run.status !== "completed" || !result.assistantMessage) {
+    const message =
+      result.run.status === "running"
+        ? "Run is already in progress"
+        : result.run.status === "cancelled"
+          ? "Run was cancelled"
+          : result.run.error || "Run failed";
     throw new RuntimeInputError(
-      { error: result.run.status === "running" ? "Run is already in progress" : result.run.error || "Run failed" },
+      { error: message },
       409,
     );
   }
@@ -201,8 +358,85 @@ function replayRun(result, conversation) {
   };
 }
 
+/** 将已持久化的取消事实转换为原始 Run 请求可返回的稳定终止结果。 */
+function buildCancelledRunResponse(result, conversation) {
+  return {
+    cancelled: true,
+    run: result.run,
+    assistantMessage: result.assistantMessage,
+    content: result.assistantMessage?.displayContent || "",
+    usage: result.run.usage,
+    model: result.run.model,
+    context: result.run.contextManifest,
+    resilience: result.run.resilience,
+    conversation,
+    replayed: false,
+  };
+}
+
+/** 合并 Runtime 主动取消与可选调用方信号，任一来源终止都向下游传播。 */
+function combineAbortSignals(runtimeSignal, callerSignal) {
+  return callerSignal ? AbortSignal.any([runtimeSignal, callerSignal]) : runtimeSignal;
+}
+
+/** 在进入耗时阶段前同步检查取消，避免已取消 Run 发起新的模型调用。 */
+function throwIfAborted(signal) {
+  if (signal.aborted) throw signal.reason || new DOMException("Run was aborted", "AbortError");
+}
+
+/** 判断错误是否来自 Runtime 或调用方取消，而不是普通模型失败。 */
+function isCancellationError(error, signal) {
+  return signal.aborted || Number(error?.status) === 499 || error?.name === "AbortError";
+}
+
+/** 构造取消端点可立即持久化且不包含业务正文的最小韧性证据。 */
+function buildCancellationResilience(context, outputStarted) {
+  return {
+    traceId: context.traceId,
+    requestId: context.requestId,
+    conversationId: context.conversationId,
+    runId: context.runId,
+    operation: "model.generate",
+    attemptCount: 0,
+    deadlineAt: new Date(context.deadlineAt).toISOString(),
+    stage: "model.generate",
+    lastCommittedStage: context.lastCommittedStage,
+    idempotencyKey: context.idempotencyKey,
+    outputStarted,
+    stopReason: "cancelled",
+    attempts: [],
+  };
+}
+
 /** 将 Runtime 总时限规范为正数，避免配置错误产生无界或立即过期的 Run。 */
 function normalizeRunTimeout(value) {
   const timeoutMs = Number(value);
   return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_RUN_TIMEOUT_MS;
+}
+
+/** 生成所有 C1 业务 Span 共用的安全关联属性。 */
+function buildTraceAttributes({ chainTraceId, requestId, conversationId, runId }) {
+  return {
+    "ai.platform.chain_trace_id": chainTraceId,
+    "ai.platform.request_id": requestId,
+    "ai.platform.conversation_id": conversationId,
+    ...(runId ? { "ai.platform.run_id": runId } : {}),
+    "ai.platform.scenario_id": "C1",
+  };
+}
+
+/** 把 Planner 的内部 Token 分段转换为不含正文的数值属性。 */
+function buildContextTokenAttributes(observability = {}) {
+  const segments = observability.tokenSegments || {};
+  return {
+    "ai.platform.context.tokens.system": segments.system,
+    "ai.platform.context.tokens.current_input": segments.currentInput,
+    "ai.platform.context.tokens.references": segments.references,
+    "ai.platform.context.tokens.memory": segments.memory,
+    "ai.platform.context.tokens.episodes": segments.episodes,
+    "ai.platform.context.tokens.history": segments.history,
+    "ai.platform.context.tokens.total_input": segments.totalInput,
+    "ai.platform.context.tokens.counted_total_input": observability.countedTotalInput,
+    "ai.platform.context.token_counter": observability.tokenCounter,
+  };
 }
