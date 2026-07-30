@@ -141,7 +141,7 @@ durability: one Run + one final assistant message
 | --- | --- | --- |
 | 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行 | 把重复、并发、失败和恢复结果统一纳入链路证据 |
 | 上下文与记忆 | 结构化记忆、Context Planner、Context Manifest、token 高低水位 | 用真实模型验证纠正、实体隔离、任务状态和来源追溯 |
-| 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通并保存 usage | 固定模型、Prompt、fixture 和参数，建立可重复比较的四维基线 |
+| 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通；Run 可选择网关可见模型别名并保存实际模型与 usage | 固定评测模型、Prompt、fixture 和参数，建立可重复比较的四维基线 |
 | 结果交付 | JSON Run、POST SSE 模型文本流、助手消息最终单次落库和 SSE 多端同步；渠道交付 Span 已完成代码接入 | 当前以功能回归为主；正式阶段耗时基线按 TODO 触发条件恢复 |
 | 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace 埋点 | 当前保持自动化回归；真实模型超时、网关错误、断连和取消的运行态样本延期 |
 | 可观测 | 已有后端中立 `ChainTracer`、OTLP/HTTP protobuf、Phoenix 选型、部署入口、PoC 业务 ID 查询和敏感正文脱敏 | TODO：正式实例真实 JSON/SSE Run、三业务 ID 查询、隐私复核、故障隔离和四维基线 |
@@ -183,9 +183,9 @@ C1 当前功能可用以浏览器/API 主链和自动化回归为证据；不宣
 
 ```mermaid
 flowchart LR
-  Source["[当前] 浏览器文本<br/>[目标] IM / IDE / API 文本"]
-  Adapter["渠道 Adapter<br/>身份映射 / requestId / conversationId"]
-  Normalize["[当前] 输入归一化与校验"]
+  Source["[当前] 浏览器文本 / 模型选择<br/>[目标] IM / IDE / API 文本"]
+  Adapter["渠道 Adapter<br/>身份映射 / requestId / conversationId / model"]
+  Normalize["[当前] 输入与模型别名归一化校验"]
   Runtime["[当前] Agent Runtime<br/>幂等 Run / 同会话串行"]
   StoreIn["[当前] SQLite 先写用户消息"]
   Planner["[当前] Context Planner<br/>记忆 / Episode / 最近消息"]
@@ -194,7 +194,7 @@ flowchart LR
   LiteLLM["[当前] LiteLLM"]
   Model["[当前] 上游模型"]
   StoreOut["[当前] 写回答 / usage / Context Manifest"]
-  Delivery["[当前] POST SSE 文本流 / 事实同步<br/>[目标] 引用 / 反馈"]
+  Delivery["[当前] POST SSE 文本流 / 事实同步<br/>分类失败原因 / 恢复入口"]
   Memory["[当前] Memory Manager 异步压缩"]
 
   Source --> Adapter --> Normalize --> Runtime --> StoreIn --> Planner
@@ -209,10 +209,10 @@ flowchart LR
 | --- | --- |
 | 准确度 | 验证最新纠正优先、实体隔离、未完成任务和来源追溯；增加真实模型固定 fixture，而不只检查响应非空 |
 | 实时性 | 分开记录 Adapter、排队、Context Planner、首文本增量、模型完成、持久化和最终交付耗时 |
-| 稳定性 | 保留 `requestId` 和 `clientMessageId` 幂等；区分输入错误、Run 冲突、模型超时、网关错误和空响应 |
+| 稳定性 | 保留 `requestId` 和 `clientMessageId` 幂等；区分输入错误、Run 冲突、鉴权、限流、模型超时、上游故障和空响应，并向渠道返回安全处理建议 |
 | Token 合理性 | 记录系统规则、当前输入、结构化记忆、Episode、历史消息和输出的分段 token；检查被排除内容是否符合优先级 |
 
-友好交互要求：收到输入后明确当前状态；问题缺少关键条件时先澄清；回答中区分已知事实、推断和不确定项；用户纠正后能在后续轮次稳定使用新事实。
+友好交互要求：收到输入后明确当前状态；用户可选择网关授权的模型别名；生成失败时在对应输入后说明安全原因和处理建议；问题缺少关键条件时先澄清；回答中区分已知事实、推断和不确定项；用户纠正后能在后续轮次稳定使用新事实。
 
 ## C2 图片理解链路
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import test from "node:test";
+import { APICallError } from "ai";
 import { createGatewayClient, GatewayRequestError, toAiSdkMessages } from "../src/gateway/gateway-client.mjs";
 import { createTestRuntime, run } from "./test-runtime.mjs";
 
@@ -117,7 +118,7 @@ test("gateway client preserves LiteLLM request and response semantics", testAiSd
 /** 为成功协议测试返回 models、token counter 或 chat completions 响应。 */
 function handleSuccessfulGatewayRequest(request) {
   if (request.url.endsWith("/v1/models")) {
-    return jsonResponse({ data: [{ id: "chat-default" }] });
+    return jsonResponse({ data: [{ id: "chat-default" }, { id: "chat-quality" }, { id: "chat-default" }, { id: "" }] });
   }
   if (request.url.endsWith("/utils/token_counter")) {
     return jsonResponse({ total_tokens: 29, model: "resolved-upstream-model" });
@@ -193,6 +194,7 @@ async function testGatewayStreamsTextDeltas() {
 
   assert.deepEqual(deltas, ["流式", "回复"]);
   assert.equal(sdkInput.maxRetries, 0);
+  assert.equal(typeof sdkInput.onError, "function");
   assert.equal(result.choices[0].message.content, "流式回复");
   assert.equal(result.choices[0].finish_reason, "stop");
   assert.equal(result.resilience.attemptCount, 1);
@@ -274,6 +276,50 @@ async function testGatewayDoesNotRetryAfterTextDelta() {
 
 test("gateway client does not retry after the first text delta", testGatewayDoesNotRetryAfterTextDelta);
 
+/** 验证 AI SDK fullStream 中的原始 API 错误不会被 textStream 包装成通用 502。 */
+async function testGatewayPreservesFullStreamApiError() {
+  const apiError = new APICallError({
+    message: "INVALID_API_KEY provider secret",
+    url: "http://gateway.test/v1/chat/completions",
+    requestBodyValues: {},
+    statusCode: 401,
+    data: { error: { message: "INVALID_API_KEY provider secret" } },
+  });
+  /** 返回包含原始鉴权错误事件的 AI SDK 完整流。 */
+  function streamTextImplementation() {
+    return createFullStreamResult(streamParts({ type: "error", error: apiError }));
+  }
+  const client = createGatewayClient(
+    {
+      baseUrl: "http://gateway.test",
+      model: "chat-default",
+      apiKey: "test-key",
+      retryBaseDelayMs: 0,
+    },
+    { streamTextImplementation },
+  );
+
+  await assert.rejects(
+    client.chatCompletions({
+      messages: [{ role: "user", content: "hello" }],
+      onTextDelta: () => {},
+    }),
+    isAuthorizationGatewayError,
+  );
+}
+
+test("gateway client preserves API errors from AI SDK fullStream", testGatewayPreservesFullStreamApiError);
+
+/** 判断异常是否为保留一次尝试证据的 401 鉴权错误。 */
+function isAuthorizationGatewayError(error) {
+  return (
+    error instanceof GatewayRequestError &&
+    error.status === 401 &&
+    error.resilience?.attemptCount === 1 &&
+    error.resilience.attempts[0].errorType === "authorization"
+  );
+}
+
 /** 验证参数类 400 错误不会进入平台自动重试。 */
 async function testPlatformDoesNotRetryPermanentError() {
   const requests = [];
@@ -322,9 +368,24 @@ function createStreamTextResult(textStream) {
   };
 }
 
+/** 创建使用 fullStream 的最小 AI SDK 流式结果。 */
+function createFullStreamResult(fullStream) {
+  return {
+    fullStream,
+    usage: Promise.resolve({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+    finishReason: Promise.resolve("error"),
+    response: Promise.resolve({}),
+  };
+}
+
 /** 依次产生调用方给定的文本增量。 */
 async function* streamValues(...values) {
   for (const value of values) yield value;
+}
+
+/** 依次产生 AI SDK fullStream 事件。 */
+async function* streamParts(...parts) {
+  for (const part of parts) yield part;
 }
 
 /** 在产生首个文本增量前模拟模型流超时。 */
@@ -453,14 +514,65 @@ async function testAiSdkManagementEndpoints() {
   });
 
   const status = await client.status();
-  const count = await client.countTokens({ messages: [{ role: "user", content: "hello" }] });
+  const count = await client.countTokens({
+    model: "chat-quality",
+    messages: [{ role: "user", content: "hello" }],
+  });
   assert.equal(status.ok, true);
   assert.equal(status.gatewayBaseUrl, "http://gateway.test/v1");
+  assert.deepEqual(status.models, ["chat-default", "chat-quality"]);
   assert.deepEqual(count, { tokens: 29, source: "litellm", model: "resolved-upstream-model" });
+  assert.equal(requests[1].body.model, "chat-quality");
   assert.deepEqual(requests.map(getRequestPath), ["/v1/models", "/utils/token_counter"]);
+
+  const emptyDirectoryClient = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch([], handleEmptyModelDirectory),
+  });
+  const emptyStatus = await emptyDirectoryClient.status();
+  assert.equal(emptyStatus.ok, true);
+  assert.deepEqual(emptyStatus.models, []);
 }
 
 test("gateway client retains LiteLLM status and token counter", testAiSdkManagementEndpoints);
+
+/** 模拟网关可达但当前 key 没有任何可见模型。 */
+function handleEmptyModelDirectory(request) {
+  if (request.url.endsWith("/v1/models")) return jsonResponse({ data: [] });
+  return handleSuccessfulGatewayRequest(request);
+}
+
+/** 验证当前 key 可见的非默认别名可用于单次生成，未知别名在 GatewayClient 边界拒绝。 */
+async function testPerRunModelSelection() {
+  const requests = [];
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch(requests, handleSuccessfulGatewayRequest),
+  });
+  await client.status();
+  await client.chatCompletions({
+    model: "chat-quality",
+    messages: [{ role: "user", content: "hello" }],
+  });
+
+  const chatRequest = requests.find(isChatRequest);
+  assert.equal(chatRequest.body.model, "chat-quality");
+  await assert.rejects(
+    client.chatCompletions({ model: "chat-hidden", messages: [{ role: "user", content: "hello" }] }),
+    isUnsupportedModelError,
+  );
+}
+
+test("gateway client routes a gateway-visible model per run", testPerRunModelSelection);
+
+/** 判断异常是否为未知模型别名产生的稳定 400。 */
+function isUnsupportedModelError(error) {
+  return error instanceof GatewayRequestError && error.status === 400 && error.data?.code === "unsupported_model";
+}
 
 /** 验证 Memory Manager 在 schema 400 后仍按原逻辑无 response_format 重试。 */
 async function testStructuredMemoryFallback() {

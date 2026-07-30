@@ -17,6 +17,15 @@
  * @property {string} value - 当前会话尚未发送的正文。
  * @property {object[]} attachments - 仅由渠道层持有的附件展示事实。
  * @property {object[]} references - 仅由渠道层持有的待发送消息引用。
+ * @property {string} model - 当前会话 Sender 选择的 LiteLLM 模型别名。
+ */
+
+/**
+ * @typedef {object} GatewayReachabilityCopy
+ * @property {"checking"|"reachable"|"unreachable"} state - 仅描述 LiteLLM `/v1/models` 可达性。
+ * @property {string} label - 侧栏紧凑状态文案。
+ * @property {string} announcement - 用户主动重新检测后的反馈文案。
+ * @property {string} detail - 解释探测边界的悬停说明。
  */
 
 const DOCUMENT_PREFIX = "参考文档链接：";
@@ -34,7 +43,12 @@ export function storeConversationDraft(drafts, conversationId, draft) {
   const id = String(conversationId || "");
   if (!id) return next;
   const normalized = normalizeConversationDraft(draft);
-  if (!normalized.value.trim() && normalized.attachments.length === 0 && normalized.references.length === 0) {
+  if (
+    !normalized.value.trim() &&
+    normalized.attachments.length === 0 &&
+    normalized.references.length === 0 &&
+    !normalized.model
+  ) {
     next.delete(id);
     return next;
   }
@@ -96,6 +110,7 @@ export function insertLatestRunFailure(messages, latestRun) {
     (message) => message?.runId === latestRun.id && message.role === "user",
   );
   if (userMessageIndex < 0) return result;
+  const failure = buildRunFailureCopy(latestRun);
   result.splice(userMessageIndex + 1, 0, {
     id: `run-failure:${latestRun.id}`,
     kind: "run-failure",
@@ -104,8 +119,103 @@ export function insertLatestRunFailure(messages, latestRun) {
     role: "assistant",
     status: "failed",
     sourceMessageId: result[userMessageIndex].id,
-    displayContent: "本次生成失败",
+    displayContent: failure.title,
+    failure,
   });
+  return result;
+}
+
+/**
+ * 将失败 Run 的安全分类映射为会话内可理解的原因和处理建议。
+ *
+ * @param {object|null|undefined} run - latestRun 或渠道收到的公开错误事实。
+ * @returns {{title: string, detail: string, action: string, code: string}} 渠道失败文案。
+ */
+export function buildRunFailureCopy(run) {
+  const publicError = run?.publicError || run?.payload || {};
+  const lastAttempt = readLastFailedAttempt(run?.resilience);
+  const statusCode = Number(publicError.status ?? run?.statusCode ?? run?.status ?? lastAttempt?.statusCode);
+  const errorType = String(lastAttempt?.errorType || "");
+  const publicCode = String(publicError.code || "");
+  const errorText = String(run?.error || publicError.error || "").toLowerCase();
+  const model = String(publicError.model || run?.model || "所选模型");
+
+  if (publicCode === "model_authorization_failed" || errorType === "authorization" || statusCode === 401 || statusCode === 403 || /模型鉴权失败|invalid_api_key/.test(errorText)) {
+    return {
+      title: "模型鉴权失败",
+      detail: `${model} 的上游访问凭据无效或没有权限。`,
+      action: "请检查模型服务凭据与模型访问权限后重试。",
+      code: "model_authorization_failed",
+    };
+  }
+  if (publicCode === "model_rate_limited" || errorType === "rate_limit" || statusCode === 429) {
+    return {
+      title: "模型服务限流",
+      detail: `${model} 当前请求过于频繁或额度暂时受限。`,
+      action: "请稍后重试，或切换到其他可用模型。",
+      code: "model_rate_limited",
+    };
+  }
+  if (publicCode === "model_timeout" || errorType === "timeout" || statusCode === 408 || statusCode === 504) {
+    return {
+      title: "模型响应超时",
+      detail: `${model} 未在本次运行时限内返回完整结果。`,
+      action: "可缩短输入后重试，或切换到其他可用模型。",
+      code: "model_timeout",
+    };
+  }
+  if (publicCode === "model_provider_unavailable" || errorType === "provider_unavailable" || statusCode >= 500) {
+    return {
+      title: "模型服务暂时不可用",
+      detail: `${model} 的上游服务当前异常。`,
+      action: "请稍后重试；持续失败时检查上游服务状态。",
+      code: "model_provider_unavailable",
+    };
+  }
+  if (publicCode === "unsupported_model" || /所选模型不可用|unsupported model alias/.test(errorText)) {
+    return {
+      title: "所选模型不可用",
+      detail: `${model} 不在当前模型网关授权列表中。`,
+      action: "请重新检测模型列表并选择可用模型。",
+      code: "unsupported_model",
+    };
+  }
+  if (publicCode === "model_context_limit" || /上下文超过模型限制|context.*length|token.*limit/.test(errorText)) {
+    return {
+      title: "上下文超过模型限制",
+      detail: `${model} 无法接收当前长度的会话上下文。`,
+      action: "请缩短输入、减少附件或新建会话后重试。",
+      code: "model_context_limit",
+    };
+  }
+  if (publicCode === "model_invalid_request" || errorType === "invalid_request" || (statusCode >= 400 && statusCode < 500)) {
+    return {
+      title: "模型无法处理当前请求",
+      detail: `${model} 拒绝了当前输入或参数。`,
+      action: "请调整输入内容、附件或模型后重试。",
+      code: "model_invalid_request",
+    };
+  }
+  return {
+    title: "无法连接模型服务",
+    detail: `${model} 的模型调用未能完成。`,
+    action: "请检查模型网关与网络状态后重试。",
+    code: "model_connection_failed",
+  };
+}
+
+/** 从网关状态读取去重模型别名；兼容只返回单个默认 `model` 的旧状态响应。 */
+export function readGatewayModels(gateway) {
+  const candidates = Array.isArray(gateway?.models) ? gateway.models : [gateway?.model];
+  const result = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const model = String(candidate || "").trim();
+    if (model && model !== "-" && !seen.has(model)) {
+      seen.add(model);
+      result.push(model);
+    }
+  }
   return result;
 }
 
@@ -139,7 +249,7 @@ export function recoverRunInput(message) {
 }
 
 /**
- * 统一判断渠道发送门禁，网关未确认在线时仍允许编辑但不允许提交。
+ * 统一判断渠道发送门禁，网关未确认可达时仍允许编辑但不允许提交。
  *
  * @param {object} input - 当前会话、网关、Run 和输入状态。
  * @returns {boolean} 是否允许执行 Run。
@@ -151,6 +261,39 @@ export function canSubmitRun({ conversationStatus, gatewayOk, activeRun, hasInpu
 /** 把会话生命周期映射为不与模型生成混淆的渠道文案。 */
 export function conversationStatusLabel(status) {
   return status === "closed" ? "已结束" : "可继续";
+}
+
+/**
+ * 将网关状态映射为不夸大上游生成能力的渠道文案。
+ *
+ * @param {object|null|undefined} gateway - `/api/gateway/status` 返回的 LiteLLM 可达性事实。
+ * @returns {GatewayReachabilityCopy} 统一用于侧栏、提示和悬停说明的展示模型。
+ */
+export function buildGatewayReachabilityCopy(gateway) {
+  if (!gateway) {
+    return {
+      state: "checking",
+      label: "正在检查",
+      announcement: "正在检查模型网关",
+      detail: "正在检查 LiteLLM /v1/models",
+    };
+  }
+  if (gateway.ok) {
+    const model = String(gateway.model || "未知模型");
+    const baseUrl = String(gateway.gatewayBaseUrl || "LiteLLM");
+    return {
+      state: "reachable",
+      label: `网关可达 · ${model}`,
+      announcement: `模型网关可达：${model}；上游生成能力未验证`,
+      detail: `${baseUrl}；仅验证 LiteLLM /v1/models，上游生成能力需以实际请求为准`,
+    };
+  }
+  return {
+    state: "unreachable",
+    label: "模型网关不可达",
+    announcement: "模型网关仍不可达",
+    detail: String(gateway.error || gateway.gatewayBaseUrl || "LiteLLM /v1/models 不可访问"),
+  };
 }
 
 /**
@@ -187,7 +330,17 @@ function normalizeConversationDraft(draft) {
     value: String(draft?.value || ""),
     attachments: Array.isArray(draft?.attachments) ? [...draft.attachments] : [],
     references: Array.isArray(draft?.references) ? [...draft.references] : [],
+    model: String(draft?.model || ""),
   };
+}
+
+/** 从 resilience 中读取最后一个失败尝试，避免成功重试覆盖最终分类。 */
+function readLastFailedAttempt(resilience) {
+  const attempts = Array.isArray(resilience?.attempts) ? resilience.attempts : [];
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    if (attempts[index]?.status === "failed") return attempts[index];
+  }
+  return null;
 }
 
 /** 从 displayContent 剔除附件摘要，保留用户真正输入的正文与文档链接。 */
