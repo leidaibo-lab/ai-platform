@@ -1,6 +1,6 @@
 import { OpenTelemetry } from "@ai-sdk/otel";
 import { trace } from "@opentelemetry/api";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { BatchSpanProcessor, ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
@@ -14,29 +14,44 @@ const SDK_VERSION = "0.6.0";
 let aiSdkTelemetryRegistered = false;
 
 /**
- * 初始化默认关闭的 OpenTelemetry PoC，并返回 Runtime 可注入的 ChainTracer。
+ * 初始化默认关闭的 C1 OpenTelemetry 旁路，并返回 Runtime 可注入的 ChainTracer。
  * Facade 模式统一管理 SDK、Exporter、采样、AI SDK 适配和进程关闭。
  *
  * @param {object} [options] - OTel 开关和导出配置。
- * @param {boolean} [options.enabled=false] - 是否启用 PoC。
+ * @param {boolean} [options.enabled=false] - 是否启用 ChainTrace 导出。
  * @param {string} [options.endpoint] - OTLP HTTP 基础地址或 `/v1/traces` 地址。
+ * @param {Record<string, string>} [options.headers] - 仅保存在服务端内存中的 OTLP 认证 header。
+ * @param {number} [options.timeoutMillis=10000] - 单批 OTLP 导出超时毫秒数。
  * @param {string} [options.serviceName] - OTel service.name。
  * @param {number} [options.samplingRatio=1] - 根 Trace 采样比例。
- * @param {object} [dependencies] - 测试可替换的 Exporter、Processor 和 SDK 工厂。
+ * @param {object} [dependencies] - 测试可替换的 Exporter、Processor 及其工厂。
  * @returns {object} OTel 生命周期和 ChainTracer。
  */
 export function initializeOpenTelemetry(
   {
     enabled = false,
     endpoint = DEFAULT_OTLP_ENDPOINT,
+    headers = {},
+    timeoutMillis = 10000,
     serviceName = DEFAULT_SERVICE_NAME,
     samplingRatio = 1,
   } = {},
-  { traceExporter, spanProcessor, createNodeSdk = createDefaultNodeSdk } = {},
+  {
+    traceExporter,
+    spanProcessor,
+    createTraceExporter = createDefaultTraceExporter,
+    createNodeSdk = createDefaultNodeSdk,
+  } = {},
 ) {
   if (!enabled) return createDisabledRuntime();
 
-  const exporter = traceExporter || new OTLPTraceExporter({ url: resolveTraceEndpoint(endpoint) });
+  const exporter =
+    traceExporter ||
+    createTraceExporter({
+      url: resolveTraceEndpoint(endpoint),
+      headers: { ...headers },
+      timeoutMillis: normalizeExportTimeout(timeoutMillis),
+    });
   const processor = spanProcessor || new BatchSpanProcessor(exporter);
   const sdk = createNodeSdk({
     autoDetectResources: false,
@@ -65,6 +80,11 @@ export function initializeOpenTelemetry(
       return shutdownPromise;
     },
   };
+}
+
+/** 创建 OTLP/HTTP protobuf 导出器，保持 Phoenix 认证和协议细节位于 Adapter 边界。 */
+function createDefaultTraceExporter(configuration) {
+  return new OTLPTraceExporter(configuration);
 }
 
 /** 创建 NodeSDK，保留测试替换点而不把 SDK 构造细节泄漏给调用方。 */
@@ -158,4 +178,10 @@ function resolveTraceEndpoint(endpoint) {
 function normalizeSamplingRatio(value) {
   const ratio = Number(value);
   return Number.isFinite(ratio) && ratio >= 0 && ratio <= 1 ? ratio : 1;
+}
+
+/** 把导出超时限制为正数，非法值回退到 OTel HTTP exporter 默认的 10 秒。 */
+function normalizeExportTimeout(value) {
+  const timeout = Number(value);
+  return Number.isFinite(timeout) && timeout > 0 ? timeout : 10000;
 }

@@ -18,7 +18,8 @@
     "test:resilience": "node --test scripts/test-retry-executor.mjs",
     "test:streaming": "node --test scripts/test-streaming-http.mjs",
     "test:demo": "node --test scripts/test-demo-adapter.mjs",
-    "test:telemetry": "node --test scripts/test-chain-trace.mjs"
+    "test:telemetry": "node --test scripts/test-chain-trace.mjs",
+    "poc:chain-trace-backends": "node scripts/run-chain-trace-backend-poc.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.14",
@@ -26,7 +27,8 @@
     "@ant-design/x": "2.9.0",
     "@ant-design/x-markdown": "2.9.0",
     "@opentelemetry/api": "1.9.1",
-    "@opentelemetry/exporter-trace-otlp-http": "0.221.0",
+    "@opentelemetry/core": "2.10.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.221.0",
     "@opentelemetry/resources": "2.10.0",
     "@opentelemetry/sdk-node": "0.221.0",
     "@opentelemetry/sdk-trace-base": "2.10.0",
