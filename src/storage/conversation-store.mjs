@@ -29,7 +29,6 @@ export class ConversationStoreError extends Error {
 export function createConversationStore({ databasePath }) {
   if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
-  database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA busy_timeout = 5000");
   migrate(database);
@@ -117,7 +116,7 @@ export function createConversationStore({ databasePath }) {
      * @param {object} input - Run 和用户消息输入。
      * @returns {object} 新建或重放的 Run 状态。
      */
-    startRun({ conversationId, requestId, clientMessageId, content, displayContent }) {
+    startRun({ conversationId, requestId, clientMessageId, content, displayContent, references = [] }) {
       // Run、用户消息、序号和事件必须在同一事务创建。
       return withTransaction(database, () => {
         const existing = database
@@ -151,10 +150,20 @@ export function createConversationStore({ databasePath }) {
           .prepare(
             `INSERT INTO messages (
               id, conversation_id, seq, client_message_id, run_id, role,
-              content_json, display_content, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, 'user', ?, ?, 'committed', ?)`,
+              content_json, display_content, status, references_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, 'user', ?, ?, 'committed', ?, ?)`,
           )
-          .run(messageId, conversationId, seq, clientMessageId, runId, JSON.stringify(content), displayContent, now);
+          .run(
+            messageId,
+            conversationId,
+            seq,
+            clientMessageId,
+            runId,
+            JSON.stringify(content),
+            displayContent,
+            JSON.stringify(references),
+            now,
+          );
         database
           .prepare("UPDATE runs SET user_message_id = ? WHERE id = ?")
           .run(messageId, runId);
@@ -231,6 +240,101 @@ export function createConversationStore({ databasePath }) {
       });
     },
 
+    /**
+     * 原子取消指定会话中的运行中 Run，并按需持久化一条中断助手消息。
+     *
+     * @param {object} input - 取消目标和已交付的部分结果。
+     * @returns {object} 当前终止状态；重复取消或完成竞态不会改写既有事实。
+     */
+    cancelRun({ conversationId, runId, partialContent = "", contextManifest, model, resilience }) {
+      return withTransaction(database, () => {
+        const run = getRunOrThrow(database, runId);
+        if (run.conversation_id !== conversationId) {
+          throw new ConversationStoreError("Run not found", 404, "run_not_found");
+        }
+        if (run.status !== "running") return buildRunResult(database, run, true);
+
+        const text = String(partialContent || "");
+        const conversation = getConversationOrThrow(database, conversationId);
+        const now = new Date().toISOString();
+        let messageId = null;
+        let seq = null;
+        if (text.length > 0) {
+          messageId = randomUUID();
+          seq = Number(conversation.next_seq) + 1;
+          database
+            .prepare(
+              `INSERT INTO messages (
+                id, conversation_id, seq, run_id, role, content_json,
+                display_content, status, usage_json, created_at
+              ) VALUES (?, ?, ?, ?, 'assistant', ?, ?, 'interrupted', NULL, ?)`,
+            )
+            .run(messageId, conversationId, seq, runId, JSON.stringify(text), text, now);
+          database
+            .prepare("UPDATE conversations SET next_seq = ?, version = version + 1, updated_at = ? WHERE id = ?")
+            .run(seq, now, conversationId);
+          insertEvent(database, conversationId, "message.created", {
+            messageId,
+            runId,
+            seq,
+            role: "assistant",
+            status: "interrupted",
+          });
+        }
+
+        database
+          .prepare(
+            `UPDATE runs
+             SET assistant_message_id = ?, status = 'cancelled', model = ?,
+                 context_manifest_json = ?, resilience_json = ?, error = NULL, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            messageId,
+            model || null,
+            jsonOrNull(contextManifest),
+            jsonOrNull(resilience),
+            now,
+            runId,
+          );
+        insertEvent(database, conversationId, "run.cancelled", {
+          runId,
+          messageId,
+          ...(seq == null ? {} : { seq }),
+        });
+        return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
+      });
+    },
+
+    /**
+     * 从当前会话事实源解析直接消息引用，不接受渠道提交的引用正文。
+     *
+     * @param {string} conversationId - 当前会话 ID。
+     * @param {Array<{type: string, messageId: string}>} references - 已通过类型校验的引用。
+     * @returns {Array<object>} 与引用顺序一致的消息事实。
+     */
+    resolveMessageReferences(conversationId, references) {
+      getConversationOrThrow(database, conversationId);
+      const messages = [];
+      for (const reference of references) {
+        const row = database
+          .prepare(
+            `SELECT * FROM messages
+             WHERE id = ? AND conversation_id = ? AND status IN ('committed', 'interrupted')`,
+          )
+          .get(reference.messageId, conversationId);
+        if (!row) {
+          throw new ConversationStoreError(
+            "Referenced message is not available in this conversation",
+            400,
+            "invalid_message_reference",
+          );
+        }
+        messages.push(mapMessageRow(row));
+      }
+      return messages;
+    },
+
     /** 提供 Context Planner 所需的会话、消息、active 记忆和 Episode 快照。 */
     getContextSnapshot(conversationId) {
       const conversation = getConversationOrThrow(database, conversationId);
@@ -255,7 +359,9 @@ export function createConversationStore({ databasePath }) {
     getCompactionSnapshot(conversationId) {
       const conversation = getConversationOrThrow(database, conversationId);
       const messages = database
-        .prepare("SELECT * FROM messages WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC")
+        .prepare(
+          "SELECT * FROM messages WHERE conversation_id = ? AND seq > ? AND status = 'committed' ORDER BY seq ASC",
+        )
         .all(conversationId, conversation.summarized_through_seq)
         .map(mapMessageRow);
       const memoryItems = database
@@ -399,10 +505,12 @@ export function createConversationStore({ databasePath }) {
   };
 }
 
-/** 创建当前 V0.6 会话、Run、记忆和事件表。 */
+/** 创建当前 V0.6 会话、Run、记忆和事件表，并兼容升级既有 SQLite 事实源。 */
 function migrate(database) {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS conversations (
+  database.exec("PRAGMA foreign_keys = OFF");
+  try {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -415,13 +523,13 @@ function migrate(database) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS runs (
+      CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       request_id TEXT NOT NULL,
       user_message_id TEXT,
       assistant_message_id TEXT,
-      status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+      status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'cancelled', 'failed')),
       model TEXT,
       usage_json TEXT,
       context_manifest_json TEXT,
@@ -431,7 +539,7 @@ function migrate(database) {
       updated_at TEXT NOT NULL,
       UNIQUE(conversation_id, request_id)
     );
-    CREATE TABLE IF NOT EXISTS messages (
+      CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       seq INTEGER NOT NULL,
@@ -442,11 +550,12 @@ function migrate(database) {
       display_content TEXT NOT NULL,
       status TEXT NOT NULL,
       usage_json TEXT,
+      references_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       UNIQUE(conversation_id, seq),
       UNIQUE(conversation_id, client_message_id)
     );
-    CREATE TABLE IF NOT EXISTS memory_items (
+      CREATE TABLE IF NOT EXISTS memory_items (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       item_type TEXT NOT NULL,
@@ -462,9 +571,9 @@ function migrate(database) {
       superseded_at_seq INTEGER,
       created_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS memory_active_idx
+      CREATE INDEX IF NOT EXISTS memory_active_idx
       ON memory_items(conversation_id, status, item_type, memory_key);
-    CREATE TABLE IF NOT EXISTS memory_versions (
+      CREATE TABLE IF NOT EXISTS memory_versions (
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       version INTEGER NOT NULL,
       source_from_seq INTEGER NOT NULL,
@@ -476,7 +585,7 @@ function migrate(database) {
       created_at TEXT NOT NULL,
       PRIMARY KEY(conversation_id, version)
     );
-    CREATE TABLE IF NOT EXISTS episode_summaries (
+      CREATE TABLE IF NOT EXISTS episode_summaries (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       from_seq INTEGER NOT NULL,
@@ -487,15 +596,90 @@ function migrate(database) {
       created_at TEXT NOT NULL,
       UNIQUE(conversation_id, from_seq, to_seq)
     );
-    CREATE TABLE IF NOT EXISTS conversation_events (
+      CREATE TABLE IF NOT EXISTS conversation_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
-  `);
-  ensureColumn(database, "runs", "resilience_json", "TEXT");
+    `);
+    ensureColumn(database, "runs", "resilience_json", "TEXT");
+    ensureColumn(database, "messages", "references_json", "TEXT NOT NULL DEFAULT '[]'");
+    migrateCancelledRunStatus(database);
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON");
+  }
+  const violations = database.prepare("PRAGMA foreign_key_check").all();
+  if (violations.length > 0) throw new Error("Conversation database migration produced invalid foreign keys");
+}
+
+/** 重建旧版 Run 与 Message 表，为 Run 状态约束加入 cancelled 并保留消息外键。 */
+function migrateCancelledRunStatus(database) {
+  const columns = database.prepare("PRAGMA table_info(runs)").all();
+  if (!columns.some(isStatusColumn)) return;
+  const table = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runs'").get();
+  if (/['"]cancelled['"]/i.test(String(table?.sql || ""))) return;
+
+  withTransaction(database, () => {
+    database.exec(`
+      CREATE TABLE runs_next (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL,
+      user_message_id TEXT,
+      assistant_message_id TEXT,
+      status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'cancelled', 'failed')),
+      model TEXT,
+      usage_json TEXT,
+      context_manifest_json TEXT,
+      resilience_json TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(conversation_id, request_id)
+    );
+    INSERT INTO runs_next (
+      id, conversation_id, request_id, user_message_id, assistant_message_id,
+      status, model, usage_json, context_manifest_json, resilience_json, error, created_at, updated_at
+    ) SELECT
+      id, conversation_id, request_id, user_message_id, assistant_message_id,
+      status, model, usage_json, context_manifest_json, resilience_json, error, created_at, updated_at
+    FROM runs;
+    CREATE TABLE messages_next (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      seq INTEGER NOT NULL,
+      client_message_id TEXT,
+      run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+      role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+      content_json TEXT NOT NULL,
+      display_content TEXT NOT NULL,
+      status TEXT NOT NULL,
+      usage_json TEXT,
+      references_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      UNIQUE(conversation_id, seq),
+      UNIQUE(conversation_id, client_message_id)
+    );
+    INSERT INTO messages_next (
+      id, conversation_id, seq, client_message_id, run_id, role, content_json,
+      display_content, status, usage_json, references_json, created_at
+    ) SELECT
+      id, conversation_id, seq, client_message_id, run_id, role, content_json,
+      display_content, status, usage_json, references_json, created_at
+    FROM messages;
+    DROP TABLE messages;
+    DROP TABLE runs;
+    ALTER TABLE runs_next RENAME TO runs;
+      ALTER TABLE messages_next RENAME TO messages;
+    `);
+  });
+}
+
+/** 判断 PRAGMA 表信息行是否表示 status 列。 */
+function isStatusColumn(column) {
+  return column.name === "status";
 }
 
 /** 为既有 SQLite 数据库补充缺失列；表名、列名和定义只允许由迁移代码常量传入。 */
@@ -626,6 +810,7 @@ function mapMessageRow(row) {
     displayContent: row.display_content,
     status: row.status,
     usage: parseJson(row.usage_json),
+    references: parseJson(row.references_json, []),
     createdAt: row.created_at,
   };
 }

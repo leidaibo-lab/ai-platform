@@ -137,7 +137,7 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 - **THEN** Runtime SHALL 创建持久化会话并返回 `conversationId`
 - **WHEN** 浏览器请求 `GET /api/runtime/conversations` 或 `GET /api/runtime/conversations/{conversationId}`
 - **THEN** Runtime SHALL 返回会话列表或完整消息、结构化记忆和版本状态
-- **AND** 会话详情 SHALL 通过 `lastRun` 保留最近完成结果，并通过 `latestRun` 暴露最近运行中、完成或失败 Run 的状态与韧性证据
+- **AND** 会话详情 SHALL 通过 `lastRun` 保留最近完成结果，并通过 `latestRun` 暴露最近运行中、完成、取消或失败 Run 的状态与韧性证据
 
 #### Scenario: User closes a conversation
 
@@ -148,7 +148,7 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 
 ### Requirement: Conversation run endpoint
 
-Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，两者均支持文本、图片 URL、图片 data URL 和文档链接。
+Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，两者均支持文本、图片 URL、图片 data URL、文档链接和分类型引用。
 
 #### Scenario: User sends mixed content
 
@@ -161,15 +161,58 @@ Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/
 - **AND** Runtime SHALL 将请求转发到 LiteLLM `/v1/chat/completions`
 - **AND** Runtime SHALL 持久化助手消息、Run 状态、usage、上下文清单和模型逐尝试韧性证据
 
+#### Scenario: User references a conversation message
+
+- **GIVEN** 当前会话中存在一条已持久化的用户或助手消息
+- **WHEN** Run 请求包含 `references: [{ "type": "conversation_message", "messageId": "..." }]`
+- **THEN** Runtime SHALL 校验引用消息属于当前会话且当前身份有权访问
+- **AND** Runtime SHALL 根据 `messageId` 从会话事实源读取引用内容，不得信任渠道重复提交的消息正文
+- **AND** Runtime SHALL 在当前用户消息中持久化引用类型和 `messageId`，并在 Context Manifest 中记录引用的入选或排除结果
+- **AND** Runtime SHALL 只装箱被直接引用的消息，不得递归展开该消息可能包含的其他引用
+- **AND** 被显式引用的 `interrupted` 助手消息 MAY 作为带中断状态的引用进入当前上下文
+
+#### Scenario: Run contains an unsupported reference type
+
+- **WHEN** Run 请求中的 `references[].type` 不是当前稳定契约支持的 `conversation_message`
+- **THEN** Demo Server SHALL 返回 `400` 输入错误
+- **AND** Runtime SHALL NOT 把未知引用降级为字符串、通用 `sourceId` 或 Prompt 拼接内容
+- **AND** 文档片段、网页快照、业务记录、工具结果、事件、操作回读和批量产物等类型 SHALL 在对应场景明确所有权、版本、时效、权限和失败语义后再加入稳定契约
+
 #### Scenario: Browser receives a streamed answer
 
 - **GIVEN** 浏览器通过 `/runs/stream` 提交带幂等标识的当前输入
 - **WHEN** Runtime 创建或命中 Run 并调用流式模型生成
-- **THEN** Demo Server SHALL 以 SSE 依次发送 `run-started`、零到多个 `text-delta`，以及一个 `completed` 或 `error` 终止事件
+- **THEN** Demo Server SHALL 以 SSE 依次发送 `run-started`、零到多个 `text-delta`，以及一个 `completed`、`cancelled` 或 `error` 终止事件
 - **AND** `text-delta` SHALL 只在内存和网络层传递，不得逐 Token 写入 SQLite
 - **AND** 成功完成后 Runtime SHALL 在同一事务中只持久化一条完整助手消息和 Run 最终状态
 - **AND** 浏览器断线 SHALL NOT 创建回答 checkpoint 或 Token 级续传状态
 - **AND** 渠道 SHALL 能通过会话详情中的 `latestRun` 查询最终状态
+
+#### Scenario: User explicitly cancels a running generation
+
+- **GIVEN** 渠道已通过 `run-started` 获得当前 `runId`
+- **AND** Run 状态为 `running`
+- **WHEN** 渠道请求 `POST /api/runtime/conversations/{conversationId}/runs/{runId}/cancel`
+- **THEN** Runtime SHALL 校验 Run 属于当前会话且当前身份有权操作
+- **AND** Runtime SHALL 取消当前模型调用及尚未开始的自动重试或退避
+- **AND** 调用方取消 SHALL NOT 触发新的模型尝试
+- **AND** Run SHALL 进入独立的 `cancelled` 终止状态，不得记录为普通 `failed`
+- **AND** 如果已经产生非空文本增量，Runtime SHALL 至多持久化一条状态为 `interrupted` 的助手消息，并保留已交付的部分内容
+- **AND** 如果尚未产生非空文本增量，Runtime SHALL NOT 创建空助手消息
+- **AND** Demo Server SHALL 通过当前流发送 `cancelled` 终止事件，并通过会话事实事件发布最终 Run 和可选中断消息状态
+
+#### Scenario: Cancellation is repeated or races with completion
+
+- **GIVEN** 目标 Run 已处于 `completed`、`cancelled` 或 `failed` 终止状态
+- **WHEN** 渠道重复请求同一取消端点
+- **THEN** Runtime SHALL 幂等返回当前终止状态且不得改写消息、Run 或 usage
+
+#### Scenario: Streaming connection closes without an explicit cancellation
+
+- **GIVEN** Run 仍在执行
+- **WHEN** 浏览器刷新、网络中断或 SSE 连接关闭，但渠道没有请求 Run 取消端点
+- **THEN** Runtime SHALL NOT 将连接关闭解释为用户取消
+- **AND** Runtime SHALL 继续按既有断连恢复语义完成或失败，并允许渠道通过 `latestRun` 查询最终状态
 
 #### Scenario: Request is retried
 
@@ -186,7 +229,7 @@ Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/
 
 #### Scenario: Request has no current input
 
-- **WHEN** `message`、`imageUrls` 和 `documentUrls` 均为空或缺失
+- **WHEN** `message`、`imageUrls`、`documentUrls` 和 `references` 均为空或缺失
 - **THEN** Demo Server SHALL 返回 `400` 输入错误
 
 ### Requirement: Structured conversation memory
@@ -227,3 +270,10 @@ Agent Runtime SHALL 按系统规则、当前输入、active 结构化记忆、�
 - **THEN** SHALL 同步完成必要压缩
 - **AND** SHALL 保留系统和安全规则、当前输入、active 关键记忆及预算内最高优先级内容
 - **AND** SHALL 返回 Context Manifest 说明入选内容、排除原因和 token 使用情况
+
+#### Scenario: Context contains an interrupted assistant message
+
+- **GIVEN** 会话中存在用户取消生成后持久化的 `interrupted` 助手消息
+- **WHEN** Runtime 为后续普通 Run 构造上下文
+- **THEN** Context Planner SHALL 默认排除该中断消息，避免把不完整回答当作可信会话事实
+- **AND** 当前 Run 通过 `conversation_message` 显式引用该消息时 MAY 将其作为带中断状态的引用装箱

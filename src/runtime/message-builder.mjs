@@ -11,6 +11,7 @@ export function normalizeRunInput(body) {
     message: String(body?.message || "").trim(),
     imageUrls: normalizeUrlList(body?.imageUrls),
     documentUrls: normalizeUrlList(body?.documentUrls),
+    references: normalizeReferences(body?.references),
   };
 }
 
@@ -24,8 +25,23 @@ export function validateRunInput(input) {
   if (!input.requestId || !input.clientMessageId) {
     return { error: "requestId and clientMessageId are required" };
   }
-  if (!input.message && input.imageUrls.length === 0 && input.documentUrls.length === 0) {
-    return { error: "Message, image, or document link is required" };
+  if (!Array.isArray(input.references)) {
+    return { error: "references must be an array", code: "invalid_references" };
+  }
+  for (const reference of input.references) {
+    if (reference.type !== "conversation_message") {
+      return {
+        error: "Unsupported reference type",
+        code: "unsupported_reference_type",
+        type: reference.type || "unknown",
+      };
+    }
+    if (!reference.messageId) {
+      return { error: "conversation_message reference requires messageId", code: "invalid_message_reference" };
+    }
+  }
+  if (!input.message && input.imageUrls.length === 0 && input.documentUrls.length === 0 && input.references.length === 0) {
+    return { error: "Message, image, document link, or reference is required" };
   }
 
   const invalidUrls = [];
@@ -71,11 +87,12 @@ export function buildUserContent({ message, imageUrls, documentUrls }) {
  * @param {object} input - 归一化 Run 输入。
  * @returns {string} 会话页面和记忆来源使用的纯文本。
  */
-export function buildDisplayContent({ message, imageUrls, documentUrls }) {
+export function buildDisplayContent({ message, imageUrls, documentUrls, references = [] }) {
   const sections = [];
   if (message) sections.push(message);
   if (imageUrls.length > 0) sections.push(`图片：${imageUrls.length} 个`);
   if (documentUrls.length > 0) sections.push(formatDocumentLinks(documentUrls));
+  if (sections.length === 0 && references.length > 0) sections.push(`引用了 ${references.length} 条消息`);
   return sections.join("\n\n");
 }
 
@@ -100,6 +117,26 @@ export function normalizeUrlList(value) {
     if (url && !seen.has(url)) {
       seen.add(url);
       result.push(url);
+    }
+  }
+  return result;
+}
+
+/** 将消息引用整理为稳定判别对象并按类型与 ID 去重；非数组交给校验层拒绝。 */
+export function normalizeReferences(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) return value;
+  const result = [];
+  const seen = new Set();
+  for (const item of value) {
+    const reference = {
+      type: String(item?.type || "").trim(),
+      messageId: String(item?.messageId || "").trim(),
+    };
+    const key = `${reference.type}:${reference.messageId}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(reference);
     }
   }
   return result;

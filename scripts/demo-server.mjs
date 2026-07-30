@@ -5,6 +5,7 @@ import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDemoConfig } from "../src/config/env.mjs";
 import { GatewayRequestError, createGatewayClient } from "../src/gateway/gateway-client.mjs";
+import { initializeOpenTelemetry } from "../src/observability/otel-runtime.mjs";
 import { RuntimeInputError, createChatRuntime } from "../src/runtime/chat-runtime.mjs";
 import { createConversationCoordinator } from "../src/runtime/conversation-coordinator.mjs";
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
@@ -12,8 +13,10 @@ import { createMemoryManager } from "../src/runtime/memory-manager.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
 
 const rootDir = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
-const demoDir = join(rootDir, "demo");
+const demoDir = join(rootDir, "demo", "dist");
 const config = await loadDemoConfig(rootDir);
+const telemetryRuntime = initializeOpenTelemetry(config.observability);
+const chainTracer = telemetryRuntime.chainTracer;
 const store = createConversationStore(config.storage);
 const gatewayClient = createGatewayClient(config.gateway);
 const coordinator = createConversationCoordinator();
@@ -37,6 +40,7 @@ const chatRuntime = createChatRuntime({
   coordinator,
   contextPlanner,
   memoryManager,
+  chainTracer,
   resilienceOptions: config.resilience,
 });
 
@@ -45,6 +49,13 @@ const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
 };
 
 // 将网关、会话资源、Run、SSE 和静态文件分流到各自 Adapter。
@@ -108,11 +119,15 @@ async function handleConversationRoute(req, res, url, route) {
     return;
   }
   if (route.action === "runs" && req.method === "POST") {
-    sendJson(res, 200, await chatRuntime.runConversation(route.conversationId, await readJson(req)));
+    await runJsonConversation(req, res, route.conversationId);
     return;
   }
   if (route.action === "runs/stream" && req.method === "POST") {
     await streamConversationRun(req, res, route.conversationId);
+    return;
+  }
+  if (route.action === "run/cancel" && req.method === "POST") {
+    sendJson(res, 200, chatRuntime.cancelConversationRun(route.conversationId, route.runId));
     return;
   }
   if (route.action === "close" && req.method === "POST") {
@@ -126,11 +141,37 @@ async function handleConversationRoute(req, res, url, route) {
   sendJson(res, 405, { error: "Method not allowed" });
 }
 
+/** 读取 JSON Run，并保证最终 HTTP 交付发生在同一个 C1 根 Trace 内。 */
+async function runJsonConversation(req, res, conversationId) {
+  const body = await readJson(req);
+  await runTracedConversation(conversationId, body, "json", {
+    /** 在渠道交付阶段写入最终 JSON 响应。 */
+    onCompleted(result) {
+      sendJson(res, 200, result);
+    },
+    /** 在 JSON 请求被其他渠道主动取消时返回最终取消事实。 */
+    onCancelled(result) {
+      sendJson(res, 200, result);
+    },
+  });
+}
+
 /** 将会话资源 URL 解析为 conversationId 和动作。 */
 function parseConversationRoute(pathname) {
-  const match = pathname.match(/^\/api\/runtime\/conversations\/([^/]+)(?:\/(runs\/stream|runs|close|events))?$/);
+  const match = pathname.match(/^\/api\/runtime\/conversations\/([^/]+)(?:\/(.+))?$/);
   if (!match) return null;
-  return { conversationId: decodeURIComponent(match[1]), action: match[2] || "" };
+  const conversationId = decodeURIComponent(match[1]);
+  const action = match[2] || "";
+  if (["", "runs", "runs/stream", "close", "events"].includes(action)) {
+    return { conversationId, action };
+  }
+  const cancellation = action.match(/^runs\/([^/]+)\/cancel$/);
+  if (!cancellation) return null;
+  return {
+    conversationId,
+    action: "run/cancel",
+    runId: decodeURIComponent(cancellation[1]),
+  };
 }
 
 /**
@@ -166,17 +207,108 @@ async function streamConversationRun(req, res, conversationId) {
   }
 
   try {
-    const result = await chatRuntime.runConversation(conversationId, body, {
+    await runTracedConversation(conversationId, body, "sse", {
       onRunStarted: sendRunStarted,
       onTextDelta: sendTextDelta,
+      /** 在渠道交付阶段写入最终 completed 事件。 */
+      onCompleted(result) {
+        writeSseEvent(res, "completed", result);
+      },
+      /** 把主动取消映射为独立终止事件，而不是普通 error。 */
+      onCancelled(result) {
+        writeSseEvent(res, "cancelled", result);
+      },
+      /** 把失败映射为稳定 error 事件，并在根 Trace 内完成交付。 */
+      onError(error) {
+        const mapped = mapHttpError(error);
+        writeSseEvent(res, "error", { ...mapped.payload, status: mapped.statusCode });
+      },
     });
-    writeSseEvent(res, "completed", result);
-  } catch (error) {
-    const mapped = mapHttpError(error);
-    writeSseEvent(res, "error", { ...mapped.payload, status: mapped.statusCode });
   } finally {
     if (!res.writableEnded) res.end();
   }
+}
+
+/**
+ * 在 `c1.conversation.run` 根 Span 内执行 Runtime，并组合业务 ID 与渠道最终交付。
+ *
+ * @param {string} conversationId - 会话 ID。
+ * @param {object} body - 已解析 Run 输入。
+ * @param {"json"|"sse"} transport - 当前渠道协议。
+ * @param {object} delivery - 渠道回调。
+ * @returns {Promise<object|null>} Runtime 结果；已交付 SSE 错误时返回 null。
+ */
+async function runTracedConversation(conversationId, body, transport, delivery) {
+  const requestId = String(body?.requestId || "");
+  return chainTracer.withSpan(
+    "c1.conversation.run",
+    buildRunTraceAttributes({ requestId, conversationId, transport }),
+    /** 在根 Span 生命周期内执行排队、Runtime 和最终渠道交付。 */
+    async (rootSpan) => {
+      let runId = null;
+      let chainTraceId = null;
+      try {
+        const result = await chatRuntime.runConversation(conversationId, body, {
+          /** Runtime 创建业务 Chain ID 后立即补到根 Span。 */
+          onChainTraceStarted(input) {
+            chainTraceId = input.chainTraceId;
+            rootSpan.setAttribute("ai.platform.chain_trace_id", chainTraceId);
+          },
+          /** Run 创建或重放后补齐 Run ID，并继续通知渠道。 */
+          async onRunStarted(input) {
+            runId = input.run.id;
+            chainTraceId = input.chainTraceId || chainTraceId;
+            rootSpan.setAttributes({
+              "ai.platform.run_id": runId,
+              "ai.platform.chain_trace_id": chainTraceId,
+              "ai.platform.run.replayed": input.replayed,
+            });
+            if (typeof delivery.onRunStarted === "function") await delivery.onRunStarted(input);
+          },
+          onTextDelta: delivery.onTextDelta,
+        });
+        const finalStatus = result.cancelled ? "cancelled" : "completed";
+        rootSpan.setAttributes({
+          "ai.platform.run.status": finalStatus,
+          "ai.platform.run.replayed": result.replayed,
+        });
+        const finalDelivery = result.cancelled ? delivery.onCancelled : delivery.onCompleted;
+        if (typeof finalDelivery === "function") {
+          await chainTracer.withSpan(
+            `channel.${transport}.delivery`,
+            buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: finalStatus }),
+            /** 把最终完成或取消载荷交给当前渠道，Span 本身不记录载荷正文。 */
+            () => finalDelivery(result),
+          );
+        }
+        return result;
+      } catch (error) {
+        rootSpan.setAttribute("ai.platform.run.status", "failed");
+        if (typeof delivery.onError !== "function") throw error;
+        rootSpan.recordError(error);
+        await chainTracer.withSpan(
+          `channel.${transport}.delivery`,
+          buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: "failed" }),
+          /** 把脱敏后的公开错误交给当前渠道。 */
+          () => delivery.onError(error),
+        );
+        return null;
+      }
+    },
+  );
+}
+
+/** 生成根 Span 和渠道 Span 共用的安全业务关联属性。 */
+function buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status }) {
+  return {
+    "ai.platform.request_id": requestId,
+    "ai.platform.conversation_id": conversationId,
+    ...(runId ? { "ai.platform.run_id": runId } : {}),
+    ...(chainTraceId ? { "ai.platform.chain_trace_id": chainTraceId } : {}),
+    "ai.platform.scenario_id": "C1",
+    "ai.platform.channel.transport": transport,
+    ...(status ? { "ai.platform.run.status": status } : {}),
+  };
 }
 
 /**
@@ -308,14 +440,41 @@ function reportBackgroundMemoryError(error) {
   console.error(`Memory compaction failed: ${error?.message || error}`);
 }
 
-/** 关闭 HTTP Server 和 SQLite 连接。 */
+let shutdownPromise = null;
+
+/** 幂等关闭 HTTP Server、SQLite 和 OpenTelemetry，并报告关闭失败。 */
 function shutdown() {
-  server.close(closeStore);
+  if (!shutdownPromise) shutdownPromise = closeResources().catch(reportShutdownError);
+  return shutdownPromise;
 }
 
-/** HTTP Server 关闭后释放 SQLite 连接。 */
-function closeStore() {
-  store.close();
+/** 停止接收请求后释放事实源，并刷新所有已结束 Span。 */
+async function closeResources() {
+  await closeHttpServer();
+  try {
+    store.close();
+  } finally {
+    await telemetryRuntime.shutdown();
+  }
+}
+
+/** 将 HTTP Server close 回调转换为可等待的 Promise。 */
+function closeHttpServer() {
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    /** Server 停止监听后完成关闭等待。 */
+    function handleClosed(error) {
+      if (error) reject(error);
+      else resolve();
+    }
+    server.close(handleClosed);
+  });
+}
+
+/** 记录关闭阶段错误并设置失败退出码。 */
+function reportShutdownError(error) {
+  console.error(`Demo shutdown failed: ${error?.message || error}`);
+  process.exitCode = 1;
 }
 
 server.listen(config.port, reportReady);
@@ -328,4 +487,5 @@ function reportReady() {
   console.log(`Gateway base URL: ${gatewayClient.gatewayBaseUrl}`);
   console.log(`Model alias: ${gatewayClient.model}`);
   console.log(`Conversation database: ${config.storage.databasePath}`);
+  console.log(`ChainTrace OTel PoC: ${telemetryRuntime.enabled ? "enabled" : "disabled"}`);
 }
