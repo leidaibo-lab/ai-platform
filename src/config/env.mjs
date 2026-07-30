@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { parseKeyPairsIntoRecord } from "@opentelemetry/core";
 
 /**
  * 从项目环境文件生成 Demo Server、Runtime 和模型网关所需的分层配置。
@@ -31,6 +32,14 @@ export async function loadDemoConfig(rootDir) {
         env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
         env.OTEL_EXPORTER_OTLP_ENDPOINT ||
         "http://localhost:4318",
+      headers: {
+        ...parseOtlpHeaders(env.OTEL_EXPORTER_OTLP_HEADERS),
+        ...parseOtlpHeaders(env.OTEL_EXPORTER_OTLP_TRACES_HEADERS),
+      },
+      timeoutMillis: readPositiveNumber(
+        env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT || env.OTEL_EXPORTER_OTLP_TIMEOUT,
+        10000,
+      ),
       serviceName: env.OTEL_SERVICE_NAME || "ai-platform-demo",
       samplingRatio: readUnitInterval(env.OTEL_TRACES_SAMPLER_ARG, 1),
     },
@@ -79,6 +88,16 @@ export async function loadEnv(filePath) {
     acc[key] = value;
     return acc;
   }, {});
+}
+
+/**
+ * 按 OpenTelemetry 标准 key=value 列表解析 OTLP header，百分号编码值会被安全解码。
+ *
+ * @param {unknown} value - `OTEL_EXPORTER_OTLP*_HEADERS` 原始值。
+ * @returns {Record<string, string>} 可直接交给 OTLP exporter 的 header 副本。
+ */
+export function parseOtlpHeaders(value) {
+  return { ...parseKeyPairsIntoRecord(typeof value === "string" ? value.trim() : "") };
 }
 
 /**

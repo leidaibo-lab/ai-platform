@@ -26,6 +26,7 @@ import {
 } from "antd";
 import {
   Archive,
+  ArrowDown,
   Bot,
   Brain,
   CircleAlert,
@@ -36,6 +37,7 @@ import {
   FileText,
   Gauge,
   Link2,
+  LoaderCircle,
   Menu,
   MessageSquareQuote,
   PanelRight,
@@ -47,11 +49,18 @@ import {
   X,
 } from "lucide-react";
 import {
+  activeRunStageLabel,
+  buildMessagePreview,
   canSubmitRun,
   conversationStatusLabel,
   insertLatestRunFailure,
+  isMessageListAtLatest,
+  readConversationDraft,
   recoverRunInput,
+  scrollMessageListToLatest as scrollReadyMessageListToLatest,
+  storeConversationDraft,
 } from "./conversation-view-model.js";
+import ConversationAnchorRail from "./conversation-anchor-rail.jsx";
 import { runtimeAdapter } from "./runtime-adapter.js";
 
 const { Text, Title } = Typography;
@@ -107,10 +116,16 @@ export default function App() {
   const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
   const [contextExpanded, setContextExpanded] = useState(false);
+  const [isFollowingLatest, setIsFollowingLatest] = useState(true);
+  const [unseenMessageCount, setUnseenMessageCount] = useState(0);
   const [linkDraft, setLinkDraft] = useState({ open: false, type: "document", value: "", error: "" });
   const attachmentComponentRef = useRef(null);
+  const messageListRef = useRef(null);
+  const composerValueRef = useRef("");
   const attachmentFactsRef = useRef([]);
   const referenceFactsRef = useRef([]);
+  const conversationDraftsRef = useRef(new Map());
+  const visibleMessageCountRef = useRef({ conversationId: null, count: 0 });
   const activeRunRef = useRef(null);
   const cancelRequestedRef = useRef(false);
 
@@ -186,6 +201,13 @@ export default function App() {
     };
   }, [currentConversationId]);
 
+  /** 同步 React 与 ref 中的 Sender 正文，供异步会话切换读取最新草稿。 */
+  function setComposerFact(next) {
+    const normalized = String(next || "");
+    composerValueRef.current = normalized;
+    setComposerValue(normalized);
+  }
+
   /** 同步 React 与 ref 中的附件事实，供并发 FileReader 回调稳定追加。 */
   function setAttachmentFacts(next) {
     attachmentFactsRef.current = next;
@@ -196,6 +218,36 @@ export default function App() {
   function setReferenceFacts(next) {
     referenceFactsRef.current = next;
     setReferences(next);
+  }
+
+  /** 保存当前会话尚未发送的渠道草稿；空草稿会清理旧快照。 */
+  function saveCurrentConversationDraft() {
+    conversationDraftsRef.current = storeConversationDraft(
+      conversationDraftsRef.current,
+      currentConversationId,
+      {
+        value: composerValueRef.current,
+        attachments: attachmentFactsRef.current,
+        references: referenceFactsRef.current,
+      },
+    );
+  }
+
+  /** 恢复目标会话的独立渠道草稿，不把其他会话输入带入当前 Sender。 */
+  function restoreConversationDraft(conversationId) {
+    const draft = readConversationDraft(conversationDraftsRef.current, conversationId);
+    setComposerFact(draft.value);
+    setAttachmentFacts(draft.attachments);
+    setReferenceFacts(draft.references);
+  }
+
+  /** 删除指定会话已经发送或主动结束的渠道草稿。 */
+  function clearConversationDraft(conversationId) {
+    conversationDraftsRef.current = storeConversationDraft(
+      conversationDraftsRef.current,
+      conversationId,
+      { value: "", attachments: [], references: [] },
+    );
   }
 
   /** 同步 React 与 ref 中的活动 Run，供事实 SSE effect 读取最新生成状态。 */
@@ -232,11 +284,13 @@ export default function App() {
   /** 选择会话并读取服务端完整事实；生成期间保持当前 Run 视图稳定。 */
   async function handleConversationChange(conversationId) {
     if (activeRunRef.current || conversationId === currentConversationId) return;
+    saveCurrentConversationDraft();
     setCurrentConversationId(conversationId);
     setConversation(null);
     setRunError("");
-    setAttachmentFacts([]);
-    setReferenceFacts([]);
+    restoreConversationDraft(conversationId);
+    setIsFollowingLatest(true);
+    setUnseenMessageCount(0);
     setConversationDrawerOpen(false);
     try {
       setConversation(await runtimeAdapter.getConversation(conversationId));
@@ -248,15 +302,16 @@ export default function App() {
   /** 创建新的服务端会话并立即切换，不在浏览器生成虚拟会话事实。 */
   async function handleCreateConversation() {
     if (activeRunRef.current) return;
+    saveCurrentConversationDraft();
     try {
       const created = await runtimeAdapter.createConversation();
       const items = await runtimeAdapter.listConversations();
       setConversations(items);
       setCurrentConversationId(created.id);
       setConversation(created);
-      setComposerValue("");
-      setAttachmentFacts([]);
-      setReferenceFacts([]);
+      restoreConversationDraft(created.id);
+      setIsFollowingLatest(true);
+      setUnseenMessageCount(0);
       setConversationDrawerOpen(false);
     } catch (error) {
       setRunError(error.message);
@@ -273,6 +328,10 @@ export default function App() {
       ]);
       setConversation(detail);
       setConversations(items);
+      clearConversationDraft(currentConversationId);
+      setComposerFact("");
+      setAttachmentFacts([]);
+      setReferenceFacts([]);
       toastApi.success("会话已结束");
     } catch (error) {
       setRunError(error.message);
@@ -293,12 +352,12 @@ export default function App() {
 
   /** 更新受控 Sender 文本。 */
   function handleComposerChange(value) {
-    setComposerValue(value);
+    setComposerFact(value);
   }
 
   /** 将选中的建议填入 Sender，仍由用户决定是否发送。 */
   function handlePromptClick({ data }) {
-    setComposerValue(String(data.label || ""));
+    setComposerFact(data.label);
   }
 
   /** 将一条已持久化消息加入当前发送引用队列，最多保留三条。 */
@@ -348,7 +407,7 @@ export default function App() {
     const recovered = recoverRunInput(sourceMessage);
     const recoveredAttachments = buildRecoveredAttachments(recovered.imageUrls, recovered.documentUrls);
     const recoveredReferences = buildRecoveredReferences(recovered.references, conversation.messages);
-    setComposerValue(recovered.message);
+    setComposerFact(recovered.message);
     setAttachmentFacts(recoveredAttachments);
     setReferenceFacts(recoveredReferences);
     setRunError("");
@@ -524,7 +583,8 @@ export default function App() {
     cancelRequestedRef.current = false;
     setActiveRunFact(runState);
     setRunError("");
-    setComposerValue("");
+    clearConversationDraft(current.id);
+    setComposerFact("");
     setAttachmentFacts([]);
     setReferenceFacts([]);
 
@@ -614,6 +674,23 @@ export default function App() {
     setContextExpanded(true);
   }
 
+  /** 通过 Bubble.List 公开接口回到视觉底部，并恢复后续内容跟随。 */
+  function scrollMessageListToLatest(behavior = "smooth") {
+    scrollReadyMessageListToLatest(messageListRef.current, behavior);
+  }
+
+  /** 响应用户的“回到最新”命令。 */
+  function handleReturnToLatest() {
+    scrollMessageListToLatest();
+  }
+
+  /** 根据反向滚动列表的位置切换跟随状态，用户向上浏览时保留当前视窗。 */
+  function handleMessageListScroll(event) {
+    const followingLatest = isMessageListAtLatest(event.currentTarget.scrollTop);
+    setIsFollowingLatest(followingLatest);
+    if (followingLatest) setUnseenMessageCount(0);
+  }
+
   /** 按稳定 messageId 定位并短暂高亮当前会话中的来源消息。 */
   function handleNavigateToMessage(messageId) {
     const element = document.getElementById(messageElementId(messageId));
@@ -648,6 +725,37 @@ export default function App() {
     () => buildVisibleMessages(conversation, activeRun, currentConversationId),
     [conversation, activeRun, currentConversationId],
   );
+
+  // 用户主动发送新消息时回到底部；后续向上浏览仍由 onScroll 关闭跟随。
+  useEffect(() => {
+    if (!activeRun?.requestId) return;
+    scrollMessageListToLatest("smooth");
+  }, [activeRun?.requestId]);
+
+  // 按会话统计离开底部后新增的消息条数，流式文本增长不会重复计数。
+  useEffect(() => {
+    const previous = visibleMessageCountRef.current;
+    const nextCount = visibleMessages.length;
+    if (previous.conversationId !== currentConversationId) {
+      visibleMessageCountRef.current = { conversationId: currentConversationId, count: nextCount };
+      setUnseenMessageCount(0);
+      return;
+    }
+    const addedCount = Math.max(0, nextCount - previous.count);
+    visibleMessageCountRef.current = { conversationId: currentConversationId, count: nextCount };
+    if (isFollowingLatest) {
+      setUnseenMessageCount(0);
+      return;
+    }
+    if (addedCount > 0) {
+      /** 合并同一次事实刷新中新增的消息，避免覆盖尚未查看的数量。 */
+      function addUnseenMessages(currentCount) {
+        return currentCount + addedCount;
+      }
+      setUnseenMessageCount(addUnseenMessages);
+    }
+  }, [currentConversationId, visibleMessages.length, isFollowingLatest]);
+
   const bubbleItems = useMemo(
     // Bubble 项只承载展示状态，messageId 和正文事实仍来自服务端消息。
     () => buildBubbleItems(visibleMessages, {
@@ -759,8 +867,29 @@ export default function App() {
           ) : visibleMessages.length === 0 ? (
             <EmptyConversation onPromptClick={handlePromptClick} />
           ) : (
-            <Bubble.List className="message-list" items={bubbleItems} autoScroll />
+            <Bubble.List
+              ref={messageListRef}
+              className="message-list"
+              items={bubbleItems}
+              autoScroll
+              onScroll={handleMessageListScroll}
+            />
           )}
+          <ConversationAnchorRail
+            messages={visibleMessages}
+            onNavigate={handleNavigateToMessage}
+          />
+          {!isFollowingLatest && visibleMessages.length > 0 ? (
+            <Button
+              className="return-to-latest"
+              size="small"
+              icon={<ArrowDown size={14} />}
+              aria-label={unseenMessageCount > 0 ? `回到最新，${unseenMessageCount} 条新消息` : "回到最新"}
+              onClick={handleReturnToLatest}
+            >
+              {unseenMessageCount > 0 ? `回到最新 · ${unseenMessageCount}` : "回到最新"}
+            </Button>
+          ) : null}
         </section>
 
         <section className="composer-dock" aria-label="消息输入">
@@ -982,6 +1111,7 @@ function ReferenceQueue({ references, onRemove }) {
 /** 渲染消息正文、可定位引用预览和图片事实。 */
 function MessageBody({ message, streaming = false, referenceMessages = [], onNavigateReference }) {
   const imageUrls = getMessageImageUrls(message);
+  const hasDisplayContent = Boolean(String(message.displayContent || "").trim());
   const referenceNodes = [];
   for (const referenceMessage of referenceMessages) {
     referenceNodes.push(
@@ -1007,12 +1137,20 @@ function MessageBody({ message, streaming = false, referenceMessages = [], onNav
           {imageUrls.map(renderMessageImage)}
         </div>
       ) : null}
-      <XMarkdown
-        content={message.displayContent || (streaming ? "" : "(空消息)")}
-        streaming={streaming ? { hasNextChunk: true, enableAnimation: true, tail: true } : undefined}
-        escapeRawHtml
-        openLinksInNewTab
-      />
+      {streaming ? (
+        <div className="message-generation-status" role="status" aria-live="polite">
+          <LoaderCircle className="message-generation-spinner" size={14} />
+          <span>{activeRunStageLabel(message.runStatus, hasDisplayContent)}</span>
+        </div>
+      ) : null}
+      {hasDisplayContent || !streaming ? (
+        <XMarkdown
+          content={message.displayContent || "(空消息)"}
+          streaming={streaming ? { hasNextChunk: true, enableAnimation: true, tail: true } : undefined}
+          escapeRawHtml
+          openLinksInNewTab
+        />
+      ) : null}
       {message.status === "interrupted" ? <Tag className="message-status-tag">已停止</Tag> : null}
     </div>
   );
@@ -1151,7 +1289,7 @@ function buildBubbleItems(messages, handlers) {
       variant: isAssistant ? "borderless" : "filled",
       status: message.status === "interrupted" ? "abort" : message.streaming ? "updating" : "success",
       streaming: Boolean(message.streaming),
-      loading: Boolean(message.streaming && !message.displayContent),
+      loading: false,
       content: (
         <MessageBody
           message={message}
@@ -1187,6 +1325,7 @@ function buildVisibleMessages(conversation, activeRun, currentConversationId) {
     status: activeRun.status === "cancelled" ? "interrupted" : "committed",
     references: [],
     streaming: activeRun.status !== "cancelled",
+    runStatus: activeRun.status,
   });
   return messages;
 }
@@ -1327,12 +1466,6 @@ function buildRecoveredReferences(references, messages) {
 /** 生成无需 CSS 转义即可由 DOM API 精确查找的消息锚点。 */
 function messageElementId(messageId) {
   return `conversation-message-${String(messageId)}`;
-}
-
-/** 将消息正文压缩为单行引用预览。 */
-function buildMessagePreview(value) {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
-  return normalized.length > 72 ? `${normalized.slice(0, 72)}...` : normalized || "(空消息)";
 }
 
 /** 将浏览器 File 对象异步读取为 data URL。 */
