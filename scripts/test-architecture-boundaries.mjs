@@ -85,7 +85,7 @@ async function testGovernanceKeepsRuntimeBoundary() {
 
 test("governance keeps Agent Runtime as the sole business model path", testGovernanceKeepsRuntimeBoundary);
 
-/** 验证场景治理文档没有把共同底座误写为完成态，并保留 C1 焦点和分阶段恢复边界。 */
+/** 验证场景治理文档保留 C1 功能焦点、分阶段恢复边界和 ChainTrace 延期口径。 */
 async function testScenarioChainsKeepCurrentFocus() {
   const content = await readProjectText("docs/scenario-interaction-chains.md");
 
@@ -96,11 +96,15 @@ async function testScenarioChainsKeepCurrentFocus() {
   assert.match(content, /`POST \.\.\.\/runs\/stream` 通过 SSE 交付 AI SDK 文本增量/);
   assert.match(content, /开始输出后不静默重生成/);
   assert.match(content, /C1 不逐 Token 写 SQLite，也不保存回答 checkpoint/);
-  assert.match(content, /当前建设焦点：C1 对话链路基线化/);
-  assert.match(content, /在 C1 达到退出条件之前，不横向扩展场景实现/);
+  assert.match(content, /当前建设焦点：C1 功能可用与确定性回归/);
+  assert.match(content, /正式实例和真实 Runtime Trace 验收按触发条件恢复/);
+  assert.match(content, /不再作为当前功能迭代或其他低风险场景调研的硬门禁/);
+  assert.match(content, /这不代表 C2-C7 已经可用/);
+  assert.match(content, /正式实例上的真实 Runtime JSON\/SSE Trace 尚未验收/);
+  assert.doesNotMatch(content, /V0\.6 已跑通 Demo 和正式 ChainTrace/);
   for (const label of SCENARIO_CHAIN_LABELS) {
     assert.match(content, new RegExp(label), `场景治理文档缺少链路：${label}`);
   }
 }
 
-test("scenario chains keep C1 as the current delivery focus", testScenarioChainsKeepCurrentFocus);
+test("scenario chains keep C1 focus and defer runtime trace acceptance", testScenarioChainsKeepCurrentFocus);

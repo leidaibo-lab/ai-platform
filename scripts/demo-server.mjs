@@ -487,5 +487,5 @@ function reportReady() {
   console.log(`Gateway base URL: ${gatewayClient.gatewayBaseUrl}`);
   console.log(`Model alias: ${gatewayClient.model}`);
   console.log(`Conversation database: ${config.storage.databasePath}`);
-  console.log(`ChainTrace OTel PoC: ${telemetryRuntime.enabled ? "enabled" : "disabled"}`);
+  console.log(`ChainTrace OTel: ${telemetryRuntime.enabled ? "enabled" : "disabled"}`);
 }

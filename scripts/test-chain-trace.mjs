@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import test from "node:test";
-import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import {
+  BasicTracerProvider,
+  BatchSpanProcessor,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import { parseOtlpHeaders } from "../src/config/env.mjs";
 import { createGatewayClient } from "../src/gateway/gateway-client.mjs";
+import { createChainTracer } from "../src/observability/chain-tracer.mjs";
 import { initializeOpenTelemetry } from "../src/observability/otel-runtime.mjs";
 import { createTestRuntime } from "./test-runtime.mjs";
+import { PocFanoutSpanExporter } from "./run-chain-trace-backend-poc.mjs";
 
 const SENSITIVE_PROMPT = "prompt-secret-chain-trace";
 const SENSITIVE_ANSWER = "answer-secret-chain-trace";
@@ -148,6 +156,137 @@ async function testIdempotentReplaySkipsModelSpan() {
 }
 
 test("idempotent replay is traced without a second model call", testIdempotentReplaySkipsModelSpan);
+
+/** 验证正式 OTLP protobuf Adapter 接收标准认证 header、Trace endpoint 和导出超时。 */
+async function testFormalExporterConfiguration() {
+  let exporterConfiguration = null;
+  let sdkConfiguration = null;
+  const exporter = createRecordingExporter();
+  const processor = new SimpleSpanProcessor(exporter);
+
+  /** 捕获正式 exporter 构造参数，同时避免测试发起网络请求。 */
+  function createCapturedExporter(configuration) {
+    exporterConfiguration = configuration;
+    return exporter;
+  }
+
+  /** 捕获 NodeSDK 配置，但不替换当前测试文件已经注册的全局 Provider。 */
+  function createCapturedNodeSdk(configuration) {
+    sdkConfiguration = configuration;
+    return {
+      /** 测试生命周期不需要注册第二个全局 Provider。 */
+      start() {},
+      /** 测试 SDK 没有额外资源需要释放。 */
+      async shutdown() {},
+    };
+  }
+
+  const runtime = initializeOpenTelemetry(
+    {
+      enabled: true,
+      endpoint: "http://phoenix.test:6006",
+      headers: parseOtlpHeaders("authorization=Bearer%20system-key,x-scope=c1%2Ctrace"),
+      timeoutMillis: 4321,
+      serviceName: "ai-platform-chaintrace-formal-test",
+      samplingRatio: 0.25,
+    },
+    {
+      spanProcessor: processor,
+      createTraceExporter: createCapturedExporter,
+      createNodeSdk: createCapturedNodeSdk,
+    },
+  );
+
+  try {
+    assert.deepEqual(exporterConfiguration, {
+      url: "http://phoenix.test:6006/v1/traces",
+      headers: { authorization: "Bearer system-key", "x-scope": "c1,trace" },
+      timeoutMillis: 4321,
+    });
+    assert.equal(sdkConfiguration.resource.attributes["service.name"], "ai-platform-chaintrace-formal-test");
+    assert.equal(sdkConfiguration.spanProcessors[0], processor);
+  } finally {
+    await runtime.shutdown();
+  }
+}
+
+test("formal OTLP exporter receives protobuf endpoint and server-side auth configuration", testFormalExporterConfiguration);
+
+/** 验证异步 OTLP 导出失败只影响旁路刷新，不改写已经完成的业务 Run。 */
+async function testExporterFailureDoesNotChangeRun() {
+  let exportAttempts = 0;
+  const failingExporter = {
+    /** 明确返回导出失败，模拟超时、认证拒绝或 Phoenix 不可用。 */
+    export(_spans, resultCallback) {
+      exportAttempts += 1;
+      resultCallback({ code: 1, error: new Error("test exporter unavailable") });
+    },
+    /** 测试导出器没有外部资源需要释放。 */
+    async shutdown() {},
+  };
+  const processor = new BatchSpanProcessor(failingExporter, {
+    scheduledDelayMillis: 60000,
+    exportTimeoutMillis: 1000,
+  });
+  const provider = new BasicTracerProvider({ spanProcessors: [processor] });
+  const isolatedChainTracer = createChainTracer({ tracer: provider.getTracer("chaintrace-failure-isolation-test") });
+  const gatewayClient = createObservedGateway({ handleChatRequest: createSuccessfulChatHandler() });
+  const fixture = createTestRuntime({ gatewayClient, chainTracer: isolatedChainTracer });
+
+  try {
+    const conversation = fixture.runtime.createConversation();
+    const result = await fixture.runtime.runConversation(conversation.id, createRunBody("export-failure"));
+
+    assert.equal(result.content, SENSITIVE_ANSWER);
+    await assert.rejects(provider.forceFlush(), /test exporter unavailable/);
+    assert.equal(exportAttempts > 0, true);
+    assert.equal(fixture.runtime.getConversation(conversation.id).latestRun.status, "completed");
+  } finally {
+    fixture.store.close();
+    await provider.shutdown();
+  }
+}
+
+test("OTLP exporter failure does not change completed Run semantics", testExporterFailureDoesNotChangeRun);
+
+/** 验证双后端 PoC 不会为不同候选重新生成 Trace 或 Span 批次。 */
+async function testPocFanoutSharesOneSpanBatch() {
+  const langfuse = createRecordingExporter();
+  const phoenix = createRecordingExporter();
+  const exporter = new PocFanoutSpanExporter([
+    { name: "langfuse", exporter: langfuse },
+    { name: "phoenix", exporter: phoenix },
+  ]);
+  const spans = [{ name: "c1.conversation.run" }];
+  let result = null;
+
+  // 收集 Composite 的最终状态，验证两个子导出器成功后才整体成功。
+  exporter.export(spans, (exportResult) => {
+    result = exportResult;
+  });
+
+  assert.equal(result?.code, 0);
+  assert.equal(langfuse.batches[0], spans);
+  assert.equal(phoenix.batches[0], spans);
+  assert.deepEqual(exporter.getSucceededBackends(), ["langfuse", "phoenix"]);
+  await exporter.shutdown();
+}
+
+test("backend PoC fans out the same readable span batch", testPocFanoutSharesOneSpanBatch);
+
+/** 创建同步成功并保留批次对象引用的最小 SpanExporter。 */
+function createRecordingExporter() {
+  return {
+    batches: [],
+    /** 保存原批次对象，供同一 Trace 断言使用。 */
+    export(spans, resultCallback) {
+      this.batches.push(spans);
+      resultCallback({ code: 0 });
+    },
+    /** 测试导出器没有外部资源需要释放。 */
+    async shutdown() {},
+  };
+}
 
 /** 创建使用真实 AI SDK 调用路径和可编排 fake LiteLLM 的 GatewayClient。 */
 function createObservedGateway({ handleChatRequest, maxAttempts = 3 }) {

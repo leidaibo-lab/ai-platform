@@ -13,7 +13,7 @@
 - 模型网关：LiteLLM、模型别名、provider key、virtual key、多模型路由、fallback、预算和限流。
 - 治理与可观测：身份上下文、审计事件、调用追踪、评测、反馈和安全策略。
 
-只有模型访问、模型路由、模型密钥和模型调用治理属于严格意义上的 AI Gateway。拆出的模型网关服务使用 `model-gateway`；项目改名不改变稳定 API 行为。当前版本只声明已落地的 Demo、Runtime 雏形、模型网关和连接器注册预留，不把平台控制面、真实工具、知识库、多人治理或运营能力写成稳定可用能力。
+只有模型访问、模型路由、模型密钥和模型调用治理属于严格意义上的 AI Gateway。拆出的模型网关服务使用 `model-gateway`；项目改名不改变稳定 API 行为。当前版本只声明已落地的 Demo、Runtime 雏形、模型网关、连接器注册预留和 C1 旁路 ChainTrace，不把平台控制面、真实工具、知识库、多人治理或运营能力写成稳定可用能力。
 
 ## Technology
 
@@ -64,5 +64,5 @@ Demo 浏览器页面不直接调用 LiteLLM 或上游中转站，而是通过 `s
 - 每类事实数据只能有一个写入所有者；拆服务前先明确 API、事件和数据迁移边界，禁止多个服务共同写同一张表。
 - 不把 `.env` 中的真实值写入文档、OpenSpec 或日志说明。
 - 修改代理行为、鉴权、模型路由、Demo API、上下文预算或多模态输入契约时，先更新 OpenSpec 或同步补齐 OpenSpec。
-- 当前 `openspec/specs/ai-platform/spec.md` 描述 V0.6 持久化会话与结构化上下文切片；真正拆出服务时再按模型网关、Agent Runtime、连接器和平台控制面分别建立稳定 spec。
+- 当前 `openspec/specs/ai-platform/spec.md` 描述 V0.6 持久化会话、结构化上下文和 C1 ChainTrace 切片；真正拆出服务时再按模型网关、Agent Runtime、连接器、治理与可观测和平台控制面分别建立稳定 spec。
 - 若目录不是 Git 仓库，最终说明需要明确“无法通过 git diff 检索变更”，改用文件扫描和本次编辑清单说明。

@@ -277,3 +277,52 @@ Agent Runtime SHALL 按系统规则、当前输入、active 结构化记忆、�
 - **WHEN** Runtime 为后续普通 Run 构造上下文
 - **THEN** Context Planner SHALL 默认排除该中断消息，避免把不完整回答当作可信会话事实
 - **AND** 当前 Run 通过 `conversation_message` 显式引用该消息时 MAY 将其作为带中断状态的引用装箱
+
+### Requirement: C1 ChainTrace export
+
+系统 SHALL 通过项目拥有的 `ChainTracer` Port 和标准 OTLP/HTTP protobuf 将脱敏 C1 Trace 旁路导出到正式 Phoenix 后端，并保持 Agent Runtime 对具体观测后端无感知。
+
+#### Scenario: ChainTrace is disabled by default
+
+- **GIVEN** `OTEL_ENABLED` 未设置或为 `false`
+- **WHEN** Demo Server 启动并执行 JSON 或 SSE Run
+- **THEN** 系统 SHALL 使用无副作用的 Null Object `ChainTracer`
+- **AND** 系统 SHALL NOT 初始化 OpenTelemetry SDK、Exporter 或 AI SDK Telemetry
+- **AND** Session、Run、Message、Memory、幂等、取消和交付语义 SHALL 保持不变
+
+#### Scenario: Runtime exports a sampled C1 trace
+
+- **GIVEN** `OTEL_ENABLED=true`
+- **AND** 服务端已配置 OTLP Trace endpoint、认证 header、`service.name` 和 `parentbased_traceidratio` 采样比例
+- **WHEN** Runtime 执行一个被采样的 JSON 或 SSE Run
+- **THEN** 系统 SHALL 使用 OTLP/HTTP protobuf 向 Phoenix 的 `/v1/traces` 接口导出 Span
+- **AND** Runtime SHALL 只依赖 `ChainTracer` Port，不得依赖 Phoenix 私有追踪 SDK 或查询 API
+- **AND** 同一模型重试的所有 Span SHALL 归属同一个 OTel `trace_id`
+- **AND** 幂等重放 SHALL 创建新的 OTel Trace、复用原业务 Chain ID，且不得再次调用模型
+- **AND** Trace SHALL 能通过 `requestId + conversationId + runId` 对应的 `ai.platform.*` 属性精确定位
+
+#### Scenario: Trace export fails
+
+- **GIVEN** C1 Run 已经开始或完成业务处理
+- **WHEN** OTLP exporter 超时、认证失败、被拒绝或 Phoenix 不可用
+- **THEN** 导出失败 SHALL NOT 改变 Run 的成功、失败、取消、幂等或持久化语义
+- **AND** Phoenix SHALL NOT 成为 Conversation、Run、Message 或 Memory 的事实源
+- **AND** Runtime SHALL NOT 因 Trace 导出失败重试模型或重复交付回答
+
+#### Scenario: ChainTrace protects business content and credentials
+
+- **GIVEN** Runtime 执行包含文本、图片、文档链接、模型错误或重试的 Run
+- **WHEN** 平台生成和导出 C1 Span
+- **THEN** AI SDK Telemetry SHALL 设置 `recordInputs=false` 和 `recordOutputs=false`
+- **AND** Span SHALL NOT 记录 Prompt、回答、图片 URL、文档 URL、原始错误正文、stack、模型网关 key 或 Phoenix 认证凭据
+- **AND** Span MAY 记录安全业务标识、阶段状态、耗时、错误分类、Context Manifest Token 分段和模型 usage 数值
+
+#### Scenario: Maintainer provisions the accepted ChainTrace backend
+
+- **WHEN** 维护者部署正式 C1 ChainTrace 后端
+- **THEN** 系统 SHALL 使用 Phoenix 19.10.0 镜像 `arizephoenix/phoenix@sha256:3092f5543a3ddd35db7390cf971027c33be6be1f171274d57f3c8658c2193d67`
+- **AND** Phoenix SHALL 使用独立 PostgreSQL 17 持久化，不得与 Runtime SQLite、LiteLLM 或业务数据库共享数据所有权
+- **AND** Phoenix SHALL 启用认证、默认保留 30 天并关闭匿名 telemetry
+- **AND** Phoenix 和 OTLP 凭据 SHALL 只由服务端配置持有，不得暴露给浏览器、渠道或普通业务客户端
+- **AND** 当前单团队权限 SHALL 限于实例级 `admin`、`member` 和 `viewer` 角色
+- **AND** 每次升级 SHALL 先完成可校验备份，并在升级后验证旧 Trace、新 Trace 写入和从升级前数据库恢复的回滚路径

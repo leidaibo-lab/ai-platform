@@ -6,7 +6,9 @@
 - 所属区域：Agent Runtime / 连接器与知识层 / 模型网关 / 治理与可观测
 - 关联需求：对 V0.6 存量能力补齐成熟方案对比、未采用原因和后续复用边界
 - 关联 OpenSpec：本次不改变稳定契约；后续实现按各项结论另行判断并更新 `openspec/specs/ai-platform/spec.md`
-- 替代记录：无
+- 替代记录：`2026-07-30-c1-chaintrace-runtime-validation-deferral.md` 仅替代本记录中的 ChainTrace 当前实施优先级，其他存量能力审计结论保持有效
+
+后续阶段调整：ChainTrace 技术接入和 Phoenix 选型保留，正式实例真实 Runtime Trace 验收改为触发式 TODO；它不再阻断当前功能迭代或其他低风险场景调研。
 
 ## 审计结论
 
@@ -21,7 +23,7 @@
 | 迁移 | 遥测采集迁移到 OpenTelemetry 语义 | 先做 AI SDK 官方遥测接入 PoC，再选择 Langfuse 或 Phoenix 等后端 |
 | 停止扩展 | 自研工具循环、自研 MCP 协议、自研工作流引擎、自研 Trace 查询后端 | 新需求先验证 AI SDK、MCP、LangGraph 或 Temporal，不得直接增加通用框架代码 |
 
-当前先完成 C1 ChainTrace 和其余退出条件，再进入其他场景。ChainTrace 按“决策记录消除冲突 -> AI SDK Telemetry + OpenTelemetry PoC -> 对比 Langfuse/Phoenix -> 接受最终后端决策 -> 正式接入”的顺序推进；AI SDK `ToolLoopAgent` 只读工具 PoC 延后到 C1 退出之后。MCP 仍通过独立的 `@ai-sdk/mcp` 或 MCP 官方 SDK 接入，不在项目内重写协议。
+本记录接受时曾要求先完成 C1 ChainTrace 和其余退出条件，再进入其他场景。该技术路径中的 OTel PoC、后端对比、Phoenix 决策、正式 exporter 和部署入口已经完成；真实 Runtime Trace 验收及其对后续场景的优先级约束已由延期记录替代。AI SDK `ToolLoopAgent` 或其他场景 PoC 现在按真实业务价值决定，但 MCP 仍通过独立的 `@ai-sdk/mcp` 或 MCP 官方 SDK 接入，不在项目内重写协议。
 
 ## 审计口径与证据边界
 
@@ -215,12 +217,12 @@ AI SDK 官方 MCP 集成使用独立的 `@ai-sdk/mcp` 包；生产建议使用 S
 | --- | --- | --- | --- |
 | P0 | 完成 C1 ChainTrace OTel PoC，对比 Langfuse/Phoenix 并接受最终后端决策 | 相同 Trace 可导出和检索、敏感正文受控、查询与成本对比、正式接入边界明确 | PoC 否；正式默认启用前复核观测安全边界 |
 | P0 | 固定 LiteLLM 版本或 digest | 固定版本、smoke test、升级与回退说明 | 否，若模型行为不变 |
-| P1 | 完成 C1 真实模型基线、异常/并发/断连回归和验收阈值 | 满足 `docs/scenario-interaction-chains.md` 的全部 C1 退出条件 | 仅内部评测否；改变稳定行为时需要 OpenSpec |
+| TODO | 触发运行态验收后完成 C1 真实模型四维基线、异常/并发/断连样本和验收阈值 | 满足 `docs/scenario-interaction-chains.md` 的完整运行态验收定义 | 仅内部评测否；改变稳定行为时需要 OpenSpec |
 | P1 | Memory Port 与 Provider Benchmark 设计 | 当前实现和候选使用同 fixture、指标和真实模型 | Port 本身否；替换行为前需要 OpenSpec |
-| P2 | C1 退出后执行 AI SDK `ToolLoopAgent` 单一只读工具 PoC | 主路径、工具异常、停止条件、审批边界和 Run 事件映射 | PoC 否；正式开放工具行为前需要 OpenSpec |
+| 按业务价值 | 执行 AI SDK `ToolLoopAgent` 单一只读工具 PoC | 主路径、工具异常、停止条件、审批边界和 Run 事件映射 | PoC 否；正式开放工具行为前需要 OpenSpec |
 | P3 | 达到触发条件后评估 LangGraph/Temporal | 真实中断恢复或副作用用例，不使用 Hello World | 是 |
 
-在 C1 ChainTrace PoC、最终后端决策和其余 C1 退出条件完成前，不横向扩展其他场景实现，也不把候选依赖加入生产主链。
+C1 ChainTrace PoC、最终后端决策和技术接入已经完成；其他场景可以按真实业务价值进入调研或最小实现，但仍不得跳过自身前置边界，也不得把未经选型和验收的候选依赖加入生产主链。正式 Runtime Trace 验收按延期记录的触发条件恢复。
 
 ## 风险与退出路径
 
