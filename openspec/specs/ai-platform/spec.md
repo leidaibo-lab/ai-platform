@@ -30,6 +30,15 @@
 - **THEN** LiteLLM SHALL 使用 `litellm_params.model` 指定的真实模型调用上游
 - **AND** Runtime 和诊断脚本不需要知道真实上游模型名
 
+#### Scenario: Browser selects a gateway-visible model alias
+
+- **GIVEN** LiteLLM `/v1/models` 返回当前服务端 key 可见的模型别名
+- **WHEN** 浏览器在会话 Sender 中选择一个别名并通过 Run 请求提交 `model`
+- **THEN** Runtime SHALL 校验并使用该别名执行当前 Run 的 token counter 和模型生成
+- **AND** GatewayClient SHALL 继续只把模型别名交给 LiteLLM，不得向浏览器返回真实上游模型配置
+- **AND** Run 请求未提供 `model` 时 SHALL 回退服务端 `LITELLM_MODEL`
+- **AND** 非默认且不在当前网关可见模型集合中的别名 SHALL 被拒绝
+
 ### Requirement: Server-side secret boundary
 
 系统 SHALL 将模型网关访问凭据和上游真实 key 保持在服务端环境变量中，不得暴露给浏览器、渠道或普通业务客户端。
@@ -76,7 +85,8 @@ Demo Server SHALL 提供状态检查接口，返回 LiteLLM 连接状态、gatew
 - **GIVEN** Demo Server 已启动
 - **WHEN** 浏览器请求 `GET /api/gateway/status`
 - **THEN** Demo Server SHALL 尝试请求 LiteLLM `/v1/models`
-- **AND** 响应 SHALL 包含 `ok`、`gatewayBaseUrl` 和 `model`
+- **AND** 响应 SHALL 包含 `ok`、`gatewayBaseUrl`、默认别名 `model` 和当前 key 可见的别名数组 `models`
+- **AND** 该状态 SHALL 只表示模型目录可达，不得表述为上游生成可用
 
 ### Requirement: AI SDK Runtime gateway client
 
@@ -87,7 +97,8 @@ Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯
 - **GIVEN** Runtime 已配置 LiteLLM 地址、模型别名和访问 key
 - **WHEN** Runtime 执行模型调用
 - **THEN** 系统 SHALL 使用 `@ai-sdk/openai-compatible` 请求 `LITELLM_BASE_URL/v1`
-- **AND** SHALL 继续使用 `LITELLM_MODEL` 模型别名和 `LITELLM_MASTER_KEY`
+- **AND** SHALL 使用当前 Run 选择的模型别名；未选择时继续使用 `LITELLM_MODEL`
+- **AND** SHALL 继续使用 `LITELLM_MASTER_KEY`
 - **AND** SHALL NOT 读取 `UPSTREAM_API_KEY` 或绕过 LiteLLM
 - **AND** SHALL 禁用 AI SDK 内建自动重试，由平台统一重试执行器拥有唯一模型尝试预算
 - **AND** 默认一次模型生成 SHALL 最多尝试三次，包含首次调用和两次自动重试
@@ -148,7 +159,7 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 
 ### Requirement: Conversation run endpoint
 
-Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，两者均支持文本、图片 URL、图片 data URL、文档链接和分类型引用。
+Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，两者均支持模型别名、文本、图片 URL、图片 data URL、文档链接和分类型引用。
 
 #### Scenario: User sends mixed content
 
@@ -160,6 +171,16 @@ Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/
 - **AND** 文档链接 SHALL 作为文本上下文附加
 - **AND** Runtime SHALL 将请求转发到 LiteLLM `/v1/chat/completions`
 - **AND** Runtime SHALL 持久化助手消息、Run 状态、usage、上下文清单和模型逐尝试韧性证据
+
+#### Scenario: Browser receives an actionable model failure
+
+- **GIVEN** Runtime 已持久化用户消息并开始模型生成
+- **WHEN** 模型调用因鉴权、权限、限流、超时、请求约束、模型不可用或服务故障失败
+- **THEN** Runtime SHALL 持久化失败 Run、安全错误摘要和不包含原始响应正文的 resilience 分类
+- **AND** POST SSE `error` 终止事件 SHALL 返回安全错误标题、原因、处理建议、公开错误码和状态
+- **AND** 浏览器 SHALL 在对应用户消息后展示失败原因与处理建议，不得只显示无分类的“本次生成失败”
+- **AND** 浏览器 SHALL NOT 展示 provider 原始错误正文、stack、上游地址或任何模型访问密钥
+- **AND** 浏览器 SHALL 继续提供恢复输入和查看运行信息的入口
 
 #### Scenario: User references a conversation message
 

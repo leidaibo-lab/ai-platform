@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { loadDemoConfig } from "../src/config/env.mjs";
 import { GatewayRequestError, createGatewayClient } from "../src/gateway/gateway-client.mjs";
 import { initializeOpenTelemetry } from "../src/observability/otel-runtime.mjs";
-import { RuntimeInputError, createChatRuntime } from "../src/runtime/chat-runtime.mjs";
+import { RuntimeExecutionError, RuntimeInputError, createChatRuntime } from "../src/runtime/chat-runtime.mjs";
 import { createConversationCoordinator } from "../src/runtime/conversation-coordinator.mjs";
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { createMemoryManager } from "../src/runtime/memory-manager.mjs";
@@ -382,6 +382,7 @@ function sendError(res, error) {
 /** 将 Runtime、存储、网关和未知错误统一映射为 HTTP 状态与公开载荷。 */
 function mapHttpError(error) {
   if (error instanceof RuntimeInputError) return { statusCode: error.status, payload: error.payload };
+  if (error instanceof RuntimeExecutionError) return { statusCode: error.status, payload: error.payload };
   if (error instanceof ConversationStoreError) {
     return { statusCode: error.status, payload: { error: error.message, code: error.code } };
   }

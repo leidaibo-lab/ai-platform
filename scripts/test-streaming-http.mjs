@@ -11,8 +11,10 @@ import test from "node:test";
 /** 验证真实 HTTP Adapter 把 OpenAI-compatible 模型流贯通到浏览器协议并最终单次落库。 */
 async function testStreamingRunOverHttp() {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "ai-platform-stream-http-"));
-  const fakeGateway = createServer(createFakeGatewayHandler());
+  const generatedModels = [];
+  const fakeGateway = createServer(createFakeGatewayHandler(generatedModels));
   let demoProcess = null;
+  let demoStderr = "";
   try {
     const gatewayPort = await listenOnRandomPort(fakeGateway);
     const demoPort = await reservePort();
@@ -30,6 +32,12 @@ async function testStreamingRunOverHttp() {
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    /** 收集 Demo Server 标准错误，验证安全映射不会额外打印 provider 原始正文。 */
+    function appendDemoStderr(chunk) {
+      demoStderr += chunk;
+    }
+    demoProcess.stderr.setEncoding("utf8");
+    demoProcess.stderr.on("data", appendDemoStderr);
     const demoBaseUrl = `http://127.0.0.1:${demoPort}`;
     await waitForDemo(demoBaseUrl, demoProcess);
 
@@ -45,6 +53,7 @@ async function testStreamingRunOverHttp() {
         body: JSON.stringify({
           requestId: "http-stream-request",
           clientMessageId: "http-stream-message",
+          model: "chat-quality",
           message: "验证 HTTP 流",
           imageUrls: [],
           documentUrls: [],
@@ -60,6 +69,7 @@ async function testStreamingRunOverHttp() {
     assert.deepEqual(events.filter(isTextDeltaEvent).map(readTextDelta), ["流式", "回复"]);
     assert.equal(completed.content, "流式回复");
     assert.equal(completed.resilience.outputStarted, true);
+    assert.equal(generatedModels[0], "chat-quality");
     assert.deepEqual(completed.conversation.messages.map(readDisplayContent), ["验证 HTTP 流", "流式回复"]);
 
     const detail = await requestJson(
@@ -67,6 +77,34 @@ async function testStreamingRunOverHttp() {
     );
     assert.equal(detail.messages.length, 2);
     assert.equal(detail.messages.filter(isAssistantMessage).length, 1);
+
+    const authorizationResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: "http-authorization-request",
+          clientMessageId: "http-authorization-message",
+          model: "chat-quality",
+          message: "验证模型鉴权失败",
+        }),
+      },
+    );
+    const authorizationEvents = await readSseEvents(authorizationResponse.body);
+    const authorizationError = authorizationEvents.find(isErrorEvent)?.data;
+    assert.deepEqual(authorizationEvents.map(readEventName), ["run-started", "error"]);
+    assert.equal(authorizationError.error, "模型鉴权失败");
+    assert.equal(authorizationError.code, "model_authorization_failed");
+    assert.match(authorizationError.detail, /上游访问凭据无效或没有权限/);
+    assert.doesNotMatch(JSON.stringify(authorizationError), /INVALID_API_KEY|provider secret/);
+    const failedDetail = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
+    );
+    assert.equal(failedDetail.latestRun.status, "failed");
+    assert.equal(failedDetail.latestRun.error, "模型鉴权失败");
+    assert.equal(failedDetail.latestRun.model, "chat-quality");
+    assert.doesNotMatch(demoStderr, /INVALID_API_KEY|provider secret/);
 
     let cancellationRunId = null;
     let resolveCancellationReady;
@@ -149,12 +187,12 @@ async function testStreamingRunOverHttp() {
 test("POST SSE supports completion, explicit cancellation, and disconnect continuation", testStreamingRunOverHttp);
 
 /** 创建可按用户输入模拟完成、取消等待和渠道断线的 OpenAI-compatible Gateway。 */
-function createFakeGatewayHandler() {
+function createFakeGatewayHandler(generatedModels) {
   /** 为 Demo 测试提供 models、token counter 和标准文本流。 */
   return async function handleFakeGatewayRequest(req, res) {
     if (req.method === "GET" && req.url === "/v1/models") {
       req.resume();
-      sendJson(res, { data: [{ id: "chat-default" }] });
+      sendJson(res, { data: [{ id: "chat-default" }, { id: "chat-quality" }] });
       return;
     }
     if (req.method === "POST" && req.url === "/utils/token_counter") {
@@ -164,6 +202,13 @@ function createFakeGatewayHandler() {
     }
     if (req.method === "POST" && req.url === "/v1/chat/completions") {
       const requestBody = await readRequestBody(req);
+      const parsedBody = JSON.parse(requestBody);
+      generatedModels.push(parsedBody.model);
+      const latestMessage = parsedBody.messages.at(-1);
+      if (latestMessage?.role === "user" && latestMessage.content === "验证模型鉴权失败") {
+        sendJson(res, { error: { message: "INVALID_API_KEY provider secret" } }, 401);
+        return;
+      }
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache",
@@ -190,6 +235,11 @@ function createFakeGatewayHandler() {
     req.resume();
     sendJson(res, { error: "not found" }, 404);
   };
+}
+
+/** 判断 SSE 事件是否为失败终止事件。 */
+function isErrorEvent(event) {
+  return event.name === "error";
 }
 
 /** 写入 finish chunk、usage 和 DONE 标记并结束模型流。 */

@@ -69,6 +69,8 @@ export function createGatewayClient(
     gatewayBaseUrl: managementClient.gatewayBaseUrl,
     model: modelAlias,
     status: managementClient.status,
+    listModels: managementClient.listModels,
+    resolveModel: managementClient.resolveModel,
     countTokens: managementClient.countTokens,
 
     /**
@@ -76,6 +78,7 @@ export function createGatewayClient(
      *
      * @param {object} input - Runtime 的模型生成参数。
      * @param {Array<object>} input.messages - OpenAI-compatible 消息列表。
+     * @param {string} [input.model] - 当前 Run 选择的 LiteLLM 模型别名。
      * @param {number} [input.temperature] - 可选采样温度。
      * @param {number} [input.maxCompletionTokens] - 模型输出硬上限。
      * @param {object} [input.responseFormat] - 需要原样转发给 LiteLLM 的结构化输出约束。
@@ -87,6 +90,7 @@ export function createGatewayClient(
      */
     async chatCompletions({
       messages,
+      model: requestedModel,
       temperature,
       maxCompletionTokens,
       responseFormat,
@@ -95,6 +99,7 @@ export function createGatewayClient(
       onTextDelta,
       abortSignal,
     }) {
+      const selectedModel = await managementClient.resolveModel(requestedModel);
       const provider = createProvider({
         name: "litellm",
         baseURL: `${gatewayRootUrl}/v1`,
@@ -106,7 +111,7 @@ export function createGatewayClient(
           responseFormat,
         }),
       });
-      const requestModel = provider.chatModel(modelAlias);
+      const requestModel = provider.chatModel(selectedModel);
       const modelMessages = toAiSdkMessages(messages);
       const context = createResilienceContext({
         ...(resilienceContext || {}),
@@ -136,7 +141,7 @@ export function createGatewayClient(
               onTextDelta,
               markOutputStarted,
               streamTextImplementation,
-              fallbackModel: modelAlias,
+              fallbackModel: selectedModel,
               ...telemetryInput,
             });
           }
@@ -151,7 +156,7 @@ export function createGatewayClient(
             ...(abortSignal === undefined ? {} : { abortSignal }),
             ...telemetryInput,
           });
-          return mapGenerateTextResult(result, modelAlias);
+          return mapGenerateTextResult(result, selectedModel);
         } catch (error) {
           throw mapAiSdkError(error, abortSignal, nowImplementation());
         }
@@ -304,11 +309,16 @@ async function streamGenerateAttempt({
     maxRetries: 0,
     timeout: Math.max(1, remainingMs),
     ...(abortSignal === undefined ? {} : { abortSignal }),
+    onError: suppressAiSdkStreamErrorLogging,
     telemetry,
     runtimeContext,
   });
   let text = "";
-  for await (const delta of result.textStream) {
+  const hasFullStream = result.fullStream !== undefined && result.fullStream !== null;
+  const stream = hasFullStream ? result.fullStream : result.textStream;
+  for await (const part of stream) {
+    if (hasFullStream && part?.type === "error") throw part.error;
+    const delta = hasFullStream ? (part?.type === "text-delta" ? part.text : "") : part;
     if (!delta) continue;
     markOutputStarted();
     text += delta;
@@ -321,6 +331,9 @@ async function streamGenerateAttempt({
   ]);
   return mapGenerateTextResult({ text, usage, finishReason, response }, fallbackModel);
 }
+
+/** 禁用 AI SDK 默认的原始错误控制台输出；异常仍由 fullStream 交给 Runtime 安全映射。 */
+function suppressAiSdkStreamErrorLogging() {}
 
 /** 为一次平台重试尝试构造只包含安全业务 ID 的 AI SDK Telemetry 输入。 */
 function createAiSdkTelemetryInput(context, attempt, operation) {
