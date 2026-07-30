@@ -25,6 +25,15 @@ export async function loadDemoConfig(rootDir) {
       retryMaxDelayMs: readNonNegativeNumber(env.DEMO_MODEL_RETRY_MAX_DELAY_MS, 5000),
     },
     resilience: { runTimeoutMs },
+    observability: {
+      enabled: readBoolean(env.OTEL_ENABLED, false),
+      endpoint:
+        env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
+        env.OTEL_EXPORTER_OTLP_ENDPOINT ||
+        "http://localhost:4318",
+      serviceName: env.OTEL_SERVICE_NAME || "ai-platform-demo",
+      samplingRatio: readUnitInterval(env.OTEL_TRACES_SAMPLER_ARG, 1),
+    },
     storage: {
       databasePath: resolve(rootDir, env.DEMO_DATABASE_PATH || ".data/ai-platform.sqlite"),
     },
@@ -104,4 +113,19 @@ function readNonNegativeNumber(value, fallback) {
 function readRatio(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
+}
+
+/** 将常见布尔字符串转换为开关，无效值回退到默认值。 */
+function readBoolean(value, fallback) {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+/** 将采样参数限制为包含 0 和 1 的单位区间。 */
+function readUnitInterval(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
