@@ -165,10 +165,11 @@ function getSourceId(message) {
 }
 
 /** 使用稳定幂等 ID 执行一次测试 Run。 */
-async function run(runtime, conversationId, index, message) {
+async function run(runtime, conversationId, index, message, model) {
   return runtime.runConversation(conversationId, {
     requestId: `request-${index}`,
     clientMessageId: `client-${index}`,
+    ...(model ? { model } : {}),
     message,
     imageUrls: [],
     documentUrls: [],
@@ -260,6 +261,20 @@ test("completed runs persist model retry evidence", async () => {
   fixture.store.close();
 });
 
+// 验证 Run 选择的模型别名同时进入 token counter、生成调用和完成事实。
+test("runtime routes the selected model through planning and generation", async () => {
+  const observations = [];
+  const fixture = createTestRuntime({ gatewayClient: createModelSelectionGateway(observations) });
+  const conversation = fixture.runtime.createConversation();
+
+  const response = await run(fixture.runtime, conversation.id, 1, "验证模型选择", "chat-quality");
+  const detail = fixture.runtime.getConversation(conversation.id);
+  assert.deepEqual(observations, ["count:chat-quality", "generate:chat-quality"]);
+  assert.equal(response.model, "chat-quality");
+  assert.equal(detail.lastRun.model, "chat-quality");
+  fixture.store.close();
+});
+
 // 验证模型最终失败时保留用户消息，并把失败尝试证据写回原 Run。
 test("failed runs persist model retry evidence without duplicate messages", async () => {
   const fixture = createTestRuntime({ gatewayClient: createRetryTraceGateway({ fail: true }) });
@@ -270,6 +285,8 @@ test("failed runs persist model retry evidence without duplicate messages", asyn
   assert.equal(detail.lastRun, null);
   assert.equal(detail.latestRun.status, "failed");
   assert.equal(detail.latestRun.resilience.attemptCount, 3);
+  assert.equal(detail.latestRun.error, "模型服务暂时不可用");
+  assert.equal(detail.latestRun.model, "retry-trace-model");
   assert.equal(detail.messages.length, 1);
   fixture.store.close();
 });
@@ -737,6 +754,27 @@ function createRetryTraceGateway({ fail = false } = {}) {
   };
 }
 
+/** 创建记录 Context Planner 与 generation 模型别名的脚本化 Gateway。 */
+function createModelSelectionGateway(observations) {
+  return {
+    model: "chat-default",
+    /** 记录当前 Run 传给 token counter 的模型别名。 */
+    async countTokens({ model }) {
+      observations.push(`count:${model}`);
+      return { tokens: 10, source: "scripted", model };
+    },
+    /** 记录当前 Run 传给生成调用的模型别名并返回同一模型事实。 */
+    async chatCompletions({ model }) {
+      observations.push(`generate:${model}`);
+      return {
+        model,
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        choices: [{ message: { content: "模型选择已生效" } }],
+      };
+    },
+  };
+}
+
 /** 创建逐段回调并返回单个完整结果的脚本化流式 Gateway。 */
 function createStreamingGateway() {
   return {
@@ -825,5 +863,5 @@ function buildRetryTraceFixture(finalStatus) {
 
 /** 判断异常是否为脚本化模型最终失败。 */
 function isScriptedModelFailure(error) {
-  return error?.message === "scripted model failure";
+  return error?.message === "模型服务暂时不可用" && error?.payload?.code === "model_provider_unavailable";
 }

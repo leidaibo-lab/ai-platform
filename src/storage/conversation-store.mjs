@@ -116,7 +116,7 @@ export function createConversationStore({ databasePath }) {
      * @param {object} input - Run 和用户消息输入。
      * @returns {object} 新建或重放的 Run 状态。
      */
-    startRun({ conversationId, requestId, clientMessageId, content, displayContent, references = [] }) {
+    startRun({ conversationId, requestId, clientMessageId, content, displayContent, references = [], model = null }) {
       // Run、用户消息、序号和事件必须在同一事务创建。
       return withTransaction(database, () => {
         const existing = database
@@ -142,10 +142,10 @@ export function createConversationStore({ databasePath }) {
         const title = conversation.next_seq === 0 ? buildConversationTitle(displayContent) : conversation.title;
         database
           .prepare(
-            `INSERT INTO runs (id, conversation_id, request_id, status, created_at, updated_at)
-             VALUES (?, ?, ?, 'running', ?, ?)`,
+            `INSERT INTO runs (id, conversation_id, request_id, status, model, created_at, updated_at)
+             VALUES (?, ?, ?, 'running', ?, ?, ?)`,
           )
-          .run(runId, conversationId, requestId, now, now);
+          .run(runId, conversationId, requestId, model, now, now);
         database
           .prepare(
             `INSERT INTO messages (

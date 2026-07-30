@@ -22,6 +22,23 @@ export class RuntimeInputError extends Error {
   }
 }
 
+/** Runtime 对渠道公开的安全执行错误，不携带 provider 原始响应正文。 */
+export class RuntimeExecutionError extends Error {
+  /**
+   * @param {object} payload - 安全错误标题、原因、处理建议和分类。
+   * @param {number} [status=500] - 对应模型或运行阶段的公开状态。
+   * @param {unknown} [cause] - 仅供服务端诊断链使用的原始异常。
+   */
+  constructor(payload, status = 500, cause) {
+    super(payload.error || "Runtime execution failed");
+    this.name = "RuntimeExecutionError";
+    this.status = status;
+    this.payload = payload;
+    this.cause = cause;
+    this.resilience = cause?.resilience || null;
+  }
+}
+
 /**
  * 装配会话生命周期、幂等 Run、上下文规划、模型调用和结构化记忆。
  *
@@ -104,6 +121,7 @@ export function createChatRuntime({
       const input = normalizeRunInput(body);
       const validationError = validateRunInput(input);
       if (validationError) throw new RuntimeInputError(validationError);
+      const selectedModel = await resolveRunModel(gatewayClient, input.model);
       const chainTraceId = randomUUID();
       const deadlineAt = Date.now() + runTimeoutMs;
       if (typeof delivery.onChainTraceStarted === "function") {
@@ -132,6 +150,7 @@ export function createChatRuntime({
               content,
               displayContent,
               references: input.references,
+              model: selectedModel,
             }),
         );
         const effectiveChainTraceId = started.run.resilience?.traceId || chainTraceId;
@@ -165,7 +184,7 @@ export function createChatRuntime({
           controller,
           partialText: "",
           contextManifest: null,
-          model: gatewayClient.model,
+          model: selectedModel,
           resilienceContext,
         };
         activeRuns.set(runId, activeRun);
@@ -196,6 +215,7 @@ export function createChatRuntime({
                 currentDisplayContent: displayContent,
                 referencedMessages,
                 resilienceContext,
+                model: selectedModel,
               });
               span.setAttributes(buildContextTokenAttributes(result.observability));
               return result;
@@ -228,6 +248,7 @@ export function createChatRuntime({
                   currentDisplayContent: displayContent,
                   referencedMessages,
                   resilienceContext,
+                  model: selectedModel,
                 });
                 span.setAttributes(buildContextTokenAttributes(result.observability));
                 return result;
@@ -248,6 +269,7 @@ export function createChatRuntime({
 
           const data = await gatewayClient.chatCompletions({
             messages: plan.messages,
+            model: selectedModel,
             maxCompletionTokens: options.reservedOutputTokens,
             resilienceContext,
             operation: "model.generate",
@@ -266,7 +288,7 @@ export function createChatRuntime({
                 displayContent: assistantContent || "(空响应)",
                 usage: data?.usage || null,
                 contextManifest: plan.manifest,
-                model: data?.model || gatewayClient.model,
+                model: data?.model || selectedModel,
                 resilience: data?.resilience || null,
               }),
           );
@@ -301,13 +323,14 @@ export function createChatRuntime({
             );
             return buildCancelledRunResponse(cancelled, store.getConversation(conversationId));
           }
+          const publicError = toRuntimeExecutionError(error, selectedModel);
           await chainTracer.withSpan(
             "storage.fail_run",
             traceAttributes,
             /** 持久化失败状态，但不把原始错误响应写入 Trace 属性。 */
-            () => store.failRun(runId, error),
+            () => store.failRun(runId, publicError),
           );
-          throw error;
+          throw publicError;
         } finally {
           if (activeRuns.get(runId) === activeRun) activeRuns.delete(runId);
         }
@@ -331,6 +354,113 @@ export function createChatRuntime({
       });
     },
   };
+}
+
+/** 解析 Run 模型别名，并把目录校验异常转换为渠道安全错误。 */
+async function resolveRunModel(gatewayClient, requestedModel) {
+  try {
+    if (typeof gatewayClient?.resolveModel === "function") return await gatewayClient.resolveModel(requestedModel);
+    return String(requestedModel || gatewayClient?.model || "chat-default");
+  } catch (error) {
+    throw toRuntimeExecutionError(error, requestedModel || gatewayClient?.model);
+  }
+}
+
+/** 将模型或运行阶段异常映射为稳定、可执行且不包含原始响应正文的渠道错误。 */
+function toRuntimeExecutionError(error, model) {
+  if (error instanceof RuntimeExecutionError) return error;
+  const lastAttempt = readLastFailedAttempt(error?.resilience);
+  const statusCode = Number(error?.status ?? lastAttempt?.statusCode);
+  const errorType = String(lastAttempt?.errorType || "");
+  const rawMessage = String(error?.message || "").toLowerCase();
+  const modelLabel = String(model || "所选模型");
+  let payload;
+
+  if (errorType === "authorization" || statusCode === 401 || statusCode === 403 || /invalid_api_key|unauthorized|forbidden/.test(rawMessage)) {
+    payload = {
+      error: "模型鉴权失败",
+      detail: `${modelLabel} 的上游访问凭据无效或没有权限。`,
+      action: "请检查模型服务凭据与模型访问权限后重试。",
+      code: "model_authorization_failed",
+      retryable: false,
+      model: modelLabel,
+    };
+  } else if (errorType === "rate_limit" || statusCode === 429) {
+    payload = {
+      error: "模型服务限流",
+      detail: `${modelLabel} 当前请求过于频繁或额度暂时受限。`,
+      action: "请稍后重试，或切换到其他可用模型。",
+      code: "model_rate_limited",
+      retryable: true,
+      model: modelLabel,
+    };
+  } else if (errorType === "timeout" || statusCode === 408 || statusCode === 504) {
+    payload = {
+      error: "模型响应超时",
+      detail: `${modelLabel} 未在本次运行时限内返回完整结果。`,
+      action: "可缩短输入后重试，或切换到其他可用模型。",
+      code: "model_timeout",
+      retryable: true,
+      model: modelLabel,
+    };
+  } else if (errorType === "provider_unavailable" || statusCode >= 500) {
+    payload = {
+      error: "模型服务暂时不可用",
+      detail: `${modelLabel} 的上游服务当前异常。`,
+      action: "请稍后重试；持续失败时检查上游服务状态。",
+      code: "model_provider_unavailable",
+      retryable: true,
+      model: modelLabel,
+    };
+  } else if (error?.data?.code === "unsupported_model" || /unsupported model alias/.test(rawMessage)) {
+    payload = {
+      error: "所选模型不可用",
+      detail: `${modelLabel} 不在当前模型网关授权列表中。`,
+      action: "请重新检测模型列表并选择可用模型。",
+      code: "unsupported_model",
+      retryable: false,
+      model: modelLabel,
+    };
+  } else if (/context.*length|token.*limit|maximum context/.test(rawMessage)) {
+    payload = {
+      error: "上下文超过模型限制",
+      detail: `${modelLabel} 无法接收当前长度的会话上下文。`,
+      action: "请缩短输入、减少附件或新建会话后重试。",
+      code: "model_context_limit",
+      retryable: false,
+      model: modelLabel,
+    };
+  } else if (errorType === "invalid_request" || (statusCode >= 400 && statusCode < 500)) {
+    payload = {
+      error: "模型无法处理当前请求",
+      detail: `${modelLabel} 拒绝了当前输入或参数。`,
+      action: "请调整输入内容、附件或模型后重试。",
+      code: "model_invalid_request",
+      retryable: false,
+      model: modelLabel,
+    };
+  } else {
+    payload = {
+      error: "无法连接模型服务",
+      detail: `${modelLabel} 的模型调用未能完成。`,
+      action: "请检查模型网关与网络状态后重试。",
+      code: "model_connection_failed",
+      retryable: Boolean(error?.retryable),
+      model: modelLabel,
+    };
+  }
+
+  const publicStatus = Number.isFinite(statusCode) ? statusCode : 502;
+  return new RuntimeExecutionError(payload, publicStatus, error);
+}
+
+/** 从逐尝试证据中读取最后一个失败分类，忽略成功尝试。 */
+function readLastFailedAttempt(resilience) {
+  const attempts = Array.isArray(resilience?.attempts) ? resilience.attempts : [];
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    if (attempts[index]?.status === "failed") return attempts[index];
+  }
+  return null;
 }
 
 /** 将完成的幂等 Run 恢复为标准响应；运行中或失败 Run 返回冲突。 */

@@ -145,8 +145,12 @@ textarea {
   border-radius: 50%;
 }
 
-.gateway-dot.is-online {
+.gateway-dot.is-reachable {
   background: #238636;
+}
+
+.gateway-dot.is-checking {
+  background: #8c959f;
 }
 
 .conversation-list {
@@ -566,6 +570,11 @@ textarea {
   display: block;
 }
 
+.run-failure-copy .run-failure-recovery {
+  margin-top: 2px;
+  color: #6f4b4a;
+}
+
 .run-failure-copy strong {
   font-size: 13px;
   line-height: 20px;
@@ -651,6 +660,30 @@ textarea {
 .composer-dock .ant-sender-header-content {
   display: grid;
   gap: 8px;
+}
+
+.sender-footer {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.sender-model-select {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.sender-model-select .ant-typography {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.sender-model-select .ant-select {
+  width: 176px;
+  max-width: 42vw;
 }
 
 .reference-queue {
@@ -965,6 +998,10 @@ textarea {
   .run-failure-actions {
     grid-column: 2;
     justify-content: flex-start;
+  }
+
+  .sender-model-select .ant-select {
+    width: min(176px, 50vw);
   }
 }
 

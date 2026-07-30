@@ -8,11 +8,14 @@ import {
 import {
   activeRunStageLabel,
   buildConversationAnchors,
+  buildGatewayReachabilityCopy,
+  buildRunFailureCopy,
   canSubmitRun,
   conversationStatusLabel,
   insertLatestRunFailure,
   isMessageListAtLatest,
   readConversationDraft,
+  readGatewayModels,
   recoverRunInput,
   scrollMessageListToLatest,
   storeConversationDraft,
@@ -48,7 +51,7 @@ async function testCompletedRunStream() {
   }
   const terminal = await adapter.runConversationStream(
     "conversation/1",
-    { requestId: "request-1", clientMessageId: "message-1", message: "验证" },
+    { requestId: "request-1", clientMessageId: "message-1", model: "chat-quality", message: "验证" },
     { onRunStarted: recordRunStarted, onTextDelta: recordTextDelta, onCompleted: recordCompleted },
   );
 
@@ -57,6 +60,7 @@ async function testCompletedRunStream() {
   assert.deepEqual(stages, ["run:run-1", "delta:流式", "delta:回复", "completed:流式回复"]);
   assert.equal(requests[0].path, "/api/runtime/conversations/conversation%2F1/runs/stream");
   assert.equal(requests[0].options.method, "POST");
+  assert.equal(JSON.parse(requests[0].options.body).model, "chat-quality");
 }
 
 /** 验证 cancelled 是独立正常终止类型，不会被 Adapter 改写为异常。 */
@@ -144,11 +148,47 @@ function testLatestRunFailureMarker() {
     conversationId: "conversation-1",
     status: "failed",
     error: "provider secret body",
+    model: "chat-default",
+    resilience: {
+      attempts: [{ status: "failed", errorType: "authorization", statusCode: 401 }],
+    },
   });
   assert.equal(result[1].kind, "run-failure");
   assert.equal(result[1].sourceMessageId, "message-1");
   assert.equal("error" in result[1], false);
+  assert.deepEqual(result[1].failure, {
+    title: "模型鉴权失败",
+    detail: "chat-default 的上游访问凭据无效或没有权限。",
+    action: "请检查模型服务凭据与模型访问权限后重试。",
+    code: "model_authorization_failed",
+  });
   assert.deepEqual(insertLatestRunFailure(messages, { id: "run-1", status: "completed" }), messages);
+}
+
+/** 验证失败反馈按安全分类给出原因和处理建议，不回显 provider 原始正文。 */
+function testRunFailureCopy() {
+  assert.deepEqual(buildRunFailureCopy({
+    model: "chat-default",
+    error: "provider secret body",
+    resilience: { attempts: [{ status: "failed", errorType: "rate_limit", statusCode: 429 }] },
+  }), {
+    title: "模型服务限流",
+    detail: "chat-default 当前请求过于频繁或额度暂时受限。",
+    action: "请稍后重试，或切换到其他可用模型。",
+    code: "model_rate_limited",
+  });
+  assert.equal(buildRunFailureCopy({
+    model: "chat-default",
+    resilience: { attempts: [{ status: "failed", errorType: "timeout", statusCode: 504 }] },
+  }).title, "模型响应超时");
+  assert.equal(buildRunFailureCopy({
+    model: "chat-default",
+    resilience: { attempts: [{ status: "failed", errorType: "provider_unavailable", statusCode: 503 }] },
+  }).title, "模型服务暂时不可用");
+  assert.equal(buildRunFailureCopy({
+    model: "chat-default",
+    publicError: { code: "unsupported_model" },
+  }).title, "所选模型不可用");
 }
 
 /** 验证失败输入可从持久化展示和多模态事实恢复，不复用旧 requestId。 */
@@ -177,6 +217,33 @@ function testChannelStatusModel() {
   assert.equal(canSubmitRun({ conversationStatus: "closed", gatewayOk: true, activeRun: null, hasInput: true }), false);
   assert.equal(conversationStatusLabel("active"), "可继续");
   assert.equal(conversationStatusLabel("closed"), "已结束");
+  assert.deepEqual(buildGatewayReachabilityCopy(null), {
+    state: "checking",
+    label: "正在检查",
+    announcement: "正在检查模型网关",
+    detail: "正在检查 LiteLLM /v1/models",
+  });
+  assert.deepEqual(buildGatewayReachabilityCopy({
+    ok: true,
+    model: "chat-default",
+    gatewayBaseUrl: "http://localhost:4000/v1",
+  }), {
+    state: "reachable",
+    label: "网关可达 · chat-default",
+    announcement: "模型网关可达：chat-default；上游生成能力未验证",
+    detail: "http://localhost:4000/v1；仅验证 LiteLLM /v1/models，上游生成能力需以实际请求为准",
+  });
+  assert.deepEqual(buildGatewayReachabilityCopy({ ok: false, error: "ECONNREFUSED" }), {
+    state: "unreachable",
+    label: "模型网关不可达",
+    announcement: "模型网关仍不可达",
+    detail: "ECONNREFUSED",
+  });
+  assert.deepEqual(
+    readGatewayModels({ model: "chat-default", models: ["chat-default", "chat-quality", "chat-default"] }),
+    ["chat-default", "chat-quality"],
+  );
+  assert.deepEqual(readGatewayModels({ model: "chat-default" }), ["chat-default"]);
 }
 
 /** 验证会话锚点只保留用户消息，并排除助手回复和失败提示等派生展示项。 */
@@ -199,14 +266,17 @@ function testConversationDraftIsolation() {
     value: "会话一草稿",
     attachments: [{ uid: "attachment-1" }],
     references: [{ messageId: "message-1" }],
+    model: "chat-quality",
   });
   const second = storeConversationDraft(first, "conversation-2", {
     value: "会话二草稿",
     attachments: [],
     references: [],
+    model: "chat-default",
   });
   assert.equal(initial.size, 0);
   assert.equal(readConversationDraft(second, "conversation-1").value, "会话一草稿");
+  assert.equal(readConversationDraft(second, "conversation-1").model, "chat-quality");
   assert.equal(readConversationDraft(second, "conversation-2").value, "会话二草稿");
 
   const restored = readConversationDraft(second, "conversation-1");
@@ -217,9 +287,11 @@ function testConversationDraftIsolation() {
     value: "",
     attachments: [],
     references: [],
+    model: "chat-quality",
   });
-  assert.equal(cleared.has("conversation-1"), false);
+  assert.equal(cleared.has("conversation-1"), true);
   assert.equal(readConversationDraft(cleared, "conversation-1").value, "");
+  assert.equal(readConversationDraft(cleared, "conversation-1").model, "chat-quality");
   assert.equal(cleared.get("conversation-2").value, "会话二草稿");
 }
 
@@ -262,6 +334,7 @@ test("Demo Adapter maps cancelled POST SSE", testCancelledRunStream);
 test("Demo Adapter maps error POST SSE", testErrorRunStream);
 test("Demo Adapter preserves JSON resource paths", testJsonResourceMapping);
 test("Demo view model persists the latest failed Run marker", testLatestRunFailureMarker);
+test("Demo view model maps safe run failure feedback", testRunFailureCopy);
 test("Demo view model recovers failed Run input", testRecoverRunInput);
 test("Demo view model guards submission and labels lifecycle", testChannelStatusModel);
 test("Demo view model builds conversation anchors", testConversationAnchors);

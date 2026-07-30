@@ -7,6 +7,7 @@
 - 关联需求：在不替换 Agent Runtime、会话事实源和现有 SSE 契约的前提下，补齐 C1 对话的输入、生成状态、结果展示、取消和引用体验
 - 关联 OpenSpec：`openspec/specs/ai-platform/spec.md`
 - 替代记录：无
+- 后续补充：`2026-07-30-c1-model-selection-and-failure-feedback.md` 扩展 Run 模型选择与分类失败反馈，不改变本记录的 UI 方案结论
 
 ## 问题
 
@@ -78,7 +79,7 @@
 - 渠道页面使用 Ant Design X 组件，并通过独立 Adapter 消费现有 Runtime JSON/SSE API。
 - `Conversations`、`Bubble` 和 `Sender` 的本地状态只负责即时展示；完成态必须由服务端 Conversation/Run 事实收口。
 - 会话生命周期与模型生成状态分开表达：`active` 显示为“可继续”，只有活动 Run 才显示“生成中”或“正在停止”。
-- 模型网关未确认在线时允许继续编辑渠道草稿，但发送门禁必须阻止创建无效 Run，并提供重新检测入口。
+- 模型网关未确认可达时允许继续编辑渠道草稿，但发送门禁必须阻止创建无效 Run，并提供重新检测入口；该状态只代表 LiteLLM `/v1/models` 可访问，不得表述为上游模型生成可用。
 - 最近失败 Run 通过 `latestRun.id -> userMessage.runId` 生成持久失败提示，只显示渠道安全文案；恢复输入必须生成新的渠道附件身份，并在再次发送时创建新的 `requestId` 和 `clientMessageId`。
 - `Think` 或 `ThoughtChain` 只映射真实的 accepted、processing、tool、source、completed、cancelled 和 failed 证据；没有服务端事件时不得伪造阶段。
 - 消息引用使用稳定、带类型的引用对象；当前 C1 只开放 `conversation_message`，未来来源按场景逐类进入稳定契约。
