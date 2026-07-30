@@ -19,6 +19,7 @@ import {
   Input,
   Modal,
   Progress,
+  Select,
   Tag,
   Tooltip,
   Typography,
@@ -50,11 +51,14 @@ import {
 } from "lucide-react";
 import {
   activeRunStageLabel,
+  buildGatewayReachabilityCopy,
   buildMessagePreview,
+  buildRunFailureCopy,
   canSubmitRun,
   conversationStatusLabel,
   insertLatestRunFailure,
   isMessageListAtLatest,
+  readGatewayModels,
   readConversationDraft,
   recoverRunInput,
   scrollMessageListToLatest as scrollReadyMessageListToLatest,
@@ -94,7 +98,7 @@ async function loadGatewayStatusSafely() {
   try {
     return await runtimeAdapter.getGatewayStatus();
   } catch (error) {
-    return { ok: false, error: error.message, model: "-", gatewayBaseUrl: "-" };
+    return { ok: false, error: error.message, model: "-", models: [], gatewayBaseUrl: "-" };
   }
 }
 
@@ -111,6 +115,7 @@ export default function App() {
   const [activeRun, setActiveRun] = useState(null);
   const [initializing, setInitializing] = useState(true);
   const [gatewayChecking, setGatewayChecking] = useState(false);
+  const [selectedModel, setSelectedModel] = useState("");
   const [runError, setRunError] = useState("");
   const [lastLatency, setLastLatency] = useState(null);
   const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
@@ -124,6 +129,7 @@ export default function App() {
   const composerValueRef = useRef("");
   const attachmentFactsRef = useRef([]);
   const referenceFactsRef = useRef([]);
+  const selectedModelRef = useRef("");
   const conversationDraftsRef = useRef(new Map());
   const visibleMessageCountRef = useRef({ conversationId: null, count: 0 });
   const activeRunRef = useRef(null);
@@ -138,6 +144,7 @@ export default function App() {
         const data = await initializeWorkspace();
         if (disposed) return;
         setGateway(data.gateway);
+        setSelectedModelFact(resolveSelectedModel(data.gateway));
         setConversations(data.conversations);
         setCurrentConversationId(data.conversation.id);
         setConversation(data.conversation);
@@ -220,6 +227,22 @@ export default function App() {
     setReferences(next);
   }
 
+  /** 同步 React 与 ref 中的当前模型别名，保证异步发送读取的是已确认选择。 */
+  function setSelectedModelFact(next) {
+    const normalized = String(next || "").trim();
+    selectedModelRef.current = normalized;
+    setSelectedModel(normalized);
+  }
+
+  /** 在网关可见别名中保留当前选择，不可用时回退默认或第一个别名。 */
+  function resolveSelectedModel(nextGateway, requestedModel = selectedModelRef.current) {
+    const models = readGatewayModels(nextGateway);
+    const requested = String(requestedModel || "").trim();
+    if (models.includes(requested)) return requested;
+    const defaultModel = String(nextGateway?.model || "").trim();
+    return models.includes(defaultModel) ? defaultModel : models[0] || "";
+  }
+
   /** 保存当前会话尚未发送的渠道草稿；空草稿会清理旧快照。 */
   function saveCurrentConversationDraft() {
     conversationDraftsRef.current = storeConversationDraft(
@@ -229,6 +252,7 @@ export default function App() {
         value: composerValueRef.current,
         attachments: attachmentFactsRef.current,
         references: referenceFactsRef.current,
+        model: selectedModelRef.current,
       },
     );
   }
@@ -239,6 +263,7 @@ export default function App() {
     setComposerFact(draft.value);
     setAttachmentFacts(draft.attachments);
     setReferenceFacts(draft.references);
+    setSelectedModelFact(resolveSelectedModel(gateway, draft.model));
   }
 
   /** 删除指定会话已经发送或主动结束的渠道草稿。 */
@@ -246,7 +271,7 @@ export default function App() {
     conversationDraftsRef.current = storeConversationDraft(
       conversationDraftsRef.current,
       conversationId,
-      { value: "", attachments: [], references: [] },
+      { value: "", attachments: [], references: [], model: selectedModelRef.current },
     );
   }
 
@@ -268,10 +293,12 @@ export default function App() {
     setGatewayChecking(true);
     const next = await loadGatewayStatusSafely();
     setGateway(next);
+    setSelectedModelFact(resolveSelectedModel(next));
     setGatewayChecking(false);
     if (announce) {
-      if (next.ok) toastApi.success(`模型网关已连接：${next.model}`);
-      else toastApi.warning("模型网关仍未连接");
+      const copy = buildGatewayReachabilityCopy(next);
+      if (next.ok) toastApi.success(copy.announcement);
+      else toastApi.warning(copy.announcement);
     }
     return next;
   }
@@ -353,6 +380,12 @@ export default function App() {
   /** 更新受控 Sender 文本。 */
   function handleComposerChange(value) {
     setComposerFact(value);
+  }
+
+  /** 更新当前会话 Sender 使用的模型别名，活动 Run 期间保持选择不可变。 */
+  function handleModelChange(value) {
+    if (activeRunRef.current) return;
+    setSelectedModelFact(value);
   }
 
   /** 将选中的建议填入 Sender，仍由用户决定是否发送。 */
@@ -564,10 +597,19 @@ export default function App() {
     const current = conversation;
     if (!current || current.status !== "active" || activeRunRef.current) return;
     if (gateway?.ok !== true) {
-      toastApi.warning("模型网关未连接，请重新检测后再发送");
+      toastApi.warning("模型网关不可达，请重新检测后再发送");
       return;
     }
-    const payload = buildRunPayload(value, attachmentFactsRef.current, referenceFactsRef.current);
+    if (!selectedModelRef.current) {
+      toastApi.warning("当前没有可用模型，请重新检测模型网关");
+      return;
+    }
+    const payload = buildRunPayload(
+      value,
+      attachmentFactsRef.current,
+      referenceFactsRef.current,
+      selectedModelRef.current,
+    );
     if (!hasRunInput(payload)) return;
 
     const startedAt = performance.now();
@@ -577,6 +619,7 @@ export default function App() {
       requestId: payload.requestId,
       runId: null,
       status: "starting",
+      model: payload.model,
       partialText: "",
       optimisticUser,
     };
@@ -621,14 +664,23 @@ export default function App() {
       setLastLatency(Math.round(performance.now() - startedAt));
       if (terminal.type === "cancelled") toastApi.info("已停止生成");
     } catch (error) {
-      setRunError(error.message);
+      const failure = buildRunFailureCopy({
+        status: "failed",
+        statusCode: error.status,
+        error: error.message,
+        publicError: error.payload,
+        model: payload.model,
+      });
       void refreshGatewayStatus();
+      let persistedFailure = false;
       try {
         const detail = await runtimeAdapter.getConversation(current.id);
+        persistedFailure = detail.latestRun?.status === "failed" && detail.latestRun?.requestId === payload.requestId;
         if (currentConversationId === current.id) setConversation(detail);
       } catch {
         // 原始流错误已经足够诊断，恢复读取失败不覆盖它。
       }
+      setRunError(persistedFailure ? "" : `${failure.title}：${error.payload?.detail || failure.detail}`);
     } finally {
       cancelRequestedRef.current = false;
       setActiveRunFact(null);
@@ -773,11 +825,35 @@ export default function App() {
     activeRun,
     hasInput: composerValue.trim() || attachments.length > 0 || references.length > 0,
   });
+  const modelOptions = readGatewayModels(gateway).map(
+    // Ant Design Select 只需要稳定别名，不暴露真实上游模型配置。
+    (model) => ({ value: model, label: model }),
+  );
 
   /** 使用 Sender 提供的原生发送按钮，同时允许附件或引用作为唯一输入。 */
   function renderSenderSuffix(originalNode, { components }) {
     if (activeRun) return originalNode;
     return <components.SendButton disabled={!canSubmit} />;
+  }
+
+  /** 在 Sender footer 中只渲染当前 Run 模型选择，发送动作继续由 suffix 唯一承载。 */
+  function renderSenderFooter() {
+    return (
+      <div className="sender-footer">
+        <div className="sender-model-select">
+          <Text type="secondary">模型</Text>
+          <Select
+            size="small"
+            value={selectedModel || undefined}
+            options={modelOptions}
+            disabled={Boolean(activeRun) || gateway?.ok !== true || modelOptions.length === 0}
+            placeholder="无可用模型"
+            aria-label="选择模型"
+            onChange={handleModelChange}
+          />
+        </div>
+      </div>
+    );
   }
 
   const attachmentMenu = {
@@ -898,7 +974,7 @@ export default function App() {
               className="gateway-alert"
               type="warning"
               showIcon
-              message="模型网关未连接，当前输入会保留但无法发送"
+              message="模型网关不可达，当前输入会保留但无法发送"
               action={(
                 <Button size="small" loading={gatewayChecking} onClick={handleRefreshGateway}>
                   重新检测
@@ -925,6 +1001,7 @@ export default function App() {
               </Dropdown>
             }
             suffix={renderSenderSuffix}
+            footer={renderSenderFooter}
             header={
               <Sender.Header forceRender open={senderHeaderOpen} title={senderHeaderTitle} closable={false}>
                 <ReferenceQueue references={references} onRemove={handleRemoveReference} />
@@ -1013,6 +1090,7 @@ function ConversationPanel({
   onCreate,
   onRefreshGateway,
 }) {
+  const gatewayCopy = buildGatewayReachabilityCopy(gateway);
   const items = [];
   for (const item of conversations) {
     items.push({
@@ -1038,9 +1116,9 @@ function ConversationPanel({
         </div>
       </div>
       <div className="gateway-line">
-        <span className={`gateway-dot ${gateway?.ok ? "is-online" : "is-offline"}`} />
-        <Tooltip title={gateway?.gatewayBaseUrl || gateway?.error || "正在检查"}>
-          <Text ellipsis>{gateway?.ok ? gateway.model : gateway ? "模型网关未连接" : "正在检查"}</Text>
+        <span className={`gateway-dot is-${gatewayCopy.state}`} />
+        <Tooltip title={gatewayCopy.detail}>
+          <Text ellipsis>{gatewayCopy.label}</Text>
         </Tooltip>
         <Tooltip title="重新检测模型网关">
           <Button
@@ -1237,6 +1315,7 @@ function MessageActions({ message, onQuote, onCopy }) {
 
 /** 渲染持久失败状态和不改变 Runtime 契约的恢复入口。 */
 function RunFailureNotice({ message, onRestore, onOpenContext }) {
+  const failure = message.failure || buildRunFailureCopy(message);
   /** 恢复与失败 Run 关联的稳定用户消息。 */
   function restoreSourceInput() {
     onRestore(message.sourceMessageId);
@@ -1245,8 +1324,9 @@ function RunFailureNotice({ message, onRestore, onOpenContext }) {
     <div id={messageElementId(message.id)} className="run-failure-notice" role="status" tabIndex={-1}>
       <CircleAlert size={18} />
       <div className="run-failure-copy">
-        <strong>本次生成失败</strong>
-        <span>输入已保存，可恢复后调整并重新发送。</span>
+        <strong>{failure.title}</strong>
+        <span>{failure.detail}</span>
+        <span className="run-failure-recovery">{failure.action} 输入已保存。</span>
       </div>
       <div className="run-failure-actions">
         <Button size="small" icon={<RotateCcw size={14} />} onClick={restoreSourceInput}>恢复输入</Button>
@@ -1346,8 +1426,8 @@ function resolveReferenceMessages(references, messages) {
   return resolved;
 }
 
-/** 生成只包含当前输入、附件地址、引用 ID 和幂等标识的 Run 载荷。 */
-function buildRunPayload(value, attachments, references) {
+/** 生成只包含模型别名、当前输入、附件地址、引用 ID 和幂等标识的 Run 载荷。 */
+function buildRunPayload(value, attachments, references, model) {
   const imageUrls = [];
   const documentUrls = [];
   for (const attachment of attachments) {
@@ -1361,6 +1441,7 @@ function buildRunPayload(value, attachments, references) {
   return {
     requestId: crypto.randomUUID(),
     clientMessageId: crypto.randomUUID(),
+    model: String(model || "").trim(),
     message: String(value || "").trim(),
     imageUrls,
     documentUrls,

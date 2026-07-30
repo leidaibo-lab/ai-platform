@@ -6,6 +6,8 @@
  * @property {string} gatewayBaseUrl - 对外 OpenAI-compatible 基础地址。
  * @property {string} model - Runtime 使用的模型别名。
  * @property {() => Promise<object>} status - LiteLLM 状态探测。
+ * @property {(options?: object) => Promise<string[]>} listModels - 当前 key 可见的模型别名。
+ * @property {(requestedModel?: string) => Promise<string>} resolveModel - 解析并校验单次 Run 模型别名。
  * @property {(input: object) => Promise<object>} chatCompletions - 模型生成调用。
  * @property {(input: object) => Promise<object>} countTokens - LiteLLM token counter 调用。
  */

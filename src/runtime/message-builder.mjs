@@ -8,6 +8,7 @@ export function normalizeRunInput(body) {
   return {
     requestId: String(body?.requestId || "").trim(),
     clientMessageId: String(body?.clientMessageId || "").trim(),
+    model: String(body?.model || "").trim(),
     message: String(body?.message || "").trim(),
     imageUrls: normalizeUrlList(body?.imageUrls),
     documentUrls: normalizeUrlList(body?.documentUrls),
@@ -24,6 +25,9 @@ export function normalizeRunInput(body) {
 export function validateRunInput(input) {
   if (!input.requestId || !input.clientMessageId) {
     return { error: "requestId and clientMessageId are required" };
+  }
+  if (input.model.length > 160 || /[\r\n\0]/.test(input.model)) {
+    return { error: "model must be a valid model alias", code: "invalid_model" };
   }
   if (!Array.isArray(input.references)) {
     return { error: "references must be an array", code: "invalid_references" };

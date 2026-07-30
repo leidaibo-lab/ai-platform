@@ -167,21 +167,24 @@ npm run demo:ui
 
 Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
 
+会话输入区的模型选择器读取 `GET /api/gateway/status` 返回的 `models`，这些值是当前 `LITELLM_MASTER_KEY` 在 LiteLLM `/v1/models` 中可见的稳定别名，不是真实上游模型配置。当前 `config.yaml` 只配置 `chat-default` 时，选择器会只有一个选项；需要更多选项时，先在 LiteLLM `model_list` 中增加对应别名和上游映射。
+
 Demo 输入区支持：
 
 - 正文：直接输入问题或指令。
 - 图片：可以上传本地图片，也可以粘贴图片 URL；Demo Server 会按 OpenAI-compatible 的 `image_url` 多模态格式转发。
 - 文档链接：可以粘贴一个或多个链接，Demo Server 会把它们作为文本上下文附在用户消息里。
 - 消息引用：可以引用当前会话中的用户或助手消息；渠道只提交稳定 `messageId`，Runtime 从 SQLite 事实源解析正文。
+- 模型选择：Sender 内选择当前 Run 使用的 LiteLLM 模型别名；未选择时回退服务端 `LITELLM_MODEL`，token counter 与模型生成使用同一别名。
 - 多会话：Runtime 使用 SQLite 持久化会话和完整原始消息；刷新页面、切换标签页后仍能继续会话。会话生命周期显示为“可继续 / 已结束”，只在存在活动 Run 时显示“生成中 / 正在停止”。
 - 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK `streamText` 文本增量，由 X Markdown 渲染；完整回答结束后才一次性落库。
 - 停止生成：生成期间调用 Runtime 取消端点，中止模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
-- 发送门禁：模型网关未确认在线时保留可编辑草稿和附件，但禁止提交无效 Run；页面提供显式重新检测入口。
-- 失败恢复：最近一次失败 Run 会在对应用户消息后保留渠道安全提示，可恢复正文、图片、文档链接和消息引用后调整再发送；恢复不会复用原有幂等标识。
+- 发送门禁：模型网关未确认可达时保留可编辑草稿和附件，但禁止提交无效 Run；页面提供显式重新检测入口。该探测只验证 LiteLLM `/v1/models`，不代表上游模型生成一定可用。
+- 失败反馈与恢复：最近一次失败 Run 会在对应用户消息后说明鉴权、限流、超时、模型不可用或上游服务异常，并给出处理建议；页面不展示 provider 原始错误正文。用户仍可恢复正文、图片、文档链接和消息引用后调整再发送，恢复不会复用原有幂等标识。
 - 多端同步：同一会话通过独立的 SSE 事件游标刷新已持久化事实；客户端不再保存或提交历史事实源。
 - 消息操作：已持久化消息只提供复制和引用，不提供删除或原位编辑；桌面在消息悬停或操作聚焦时显示快捷操作，移动端收敛为单一操作菜单，用户纠正通过追加新消息表达。
 - 会话导航：桌面会话区左侧将用户发起的消息聚合为居中的等长锚点；悬停时刻度横向展开并预览摘要，点击后按稳定 `messageId` 定位并高亮原消息，助手回复不生成锚点。
-- 会话草稿：当前页面生命周期内按稳定 `conversationId` 隔离正文、附件和引用；切换会话会保存并恢复各自草稿，发送或结束会话后清理对应快照。
+- 会话草稿：当前页面生命周期内按稳定 `conversationId` 隔离正文、附件、引用和模型选择；切换会话会保存并恢复各自草稿，发送后清理已提交输入并保留当前模型选择。
 - 长会话跟随：位于底部时继续跟随流式回答，用户主动向上浏览后保留当前视窗并显示“回到最新”；活动回答附近只展示 `starting / running / stopping` 已有事实对应的渠道状态。
 - 结构化记忆：Memory Manager 提取目标、约束、偏好、事实、决策、任务和 Episode，用户纠正会废弃旧事实并保留来源消息。
 - 运行上下文：桌面默认收起 Inspector，按需展开；移动端通过 Drawer 展示 Context Manifest、Token 装箱结果与 active 结构化记忆。引用预览可按稳定 `messageId` 定位并高亮原消息。
@@ -217,7 +220,7 @@ Demo Server API 按层级暴露：
 
 | API | 说明 |
 | --- | --- |
-| `GET /api/gateway/status` | 检查 LiteLLM 连接状态、gateway base url 和模型别名 |
+| `GET /api/gateway/status` | 检查 LiteLLM `/v1/models` 可达性，并返回 gateway base url、默认别名和当前 key 可见的 `models` |
 | `GET /api/runtime/conversations` | 列出持久化会话 |
 | `POST /api/runtime/conversations` | 创建会话 |
 | `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆和版本状态 |
@@ -227,12 +230,13 @@ Demo Server API 按层级暴露：
 | `POST /api/runtime/conversations/{id}/close` | 完成最终 checkpoint 并结束会话 |
 | `GET /api/runtime/conversations/{id}/events` | 订阅多端增量事件流 |
 
-Run 请求只包含当前输入和幂等标识：
+Run 请求只包含模型别名、当前输入和幂等标识：
 
 ```json
 {
   "requestId": "request-uuid",
   "clientMessageId": "message-uuid",
+  "model": "chat-default",
   "message": "当前问题",
   "imageUrls": [],
   "documentUrls": [],
