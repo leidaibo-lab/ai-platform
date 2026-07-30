@@ -28,9 +28,10 @@ const contextOptions = {
  *
  * @param {object} [options] - 可选测试依赖。
  * @param {object} [options.gatewayClient] - 替换默认脚本模型的 Gateway。
+ * @param {object} [options.chainTracer] - 替换默认 Null Object 的 ChainTracer。
  * @returns {object} 可供单元测试或 fixture runner 使用的 Runtime 装配。
  */
-function createTestRuntime({ gatewayClient = createScriptedGateway() } = {}) {
+function createTestRuntime({ gatewayClient = createScriptedGateway(), chainTracer } = {}) {
   const store = createConversationStore({ databasePath: ":memory:" });
   const coordinator = createConversationCoordinator();
   const contextPlanner = createContextPlanner({
@@ -47,6 +48,7 @@ function createTestRuntime({ gatewayClient = createScriptedGateway() } = {}) {
     coordinator,
     contextPlanner,
     memoryManager,
+    chainTracer,
   });
   return { store, gatewayClient, contextPlanner, memoryManager, runtime };
 }
@@ -296,6 +298,202 @@ test("conversation store migrates retry evidence column for existing databases",
   assert.equal(hasResilienceColumn, true);
 });
 
+// 验证旧版完整 Run/Message 关系升级后保留外键，并允许 cancelled 状态与结构化引用。
+test("conversation store migrates cancellation and references without breaking message run links", () => {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "ai-platform-cancel-migration-"));
+  const databasePath = join(temporaryDirectory, "legacy.sqlite");
+  try {
+    const legacyDatabase = new DatabaseSync(databasePath);
+    legacyDatabase.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE conversations (
+        id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('active', 'closed')), version INTEGER NOT NULL,
+        memory_version INTEGER NOT NULL, summarized_through_seq INTEGER NOT NULL, next_seq INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        request_id TEXT NOT NULL, user_message_id TEXT, assistant_message_id TEXT,
+        status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+        model TEXT, usage_json TEXT, context_manifest_json TEXT, error TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(conversation_id, request_id)
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL, client_message_id TEXT,
+        run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+        content_json TEXT NOT NULL, display_content TEXT NOT NULL, status TEXT NOT NULL,
+        usage_json TEXT, created_at TEXT NOT NULL,
+        UNIQUE(conversation_id, seq), UNIQUE(conversation_id, client_message_id)
+      );
+      INSERT INTO conversations VALUES (
+        'legacy-conversation', 'local', 'local-user', '旧会话', 'active', 1, 0, 0, 2,
+        '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z'
+      );
+      INSERT INTO runs VALUES (
+        'legacy-run', 'legacy-conversation', 'legacy-request', 'legacy-user', 'legacy-assistant',
+        'completed', 'legacy-model', NULL, NULL, NULL,
+        '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z'
+      );
+      INSERT INTO messages VALUES (
+        'legacy-user', 'legacy-conversation', 1, 'legacy-client', 'legacy-run', 'user',
+        '"旧问题"', '旧问题', 'committed', NULL, '2026-07-29T00:00:00.000Z'
+      );
+      INSERT INTO messages VALUES (
+        'legacy-assistant', 'legacy-conversation', 2, NULL, 'legacy-run', 'assistant',
+        '"旧回答"', '旧回答', 'committed', NULL, '2026-07-29T00:00:00.000Z'
+      );
+    `);
+    legacyDatabase.close();
+
+    const store = createConversationStore({ databasePath });
+    const detail = store.getConversation("legacy-conversation");
+    assert.deepEqual(detail.messages.map(getRunId), ["legacy-run", "legacy-run"]);
+    assert.deepEqual(detail.messages.map(getReferences), [[], []]);
+    store.close();
+
+    const migratedDatabase = new DatabaseSync(databasePath);
+    const runSql = migratedDatabase.prepare("SELECT sql FROM sqlite_master WHERE name = 'runs'").get().sql;
+    const foreignKeyViolations = migratedDatabase.prepare("PRAGMA foreign_key_check").all();
+    assert.match(runSql, /cancelled/);
+    assert.deepEqual(foreignKeyViolations, []);
+    migratedDatabase.close();
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+// 验证直接消息引用由服务端解析并写入 Manifest，渠道伪造正文不会进入模型上下文。
+test("conversation message references use server facts and reject invalid sources", async () => {
+  const gatewayClient = createCapturingGateway();
+  const fixture = createTestRuntime({ gatewayClient });
+  const conversation = fixture.runtime.createConversation();
+  const otherConversation = fixture.runtime.createConversation();
+  await run(fixture.runtime, conversation.id, 1, "服务端原始事实");
+  await run(fixture.runtime, otherConversation.id, 1, "其他会话事实");
+  const sourceMessages = fixture.runtime.getConversation(conversation.id).messages;
+  const foreignMessage = fixture.runtime.getConversation(otherConversation.id).messages[0];
+
+  const response = await fixture.runtime.runConversation(conversation.id, {
+    requestId: "reference-request",
+    clientMessageId: "reference-client",
+    message: "基于引用回答",
+    references: [
+      { type: "conversation_message", messageId: sourceMessages[0].id, content: "渠道伪造正文" },
+      { type: "conversation_message", messageId: sourceMessages[1].id },
+    ],
+  });
+  const modelMessages = gatewayClient.requests.at(-1);
+  const modelText = modelMessages.map(getMessageContent).join("\n");
+  const persisted = fixture.runtime.getConversation(conversation.id).messages.at(-2);
+
+  assert.match(modelText, /服务端原始事实/);
+  assert.match(modelText, /测试回复/);
+  assert.doesNotMatch(modelText, /渠道伪造正文/);
+  assert.deepEqual(response.context.selected.referenceMessageIds, sourceMessages.map(getMessageId));
+  assert.deepEqual(persisted.references, sourceMessages.map(toConversationMessageReference));
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      requestId: "foreign-reference-request",
+      clientMessageId: "foreign-reference-client",
+      message: "跨会话引用",
+      references: [{ type: "conversation_message", messageId: foreignMessage.id }],
+    }),
+    isInvalidMessageReference,
+  );
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      requestId: "unknown-reference-request",
+      clientMessageId: "unknown-reference-client",
+      message: "未知引用",
+      references: [{ type: "document_chunk", messageId: sourceMessages[0].id }],
+    }),
+    isUnsupportedReferenceType,
+  );
+  fixture.store.close();
+});
+
+// 验证首个文本增量前取消不会创建空助手消息，且重复取消保持幂等。
+test("cancelling before the first delta persists no assistant message", async () => {
+  const controlled = createCancellableGateway();
+  const fixture = createTestRuntime({ gatewayClient: controlled.gatewayClient });
+  const conversation = fixture.runtime.createConversation();
+  let runId = null;
+  const runPromise = fixture.runtime.runConversation(
+    conversation.id,
+    { requestId: "cancel-empty-request", clientMessageId: "cancel-empty-client", message: "立即停止" },
+    {
+      /** 保存可供取消端点使用的 Run ID。 */
+      onRunStarted(event) {
+        runId = event.run.id;
+      },
+    },
+  );
+  await controlled.waitUntilGenerating;
+  const firstCancellation = fixture.runtime.cancelConversationRun(conversation.id, runId);
+  const result = await runPromise;
+  const repeatedCancellation = fixture.runtime.cancelConversationRun(conversation.id, runId);
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.equal(firstCancellation.run.status, "cancelled");
+  assert.equal(result.cancelled, true);
+  assert.equal(repeatedCancellation.run.status, "cancelled");
+  assert.equal(controlled.getCallCount(), 1);
+  assert.equal(detail.messages.length, 1);
+  assert.equal(detail.latestRun.status, "cancelled");
+  fixture.store.close();
+});
+
+// 验证增量后取消只落一条 interrupted 消息，默认排除但显式引用时进入上下文。
+test("cancelling after a delta persists one explicitly referenceable interrupted message", async () => {
+  const controlled = createCancellableGateway({ partialText: "部分回答" });
+  const fixture = createTestRuntime({ gatewayClient: controlled.gatewayClient });
+  const conversation = fixture.runtime.createConversation();
+  let runId = null;
+  const runPromise = fixture.runtime.runConversation(
+    conversation.id,
+    { requestId: "cancel-partial-request", clientMessageId: "cancel-partial-client", message: "生成后停止" },
+    {
+      /** 保存可供取消端点使用的 Run ID。 */
+      onRunStarted(event) {
+        runId = event.run.id;
+      },
+      /** 消费测试增量，模拟 SSE 渠道已经交付正文。 */
+      onTextDelta() {},
+    },
+  );
+  await controlled.waitUntilDelta;
+  fixture.runtime.cancelConversationRun(conversation.id, runId);
+  await runPromise;
+  const interrupted = fixture.runtime.getConversation(conversation.id).messages.at(-1);
+
+  await run(fixture.runtime, conversation.id, 2, "普通后续问题");
+  const ordinaryContext = controlled.requests.at(-1).map(getMessageContent).join("\n");
+  assert.doesNotMatch(ordinaryContext, /部分回答/);
+
+  const referenced = await fixture.runtime.runConversation(conversation.id, {
+    requestId: "reference-interrupted-request",
+    clientMessageId: "reference-interrupted-client",
+    message: "引用中断回答",
+    references: [{ type: "conversation_message", messageId: interrupted.id }],
+  });
+  const referencedContext = controlled.requests.at(-1).map(getMessageContent).join("\n");
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.equal(interrupted.status, "interrupted");
+  assert.equal(interrupted.displayContent, "部分回答");
+  assert.match(referencedContext, /role=assistant\/interrupted/);
+  assert.match(referencedContext, /部分回答/);
+  assert.deepEqual(referenced.context.selected.referenceMessageIds, [interrupted.id]);
+  assert.equal(detail.messages.filter(isInterruptedMessage).length, 1);
+  fixture.store.close();
+});
+
 // 验证用户纠正会废弃旧事实，Context Planner 只发送 active 最新值。
 test("structured memory keeps the latest corrected fact", async () => {
   const fixture = createTestRuntime();
@@ -394,6 +592,123 @@ function getMessageRole(message) {
 /** 返回持久化消息展示内容，供顺序断言复用。 */
 function getDisplayContent(message) {
   return message.displayContent;
+}
+
+/** 返回消息关联 Run ID，供迁移后外键关系断言使用。 */
+function getRunId(message) {
+  return message.runId;
+}
+
+/** 返回消息结构化引用，供迁移和持久化断言使用。 */
+function getReferences(message) {
+  return message.references;
+}
+
+/** 返回消息稳定 ID。 */
+function getMessageId(message) {
+  return message.id;
+}
+
+/** 将消息映射为当前 C1 稳定引用对象。 */
+function toConversationMessageReference(message) {
+  return { type: "conversation_message", messageId: message.id };
+}
+
+/** 判断错误是否为跨会话或不存在的消息引用。 */
+function isInvalidMessageReference(error) {
+  return error instanceof ConversationStoreError && error.code === "invalid_message_reference";
+}
+
+/** 判断错误是否为当前契约尚未开放的引用类型。 */
+function isUnsupportedReferenceType(error) {
+  return error?.payload?.code === "unsupported_reference_type";
+}
+
+/** 判断消息是否为取消后保存的中断助手消息。 */
+function isInterruptedMessage(message) {
+  return message.status === "interrupted";
+}
+
+/** 创建记录每次模型上下文的确定性 Gateway。 */
+function createCapturingGateway() {
+  const requests = [];
+  return {
+    model: "capturing-test-model",
+    requests,
+    /** 返回固定 token 数，避免引用测试依赖真实管理端点。 */
+    async countTokens() {
+      return { tokens: 10, source: "scripted", model: this.model };
+    },
+    /** 记录服务端构造的模型消息并返回固定回复。 */
+    async chatCompletions({ messages }) {
+      requests.push(messages);
+      return {
+        model: this.model,
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        choices: [{ message: { content: "测试回复" } }],
+      };
+    },
+  };
+}
+
+/** 创建首个调用可由 AbortSignal 终止、后续调用正常完成的脚本化 Gateway。 */
+function createCancellableGateway({ partialText = "" } = {}) {
+  const requests = [];
+  let callCount = 0;
+  let resolveGenerating;
+  let resolveDelta;
+  const waitUntilGenerating = new Promise((resolve) => {
+    resolveGenerating = resolve;
+  });
+  const waitUntilDelta = new Promise((resolve) => {
+    resolveDelta = resolve;
+  });
+  const gatewayClient = {
+    model: "cancellable-test-model",
+    /** 返回固定 token 数，避免取消测试依赖真实管理端点。 */
+    async countTokens() {
+      return { tokens: 10, source: "scripted", model: this.model };
+    },
+    /** 首次调用等待取消，之后记录上下文并返回固定回复。 */
+    async chatCompletions({ messages, onTextDelta, abortSignal }) {
+      callCount += 1;
+      requests.push(messages);
+      if (callCount > 1) {
+        return {
+          model: this.model,
+          usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+          choices: [{ message: { content: "取消后的正常回复" } }],
+        };
+      }
+      resolveGenerating();
+      if (partialText && typeof onTextDelta === "function") await onTextDelta(partialText);
+      resolveDelta();
+      await waitForAbort(abortSignal);
+      throw abortSignal.reason || new DOMException("Run was aborted", "AbortError");
+    },
+  };
+  return {
+    gatewayClient,
+    requests,
+    waitUntilGenerating,
+    waitUntilDelta,
+    /** 返回实际模型调用次数，验证取消未触发自动重试。 */
+    getCallCount() {
+      return callCount;
+    },
+  };
+}
+
+/** 等待 AbortSignal 终止；已取消信号立即返回。 */
+function waitForAbort(signal) {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    /** 收到一次取消后结束测试等待。 */
+    function handleAbort() {
+      resolve();
+    }
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 /** 创建返回成功或最终失败重试证据的脚本化 Gateway。 */

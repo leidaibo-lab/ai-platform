@@ -27,7 +27,14 @@ export function createContextPlanner({ store, gatewayClient, contextOptions, sys
      * @param {object} input - 当前会话和用户消息。
      * @returns {Promise<object>} 模型消息、预算状态和可解释清单。
      */
-    async plan({ conversationId, currentMessageId, currentContent, currentDisplayContent, resilienceContext }) {
+    async plan({
+      conversationId,
+      currentMessageId,
+      currentContent,
+      currentDisplayContent,
+      referencedMessages = [],
+      resilienceContext,
+    }) {
       const snapshot = store.getContextSnapshot(conversationId);
       let currentMessage = null;
       for (const message of snapshot.messages) {
@@ -43,35 +50,59 @@ export function createContextPlanner({ store, gatewayClient, contextOptions, sys
       const memoryCandidates = rankMemory(snapshot.memoryItems, query);
       const episodeCandidates = rankEpisodes(snapshot.episodes, query);
       const historyCandidates = [];
+      const referencedIds = new Set(referencedMessages.map(getId));
       for (const message of snapshot.messages) {
-        if (message.seq > snapshot.conversation.summarizedThroughSeq && message.seq < currentMessage.seq) {
+        if (
+          message.status === "committed" &&
+          !referencedIds.has(message.id) &&
+          message.seq > snapshot.conversation.summarizedThroughSeq &&
+          message.seq < currentMessage.seq
+        ) {
           historyCandidates.push(message);
         }
       }
 
-      const memoryBudget = Math.floor(thresholds.dynamicBudget * 0.35);
-      const episodeBudget = Math.floor(thresholds.dynamicBudget * 0.2);
+      const selectedReferences = takeReferencesWithinBudget(referencedMessages, thresholds.dynamicBudget);
+      const referenceMessages = selectedReferences.map(toReferenceModelMessage);
+      const referenceTokens = estimateMessagesTokens(referenceMessages);
+      const remainingDynamicBudget = Math.max(0, thresholds.dynamicBudget - referenceTokens);
+      const memoryBudget = Math.floor(remainingDynamicBudget * 0.35);
+      const episodeBudget = Math.floor(remainingDynamicBudget * 0.2);
       const selectedMemory = takeMemoryWithinBudget(memoryCandidates, memoryBudget);
       const selectedEpisodes = takeEpisodesWithinBudget(episodeCandidates, episodeBudget);
-      const structuralTokens = estimateMessagesTokens([
-        buildMemoryMessage(selectedMemory),
-        buildEpisodeMessage(selectedEpisodes),
-      ].filter(Boolean));
-      const historyBudget = Math.max(0, thresholds.dynamicBudget - structuralTokens);
+      const memoryMessage = buildMemoryMessage(selectedMemory);
+      const episodeMessage = buildEpisodeMessage(selectedEpisodes);
+      const structuralTokens = estimateMessagesTokens([memoryMessage, episodeMessage].filter(Boolean));
+      const historyBudget = Math.max(0, remainingDynamicBudget - structuralTokens);
       const selectedHistory = takeRecentMessagesWithinBudget(historyCandidates, historyBudget);
       const messages = [
         systemMessage,
-        ...(selectedMemory.length > 0 ? [buildMemoryMessage(selectedMemory)] : []),
-        ...(selectedEpisodes.length > 0 ? [buildEpisodeMessage(selectedEpisodes)] : []),
+        ...referenceMessages,
+        ...(memoryMessage ? [memoryMessage] : []),
+        ...(episodeMessage ? [episodeMessage] : []),
         ...selectedHistory.map(toModelMessage),
         userMessage,
       ];
       const estimatedTokens = estimateMessagesTokens(messages);
       const gatewayCount = await countWithGateway(gatewayClient, messages, resilienceContext);
       const dynamicTokens = estimateMessagesTokens(historyCandidates.map(toModelMessage));
+      const tokenSegments = {
+        system: estimateMessagesTokens([systemMessage]),
+        currentInput: estimateMessagesTokens([userMessage]),
+        references: referenceTokens,
+        memory: estimateMessagesTokens(memoryMessage ? [memoryMessage] : []),
+        episodes: estimateMessagesTokens(episodeMessage ? [episodeMessage] : []),
+        history: estimateMessagesTokens(selectedHistory.map(toModelMessage)),
+        totalInput: estimatedTokens,
+      };
 
       return {
         messages,
+        observability: {
+          tokenSegments,
+          countedTotalInput: gatewayCount?.tokens ?? estimatedTokens,
+          tokenCounter: gatewayCount?.source || "local-estimate",
+        },
         manifest: {
           budget: thresholds.inputBudget,
           estimatedTokens,
@@ -80,11 +111,13 @@ export function createContextPlanner({ store, gatewayClient, contextOptions, sys
           dynamicTokens,
           watermarks: { high: thresholds.high, low: thresholds.low, hard: thresholds.hard },
           selected: {
+            referenceMessageIds: selectedReferences.map(getId),
             memoryItemIds: selectedMemory.map(getId),
             episodeIds: selectedEpisodes.map(getId),
             historyMessageIds: selectedHistory.map(getId),
           },
           excluded: {
+            referenceMessageIds: differenceIds(referencedMessages, selectedReferences),
             memoryItemIds: differenceIds(memoryCandidates, selectedMemory),
             episodeIds: differenceIds(episodeCandidates, selectedEpisodes),
             historyMessageIds: differenceIds(historyCandidates, selectedHistory),
@@ -95,6 +128,19 @@ export function createContextPlanner({ store, gatewayClient, contextOptions, sys
       };
     },
   };
+}
+
+/** 按请求顺序在动态预算中选择完整直接引用，禁止部分截断引用正文。 */
+function takeReferencesWithinBudget(messages, budget) {
+  const selected = [];
+  let used = 0;
+  for (const message of messages) {
+    const tokens = estimateMessageTokens(toReferenceModelMessage(message));
+    if (used + tokens > budget) continue;
+    selected.push(message);
+    used += tokens;
+  }
+  return selected;
 }
 
 /** 按业务优先级和当前问题相关性排序 active 记忆。 */
@@ -188,6 +234,31 @@ function buildEpisodeMessage(episodes) {
     role: "system",
     content: ["与当前问题相关的历史片段：", ...episodes.map(renderEpisode)].join("\n"),
   };
+}
+
+/** 将一条直接消息引用渲染为带来源角色与中断状态的独立系统上下文。 */
+function toReferenceModelMessage(message) {
+  const status = message.status === "interrupted" ? "/interrupted" : "";
+  return {
+    role: "system",
+    content: [
+      `当前用户直接引用的会话消息 [messageId=${message.id}; role=${message.role}${status}]：`,
+      renderReferencedContent(message.content),
+    ].join("\n"),
+  };
+}
+
+/** 将事实源中的文本或多模态消息转换为不会递归展开引用关系的引用正文。 */
+function renderReferencedContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(content ?? "");
+  const parts = [];
+  for (const part of content) {
+    if (part?.type === "text") parts.push(String(part.text || ""));
+    else if (part?.type === "image_url") parts.push(`[图片：${String(part.image_url?.url || "")}]`);
+    else parts.push(JSON.stringify(part));
+  }
+  return parts.filter(Boolean).join("\n");
 }
 
 /** 将单条结构化记忆渲染为稳定、紧凑、可读的提示文本。 */

@@ -7,16 +7,36 @@
     "node": ">=22.5.0"
   },
   "scripts": {
-    "demo": "node scripts/demo-server.mjs",
-    "test": "node --test scripts/test-runtime.mjs scripts/test-gateway-client.mjs scripts/test-retry-executor.mjs scripts/test-streaming-http.mjs scripts/test-architecture-boundaries.mjs",
+    "demo": "npm run demo:build && node scripts/demo-server.mjs",
+    "demo:build": "vite build --config demo/vite.config.mjs",
+    "demo:server": "node scripts/demo-server.mjs",
+    "demo:ui": "vite --config demo/vite.config.mjs",
+    "test": "node --test scripts/test-runtime.mjs scripts/test-gateway-client.mjs scripts/test-retry-executor.mjs scripts/test-streaming-http.mjs scripts/test-demo-adapter.mjs scripts/test-chain-trace.mjs scripts/test-architecture-boundaries.mjs",
     "test:architecture": "node --test scripts/test-architecture-boundaries.mjs",
     "test:gateway": "node --test scripts/test-gateway-client.mjs",
     "test:runtime": "node --test scripts/test-runtime.mjs",
     "test:resilience": "node --test scripts/test-retry-executor.mjs",
-    "test:streaming": "node --test scripts/test-streaming-http.mjs"
+    "test:streaming": "node --test scripts/test-streaming-http.mjs",
+    "test:demo": "node --test scripts/test-demo-adapter.mjs",
+    "test:telemetry": "node --test scripts/test-chain-trace.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.14",
-    "ai": "7.0.37"
+    "@ai-sdk/otel": "1.0.37",
+    "@ant-design/x": "2.9.0",
+    "@ant-design/x-markdown": "2.9.0",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.221.0",
+    "@opentelemetry/resources": "2.10.0",
+    "@opentelemetry/sdk-node": "0.221.0",
+    "@opentelemetry/sdk-trace-base": "2.10.0",
+    "ai": "7.0.37",
+    "antd": "6.5.2",
+    "lucide-react": "1.27.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "vite": "6.4.3"
   }
 }

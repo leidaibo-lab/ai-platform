@@ -11,7 +11,7 @@ import test from "node:test";
 /** 验证真实 HTTP Adapter 把 OpenAI-compatible 模型流贯通到浏览器协议并最终单次落库。 */
 async function testStreamingRunOverHttp() {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "ai-platform-stream-http-"));
-  const fakeGateway = createServer(handleFakeGatewayRequest);
+  const fakeGateway = createServer(createFakeGatewayHandler());
   let demoProcess = null;
   try {
     const gatewayPort = await listenOnRandomPort(fakeGateway);
@@ -26,6 +26,7 @@ async function testStreamingRunOverHttp() {
         LITELLM_MASTER_KEY: "sk-http-stream-test",
         LITELLM_MODEL: "chat-default",
         DEMO_MODEL_RETRY_BASE_DELAY_MS: "0",
+        OTEL_ENABLED: "false",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -66,6 +67,78 @@ async function testStreamingRunOverHttp() {
     );
     assert.equal(detail.messages.length, 2);
     assert.equal(detail.messages.filter(isAssistantMessage).length, 1);
+
+    let cancellationRunId = null;
+    let resolveCancellationReady;
+    /** 保存首个取消增量到达时使用的 Promise resolver。 */
+    const cancellationReady = new Promise((resolve) => {
+      resolveCancellationReady = resolve;
+    });
+    const cancellationResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: "http-cancel-request",
+          clientMessageId: "http-cancel-message",
+          message: "验证 HTTP 取消",
+        }),
+      },
+    );
+    /** 收集取消流的 Run ID，并在首个增量到达时允许测试调用取消端点。 */
+    function observeCancellationEvent(event) {
+      if (event.name === "run-started") cancellationRunId = event.data.runId;
+      if (event.name === "text-delta") resolveCancellationReady();
+    }
+    const cancellationEventsPromise = readSseEvents(cancellationResponse.body, observeCancellationEvent);
+    await withTimeout(cancellationReady, "waiting for cancellation delta");
+    const cancellationResult = await withTimeout(
+      requestJson(
+        `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/${encodeURIComponent(cancellationRunId)}/cancel`,
+        { method: "POST", body: {} },
+      ),
+      "waiting for cancellation response",
+    );
+    const cancellationEvents = await withTimeout(cancellationEventsPromise, "waiting for cancelled SSE event");
+    const repeatedCancellation = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/${encodeURIComponent(cancellationRunId)}/cancel`,
+      { method: "POST", body: {} },
+    );
+    assert.deepEqual(cancellationEvents.map(readEventName), ["run-started", "text-delta", "cancelled"]);
+    assert.equal(cancellationResult.run.status, "cancelled");
+    assert.equal(cancellationResult.assistantMessage.status, "interrupted");
+    assert.equal(cancellationResult.assistantMessage.displayContent, "取消前片段");
+    assert.equal(repeatedCancellation.run.status, "cancelled");
+
+    const disconnectController = new AbortController();
+    const disconnectResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: "http-disconnect-request",
+          clientMessageId: "http-disconnect-message",
+          message: "验证 SSE 断线",
+        }),
+        signal: disconnectController.signal,
+      },
+    );
+    /** 在首个断线测试增量到达后主动关闭浏览器侧读取。 */
+    function disconnectAfterFirstDelta(event) {
+      if (event.name === "text-delta") disconnectController.abort();
+    }
+    await withTimeout(
+      readSseEvents(disconnectResponse.body, disconnectAfterFirstDelta).catch(ignoreExpectedDisconnect),
+      "waiting for client disconnect",
+    );
+    const completedAfterDisconnect = await waitForLatestRunStatus(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
+      "completed",
+    );
+    assert.equal(completedAfterDisconnect.latestRun.status, "completed");
+    assert.equal(completedAfterDisconnect.messages.at(-1).displayContent, "断线后继续完成");
   } finally {
     if (demoProcess) await stopProcess(demoProcess);
     await closeServer(fakeGateway);
@@ -73,36 +146,60 @@ async function testStreamingRunOverHttp() {
   }
 }
 
-test("POST SSE run streams model deltas and persists one final message", testStreamingRunOverHttp);
+test("POST SSE supports completion, explicit cancellation, and disconnect continuation", testStreamingRunOverHttp);
 
-/** 为 Demo 测试提供 models、token counter 和标准 OpenAI-compatible 文本流。 */
-async function handleFakeGatewayRequest(req, res) {
-  req.resume();
-  if (req.method === "GET" && req.url === "/v1/models") {
-    sendJson(res, { data: [{ id: "chat-default" }] });
-    return;
-  }
-  if (req.method === "POST" && req.url === "/utils/token_counter") {
-    sendJson(res, { total_tokens: 12, model: "fake-stream-model" });
-    return;
-  }
-  if (req.method === "POST" && req.url === "/v1/chat/completions") {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-    });
-    writeOpenAiChunk(res, "流式", null);
-    await delay(10);
-    writeOpenAiChunk(res, "回复", null);
-    writeOpenAiChunk(res, "", "stop", {
-      prompt_tokens: 12,
-      completion_tokens: 2,
-      total_tokens: 14,
-    });
-    res.end("data: [DONE]\n\n");
-    return;
-  }
-  sendJson(res, { error: "not found" }, 404);
+/** 创建可按用户输入模拟完成、取消等待和渠道断线的 OpenAI-compatible Gateway。 */
+function createFakeGatewayHandler() {
+  /** 为 Demo 测试提供 models、token counter 和标准文本流。 */
+  return async function handleFakeGatewayRequest(req, res) {
+    if (req.method === "GET" && req.url === "/v1/models") {
+      req.resume();
+      sendJson(res, { data: [{ id: "chat-default" }] });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/utils/token_counter") {
+      req.resume();
+      sendJson(res, { total_tokens: 12, model: "fake-stream-model" });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/v1/chat/completions") {
+      const requestBody = await readRequestBody(req);
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+      });
+      if (requestBody.includes("验证 SSE 断线")) {
+        writeOpenAiChunk(res, "断线后", null);
+        await delay(40);
+        writeOpenAiChunk(res, "继续完成", null);
+        finishOpenAiStream(res, 4);
+        return;
+      }
+      if (requestBody.includes("验证 HTTP 取消")) {
+        const responseClosed = waitForResponseClose(res);
+        writeOpenAiChunk(res, "取消前片段", null);
+        await withTimeout(responseClosed, "model request was not aborted");
+        return;
+      }
+      writeOpenAiChunk(res, "流式", null);
+      await delay(10);
+      writeOpenAiChunk(res, "回复", null);
+      finishOpenAiStream(res, 2);
+      return;
+    }
+    req.resume();
+    sendJson(res, { error: "not found" }, 404);
+  };
+}
+
+/** 写入 finish chunk、usage 和 DONE 标记并结束模型流。 */
+function finishOpenAiStream(res, completionTokens) {
+  writeOpenAiChunk(res, "", "stop", {
+    prompt_tokens: 12,
+    completion_tokens: completionTokens,
+    total_tokens: 12 + completionTokens,
+  });
+  res.end("data: [DONE]\n\n");
 }
 
 /** 写入一个 OpenAI-compatible chat completion chunk。 */
@@ -178,7 +275,7 @@ async function requestJson(url, options = {}) {
 }
 
 /** 读取完整 SSE 响应并解析 JSON 事件。 */
-async function readSseEvents(stream) {
+async function readSseEvents(stream, onEvent) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   const events = [];
@@ -192,7 +289,7 @@ async function readSseEvents(stream) {
       while (boundary) {
         const block = buffer.slice(0, boundary.index);
         buffer = buffer.slice(boundary.index + boundary[0].length);
-        appendSseEvent(events, block);
+        appendSseEvent(events, block, onEvent);
         boundary = /\r?\n\r?\n/.exec(buffer);
       }
     }
@@ -203,33 +300,101 @@ async function readSseEvents(stream) {
 }
 
 /** 将包含 data 的单个 SSE block 追加为结构化事件。 */
-function appendSseEvent(events, block) {
+function appendSseEvent(events, block, onEvent) {
   let name = "message";
   const dataLines = [];
   for (const line of block.split(/\r?\n/)) {
     if (line.startsWith("event:")) name = line.slice(6).trim();
     if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
   }
-  if (dataLines.length > 0) events.push({ name, data: JSON.parse(dataLines.join("\n")) });
+  if (dataLines.length === 0) return;
+  const event = { name, data: JSON.parse(dataLines.join("\n")) };
+  events.push(event);
+  if (typeof onEvent === "function") onEvent(event);
+}
+
+/** 读取完整测试请求体，供 fake gateway 根据当前输入选择响应行为。 */
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    /** 累积一个测试请求块。 */
+    function appendChunk(chunk) {
+      body += chunk;
+    }
+    /** 请求体读取完成后返回聚合文本。 */
+    function finishBody() {
+      resolve(body);
+    }
+    req.on("data", appendChunk);
+    req.on("end", finishBody);
+    req.on("error", reject);
+  });
+}
+
+/** 等待 Runtime 取消下游请求后 fake gateway 响应连接关闭。 */
+function waitForResponseClose(res) {
+  return new Promise((resolve) => {
+    /** 下游连接关闭后结束等待。 */
+    function handleResponseClose() {
+      resolve();
+    }
+    res.once("close", handleResponseClose);
+  });
+}
+
+/** 为异步集成测试阶段增加可诊断的硬超时。 */
+async function withTimeout(promise, label, timeoutMs = 5000) {
+  let timeout;
+  /** 超时后抛出带当前阶段的错误。 */
+  const timeoutPromise = new Promise((resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(label)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** 轮询会话详情直到 latestRun 达到预期终止状态。 */
+async function waitForLatestRunStatus(url, expectedStatus) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const detail = await requestJson(url);
+    if (detail.latestRun?.status === expectedStatus) return detail;
+    await delay(20);
+  }
+  throw new Error(`latestRun did not reach ${expectedStatus}`);
+}
+
+/** 吞掉测试主动中断客户端读取产生的预期 AbortError。 */
+function ignoreExpectedDisconnect(error) {
+  if (error?.name !== "AbortError") throw error;
 }
 
 /** 终止 Demo 子进程并等待退出。 */
 async function stopProcess(child) {
   if (child.exitCode !== null) return;
   child.kill("SIGTERM");
-  /** 将子进程退出事件转换为清理 Promise。 */
-  await new Promise((resolve) => {
+  /** 将子进程退出事件转换为可等待的 Promise，并避免失败用例永久卡住。 */
+  const exited = new Promise((resolve) => {
     /** 子进程退出后完成清理等待。 */
     function handleExit() {
       resolve();
     }
     child.once("exit", handleExit);
   });
+  try {
+    await withTimeout(exited, "waiting for Demo Server shutdown", 2000);
+  } catch {
+    child.kill("SIGKILL");
+    await exited;
+  }
 }
 
 /** 关闭 HTTP Server；未启动状态直接视为已关闭。 */
 function closeServer(server) {
   if (!server.listening) return Promise.resolve();
+  server.closeAllConnections();
   /** 将 Server 关闭回调转换为可等待的清理结果。 */
   return new Promise((resolve, reject) => {
     /** Server 完成关闭后结束 Promise。 */
