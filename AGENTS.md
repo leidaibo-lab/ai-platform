@@ -17,7 +17,7 @@
 
 当前项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。模型网关仍是平台内部区域，不得用 `ai-platform` 代替模型网关领域名称。
 
-当前代码落地这个目标结构里的 V0.6 切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、连接器注册预留，以及 OpenSpec/docs/回归评测的最小治理。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
+当前代码落地这个目标结构里的 V0.6 切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、连接器注册预留、默认关闭的 C1 ChainTrace OpenTelemetry 旁路与已选定的 Phoenix 后端，以及 OpenSpec/docs/回归评测的最小治理。正式实例和真实 Runtime Trace 验收当前为触发式 TODO，不得写成已完成运行态能力。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
@@ -48,7 +48,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `README.md`：面向使用者的启动、Runtime 配置和模型连通性测试说明。
 - `docs/README.md`：项目文档索引。
 - `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。
-- `docs/scenario-interaction-chains.md`：定义共同底座与场景能力边界，按输入场景拆分业务链路；当前聚焦 C1 对话链路基线化，并按准确度、实时性、稳定性和 Token 逐链路验收。
+- `docs/scenario-interaction-chains.md`：定义共同底座与场景能力边界，按输入场景拆分业务链路；当前聚焦 C1 功能可用和确定性回归，ChainTrace 运行态验收按触发条件恢复。
 - `docs/solution-selection-governance.md`：方案发现、成熟能力复用、`采用 / 适配 / 自研` 决策门禁、完成定义和存量能力审计规则。
 - `docs/decisions/`：保存可追溯的方案决策记录；新记录从 `docs/decisions/TEMPLATE.md` 创建，保留采用理由、未采用理由和重评条件。
 - `docs/coding-standards.md`：函数注释、数据结构、设计模式和设计原则等编码规范。
@@ -99,6 +99,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 
 - `config.yaml`：LiteLLM Proxy 的模型别名、上游转发参数和 master key 配置。
 - `docker-compose.yml`：本地 LiteLLM 容器启动入口。
+- `docker-compose.chaintrace.yml`：触发 ChainTrace TODO 后使用的后端入口，固定 Phoenix 19.10.0 digest、PostgreSQL 17、Auth、30 天保留并禁用匿名 telemetry；当前日常启动不要求运行。
 - `scripts/test-chat.sh`：仅用于验证 LiteLLM 到上游模型连通性的最小 smoke test，不属于平台业务入口。
 - `scripts/test-architecture-boundaries.mjs`：全局架构图与治理契约的边界回归检查，防止模型诊断链重新进入平台能力规划。
 - `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、JSON Run、POST SSE 模型文本流、会话事件流、静态页面和错误返回。
@@ -110,6 +111,8 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `src/runtime/memory-manager.mjs`：结构化记忆提取、高低水位压缩、MemoryDelta 校验和 memoryVersion 乐观锁。
 - `src/runtime/conversation-coordinator.mjs`：按 conversationId 串行同一进程内的 Run。
 - `src/resilience/retry-executor.mjs`：共同底座的统一重试执行器和 `ResilienceContext`，负责共享截止时间、局部尝试、退避和逐尝试证据。
+- `src/observability/chain-tracer.mjs`：Runtime 依赖的后端中立 `ChainTracer` Port，负责 C1 阶段 Span、业务标识和错误脱敏语义。
+- `src/observability/otel-runtime.mjs`：OpenTelemetry Facade，负责默认关闭、OTLP/HTTP protobuf exporter、采样、AI SDK Telemetry 和进程生命周期。
 - `src/gateway/gateway-contract.mjs`：Runtime 依赖的 GatewayClient 数据契约和统一错误类型。
 - `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 的 `generateText` / `streamText` 和 `@ai-sdk/openai-compatible` 调用 LiteLLM，并保持 Runtime 的 chat completions 契约。
 - `src/gateway/litellm-management-client.mjs`：LiteLLM 专属管理客户端，仅封装 `/v1/models` 和 token counter，不负责模型生成。

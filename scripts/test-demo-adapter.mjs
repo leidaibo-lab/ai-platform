@@ -6,10 +6,16 @@ import {
   createRuntimeAdapter,
 } from "../demo/src/runtime-adapter.js";
 import {
+  activeRunStageLabel,
+  buildConversationAnchors,
   canSubmitRun,
   conversationStatusLabel,
   insertLatestRunFailure,
+  isMessageListAtLatest,
+  readConversationDraft,
   recoverRunInput,
+  scrollMessageListToLatest,
+  storeConversationDraft,
 } from "../demo/src/conversation-view-model.js";
 
 /** 验证 Adapter 能跨任意网络分块恢复 run-started、文本增量和完成事实。 */
@@ -173,6 +179,84 @@ function testChannelStatusModel() {
   assert.equal(conversationStatusLabel("closed"), "已结束");
 }
 
+/** 验证会话锚点只保留用户消息，并排除助手回复和失败提示等派生展示项。 */
+function testConversationAnchors() {
+  const anchors = buildConversationAnchors([
+    { id: "message-1", role: "user", displayContent: "检查当前方案\n的边界" },
+    { id: "message-2", role: "assistant", displayContent: "边界已确认" },
+    { id: "run-failure:run-1", kind: "run-failure", role: "assistant", displayContent: "本次生成失败" },
+    { id: "message-3", role: "assistant", displayContent: "", streaming: true },
+  ]);
+  assert.deepEqual(anchors, [
+    { id: "message-1", preview: "检查当前方案 的边界" },
+  ]);
+}
+
+/** 验证草稿按 conversationId 隔离、读取返回副本且空草稿会清理旧值。 */
+function testConversationDraftIsolation() {
+  const initial = new Map();
+  const first = storeConversationDraft(initial, "conversation-1", {
+    value: "会话一草稿",
+    attachments: [{ uid: "attachment-1" }],
+    references: [{ messageId: "message-1" }],
+  });
+  const second = storeConversationDraft(first, "conversation-2", {
+    value: "会话二草稿",
+    attachments: [],
+    references: [],
+  });
+  assert.equal(initial.size, 0);
+  assert.equal(readConversationDraft(second, "conversation-1").value, "会话一草稿");
+  assert.equal(readConversationDraft(second, "conversation-2").value, "会话二草稿");
+
+  const restored = readConversationDraft(second, "conversation-1");
+  restored.attachments.push({ uid: "attachment-local" });
+  assert.equal(readConversationDraft(second, "conversation-1").attachments.length, 1);
+
+  const cleared = storeConversationDraft(second, "conversation-1", {
+    value: "",
+    attachments: [],
+    references: [],
+  });
+  assert.equal(cleared.has("conversation-1"), false);
+  assert.equal(readConversationDraft(cleared, "conversation-1").value, "");
+  assert.equal(cleared.get("conversation-2").value, "会话二草稿");
+}
+
+/** 验证长会话跟随阈值和活动 Run 状态只映射已有渠道事实。 */
+function testConversationProgressModel() {
+  assert.equal(isMessageListAtLatest(0), true);
+  assert.equal(isMessageListAtLatest(-20), true);
+  assert.equal(isMessageListAtLatest(-25), false);
+  assert.equal(activeRunStageLabel("starting", false), "正在连接模型");
+  assert.equal(activeRunStageLabel("running", false), "正在等待模型响应");
+  assert.equal(activeRunStageLabel("running", true), "正在生成回答");
+  assert.equal(activeRunStageLabel("stopping", true), "正在停止生成");
+}
+
+/** 验证空会话首次挂载时不会提前调用 Bubble.List 的内部滚动命令。 */
+function testMessageListReadyGuard() {
+  let scrollOptions = null;
+  const mountingList = {
+    /** 未就绪时一旦被调用就立即暴露回归。 */
+    scrollTo() {
+      throw new Error("未就绪的 Bubble.List 不应执行 scrollTo");
+    },
+  };
+  assert.equal(scrollMessageListToLatest(null), false);
+  assert.equal(scrollMessageListToLatest(mountingList), false);
+
+  const readyList = {
+    scrollBoxNativeElement: {},
+    /** 记录发给第三方组件的稳定滚动命令。 */
+    scrollTo(options) {
+      scrollOptions = options;
+    },
+  };
+  assert.equal(scrollMessageListToLatest(readyList, "instant"), true);
+  assert.deepEqual(scrollOptions, { top: "bottom", behavior: "instant" });
+}
+
 test("Demo Adapter maps completed POST SSE", testCompletedRunStream);
 test("Demo Adapter maps cancelled POST SSE", testCancelledRunStream);
 test("Demo Adapter maps error POST SSE", testErrorRunStream);
@@ -180,6 +264,10 @@ test("Demo Adapter preserves JSON resource paths", testJsonResourceMapping);
 test("Demo view model persists the latest failed Run marker", testLatestRunFailureMarker);
 test("Demo view model recovers failed Run input", testRecoverRunInput);
 test("Demo view model guards submission and labels lifecycle", testChannelStatusModel);
+test("Demo view model builds conversation anchors", testConversationAnchors);
+test("Demo view model isolates conversation drafts", testConversationDraftIsolation);
+test("Demo view model maps message progress", testConversationProgressModel);
+test("Demo view model guards message list mount scrolling", testMessageListReadyGuard);
 
 /** 创建由指定 UTF-8 分块组成的 SSE Response。 */
 function sseResponse(chunks) {

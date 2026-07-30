@@ -1,0 +1,48 @@
+name: ai-platform-chaintrace
+
+services:
+  phoenix:
+    image: arizephoenix/phoenix@sha256:3092f5543a3ddd35db7390cf971027c33be6be1f171274d57f3c8658c2193d67
+    depends_on:
+      phoenix-postgres:
+        condition: service_healthy
+    environment:
+      PHOENIX_SQL_DATABASE_URL: postgresql://${PHOENIX_POSTGRES_USER:-phoenix}:${PHOENIX_POSTGRES_PASSWORD:?set PHOENIX_POSTGRES_PASSWORD}@phoenix-postgres:5432/${PHOENIX_POSTGRES_DB:-phoenix}
+      PHOENIX_ENABLE_AUTH: "true"
+      PHOENIX_SECRET: ${PHOENIX_SECRET:?set PHOENIX_SECRET}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:?set PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD}
+      PHOENIX_ENABLE_STRONG_PASSWORD_POLICY: "true"
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "30"
+      PHOENIX_TELEMETRY_ENABLED: "false"
+      PHOENIX_ALLOWED_SANDBOX_PROVIDERS: "NONE"
+    ports:
+      - "127.0.0.1:${PHOENIX_HOST_PORT:-6006}:6006"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/healthz')
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  phoenix-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${PHOENIX_POSTGRES_USER:-phoenix}
+      POSTGRES_PASSWORD: ${PHOENIX_POSTGRES_PASSWORD:?set PHOENIX_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${PHOENIX_POSTGRES_DB:-phoenix}
+    volumes:
+      - phoenix_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  phoenix_postgres_data:

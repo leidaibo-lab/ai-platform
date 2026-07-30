@@ -23,8 +23,11 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-07-30 | [C1 ChainTrace 运行态验收延期](./2026-07-30-c1-chaintrace-runtime-validation-deferral.md) | 接受 | 保留默认关闭的技术接入和 Phoenix 选型；正式实例、真实 Runtime Trace 与四维运行态基线转为触发式 TODO |
+| 2026-07-30 | [C1 ChainTrace 最终后端采用 Phoenix](./2026-07-30-c1-chaintrace-backend-phoenix.md) | 接受 | 采用 Phoenix 19.10.0 + PostgreSQL 17；保留后端中立 OTLP/ChainTracer，并以 Auth、精确检索和升级回滚实测为门禁 |
+| 2026-07-30 | [C1 ChainTrace 后端对比](./2026-07-30-c1-chaintrace-backend-comparison.md) | 接受 | 同一脱敏 C1 OTLP Trace 完成 Langfuse/Phoenix 的查询、隐私、部署、权限、保留和资源实测，Phoenix 进入最终决策 |
 | 2026-07-29 | [C1 渠道体验采用 Ant Design X](./2026-07-29-c1-channel-experience-ant-design-x.md) | 接受 | 适配 Ant Design X 与 X Markdown，保留现有 Runtime/SSE 事实边界，并先固化取消和分类型引用契约 |
-| 2026-07-29 | [C1 ChainTrace 优先级与 OpenTelemetry 实施路径](./2026-07-29-c1-chaintrace-priority-and-otel-path.md) | 接受 | 先完成 C1 ChainTrace；按 OTel PoC、双后端对比、最终决策和正式接入推进，再进入其他场景 |
+| 2026-07-29 | [C1 ChainTrace 优先级与 OpenTelemetry 实施路径](./2026-07-29-c1-chaintrace-priority-and-otel-path.md) | 已替代 | OTel PoC 与后端决策路径已执行；“运行态验收优先于后续建设”的门禁由延期记录替代 |
 | 2026-07-29 | [存量能力选型审计](./2026-07-29-existing-capability-selection-audit.md) | 接受 | 保留模型主链和业务事实；封装记忆与有限重试；迁移到 OTel；停止自研工具循环、协议、工作流引擎和 Trace 后端 |
 
 没有单独决策证据的存量实现仍按照 [`方案选型与复用治理`](../solution-selection-governance.md) 审计，不能因为本次总审计存在就自动视为已经通过选型。后续 PoC、迁移和重要依赖引入继续建立独立记录。

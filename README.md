@@ -39,7 +39,7 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 
 `scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
-当前交付聚焦 C1 对话问答链路基线化：先基于现有 Runtime 建立完整 `ChainTrace` 和准确度、实时性、稳定性、Token 四维基线，再进入其他场景。共同底座只提供七条场景可复用的执行骨架，不代表图片、文档、业务查询、实时事件、操作执行和批量分析已经完成；具体边界与退出条件见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
+当前交付聚焦 C1 对话问答的功能可用、确定性回归和能力理解。ChainTrace 的代码、稳定契约、Phoenix 选型和部署入口已经保留，但默认关闭；正式实例、真实 Runtime Trace 和四维运行态基线列为触发式 TODO，不作为日常启动或当前功能迭代的前置条件。共同底座只提供七条场景可复用的执行骨架，不代表图片、文档、业务查询、实时事件、操作执行和批量分析已经完成；具体边界见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
 
 ## 本地启动
 
@@ -179,7 +179,10 @@ Demo 输入区支持：
 - 发送门禁：模型网关未确认在线时保留可编辑草稿和附件，但禁止提交无效 Run；页面提供显式重新检测入口。
 - 失败恢复：最近一次失败 Run 会在对应用户消息后保留渠道安全提示，可恢复正文、图片、文档链接和消息引用后调整再发送；恢复不会复用原有幂等标识。
 - 多端同步：同一会话通过独立的 SSE 事件游标刷新已持久化事实；客户端不再保存或提交历史事实源。
-- 消息操作：已持久化消息只提供复制和引用，不提供删除或原位编辑；桌面显示快捷操作，移动端收敛为单一操作菜单，用户纠正通过追加新消息表达。
+- 消息操作：已持久化消息只提供复制和引用，不提供删除或原位编辑；桌面在消息悬停或操作聚焦时显示快捷操作，移动端收敛为单一操作菜单，用户纠正通过追加新消息表达。
+- 会话导航：桌面会话区左侧将用户发起的消息聚合为居中的等长锚点；悬停时刻度横向展开并预览摘要，点击后按稳定 `messageId` 定位并高亮原消息，助手回复不生成锚点。
+- 会话草稿：当前页面生命周期内按稳定 `conversationId` 隔离正文、附件和引用；切换会话会保存并恢复各自草稿，发送或结束会话后清理对应快照。
+- 长会话跟随：位于底部时继续跟随流式回答，用户主动向上浏览后保留当前视窗并显示“回到最新”；活动回答附近只展示 `starting / running / stopping` 已有事实对应的渠道状态。
 - 结构化记忆：Memory Manager 提取目标、约束、偏好、事实、决策、任务和 Episode，用户纠正会废弃旧事实并保留来源消息。
 - 运行上下文：桌面默认收起 Inspector，按需展开；移动端通过 Drawer 展示 Context Manifest、Token 装箱结果与 active 结构化记忆。引用预览可按稳定 `messageId` 定位并高亮原消息。
 - Token 水位：动态原始消息达到 75% 高水位后压缩到 45% 低水位；接近 90% 硬水位时先同步压缩再回答。
@@ -187,6 +190,28 @@ Demo 输入区支持：
 当前服务端还没有工具调用或可验证处理阶段事件，因此页面不展示 `Think` 或 `ThoughtChain`，也不会把模型原始思维链作为体验数据。后续只有在 Runtime 提供真实阶段、工具和来源证据后，才增加相应展示。
 
 注意：LiteLLM Proxy 只负责转发请求，不会自动打开文档链接、读取私有文档，也不会自动提取文档里的图片。如果要让模型处理文档里的图片，需要把图片单独上传，或提供可公开访问的图片直链，并确保当前上游模型支持视觉输入。
+
+## C1 ChainTrace 后端（预留，默认关闭）
+
+C1 ChainTrace 已接受 Phoenix 19.10.0 + PostgreSQL 17 作为后续正式后端。Runtime 仍只依赖项目自有 `ChainTracer` Port，通过 OTLP/HTTP protobuf 旁路导出；Phoenix 不保存或决定 Conversation、Run、Message 和 Memory 业务事实。
+
+当前阶段保持 `OTEL_ENABLED=false`，正常启动 LiteLLM、Demo Server 和 Runtime 不需要启动 Phoenix。正式实例与真实 Runtime Trace 验收是 TODO；当出现难以通过 Run 状态和日志定位的问题、需要 P50/P95/重试/Token 基线、进入多人共享或准生产部署时，再执行下面的启用流程。
+
+恢复 TODO 时，先在 `.env` 中替换 `PHOENIX_POSTGRES_PASSWORD`、`PHOENIX_SECRET` 和 `PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD`，再启动固定 digest 的 Phoenix 与 PostgreSQL：
+
+```bash
+docker compose --env-file .env -f docker-compose.chaintrace.yml up -d
+```
+
+浏览器访问 `http://localhost:6006`，使用 `admin@localhost` 和首次启动密码登录并立即修改密码，然后在 Settings 创建 system API key。将 key 写入服务端 `.env` 的标准 OTel header，空格使用 `%20`：
+
+```bash
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:6006/v1/traces
+OTEL_EXPORTER_OTLP_TRACES_HEADERS=authorization=Bearer%20你的system-api-key
+```
+
+TODO 验收目标是：重启 Demo Server 并执行一个真实 JSON 或 SSE Run，在 Phoenix 按 `ai.platform.request_id`、`ai.platform.conversation_id` 和 `ai.platform.run_id` 精确定位同一 Trace，再完成 Span 完整性、敏感数据和 exporter 故障隔离检查。完整触发条件、健康检查、认证验证、备份和升级边界见 [C1 ChainTrace 运行态验收延期决策](./docs/decisions/2026-07-30-c1-chaintrace-runtime-validation-deferral.md) 与 [C1 ChainTrace 运维说明](./docs/c1-chaintrace-operations.md)。
 
 Demo Server API 按层级暴露：
 
@@ -265,10 +290,12 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 - `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
 - `DEMO_RUN_TIMEOUT_MS` 是排队、上下文规划和全部模型尝试共享的 Run 总时限，默认 `120000` 毫秒。
 - `DEMO_MODEL_MAX_ATTEMPTS` 默认 `3`，包含首次调用；退避由 `DEMO_MODEL_RETRY_BASE_DELAY_MS` 和 `DEMO_MODEL_RETRY_MAX_DELAY_MS` 控制。
-- `OTEL_ENABLED` 控制 C1 ChainTrace OpenTelemetry PoC，默认 `false`；禁用时不初始化 SDK、Exporter 或 AI SDK Telemetry。
-- `OTEL_EXPORTER_OTLP_ENDPOINT` 是 OTLP HTTP 基础地址，默认 `http://localhost:4318`；也可用 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 提供完整 `/v1/traces` 地址。
+- `OTEL_ENABLED` 控制 C1 ChainTrace，默认 `false`；禁用时不初始化 SDK、Exporter 或 AI SDK Telemetry。
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 是启用 TODO 时使用的 Phoenix OTLP HTTP 地址；代码固定使用 protobuf，也兼容以 `OTEL_EXPORTER_OTLP_ENDPOINT` 提供基础地址。
+- `OTEL_EXPORTER_OTLP_TRACES_HEADERS` 和 `OTEL_EXPORTER_OTLP_HEADERS` 使用 OTel `key=value` 列表；Trace 专用 header 优先，凭据只保存在服务端内存。
+- `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` 默认 `10000` 毫秒，exporter 超时、认证失败或后端不可用不改变 Run 语义。
 - `OTEL_SERVICE_NAME` 默认 `ai-platform-demo`；`OTEL_TRACES_SAMPLER_ARG` 是 `parentbased_traceidratio` 的根 Trace 采样比例，范围为 `0` 到 `1`。
-- PoC 只旁路导出 Span，不向 SQLite 增加 Trace 副本；Langfuse/Phoenix 最终后端、保留期和权限模型仍需后续决策记录接受。
+- TODO 恢复后的 Phoenix 正式部署启用 Auth、30 天默认保留和关闭匿名 telemetry；Runtime 不引入 Phoenix 私有 SDK，也不向 SQLite 增加 Trace 副本。
 
 ## 文档与规范
 
@@ -279,6 +306,8 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | Agent Skill 索引、目录规范、治理规则 | `.agents/skills/README.md` |
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |
 | 共同底座边界、重试与恢复策略、七条场景链路、当前 C1 焦点、质量指标和建设顺序 | `docs/scenario-interaction-chains.md` |
+| Phoenix ChainTrace TODO 的触发条件与阶段决策 | `docs/decisions/2026-07-30-c1-chaintrace-runtime-validation-deferral.md` |
+| Phoenix ChainTrace 启用、认证、健康检查、备份与升级边界 | `docs/c1-chaintrace-operations.md` |
 | 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |

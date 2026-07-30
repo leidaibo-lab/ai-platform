@@ -1,12 +1,14 @@
 # C1 ChainTrace 优先级与 OpenTelemetry 实施路径
 
-- 状态：接受
+- 状态：已替代
 - 日期：2026-07-29
 - 负责人：AI 应用基础平台维护者
 - 所属区域：Agent Runtime / 治理与可观测
 - 关联需求：在扩展其他场景前完成 C1 ChainTrace，并消除存量审计与 C1 建设焦点之间的优先级冲突
 - 关联 OpenSpec：PoC 和内部观测不改变稳定契约；正式默认启用、调整 Session/Run API 或扩大观测数据边界前复核 `openspec/specs/ai-platform/spec.md`
-- 替代记录：无；本记录细化 `2026-07-29-existing-capability-selection-audit.md` 的实施顺序
+- 替代记录：`2026-07-30-c1-chaintrace-runtime-validation-deferral.md` 仅替代本记录的当前实施优先级；OTel PoC 和后端选型路径保留为历史依据
+
+后续阶段调整：OTel PoC、双后端对比、Phoenix 决策、正式 exporter 和部署入口已经完成；正式实例上的真实 Runtime Trace 验收改为触发式 TODO，不再作为当前功能迭代或其他低风险场景调研的硬门禁。
 
 ## 问题
 
@@ -18,7 +20,7 @@
 
 ### 必须满足
 
-- C1 达到退出条件之前，不正式扩展 C2-C7 的场景实现。
+- 本记录接受时曾把 C1 完整退出条件设为 C2-C7 的前置门禁；该门禁已由后续延期记录替代，当前只保留各场景自身的安全和能力前置条件。
 - 使用 AI SDK v7 正式 `telemetry` 接口和 OpenTelemetry GenAI 语义，不自研遥测协议。
 - 平台只拥有业务身份映射、阶段名称、质量指标、采样和脱敏规则。
 - Trace 存储、查询、可视化和通用评测工作台交给成熟后端。
@@ -89,16 +91,15 @@
 
 ## 实施边界
 
-建设顺序固定为：
+本记录当时接受的建设顺序如下；前三项和正式 exporter/部署入口已经完成，真实运行态验收的执行时机由后续延期记录替代：
 
 ```text
 决策记录消除优先级冲突
   -> AI SDK Telemetry + OpenTelemetry PoC
   -> 使用同一 Trace 对比 Langfuse 与 Phoenix
   -> 新建并接受最终后端决策记录
-  -> 正式接入并完成 C1 ChainTrace 验收
-  -> 完成其余 C1 退出条件
-  -> 再进入其他场景
+  -> 正式 exporter 与部署入口
+  -> [已延期] 正式实例真实 Runtime Trace 验收
 ```
 
 PoC 默认关闭且不得进入生产主链。正式接入仍通过 Agent Runtime 产生业务关联语义，观测导出保持旁路；观测后端不可写入 Conversation、Run、Message 或 Memory 事实数据。
