@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | 渠道与体验层 | Demo、Web、IM、IDE、API 等入口适配；输入输出格式转换 | Agent 编排、工具执行、模型供应商密钥 | `demo/index.html`、`scripts/demo-server.mjs` 的静态页面和 HTTP 接入部分 |
 | 平台控制面 | 租户、用户、应用、Agent 定义、版本发布、配置和运营入口 | 执行单次 Agent 任务、直接调用上游模型 | 尚未实现；未来的大平台属于此区域，不只是更大的 Demo |
-| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位、GatewayClient，以及有界只读工具循环和 ToolResult 事实 |
+| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位、GatewayClient、有界只读工具循环、ToolResult 事实和单 Run 无工具总结恢复 |
 | 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有只读 Tool Registry 和 Open-Meteo 天气 Connector；MCP、企业业务连接器和知识能力尚未实现 |
 | 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default` 和上游 key 收口 |
 | 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 已有默认关闭的 C1 ChainTracer + OTel 旁路、Phoenix + PostgreSQL 选型与部署入口、回归评测和治理契约；真实 Runtime Trace、审计与反馈仍未完成 |
@@ -258,7 +258,7 @@ flowchart LR
       ConversationStore["SQLite Conversation Store"]
       ToolRegistry["src/tools<br/>只读 schema / allowlist"]
       WeatherConnector["src/connectors<br/>Open-Meteo 天气 Connector"]
-      GatewayClient["src/gateway<br/>AI SDK Core 多步模型客户端"]
+      GatewayClient["src/gateway<br/>ToolLoopAgent + Core 调用分流"]
       ConfigLoader["src/config<br/>本地配置装配"]
     end
 
@@ -378,8 +378,8 @@ scripts/test-chat.sh
 - SQLite 持久化多会话、幂等 Run、POST SSE 模型文本流和独立的 SSE 多标签页事实同步。
 - 结构化 MemoryDelta、来源追溯、memoryVersion 乐观锁和最终 checkpoint。
 - Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
-- AI SDK Core v7 的 `generateText` / `streamText`、`Output.object` 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端；AI SDK 内建重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
-- AI SDK Core `generateText` / `streamText` 通过 `tools`、`stopWhen` 和 `prepareStep` 提供最多四步的模型工具编排；Runtime 负责只读 allowlist、ToolResult 持久化、幂等、SSE 阶段和脱敏 `runtime.tool.execute` Span，Open-Meteo Connector 负责固定端点天气读取。
+- AI SDK Core v7 的 `ToolLoopAgent`、`generateText` / `streamText`、`Output.object` 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端；AI SDK 内建重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
+- 纯文本工具型对话复用 GatewayClient 生命周期内的 `ToolLoopAgent`，通过 `callOptionsSchema`、`prepareCall`、`prepareStep`、`runtimeContext` 和 `toolsContext` 提供最多四步的模型工具编排；普通调用和动态结构化输出保留 Core 函数路径。Runtime 负责只读 allowlist、ToolResult 持久化、幂等、SSE 阶段和脱敏 `runtime.tool.execute` Span；工具后模型瞬时失败且尚未输出时，从 SQLite ToolResult 构造结构化工具消息做无 ToolSet 总结恢复。Open-Meteo Connector 只负责固定端点天气读取。
 - 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
 - Agent Runtime 及其 GatewayClient、只读 Tool Registry、天气 Connector 和模型网关的模块边界。
 - OpenSpec、文档、回归评测和自动化架构边界检查的最小治理。
@@ -391,6 +391,7 @@ scripts/test-chat.sh
 - 私有文档解析、知识索引、RAG、引用和知识权限。
 - 多用户 virtual key、预算、RPM/TPM 限流、调用统计和多上游 fallback。
 - 多用户身份映射、跨主机数据库、统一 trace、审计和在线评测反馈闭环。
+- 跨进程或服务重启后的运行中任务恢复、通用 checkpoint、持久工作流和写副作用补偿。
 
 ## 演进路线
 

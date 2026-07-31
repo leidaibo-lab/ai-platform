@@ -1,8 +1,15 @@
+import { z } from "zod";
 import { WeatherConnectorError } from "../connectors/open-meteo-weather.mjs";
 
 const WEATHER_TOPIC_PATTERN = /(天气|气温|温度|降水|降雨|下雨|湿度|风速)/u;
 const UNSUPPORTED_WEATHER_TIME_PATTERN = /(昨天|前天|后天|大后天|上周|本周|下周|上个月|下个月|去年|历史|未来\s*(?:两|三|[2-9])\s*天)/u;
 const WEATHER_ROUTE_NOISE_PATTERN = /(今天|今日|明天|明日|现在|当前|实时|天气|气温|温度|降水|降雨|下雨|湿度|风速|怎么样|如何|多少|几度|是否|会不会|有没有|查询|查一下|帮我|请|当地|这里|我这|的|是|吗|呢|呀|啊|[？?，,。\s])/gu;
+const WEATHER_INPUT_SCHEMA = z
+  .object({
+    location: z.string().trim().min(1).max(80).describe("明确的城市或地区名称，例如深圳、广东深圳。"),
+    date: z.enum(["today", "tomorrow"]).default("today").describe("查询今天使用 today，查询明天使用 tomorrow。"),
+  })
+  .strict();
 
 /**
  * 创建 `get_weather` 平台工具定义；模型只看到地点和日期，不接触外部 URL。
@@ -20,25 +27,7 @@ export function createWeatherToolDefinition(weatherConnector) {
     description:
       "查询指定地点今天或明天的实时天气与预报。涉及当前温度、降雨、湿度、风速或天气时必须调用；不得凭模型记忆声称实时结果。",
     effect: "read",
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["location"],
-      properties: {
-        location: {
-          type: "string",
-          minLength: 1,
-          maxLength: 80,
-          description: "明确的城市或地区名称，例如深圳、广东深圳。",
-        },
-        date: {
-          type: "string",
-          enum: ["today", "tomorrow"],
-          default: "today",
-          description: "查询今天使用 today，查询明天使用 tomorrow。",
-        },
-      },
-    },
+    inputSchema: WEATHER_INPUT_SCHEMA,
     /** 只在当前能力覆盖的时间范围且用户明确给出地点时强制首步天气调用。 */
     matchesInput({ message } = {}) {
       return matchesCurrentWeatherInput(message);

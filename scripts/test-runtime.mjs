@@ -95,13 +95,13 @@ function createToolCallingGateway() {
       return { tokens: estimateMessagesTokens(messages), source: "scripted", model: this.model };
     },
     /** 模拟 AI SDK Core 多步生成选择天气工具、获得 ToolResult 后生成最终回答。 */
-    async chatCompletions({ messages, outputSchema, tools, requiredToolName }) {
+    async chatCompletions({ messages, outputSchema, tools, toolsContext, requiredToolName }) {
       if (outputSchema) return buildScriptedMemoryResponse(messages, this.model);
       assert.ok(tools?.get_weather);
       assert.equal(requiredToolName, "get_weather");
       const output = await tools.get_weather.execute(
         { location: "深圳", date: "today" },
-        { toolCallId: "weather-call-1", messages, context: {} },
+        { toolCallId: "weather-call-1", messages, context: toolsContext.get_weather },
       );
       assert.equal(output.status, "success");
       return {
@@ -122,13 +122,13 @@ function createFailingToolGateway() {
       return { tokens: estimateMessagesTokens(messages), source: "scripted", model: this.model };
     },
     /** 模拟 AI SDK Core 多步生成接收失败 ToolResult 后继续生成用户可执行说明。 */
-    async chatCompletions({ messages, outputSchema, tools, requiredToolName }) {
+    async chatCompletions({ messages, outputSchema, tools, toolsContext, requiredToolName }) {
       if (outputSchema) return buildScriptedMemoryResponse(messages, this.model);
       assert.ok(tools?.get_weather);
       assert.equal(requiredToolName, "get_weather");
       const output = await tools.get_weather.execute(
         { location: "未知地点", date: "today" },
-        { toolCallId: "weather-failure-call-1", messages, context: {} },
+        { toolCallId: "weather-failure-call-1", messages, context: toolsContext.get_weather },
       );
       assert.equal(output.status, "error");
       assert.equal(output.error.code, "weather_query_failed");
@@ -139,6 +139,117 @@ function createFailingToolGateway() {
       };
     },
   };
+}
+
+/** 创建先完成天气工具、再按场景恢复或在已输出后失败的脚本化 Gateway。 */
+function createStreamingToolRecoveryGateway({ outputBeforeFailure = false } = {}) {
+  let generationCalls = 0;
+  const gatewayClient = {
+    model: "tool-recovery-stream-model",
+    /** 返回 Context Planner 使用的确定性 token 数。 */
+    async countTokens({ messages }) {
+      return { tokens: estimateMessagesTokens(messages), source: "scripted", model: this.model };
+    },
+    /** 首次生成在工具落库后失败，第二次校验结构化续接并流式返回总结。 */
+    async chatCompletions({
+      messages,
+      outputSchema,
+      tools,
+      toolsContext,
+      requiredToolName,
+      operation,
+      onTextDelta,
+    }) {
+      if (outputSchema) return buildScriptedMemoryResponse(messages, this.model);
+      generationCalls += 1;
+      if (generationCalls === 1) {
+        assert.ok(tools?.get_weather);
+        assert.equal(requiredToolName, "get_weather");
+        const output = await tools.get_weather.execute(
+          { location: "深圳", date: "today" },
+          { toolCallId: "weather-stream-recovery-call", messages, context: toolsContext.get_weather },
+        );
+        assert.equal(output.status, "success");
+        if (outputBeforeFailure) await onTextDelta("已交付的部分回答");
+        const error = new Error("scripted post-tool model failure");
+        error.status = 503;
+        error.resilience = buildPostToolBoundaryTrace(outputBeforeFailure);
+        throw error;
+      }
+
+      assert.equal(tools, undefined);
+      assert.equal(requiredToolName, undefined);
+      assert.equal(operation, "model.tool_result_summary");
+      const toolCallMessage = messages.find(isStructuredToolCallMessage);
+      const toolResultMessage = messages.find(isStructuredToolResultMessage);
+      assert.equal(toolCallMessage.content[0].toolCallId, "weather-stream-recovery-call");
+      assert.equal(toolResultMessage.content[0].toolCallId, "weather-stream-recovery-call");
+      assert.equal(toolResultMessage.content[0].output.type, "json");
+      assert.equal(toolResultMessage.content[0].output.value.status, "success");
+      await onTextDelta("深圳当前 26°C，");
+      await onTextDelta("来源 Open-Meteo。");
+      return {
+        model: this.model,
+        usage: { prompt_tokens: estimateMessagesTokens(messages), completion_tokens: 12, total_tokens: 42 },
+        choices: [{ message: { content: "深圳当前 26°C，来源 Open-Meteo。" } }],
+        resilience: {
+          operation: "model.tool_result_summary",
+          attemptCount: 1,
+          outputStarted: true,
+          retryBoundaryCrossed: false,
+          attempts: [{ attempt: 1, status: "completed", stopReason: "completed" }],
+        },
+      };
+    },
+  };
+  return {
+    gatewayClient,
+    /** 返回不含 MemoryDelta 的实际生成阶段次数。 */
+    getGenerationCalls() {
+      return generationCalls;
+    },
+  };
+}
+
+/** 构造工具后瞬时故障因不可重放边界停止的原始韧性证据。 */
+function buildPostToolBoundaryTrace(outputStarted = false) {
+  return {
+    operation: "model.generate",
+    attemptCount: 1,
+    outputStarted,
+    retryBoundaryCrossed: true,
+    attempts: [
+      {
+        attempt: 1,
+        status: "failed",
+        errorType: "provider_unavailable",
+        statusCode: 503,
+        retryable: false,
+        willRetry: false,
+        stopReason: "retry-boundary-crossed",
+      },
+    ],
+  };
+}
+
+/** 判断 Runtime 恢复消息是否为 AI SDK 结构化工具调用。 */
+function isStructuredToolCallMessage(message) {
+  return message.role === "assistant" && message.content?.[0]?.type === "tool-call";
+}
+
+/** 判断 Runtime 恢复消息是否为 AI SDK 结构化工具结果。 */
+function isStructuredToolResultMessage(message) {
+  return message.role === "tool" && message.content?.[0]?.type === "tool-result";
+}
+
+/** 判断错误是否保持了工具后已输出且未进入总结恢复的原始证据。 */
+function isPostToolOutputFailure(error) {
+  return (
+    error?.payload?.code === "model_provider_unavailable" &&
+    error?.resilience?.outputStarted === true &&
+    error.resilience.retryBoundaryCrossed === true &&
+    error.resilience.recovery === undefined
+  );
 }
 
 /** 返回 Runtime 渠道工具事件类型。 */
@@ -378,6 +489,109 @@ test("read-only weather tool is persisted, streamed, and replayed without a seco
   );
   assert.equal(detail.latestRun.toolCalls[0].observedAt, "2026-07-30T20:15");
   assert.equal(detail.memory.items.length, 0);
+  fixture.store.close();
+});
+
+// 验证工具后模型失败的恢复阶段继续使用原文本回调，并且最终只落一条助手消息。
+test("ToolResult summary recovery keeps streaming delivery and one final assistant message", async () => {
+  let connectorCalls = 0;
+  const weatherConnector = {
+    /** 返回固定天气事实并记录恢复前唯一一次 Connector 调用。 */
+    async getWeather() {
+      connectorCalls += 1;
+      return {
+        schemaVersion: "weather.v1",
+        location: { name: "深圳", timezone: "Asia/Shanghai" },
+        forecast: { date: "2026-07-31", temperature: { current: 26 } },
+        observedAt: "2026-07-31T10:00",
+        source: { name: "Open-Meteo", retrievedAt: "2026-07-31T10:01:00.000Z" },
+      };
+    },
+  };
+  const scenario = createStreamingToolRecoveryGateway();
+  const toolRegistry = createToolRegistry([createWeatherToolDefinition(weatherConnector)]);
+  const fixture = createTestRuntime({ gatewayClient: scenario.gatewayClient, toolRegistry });
+  const conversation = fixture.runtime.createConversation();
+  const deltas = [];
+  /** 收集恢复阶段通过原 Runtime delivery 回调交付的文本增量。 */
+  function collectRecoveryDelta(delta) {
+    deltas.push(delta);
+  }
+
+  const response = await fixture.runtime.runConversation(
+    conversation.id,
+    {
+      requestId: "weather-stream-recovery-request",
+      clientMessageId: "weather-stream-recovery-client",
+      message: "今天深圳天气",
+      imageUrls: [],
+      documentUrls: [],
+    },
+    { onTextDelta: collectRecoveryDelta },
+  );
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.equal(connectorCalls, 1);
+  assert.equal(scenario.getGenerationCalls(), 2);
+  assert.deepEqual(deltas, ["深圳当前 26°C，", "来源 Open-Meteo。"]);
+  assert.equal(response.content, "深圳当前 26°C，来源 Open-Meteo。");
+  assert.deepEqual(detail.messages.map(getMessageRole), ["user", "assistant"]);
+  assert.equal(detail.latestRun.status, "completed");
+  assert.equal(detail.latestRun.toolCalls[0].status, "completed");
+  assert.equal(detail.latestRun.resilience.recovered, true);
+  assert.equal(detail.latestRun.resilience.recovery.execution.outputStarted, true);
+  fixture.store.close();
+});
+
+// 验证已经交付正文后不自动恢复，避免把新总结拼接到部分回答之后。
+test("ToolResult summary recovery does not restart after text output has begun", async () => {
+  let connectorCalls = 0;
+  const weatherConnector = {
+    /** 返回固定天气事实并记录唯一一次 Connector 调用。 */
+    async getWeather() {
+      connectorCalls += 1;
+      return {
+        schemaVersion: "weather.v1",
+        location: { name: "深圳", timezone: "Asia/Shanghai" },
+        forecast: { date: "2026-07-31", temperature: { current: 26 } },
+        observedAt: "2026-07-31T10:00",
+        source: { name: "Open-Meteo", retrievedAt: "2026-07-31T10:01:00.000Z" },
+      };
+    },
+  };
+  const scenario = createStreamingToolRecoveryGateway({ outputBeforeFailure: true });
+  const toolRegistry = createToolRegistry([createWeatherToolDefinition(weatherConnector)]);
+  const fixture = createTestRuntime({ gatewayClient: scenario.gatewayClient, toolRegistry });
+  const conversation = fixture.runtime.createConversation();
+  const deltas = [];
+  /** 收集原调用在失败前已经交付的正文。 */
+  function collectOriginalDelta(delta) {
+    deltas.push(delta);
+  }
+
+  await assert.rejects(
+    fixture.runtime.runConversation(
+      conversation.id,
+      {
+        requestId: "weather-post-output-failure-request",
+        clientMessageId: "weather-post-output-failure-client",
+        message: "今天深圳天气",
+        imageUrls: [],
+        documentUrls: [],
+      },
+      { onTextDelta: collectOriginalDelta },
+    ),
+    isPostToolOutputFailure,
+  );
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.equal(connectorCalls, 1);
+  assert.equal(scenario.getGenerationCalls(), 1);
+  assert.deepEqual(deltas, ["已交付的部分回答"]);
+  assert.deepEqual(detail.messages.map(getMessageRole), ["user"]);
+  assert.equal(detail.latestRun.status, "failed");
+  assert.equal(detail.latestRun.toolCalls[0].status, "completed");
+  assert.equal(detail.latestRun.resilience.recovery, undefined);
   fixture.store.close();
 });
 

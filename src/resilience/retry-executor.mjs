@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
  * @property {string|null} lastCommittedStage - 最近已持久化的稳定阶段。
  * @property {string|null} idempotencyKey - 当前操作复用的幂等键。
  * @property {boolean} outputStarted - 是否已经向调用方交付有效输出。
+ * @property {boolean} retryBoundaryCrossed - 是否已进入不可安全重放整段任务的执行阶段。
  */
 
 /**
@@ -30,7 +31,7 @@ import { setTimeout as delay } from "node:timers/promises";
  * @property {"completed"|"failed"} status - 当前尝试结果。
  * @property {string|null} errorType - 脱敏错误分类。
  * @property {number|null} statusCode - 可用时记录的 HTTP 状态。
- * @property {boolean} retryable - 错误语义是否允许重试。
+ * @property {boolean} retryable - 当前错误与重放边界是否允许平台自动重试。
  * @property {boolean} willRetry - 次数与截止时间是否允许继续尝试。
  * @property {number} backoffMs - 实际计划执行的退避时间。
  * @property {string} stopReason - 完成、重试或终止原因。
@@ -50,6 +51,7 @@ import { setTimeout as delay } from "node:timers/promises";
  * @property {string|null} lastCommittedStage - 最近已提交的稳定阶段。
  * @property {string|null} idempotencyKey - 当前操作幂等键。
  * @property {boolean} outputStarted - 是否已经交付有效输出。
+ * @property {boolean} retryBoundaryCrossed - 是否已进入不可安全重放整段任务的执行阶段。
  * @property {RetryAttemptTrace[]} attempts - 按执行顺序保存的逐尝试证据。
  */
 
@@ -89,6 +91,7 @@ export function createResilienceContext(input) {
     lastCommittedStage: normalizeOptionalString(input.lastCommittedStage),
     idempotencyKey: normalizeOptionalString(input.idempotencyKey),
     outputStarted: Boolean(input.outputStarted),
+    retryBoundaryCrossed: Boolean(input.retryBoundaryCrossed),
   });
 }
 
@@ -117,17 +120,23 @@ export async function executeWithRetry({
   validateRetryInput(context, policy, task);
   const attempts = [];
   let outputStarted = context.outputStarted;
+  let retryBoundaryCrossed = context.retryBoundaryCrossed;
 
   /** 标记当前操作已经产生不可静默重放的有效输出。 */
   function markOutputStarted() {
     outputStarted = true;
   }
 
+  /** 标记当前操作已进入不可安全重放整段任务的阶段。 */
+  function markRetryBoundaryCrossed() {
+    retryBoundaryCrossed = true;
+  }
+
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
     if (abortSignal?.aborted) {
       throw new RetryExecutionError(
         abortSignal.reason || createAbortError(),
-        buildRetryTrace(context, policy, attempts, outputStarted),
+        buildRetryTrace(context, policy, attempts, { outputStarted, retryBoundaryCrossed }),
       );
     }
 
@@ -136,7 +145,7 @@ export async function executeWithRetry({
     if (remainingMs <= 0) {
       throw new RetryExecutionError(
         new RetryDeadlineError(),
-        buildRetryTrace(context, policy, attempts, outputStarted),
+        buildRetryTrace(context, policy, attempts, { outputStarted, retryBoundaryCrossed }),
       );
     }
 
@@ -147,6 +156,7 @@ export async function executeWithRetry({
         deadlineAt: context.deadlineAt,
         remainingMs,
         markOutputStarted,
+        markRetryBoundaryCrossed,
       });
       const endedAt = nowImplementation();
       attempts.push({
@@ -161,11 +171,15 @@ export async function executeWithRetry({
         backoffMs: 0,
         stopReason: "completed",
       });
-      return { value, resilience: buildRetryTrace(context, policy, attempts, outputStarted) };
+      return {
+        value,
+        resilience: buildRetryTrace(context, policy, attempts, { outputStarted, retryBoundaryCrossed }),
+      };
     } catch (error) {
       const endedAt = nowImplementation();
       const description = policy.describeError(error);
-      const retryable = !outputStarted && policy.shouldRetry(error, { attempt, context, description });
+      const retryableByPolicy = policy.shouldRetry(error, { attempt, context, description });
+      const retryable = !outputStarted && !retryBoundaryCrossed && retryableByPolicy;
       const requestedBackoffMs = normalizeDelay(policy.calculateBackoffMs(error, { attempt, context, description }));
       const remainingAfterAttemptMs = Math.floor(context.deadlineAt - endedAt);
       const hasAnotherAttempt = attempt < policy.maxAttempts;
@@ -181,12 +195,21 @@ export async function executeWithRetry({
         retryable,
         willRetry,
         backoffMs: willRetry ? requestedBackoffMs : 0,
-        stopReason: selectStopReason({ retryable, hasAnotherAttempt, hasBackoffBudget }),
+        stopReason: selectStopReason({
+          retryableByPolicy,
+          outputStarted,
+          retryBoundaryCrossed,
+          hasAnotherAttempt,
+          hasBackoffBudget,
+        }),
       };
       attempts.push(attemptTrace);
 
       if (!willRetry) {
-        throw new RetryExecutionError(error, buildRetryTrace(context, policy, attempts, outputStarted));
+        throw new RetryExecutionError(
+          error,
+          buildRetryTrace(context, policy, attempts, { outputStarted, retryBoundaryCrossed }),
+        );
       }
 
       try {
@@ -195,14 +218,17 @@ export async function executeWithRetry({
         attemptTrace.willRetry = false;
         attemptTrace.backoffMs = 0;
         attemptTrace.stopReason = "cancelled";
-        throw new RetryExecutionError(sleepError, buildRetryTrace(context, policy, attempts, outputStarted));
+        throw new RetryExecutionError(
+          sleepError,
+          buildRetryTrace(context, policy, attempts, { outputStarted, retryBoundaryCrossed }),
+        );
       }
     }
   }
 
   throw new RetryExecutionError(
     new Error("Retry attempts exhausted"),
-    buildRetryTrace(context, policy, attempts, outputStarted),
+    buildRetryTrace(context, policy, attempts, { outputStarted, retryBoundaryCrossed }),
   );
 }
 
@@ -222,7 +248,15 @@ function validateRetryInput(context, policy, task) {
 }
 
 /** 构造可持久化的重试证据，并复制尝试记录避免调用方反向修改内部状态。 */
-function buildRetryTrace(context, policy, attempts, outputStarted = context.outputStarted) {
+function buildRetryTrace(
+  context,
+  policy,
+  attempts,
+  {
+    outputStarted = context.outputStarted,
+    retryBoundaryCrossed = context.retryBoundaryCrossed,
+  } = {},
+) {
   const attemptCopies = [];
   for (const attempt of attempts) attemptCopies.push({ ...attempt });
   return {
@@ -238,13 +272,22 @@ function buildRetryTrace(context, policy, attempts, outputStarted = context.outp
     lastCommittedStage: context.lastCommittedStage,
     idempotencyKey: context.idempotencyKey,
     outputStarted,
+    retryBoundaryCrossed,
     attempts: attemptCopies,
   };
 }
 
 /** 根据错误可重试性、次数和时间预算返回稳定的停止原因。 */
-function selectStopReason({ retryable, hasAnotherAttempt, hasBackoffBudget }) {
-  if (!retryable) return "not-retryable";
+function selectStopReason({
+  retryableByPolicy,
+  outputStarted,
+  retryBoundaryCrossed,
+  hasAnotherAttempt,
+  hasBackoffBudget,
+}) {
+  if (!retryableByPolicy) return "not-retryable";
+  if (outputStarted) return "output-started";
+  if (retryBoundaryCrossed) return "retry-boundary-crossed";
   if (!hasAnotherAttempt) return "max-attempts";
   if (!hasBackoffBudget) return "deadline";
   return "retrying";

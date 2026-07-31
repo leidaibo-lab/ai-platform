@@ -39,7 +39,7 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 
 `scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
-当前交付聚焦 C1 对话问答的功能可用、确定性回归和能力理解。ChainTrace 的代码、稳定契约、Phoenix 选型和部署入口已经保留，但默认关闭；正式实例、真实 Runtime Trace 和四维运行态基线列为触发式 TODO，不作为日常启动或当前功能迭代的前置条件。共同底座只提供七条场景可复用的执行骨架，不代表图片、文档、业务查询、实时事件、操作执行和批量分析已经完成；具体边界见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
+当前交付聚焦 C1 对话问答的功能可用、确定性回归和能力理解，并以 Open-Meteo 跑通首个只读天气工具、ToolResult 持久化和工具后模型故障的无工具总结恢复。ChainTrace 的代码、稳定契约、Phoenix 选型和部署入口已经保留，但默认关闭；正式实例、真实 Runtime Trace 和四维运行态基线列为触发式 TODO，不作为日常启动或当前功能迭代的前置条件。共同底座只提供七条场景可复用的执行骨架，不代表图片、文档、企业业务查询、实时事件、操作执行和批量分析已经完成；具体边界见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
 
 ## 本地启动
 
@@ -171,7 +171,7 @@ npm run demo:check
 
 页面会请求本地 Demo Server，再由 Demo Server 装配的 Agent Runtime 通过 GatewayClient 和 AI SDK，使用 `.env` 里的 `LITELLM_MASTER_KEY` 调用 LiteLLM。浏览器不会拿到 `LITELLM_MASTER_KEY` 或 `UPSTREAM_API_KEY`。
 
-Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
+Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。工具型主对话复用 GatewayClient 内的 `ToolLoopAgent`，通过 `callOptionsSchema` / `prepareCall` 按 Run 动态注入模型、工具和执行设置，并在每次调用传入取消、超时及 Runtime/Tool Context；无工具普通调用、MemoryDelta 等动态结构化输出和原始 `responseFormat` 兼容调用继续使用 `generateText` / `streamText`。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
 
 会话输入区的模型选择器读取 `GET /api/gateway/status` 返回的 `models`，这些值是当前 `LITELLM_MASTER_KEY` 在 LiteLLM `/v1/models` 中可见的稳定别名，不是真实上游模型配置。当前 `config.yaml` 只配置 `chat-default` 时，选择器会只有一个选项；需要更多选项时，先在 LiteLLM `model_list` 中增加对应别名和上游映射。
 
@@ -183,7 +183,7 @@ Demo 输入区支持：
 - 消息引用：可以引用当前会话中的用户或助手消息；渠道只提交稳定 `messageId`，Runtime 从 SQLite 事实源解析正文。
 - 模型选择：Sender 内选择当前 Run 使用的 LiteLLM 模型别名；未选择时回退服务端 `LITELLM_MODEL`，token counter 与模型生成使用同一别名。
 - 多会话工作台：Runtime 使用 SQLite 持久化会话和完整原始消息；渠道支持标题搜索、今天/昨天/最近 7 天/更早分组、当前/归档/全部筛选、重命名与独立归档。归档不删除事实，取消归档也不会重新打开 `closed` 会话。
-- 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK `streamText` 文本增量，由 X Markdown 渲染；完整回答结束后才一次性落库。
+- 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK 标准事件流的文本增量；普通调用使用 `streamText`，工具型对话使用 `ToolLoopAgent.stream()`，由 X Markdown 渲染并在完整回答结束后一次性落库。
 - 停止生成：生成期间调用 Runtime 取消端点，中止模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
 - 发送门禁：本地会话先独立加载，模型网关状态在后台刷新；网关未确认可达时仍可浏览和整理会话、编辑草稿和附件，但禁止提交无效 Run。该探测只验证 LiteLLM `/v1/models`，不代表上游模型生成一定可用。
 - 失败反馈与恢复：最近一次失败 Run 会在对应用户消息后说明鉴权、限流、超时、模型不可用或上游服务异常，并给出处理建议；页面不展示 provider 原始错误正文。失败可直接重试或编辑后发送，最后一条正常助手回答可重新生成，中断回答可继续生成；每次动作都使用新的幂等标识，并以 `sourceRunId + recoveryMode` 记录来源而不修改历史。
@@ -304,9 +304,10 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 - `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
 - `DEMO_RUN_TIMEOUT_MS` 是排队、上下文规划和全部模型尝试共享的 Run 总时限，默认 `120000` 毫秒。
 - `DEMO_MODEL_MAX_ATTEMPTS` 默认 `3`，包含首次调用；退避由 `DEMO_MODEL_RETRY_BASE_DELAY_MS` 和 `DEMO_MODEL_RETRY_MAX_DELAY_MS` 控制。
-- `DEMO_TOOL_MAX_STEPS` 默认 `4`，限制一次 Run 内 AI SDK Core 多步生成的模型步骤；`DEMO_WEATHER_TOOL_ENABLED` 默认启用首个只读天气工具。
+- `DEMO_TOOL_MAX_STEPS` 默认 `4`，限制一次 Run 内 `ToolLoopAgent`（或动态结构化特殊路径）的模型步骤；`DEMO_WEATHER_TOOL_ENABLED` 默认启用首个只读天气工具。
 - `DEMO_WEATHER_TIMEOUT_MS` 默认 `8000` 毫秒；天气 Connector 只访问代码内固定的 Open-Meteo Geocoding 与 Forecast HTTPS 端点，不接受渠道或模型传入 URL。
 - 当前输入包含明确地点且查询今天或明天天气时，服务端 Registry 会通过 AI SDK `prepareStep` 把首步确定性路由到 `get_weather`，后续步骤恢复 `auto`；缺少地点或超出日期范围时仍由模型澄清，不把任意文本转换为外部请求。
+- 工具结果落库后若后续模型步骤因瞬时错误失败，且尚未交付正文，Runtime 会从 SQLite ToolResult 构造 AI SDK 结构化工具消息并发起无工具总结恢复；恢复仍共享原 Run 时限和取消信号，不会再次执行 Connector，也不提供跨进程任务恢复。
 - `OTEL_ENABLED` 控制 C1 ChainTrace，默认 `false`；禁用时不初始化 SDK、Exporter 或 AI SDK Telemetry。
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 是启用 TODO 时使用的 Phoenix OTLP HTTP 地址；代码固定使用 protobuf，也兼容以 `OTEL_EXPORTER_OTLP_ENDPOINT` 提供基础地址。
 - `OTEL_EXPORTER_OTLP_TRACES_HEADERS` 和 `OTEL_EXPORTER_OTLP_HEADERS` 使用 OTel `key=value` 列表；Trace 专用 header 优先，凭据只保存在服务端内存。
@@ -326,6 +327,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | Phoenix ChainTrace TODO 的触发条件与阶段决策 | `docs/decisions/2026-07-30-c1-chaintrace-runtime-validation-deferral.md` |
 | Phoenix ChainTrace 启用、认证、健康检查、备份与升级边界 | `docs/c1-chaintrace-operations.md` |
 | V1 只读工具循环、天气 Connector 和 LiteLLM digest 决策 | `docs/decisions/2026-07-30-v1-read-only-tool-loop-and-weather.md` |
+| ToolResult 持久化总结恢复决策 | `docs/decisions/2026-07-31-tool-result-summary-recovery.md` |
 | AI SDK Core v7 当前采用、延后与不采用的 API 边界 | `docs/ai-sdk-core-alignment.md` |
 | 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
@@ -338,7 +340,7 @@ Skill 相关内容统一放在 `.agents/skills/`，并遵守 `https://gitlab.sea
 
 当前保持单仓和轻量部署，先稳定区域接口，再按跨项目复用、独立安全边界、独立扩缩容或团队所有权逐个拆成服务：
 
-1. V1：已适配 AI SDK Core `generateText` / `streamText` 的有界多步工具能力，并以 Open-Meteo 天气查询跑通无副作用只读工具的确定性闭环；真实模型 smoke test、更多业务 Connector、人工确认和写操作仍未完成。
+1. V1：已适配 AI SDK Core `generateText` / `streamText` 的有界多步工具能力，以 Open-Meteo 天气查询跑通无副作用只读工具闭环，并支持从持久化 ToolResult 无工具恢复最终总结；真实模型 smoke test、更多业务 Connector、人工确认、写操作和跨进程恢复仍未完成。
 2. V2：把 LiteLLM 模型网关补成团队共享服务，增加 virtual key、多模型路由、fallback、预算、限流和调用统计。
 3. V3：按资源和权限边界拆出连接器服务与知识服务。
 4. V4：建设平台控制面和多渠道 Adapter，复用已经稳定的 Runtime、连接器和模型网关。

@@ -102,7 +102,7 @@
 | Memory Manager | `[当前]` `memoryVersion` 冲突后重读并重算，最多尝试三次 | 只重算尚未压缩的连续区间，不回滚原始消息或主 Run |
 | 模型生成 | `[当前]` AI SDK `maxRetries: 0`，平台统一重试执行器拥有唯一尝试预算并将证据写入 Run | 默认 `maxAttempts: 3`，即首次调用加两次重试；只处理瞬时网络错误、408、429、500、502、503、504，并遵守 `Retry-After` |
 | 流式交付 | `[当前]` `POST .../runs/stream` 通过 SSE 交付 AI SDK 文本增量；独立事件流按 SQLite 游标同步已落库事实 | 首个有效文本增量前可重试模型；开始输出后不静默重生成。浏览器断线后查询 Run 最终状态，不要求 Token 级断点续传 |
-| 当前只读 Connector | `[当前]` Open-Meteo 查询共享 Run 截止时间和取消信号；失败保存安全 ToolResult 并回填模型 | 当前不自动重试 Connector；已完成 Run 的幂等重放直接返回工具事实，不再次访问外部服务 |
+| 当前只读 Connector | `[当前]` Open-Meteo 查询共享 Run 截止时间和取消信号；失败保存安全 ToolResult 并回填模型 | 不自动重试 Connector；工具后模型瞬时失败且尚未输出时，从 SQLite ToolResult 发起无工具总结恢复；幂等重放和恢复均不再次访问外部服务 |
 | 未来写操作 | `[目标]` 尚未实现 | 必须具备业务幂等键、结果回读和不确定状态处理；未知结果不得自动重放 |
 
 ### C1 当前模型重试策略
@@ -143,7 +143,7 @@ durability: one Run + one final assistant message
 | 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行；标题与独立归档事实；恢复 Run 来源关系 | 把跨进程并发与更多异常恢复结果纳入链路证据 |
 | 上下文与记忆 | 结构化记忆、Context Planner、Context Manifest、token 高低水位 | 用真实模型验证纠正、实体隔离、任务状态和来源追溯 |
 | 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通；Run 可选择网关可见模型别名并保存实际模型与 usage | 固定评测模型、Prompt、fixture 和参数，建立可重复比较的四维基线 |
-| 只读工具 | C1 渠道可按模型决策调用服务端 `get_weather`；Runtime 校验 allowlist、持久化 ToolResult，并通过 SSE 交付真实工具阶段 | 补真实模型天气验收和追问证据；该切片只证明天气工具闭环，不代表完整 C4 业务数据能力 |
+| 只读工具 | C1 渠道可按模型决策调用服务端 `get_weather`；Runtime 校验 allowlist、持久化 ToolResult，通过 SSE 交付真实工具阶段，并可在工具后模型瞬时失败时无工具恢复总结 | 补真实模型天气验收和追问证据；该切片只证明天气工具闭环和单 Run 恢复，不代表完整 C4 业务数据或跨进程恢复能力 |
 | 结果交付 | JSON Run、POST SSE 模型文本流、助手消息最终单次落库和 SSE 多端同步；渠道支持安全 Markdown、长列表窗口、键盘与移动端基线 | 当前以功能回归和 gzip 预算为主；正式阶段耗时基线按 TODO 触发条件恢复 |
 | 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace；渠道可创建 `retry / regenerate / continue` 新 Run | 当前保持自动化回归；真实模型超时、网关错误和更复杂断连样本延期 |
 | 可观测 | 已有后端中立 `ChainTracer`、OTLP/HTTP protobuf、Phoenix 选型、部署入口、PoC 业务 ID 查询和敏感正文脱敏 | TODO：正式实例真实 JSON/SSE Run、三业务 ID 查询、隐私复核、故障隔离和四维基线 |
@@ -191,13 +191,14 @@ flowchart LR
   Runtime["[当前] Agent Runtime<br/>幂等 Run / 同会话串行"]
   StoreIn["[当前] SQLite 先写用户消息"]
   Planner["[当前] Context Planner<br/>记忆 / Episode / 最近消息"]
-  Gateway["[当前] GatewayClient<br/>平台统一重试 / Core 多步调用"]
-  AiSdk["[当前] AI SDK<br/>文本生成 / 工具消息编排"]
+  Gateway["[当前] GatewayClient<br/>平台统一重试 / 调用分流"]
+  AiSdk["[当前] AI SDK<br/>ToolLoopAgent / Core 函数"]
   LiteLLM["[当前] LiteLLM"]
   Model["[当前] 上游模型"]
   Registry["[当前] Runtime Tool Registry<br/>只读 allowlist / schema"]
   Weather["[当前] get_weather / Open-Meteo<br/>固定 HTTPS 端点"]
   ToolResult["[当前] ToolResult 事实<br/>状态 / 来源 / 数据时间"]
+  Recovery["[当前] ToolResult 总结恢复<br/>SQLite 事实 / 无 ToolSet"]
   StoreOut["[当前] 写回答 / usage / Context Manifest"]
   Delivery["[当前] POST SSE 文本流 / 事实同步<br/>分类失败原因 / 恢复入口"]
   Memory["[当前] Memory Manager 异步压缩"]
@@ -207,6 +208,7 @@ flowchart LR
   Model -->|工具调用| AiSdk
   AiSdk -->|Runtime 执行包装器| Registry --> Weather --> ToolResult --> AiSdk
   ToolResult -->|tool-started / completed / failed| Delivery
+  ToolResult -.->|工具后瞬时失败且未输出| Recovery --> Gateway
   Model -->|文本增量| Delivery
   Model -->|最终结果| StoreOut -->|completed / 事实同步| Delivery
   StoreOut -.-> Memory
@@ -302,14 +304,15 @@ flowchart LR
   Source["[当前] C1 浏览器查询<br/>[目标] IM / API 查询"]
   Adapter["渠道 Adapter<br/>统一身份与当前问题"]
   Runtime["[当前] Agent Runtime<br/>Run / 工具事实 / 幂等"]
-  Gateway["[当前] GatewayClient<br/>Core 多步调用"]
-  AiSdk["[当前] AI SDK<br/>工具消息编排"]
+  Gateway["[当前] GatewayClient<br/>Agent / Core 调用分流"]
+  AiSdk["[当前] ToolLoopAgent<br/>工具消息编排"]
   LiteLLM["[当前] LiteLLM"]
   Model["[当前] 上游模型"]
   Registry["[当前] Tool Registry<br/>schema / 只读 allowlist"]
   Connector["[当前] Open-Meteo Connector<br/>参数 / 超时 / 脱敏"]
   Business["[当前] Open-Meteo API<br/>[目标] 业务 API / DB / MCP / Search"]
   Result["[当前] weather.v1 ToolResult<br/>来源 / 时间 / 可重试性"]
+  Recovery["[当前] 无工具总结恢复<br/>结构化工具消息"]
   Validate["[当前] schema / 来源与时间约束<br/>[目标] 企业事实引用校验"]
   Delivery["[当前] C1 渠道输出<br/>答案 + 数据时间 + 来源"]
 
@@ -317,6 +320,7 @@ flowchart LR
   Model -->|get_weather 调用| AiSdk
   AiSdk -->|Runtime 执行包装器| Registry --> Connector --> Business --> Result --> AiSdk
   Result -->|工具阶段事实| Delivery
+  Result -.->|后续模型瞬时失败且未输出| Recovery --> Gateway
   Model -->|最终回答| Validate --> Delivery
 ```
 

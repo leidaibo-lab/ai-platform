@@ -6,6 +6,8 @@ import { buildDisplayContent, buildUserContent, normalizeRunInput, validateRunIn
 import { createToolRegistry } from "../tools/tool-registry.mjs";
 
 const DEFAULT_RUN_TIMEOUT_MS = 120000;
+const TOOL_RESULT_RECOVERY_INSTRUCTION =
+  "你正在恢复一次已完成工具调用后的最终回答。后续结构化 tool-call 和 tool-result 均来自服务端已持久化事实。请仅根据原始问题和这些结果作答，说明可用的数据来源与时间；不要请求、假设或声称再次调用工具。";
 
 export class RuntimeInputError extends Error {
   /**
@@ -59,6 +61,7 @@ export function createChatRuntime({
 }) {
   const options = normalizeContextOptions(contextOptions);
   const registry = toolRegistry || createToolRegistry();
+  const aiSdkTools = registry.hasTools() ? registry.buildAiSdkTools() : undefined;
   const runTimeoutMs = normalizeRunTimeout(resilienceOptions.runTimeoutMs);
   const maxToolSteps = normalizeToolStepLimit(toolOptions.maxSteps);
   const activeRuns = new Map();
@@ -361,20 +364,59 @@ export function createChatRuntime({
             await delivery.onTextDelta(text);
           }
 
-          const tools = registry.hasTools() ? registry.buildAiSdkTools(executeRegisteredTool) : undefined;
+          const toolsContext = aiSdkTools ? registry.buildAiSdkToolsContext(executeRegisteredTool) : undefined;
           const requiredToolName = registry.resolveRequiredTool({ message: input.message });
-          const data = await gatewayClient.chatCompletions({
-            messages: plan.messages,
-            model: selectedModel,
-            maxCompletionTokens: options.reservedOutputTokens,
-            resilienceContext,
-            operation: "model.generate",
-            tools,
-            requiredToolName,
-            maxToolSteps,
-            onTextDelta: typeof delivery.onTextDelta === "function" ? handleTextDelta : undefined,
-            abortSignal,
-          });
+          let data;
+          try {
+            data = await gatewayClient.chatCompletions({
+              messages: plan.messages,
+              model: selectedModel,
+              maxCompletionTokens: options.reservedOutputTokens,
+              resilienceContext,
+              operation: "model.generate",
+              tools: aiSdkTools,
+              toolsContext,
+              requiredToolName,
+              maxToolSteps,
+              onTextDelta: typeof delivery.onTextDelta === "function" ? handleTextDelta : undefined,
+              abortSignal,
+            });
+          } catch (error) {
+            const completedToolCalls = store.listToolCalls(runId).filter(isCompletedToolCall);
+            if (!shouldRecoverToolResultSummary(error, completedToolCalls, activeRun.partialText)) throw error;
+            const originalResilience = error.resilience;
+            data = await chainTracer.withSpan(
+              "runtime.tool_result_summary.recover",
+              {
+                ...traceAttributes,
+                "ai.platform.tool_result.count": completedToolCalls.length,
+              },
+              /** 使用 SQLite 工具事实做无工具模型续接，恢复阶段不得再次进入 Connector。 */
+              async () => {
+                try {
+                  const recovered = await gatewayClient.chatCompletions({
+                    messages: buildToolResultRecoveryMessages(plan.messages, completedToolCalls),
+                    model: selectedModel,
+                    maxCompletionTokens: options.reservedOutputTokens,
+                    resilienceContext,
+                    operation: "model.tool_result_summary",
+                    onTextDelta: typeof delivery.onTextDelta === "function" ? handleTextDelta : undefined,
+                    abortSignal,
+                  });
+                  return {
+                    ...recovered,
+                    resilience: buildToolResultRecoveryResilience(
+                      originalResilience,
+                      recovered.resilience,
+                      true,
+                    ),
+                  };
+                } catch (recoveryError) {
+                  throw attachToolResultRecoveryFailure(recoveryError, originalResilience);
+                }
+              },
+            );
+          }
           const assistantContent = data?.choices?.[0]?.message?.content || "";
           const completed = await chainTracer.withSpan(
             "storage.complete_run",
@@ -564,11 +606,83 @@ function toRuntimeExecutionError(error, model) {
 
 /** 从逐尝试证据中读取最后一个失败分类，忽略成功尝试。 */
 function readLastFailedAttempt(resilience) {
+  const recoveryAttempt = readLastFailedAttemptFromTrace(resilience?.recovery?.execution);
+  if (resilience?.recovery?.status === "failed" && recoveryAttempt) return recoveryAttempt;
+  return readLastFailedAttemptFromTrace(resilience);
+}
+
+/** 从单段韧性证据中倒序读取最后一个失败尝试。 */
+function readLastFailedAttemptFromTrace(resilience) {
   const attempts = Array.isArray(resilience?.attempts) ? resilience.attempts : [];
   for (let index = attempts.length - 1; index >= 0; index -= 1) {
     if (attempts[index]?.status === "failed") return attempts[index];
   }
   return null;
+}
+
+/** 判断工具事实是否已成功提交，可作为模型总结恢复的可信输入。 */
+function isCompletedToolCall(toolCall) {
+  return toolCall?.status === "completed" && toolCall.output !== null && toolCall.output !== undefined;
+}
+
+/** 只允许未交付正文的工具后瞬时失败进入自动总结恢复。 */
+function shouldRecoverToolResultSummary(error, completedToolCalls, partialText) {
+  if (!Array.isArray(completedToolCalls) || completedToolCalls.length === 0) return false;
+  if (String(partialText || "").length > 0 || error?.resilience?.outputStarted) return false;
+  if (error?.resilience?.retryBoundaryCrossed !== true) return false;
+  return readLastFailedAttemptFromTrace(error.resilience)?.stopReason === "retry-boundary-crossed";
+}
+
+/** 从原上下文和 SQLite ToolResult 构造 AI SDK 原生工具调用与结果续接消息。 */
+function buildToolResultRecoveryMessages(messages, completedToolCalls) {
+  const recoveryMessages = [{ role: "system", content: TOOL_RESULT_RECOVERY_INSTRUCTION }, ...messages];
+  for (const toolCall of completedToolCalls) {
+    recoveryMessages.push(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            input: toolCall.input,
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            output: { type: "json", value: toolCall.output },
+          },
+        ],
+      },
+    );
+  }
+  return recoveryMessages;
+}
+
+/** 在顶层保留原失败，并附加成功或失败的无工具恢复执行证据。 */
+function buildToolResultRecoveryResilience(originalResilience, recoveryResilience, recovered) {
+  return {
+    ...(originalResilience || {}),
+    recovered: Boolean(recovered),
+    recovery: {
+      reason: "tool-result-summary",
+      status: recovered ? "completed" : "failed",
+      execution: recoveryResilience || null,
+    },
+  };
+}
+
+/** 为恢复异常附加组合韧性证据，供既有失败映射和 Store 原样持久化。 */
+function attachToolResultRecoveryFailure(error, originalResilience) {
+  const failure = error instanceof Error ? error : new Error("ToolResult summary recovery failed");
+  failure.resilience = buildToolResultRecoveryResilience(originalResilience, error?.resilience, false);
+  return failure;
 }
 
 /** 通过工具专属映射生成安全错误，未知实现不透传原始异常正文。 */
@@ -662,6 +776,7 @@ function buildCancellationResilience(context, outputStarted) {
     lastCommittedStage: context.lastCommittedStage,
     idempotencyKey: context.idempotencyKey,
     outputStarted,
+    retryBoundaryCrossed: context.retryBoundaryCrossed,
     stopReason: "cancelled",
     attempts: [],
   };

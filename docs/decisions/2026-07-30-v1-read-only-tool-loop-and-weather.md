@@ -7,7 +7,7 @@
 - 关联需求：以用户在 C1 渠道查询实时天气为入口，跑通第一个可追溯、无副作用的 C4 只读工具闭环
 - 关联 OpenSpec：`openspec/specs/ai-platform/spec.md`
 - 前置记录：`2026-07-29-existing-capability-selection-audit.md`
-- 后续记录：`2026-07-31-ai-sdk-core-v7-alignment.md` 替代本记录中的 `ToolLoopAgent` 实现选择，其余天气 Connector 与安全边界继续有效
+- 后续记录：`2026-07-31-ai-sdk-core-v7-alignment.md` 细化本记录中的 `ToolLoopAgent` 复用、动态调用配置和 Core 特殊路径，其余天气 Connector 与安全边界继续有效
 
 ## 问题与边界
 
@@ -38,7 +38,7 @@
 ## 决策
 
 - 固定 LiteLLM 为本机已验证的不可变镜像 `ghcr.io/berriai/litellm@sha256:89ccaccfda9083f7693777597ca27f8ffca12045e4fa9277155fb7c5f06e68b2`；升级时先拉取新候选、运行模型 smoke test 和 Runtime 回归，再显式更新 digest。回退只需恢复上一 digest。
-- 适配 AI SDK `ToolLoopAgent`，最大四个模型步骤；不自研通用循环。该实现选择后续由 `2026-07-31-ai-sdk-core-v7-alignment.md` 替代为 Core 多步调用。
+- 适配 AI SDK `ToolLoopAgent`，在 GatewayClient 生命周期内复用同一个工具型对话 Agent，通过 call options 按 Run 动态选择模型、工具和步骤预算，最大四个模型步骤；不自研通用循环。动态结构化输出等特殊调用继续使用 Core 函数，具体分流由 `2026-07-31-ai-sdk-core-v7-alignment.md` 固化。
 - 对包含明确地点且处于今天或明天范围的天气输入，由服务端 Tool Registry 进行确定性任务路由：首步使用 AI SDK `toolChoice` 强制 `get_weather`，ToolResult 回填后恢复 `auto`。真实模型在纯 `auto` 下可能直接回答，因此不能只依赖 Prompt 或模型自觉。
 - 平台拥有 Run、工具 allowlist、权限、ToolResult、幂等、SSE 事件和审计；AI SDK 负责模型工具消息编排；Open-Meteo Connector 只负责固定端点的地点解析和天气读取；LiteLLM 不执行工具。
 - 首个工具固定为 `get_weather`，只接受地点和 `today` / `tomorrow`，不得接受 URL、代码或任意请求参数。
@@ -51,7 +51,7 @@
 - 异常路径：地点不存在、输入非法、超时和上游错误均产生确定状态；原始响应和调用栈不进入渠道或 Trace。
 - 稳定性：已完成 Run 的幂等重放不再次调用天气服务；工具循环最多四步并共享 Run 截止时间。
 - 可观测：工具执行进入 SQLite 事实事件、POST SSE 和脱敏 ChainTrace Span。
-- 回归：Connector、Registry、GatewayClient、Runtime、SSE Adapter 和渠道阶段共 71/71 项确定性测试通过；真实模型 smoke test 单独报告。
+- 回归：Connector、Registry、GatewayClient、Runtime、SSE Adapter 和渠道阶段确定性测试通过；真实模型 smoke test 单独报告。
 
 ## 剩余边界与重评
 
