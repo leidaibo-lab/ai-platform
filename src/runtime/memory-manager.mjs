@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   calculateContextThresholds,
   estimateMessagesTokens,
@@ -5,8 +6,45 @@ import {
 } from "./context-budget.mjs";
 
 const MEMORY_PROMPT_VERSION = "structured-memory-v1";
-const ALLOWED_TYPES = new Set(["goal", "constraint", "preference", "fact", "decision", "task"]);
-const ALLOWED_PRIORITIES = new Set(["critical", "high", "normal"]);
+const ALLOWED_TYPE_VALUES = ["goal", "constraint", "preference", "fact", "decision", "task"];
+const ALLOWED_PRIORITY_VALUES = ["critical", "high", "normal"];
+const ALLOWED_TYPES = new Set(ALLOWED_TYPE_VALUES);
+const ALLOWED_PRIORITIES = new Set(ALLOWED_PRIORITY_VALUES);
+const MEMORY_IDENTITY_SCHEMA = z
+  .object({
+    type: z.enum(ALLOWED_TYPE_VALUES),
+    entity: z.string(),
+    key: z.string(),
+  })
+  .strict();
+const MEMORY_SOURCE_IDS_SCHEMA = z.array(z.string());
+const MEMORY_DELTA_OUTPUT_SCHEMA = z
+  .object({
+    upserts: z.array(
+      MEMORY_IDENTITY_SCHEMA.extend({
+        value: z.string(),
+        reason: z.string(),
+        itemStatus: z.string(),
+        priority: z.enum(ALLOWED_PRIORITY_VALUES),
+        sourceMessageIds: MEMORY_SOURCE_IDS_SCHEMA,
+      }).strict(),
+    ),
+    supersedes: z.array(
+      MEMORY_IDENTITY_SCHEMA.extend({
+        sourceMessageIds: MEMORY_SOURCE_IDS_SCHEMA,
+      }).strict(),
+    ),
+    episode: z
+      .object({
+        topic: z.string(),
+        summary: z.string(),
+        sourceMessageIds: MEMORY_SOURCE_IDS_SCHEMA,
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict()
+  .describe("长期会话记忆的新增、纠正和 Episode 摘要");
 
 /**
  * 创建结构化记忆提取、压缩调度、乐观锁重试和最终 checkpoint 管理器。
@@ -190,66 +228,12 @@ function buildExtractionPrompt(memoryItems, messages) {
   ].join("\n\n");
 }
 
-/** 定义交给 AI SDK `Output.object` 的 MemoryDelta JSON Schema 和模型提示元数据。 */
+/** 定义交给 AI SDK `Output.object` 的 MemoryDelta Standard Schema 和模型提示元数据。 */
 function buildMemoryOutputSchema() {
-  const itemProperties = {
-    type: { type: "string", enum: [...ALLOWED_TYPES] },
-    entity: { type: "string" },
-    key: { type: "string" },
-  };
   return {
     name: "conversation_memory_delta",
     description: "长期会话记忆的新增、纠正和 Episode 摘要",
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["upserts", "supersedes", "episode"],
-      properties: {
-        upserts: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "entity", "key", "value", "reason", "itemStatus", "priority", "sourceMessageIds"],
-            properties: {
-              ...itemProperties,
-              value: { type: "string" },
-              reason: { type: "string" },
-              itemStatus: { type: "string" },
-              priority: { type: "string", enum: [...ALLOWED_PRIORITIES] },
-              sourceMessageIds: { type: "array", items: { type: "string" } },
-            },
-          },
-        },
-        supersedes: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "entity", "key", "sourceMessageIds"],
-            properties: {
-              ...itemProperties,
-              sourceMessageIds: { type: "array", items: { type: "string" } },
-            },
-          },
-        },
-        episode: {
-          anyOf: [
-            { type: "null" },
-            {
-              type: "object",
-              additionalProperties: false,
-              required: ["topic", "summary", "sourceMessageIds"],
-              properties: {
-                topic: { type: "string" },
-                summary: { type: "string" },
-                sourceMessageIds: { type: "array", items: { type: "string" } },
-              },
-            },
-          ],
-        },
-      },
-    },
+    schema: MEMORY_DELTA_OUTPUT_SCHEMA,
   };
 }
 

@@ -104,8 +104,12 @@ Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯
 - **AND** 默认一次模型生成 SHALL 最多尝试三次，包含首次调用和两次自动重试
 - **AND** 所有尝试 SHALL 复用同一个 Run 和绝对截止时间，不得重复持久化用户消息
 - **AND** Runtime SHALL 持久化逐尝试结果、错误分类、退避和最终重试判定
-- **AND** 流式 Run SHALL 使用 AI SDK `streamText`，非流式 Run SHALL 保持既有 `generateText` 契约
-- **AND** 存在工具时 SHALL 通过同一组 Core 调用参数提供 `tools`、`stopWhen` 和按需的 `prepareStep`，不得另建绕过 GatewayClient 的工具模型入口
+- **AND** 无工具的流式 Run SHALL 使用 AI SDK `streamText`，无工具的非流式 Run SHALL 使用 `generateText`
+- **AND** 存在工具且没有动态 `outputSchema` 或原始 `responseFormat` 时 SHALL 复用 GatewayClient 生命周期内的 `ToolLoopAgent`
+- **AND** GatewayClient SHALL 通过 `callOptionsSchema` 和 `prepareCall` 按 Run 校验并配置模型、工具、步骤预算和安全 Telemetry，通过 `prepareStep` 执行首步确定性工具路由
+- **AND** 每次 Agent 调用 SHALL 传入当前 Run 的 `abortSignal`、剩余 `timeout`、`runtimeContext` 和经工具 `contextSchema` 校验的 `toolsContext`
+- **AND** 存在动态 `outputSchema` 或原始 `responseFormat` 时 SHALL 保留 `generateText` / `streamText` Core 路径，并在需要工具时传入同一 ToolSet、停止条件和首步路由
+- **AND** ToolLoopAgent 和 Core 函数 SHALL 只作为 GatewayClient 内部实现，不得形成绕过 Runtime 的业务入口
 
 #### Scenario: Runtime retries a transient model failure
 
@@ -135,7 +139,7 @@ Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯
 - **THEN** GatewayClient SHALL 将现有消息转换为等价 AI SDK ModelMessage
 - **AND** SHALL 将图片 URL 原样转发给 LiteLLM，不得在 Runtime 提前下载
 - **AND** SHALL 保留 `max_completion_tokens` 和兼容调用方原始 `response_format` 的请求语义
-- **AND** Runtime 内部结构化任务 SHALL 使用 AI SDK `Output.object` 和 JSON Schema 生成、解析与校验结果
+- **AND** Runtime 内部结构化任务 SHALL 使用 AI SDK `Output.object` 和带本地校验的 Standard Schema 生成、解析与校验结果
 - **AND** SHALL 使用 AI SDK v7 的 `usage` 汇总全部模型步骤、通过 `stream` 消费标准事件，并从 `finalStep.response` 读取最终响应元数据
 - **AND** SHALL NOT 依赖已弃用的 `totalUsage`、`fullStream` 或顶层 `response`
 - **AND** SHALL 将模型正文、实际模型、usage、finish reason 和 HTTP 错误映射回现有 GatewayClient 契约
@@ -145,8 +149,8 @@ Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯
 
 - **GIVEN** Memory Manager 已选择需要压缩的连续消息区间
 - **WHEN** Runtime 请求模型提取 MemoryDelta
-- **THEN** GatewayClient SHALL 通过 `Output.object({ schema: jsonSchema(...) })` 请求并返回已解析的结构化结果
-- **AND** AI SDK SHALL 在结果进入 MemoryDelta reducer 前执行 JSON Schema 校验
+- **THEN** GatewayClient SHALL 通过 `Output.object` 和 Zod Standard Schema 请求并返回已解析的结构化结果
+- **AND** AI SDK SHALL 在结果进入 MemoryDelta reducer 前执行本地 Standard Schema 校验
 - **AND** provider 以 `400` 拒绝结构化输出请求时 Runtime MAY 移除 `outputSchema`，使用纯 JSON 提示执行一次兼容降级
 - **AND** 降级结果 SHALL 继续经过现有 MemoryDelta 字段、来源 ID 和状态归一化校验
 
@@ -241,13 +245,13 @@ Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/
 
 ### Requirement: V1 read-only tool loop
 
-Agent Runtime SHALL 适配 AI SDK Core `generateText` / `streamText` 的 `tools`、`stopWhen` 和 `prepareStep` 执行有界只读工具循环，并继续拥有 Conversation、Run、权限、工具事实、幂等、交付和审计；LiteLLM SHALL 只负责模型访问、路由和转发，不得执行或保存业务工具结果。
+Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯文本有界只读工具循环，并只在动态结构化输出等特殊调用中使用带 `tools`、`stopWhen` 和 `prepareStep` 的 Core 函数路径；Runtime 继续拥有 Conversation、Run、权限、工具事实、幂等、交付和审计，LiteLLM SHALL 只负责模型访问、路由和转发，不得执行或保存业务工具结果。
 
 #### Scenario: Model requests current weather
 
 - **GIVEN** `get_weather` 已在服务端 Tool Registry 中启用
 - **WHEN** 当前输入包含明确地点且属于今天或明天的天气查询
-- **THEN** Runtime SHALL 通过服务端 Tool Registry 把 AI SDK Core 多步生成的首步固定路由到 `get_weather`，ToolResult 回填后的后续步骤恢复自动选择
+- **THEN** Runtime SHALL 通过服务端 Tool Registry 和 `ToolLoopAgent.prepareStep` 把首步固定路由到 `get_weather`，ToolResult 回填后的后续步骤恢复自动选择
 - **AND** Runtime SHALL 在同一 Run 总截止时间内执行固定目标的 Open-Meteo Connector
 - **AND** Runtime SHALL 持久化 `toolCallId`、工具名、脱敏输入、状态、结构化结果或安全错误、来源和数据时间
 - **AND** Runtime SHALL 将结构化 ToolResult 回填给同一有界生成循环，由模型生成最终回答
@@ -277,6 +281,27 @@ Agent Runtime SHALL 适配 AI SDK Core `generateText` / `streamText` 的 `tools`
 - **THEN** 循环 SHALL 共享 Run 截止时间并最多执行四个模型步骤
 - **AND** 只允许 Tool Registry 中启用的只读工具，不得让模型提交任意 URL 或动态代码
 - **AND** 相同 `requestId` 的已完成 Run 重放 SHALL 返回已持久化工具事实和回答，不得再次调用 Connector
+
+#### Scenario: Model fails after tool execution starts
+
+- **GIVEN** 模型已在当前 Run 中生成工具调用
+- **WHEN** Runtime 开始执行 Connector，但后续模型步骤返回可重试的瞬时错误
+- **THEN** Runtime SHALL 在 Connector 执行前越过当前生成尝试的自动重试边界
+- **AND** Runtime SHALL NOT 为该错误重新执行整段模型与工具循环
+- **AND** 已开始的工具调用 SHALL 保持其已持久化的 ToolResult 状态
+- **AND** 如果尚未交付任何正文且 SQLite 中至少存在一个 completed ToolResult，Runtime SHALL 从会话事实源重新读取结果，并发起一个不携带 ToolSet、`toolsContext` 或强制工具路由的总结恢复阶段
+- **AND** 恢复消息 SHALL 使用匹配 `toolCallId` 和工具名的 AI SDK 结构化 `tool-call` / `tool-result` ModelMessage，不得通过普通文本 Prompt 冒充工具结果
+- **AND** 恢复阶段 SHALL 共享原 Run 的绝对截止时间、取消信号、模型别名、业务 Trace 和幂等边界，且不得再次执行 Connector
+- **AND** 恢复成功后原 Run SHALL 进入 `completed`，并且 Runtime SHALL 只持久化一条完整助手消息
+
+#### Scenario: ToolResult summary recovery cannot complete
+
+- **GIVEN** Runtime 已因工具后模型瞬时错误进入无工具总结恢复阶段
+- **WHEN** 恢复调用再次失败、被取消或耗尽原 Run 剩余时限
+- **THEN** Runtime SHALL NOT 再次执行 Connector
+- **AND** 非取消失败 SHALL 使原 Run 进入 `failed`，并在 resilience 中分别保留原生成失败和恢复执行证据
+- **AND** 调用方取消 SHALL 继续遵守独立 `cancelled` 状态和部分正文持久化契约
+- **AND** 如果原生成已经交付正文，或不存在 completed ToolResult，Runtime SHALL NOT 自动恢复，Run SHALL 按既有失败语义收口
 
 #### Scenario: User explicitly cancels a running generation
 

@@ -59,6 +59,37 @@ async function testRetryExecutorCompletesWithinSharedDeadline() {
 
 test("retry executor preserves one context across local attempts", testRetryExecutorCompletesWithinSharedDeadline);
 
+/** 验证任务越过显式重试边界后，瞬时错误也不会重放整段执行。 */
+async function testRetryExecutorStopsAfterRetryBoundary() {
+  let calls = 0;
+  const context = createResilienceContext({ deadlineAt: 2000 });
+
+  /** 模拟先进入不可重放阶段，随后返回可重试的服务端错误。 */
+  async function task({ markRetryBoundaryCrossed }) {
+    calls += 1;
+    markRetryBoundaryCrossed();
+    throw createStatusError(503);
+  }
+
+  /** 保持测试尝试始终处于共享截止时间内。 */
+  function nowImplementation() {
+    return 1000;
+  }
+
+  await assert.rejects(
+    executeWithRetry({
+      context,
+      policy: createTestPolicy({ maxAttempts: 3, backoffMs: 0 }),
+      task,
+      nowImplementation,
+    }),
+    isRetryBoundaryStoppedRetry,
+  );
+  assert.equal(calls, 1);
+}
+
+test("retry executor does not replay a task after its retry boundary", testRetryExecutorStopsAfterRetryBoundary);
+
 /** 验证剩余时间不足以完成退避时停止，不把每次尝试重新赋予完整超时。 */
 async function testRetryExecutorStopsAtDeadline() {
   let now = 1000;
@@ -131,6 +162,18 @@ function isDeadlineStoppedRetry(error) {
     error instanceof RetryExecutionError &&
     error.resilience.attemptCount === 1 &&
     error.resilience.attempts[0].stopReason === "deadline"
+  );
+}
+
+/** 判断执行器是否因不可重放边界在首次错误后停止。 */
+function isRetryBoundaryStoppedRetry(error) {
+  return (
+    error instanceof RetryExecutionError &&
+    error.resilience.attemptCount === 1 &&
+    error.resilience.outputStarted === false &&
+    error.resilience.retryBoundaryCrossed === true &&
+    error.resilience.attempts[0].retryable === false &&
+    error.resilience.attempts[0].stopReason === "retry-boundary-crossed"
   );
 }
 

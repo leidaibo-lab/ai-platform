@@ -237,11 +237,26 @@ test("Tool Registry adapts the weather definition to an AI SDK tool", async () =
     executions.push({ name: definition.name, input, toolCallId: options.toolCallId });
     return { status: "success", data: await definition.execute(input, { abortSignal: options.abortSignal }) };
   }
-  const tools = registry.buildAiSdkTools(executeTool);
+  const tools = registry.buildAiSdkTools();
+  const toolsContext = registry.buildAiSdkToolsContext(executeTool);
+  const invalidInput = await tools.get_weather.inputSchema["~standard"].validate({ location: "" });
+  const defaultedInput = await tools.get_weather.inputSchema["~standard"].validate({ location: "深圳" });
+  const validContext = await tools.get_weather.contextSchema["~standard"].validate(toolsContext.get_weather);
+  const missingContext = await tools.get_weather.contextSchema["~standard"].validate({});
+  const pollutedContext = await tools.get_weather.contextSchema["~standard"].validate({
+    ...toolsContext.get_weather,
+    tenantSecret: "must-not-pass",
+  });
   const result = await tools.get_weather.execute(
     { location: "深圳", date: "today" },
-    { toolCallId: "call-1", messages: [], context: {} },
+    { toolCallId: "call-1", messages: [], context: toolsContext.get_weather },
   );
+  assert.ok(invalidInput.issues?.length > 0);
+  assert.deepEqual(defaultedInput.value, { location: "深圳", date: "today" });
+  assert.equal(validContext.issues, undefined);
+  assert.equal(validContext.value.executeTool, executeTool);
+  assert.ok(missingContext.issues?.length > 0);
+  assert.ok(pollutedContext.issues?.length > 0);
   assert.equal(registry.hasTools(), true);
   assert.deepEqual(registry.list().map(readToolName), ["get_weather"]);
   assert.equal(registry.resolveRequiredTool({ message: "今天深圳天气怎么样" }), "get_weather");

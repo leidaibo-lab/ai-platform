@@ -1,4 +1,11 @@
 import { jsonSchema, tool } from "ai";
+import { z } from "zod";
+
+const TOOL_EXECUTION_CONTEXT_SCHEMA = z
+  .object({
+    executeTool: z.custom(isToolExecutor),
+  })
+  .strict();
 
 /**
  * @typedef {object} ToolDefinition
@@ -6,7 +13,7 @@ import { jsonSchema, tool } from "ai";
  * @property {string} title - 渠道展示的公开标题。
  * @property {string} description - 发送给模型的工具用途和边界。
  * @property {"read"} effect - 当前 V1 只允许无副作用只读工具。
- * @property {object} inputSchema - 用于模型参数生成和运行时校验的 JSON Schema。
+ * @property {object} inputSchema - 用于模型参数生成和运行时校验的 Zod/Standard Schema 或 JSON Schema。
  * @property {(input: object, context: object) => Promise<object>} execute - 具体 Connector 执行入口。
  * @property {(input: {message: string}) => boolean} [matchesInput] - 确定性任务路由谓词，命中时强制首步调用该工具。
  * @property {(error: unknown) => {code: string, message: string, retryable: boolean}} [toPublicError] - 工具专属安全错误映射。
@@ -69,26 +76,46 @@ export function createToolRegistry(definitions = []) {
     /**
      * 将当前 allowlist 转换为 AI SDK ToolSet，并把执行统一交回 Runtime 包装器。
      *
-     * @param {(definition: ToolDefinition, input: object, options: object) => Promise<object>} executeTool - Runtime 执行包装器。
      * @returns {Record<string, object>} 可交给 AI SDK Core 多步生成的工具集合。
      */
-    buildAiSdkTools(executeTool) {
-      if (typeof executeTool !== "function") throw new TypeError("executeTool must be a function");
+    buildAiSdkTools() {
       const tools = {};
       for (const definition of registry.values()) {
-        /** 通过 Runtime 包装器执行一个经过 AI SDK schema 校验的工具调用。 */
+        /** 通过 AI SDK `toolsContext` 中的 Runtime 包装器执行已校验的工具调用。 */
         async function execute(input, options) {
-          return executeTool(definition, input, options);
+          const { context, ...executionOptions } = options || {};
+          return context.executeTool(definition, input, executionOptions);
         }
         tools[definition.name] = tool({
           description: definition.description,
-          inputSchema: jsonSchema(definition.inputSchema),
+          inputSchema: toAiSdkSchema(definition.inputSchema),
+          contextSchema: TOOL_EXECUTION_CONTEXT_SCHEMA,
           execute,
         });
       }
       return tools;
     },
+
+    /** 为当前 Run 构造按工具名隔离并由 AI SDK 校验的服务端执行上下文。 */
+    buildAiSdkToolsContext(executeTool) {
+      if (typeof executeTool !== "function") throw new TypeError("executeTool must be a function");
+      const toolsContext = {};
+      for (const definition of registry.values()) {
+        toolsContext[definition.name] = { executeTool };
+      }
+      return toolsContext;
+    },
   };
+}
+
+/** 判断服务端工具上下文是否提供 Runtime 受控执行入口。 */
+function isToolExecutor(value) {
+  return typeof value === "function";
+}
+
+/** 保留 Zod 等 Standard Schema 的本地校验器，并兼容既有原始 JSON Schema 定义。 */
+function toAiSdkSchema(schema) {
+  return typeof schema?.["~standard"]?.validate === "function" ? schema : jsonSchema(schema);
 }
 
 /** 校验服务端工具定义不变量，当前阶段拒绝写工具进入 allowlist。 */
