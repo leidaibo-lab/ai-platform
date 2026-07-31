@@ -142,6 +142,46 @@ async function testAiSdkProtocolMapping() {
 
 test("gateway client preserves LiteLLM request and response semantics", testAiSdkProtocolMapping);
 
+/** 验证图片模型经 LiteLLM 标准端点调用，并固定单次尝试与通用尺寸参数。 */
+async function testAiSdkImageGenerationMapping() {
+  const requests = [];
+  /** 返回一张有效 1x1 PNG 的 OpenAI-compatible 图片结果。 */
+  function handleImageGenerationRequest() {
+    return jsonResponse({
+      data: [{
+        b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      }],
+    });
+  }
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    imageModel: "image-default",
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch(requests, handleImageGenerationRequest),
+  });
+
+  const result = await client.generateImages({
+    prompt: "一枚放在白色桌面的红色印章",
+    size: "1024x1024",
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "http://gateway.test/v1/images/generations");
+  assert.equal(requests[0].body.model, "image-default");
+  assert.equal(requests[0].body.n, 1);
+  assert.equal(requests[0].body.size, "1024x1024");
+  assert.equal(result.images.length, 1);
+  assert.equal(result.images[0].mediaType, "image/png");
+  assert.ok(result.images[0].bytes.length > 0);
+  assert.equal(result.usage.generated_images, 1);
+  assert.equal(result.resilience.maxAttempts, 1);
+  assert.equal(result.resilience.attemptCount, 1);
+  assert.equal(result.resilience.retryBoundaryCrossed, true);
+}
+
+test("gateway client generates images through LiteLLM without automatic retries", testAiSdkImageGenerationMapping);
+
 /** 验证 AI SDK `Output.object` 负责结构化输出请求、解析和 Standard Schema 校验。 */
 async function testAiSdkStructuredOutputMapping() {
   const requests = [];

@@ -44,7 +44,7 @@ const GLOBAL_ARCHITECTURE_ASSETS = Object.freeze([
 
 const SCENARIO_CHAIN_LABELS = Object.freeze([
   "C1 对话问答",
-  "C2 图片理解",
+  "C2 图片理解与生成",
   "C3 文档知识问答",
   "C4 业务数据查询",
   "C5 实时事件处理",

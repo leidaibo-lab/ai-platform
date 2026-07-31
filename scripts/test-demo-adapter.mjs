@@ -38,6 +38,7 @@ async function testCompletedRunStream() {
       "event: run-started\ndata: {\"runId\":\"run-1\",\"status\":\"running\"}\n",
       "\nevent: tool-started\ndata: {\"toolCallId\":\"call-1\",\"toolName\":\"get_weather\",\"title\":\"实时天气\"}\n\n",
       "event: tool-completed\ndata: {\"toolCallId\":\"call-1\",\"toolName\":\"get_weather\",\"source\":\"Open-Meteo\"}\n\n",
+      "event: artifact-created\ndata: {\"assetId\":\"asset-1\",\"type\":\"image_asset\"}\n\n",
       "\nevent: text-delta\ndata: {\"delta\":\"流式\"}\n\n",
       "event: text-delta\ndata: {\"delta\":\"回复\"}\n\n",
       "event: completed\ndata: {\"content\":\"流式回复\",\"conversation\":{\"id\":\"conversation-1\"}}\n\n",
@@ -57,6 +58,10 @@ async function testCompletedRunStream() {
   function recordToolEvent(event) {
     stages.push(`${event.event}:${event.toolName}`);
   }
+  /** 记录已经完成持久化的图片资产。 */
+  function recordArtifact(artifact) {
+    stages.push(`artifact:${artifact.assetId}`);
+  }
   /** 记录完成载荷。 */
   function recordCompleted(result) {
     stages.push(`completed:${result.content}`);
@@ -64,7 +69,13 @@ async function testCompletedRunStream() {
   const terminal = await adapter.runConversationStream(
     "conversation/1",
     { requestId: "request-1", clientMessageId: "message-1", model: "chat-quality", message: "验证" },
-    { onRunStarted: recordRunStarted, onToolEvent: recordToolEvent, onTextDelta: recordTextDelta, onCompleted: recordCompleted },
+    {
+      onRunStarted: recordRunStarted,
+      onToolEvent: recordToolEvent,
+      onArtifactCreated: recordArtifact,
+      onTextDelta: recordTextDelta,
+      onCompleted: recordCompleted,
+    },
   );
 
   assert.equal(terminal.type, "completed");
@@ -73,6 +84,7 @@ async function testCompletedRunStream() {
     "run:run-1",
     "tool-started:get_weather",
     "tool-completed:get_weather",
+    "artifact:asset-1",
     "delta:流式",
     "delta:回复",
     "completed:流式回复",

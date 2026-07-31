@@ -1,8 +1,16 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createNullChainTracer } from "../observability/chain-tracer.mjs";
 import { createResilienceContext } from "../resilience/retry-executor.mjs";
+import { ImageAssetStoreError } from "../storage/image-asset-store.mjs";
 import { normalizeContextOptions } from "./context-budget.mjs";
-import { buildDisplayContent, buildUserContent, normalizeRunInput, validateRunInput } from "./message-builder.mjs";
+import { ImageGenerationPolicyError, inspectGeneratedImage } from "./image-generation-policy.mjs";
+import {
+  IMAGE_GENERATION_OPERATION,
+  buildDisplayContent,
+  buildUserContent,
+  normalizeRunInput,
+  validateRunInput,
+} from "./message-builder.mjs";
 import { createToolRegistry } from "../tools/tool-registry.mjs";
 
 const DEFAULT_RUN_TIMEOUT_MS = 120000;
@@ -54,6 +62,7 @@ export function createChatRuntime({
   coordinator,
   contextPlanner,
   memoryManager,
+  imageAssetStore,
   toolRegistry,
   toolOptions = {},
   chainTracer = createNullChainTracer(),
@@ -86,7 +95,11 @@ export function createChatRuntime({
       contextManifest: ownedActive?.contextManifest || null,
       model: ownedActive?.model || null,
       resilience: ownedActive
-        ? buildCancellationResilience(ownedActive.resilienceContext, ownedActive.partialText.length > 0)
+        ? buildCancellationResilience(
+            ownedActive.resilienceContext,
+            ownedActive.partialText.length > 0,
+            ownedActive.operation === IMAGE_GENERATION_OPERATION ? "model.image.generate" : "model.generate",
+          )
         : null,
     });
     return { ...cancelled, conversation: store.getConversation(conversationId) };
@@ -143,6 +156,7 @@ export function createChatRuntime({
      * @param {(input: object) => Promise<void>|void} [delivery.onChainTraceStarted] - 业务 Chain ID 创建通知。
      * @param {(delta: string) => Promise<void>|void} [delivery.onTextDelta] - 模型文本增量消费者。
      * @param {(event: object) => Promise<void>|void} [delivery.onToolEvent] - 工具开始、完成或失败阶段消费者。
+     * @param {(artifact: object) => Promise<void>|void} [delivery.onArtifactCreated] - 图片资产完成消费者。
      * @param {AbortSignal} [delivery.abortSignal] - 可选调用方取消信号。
      * @returns {Promise<object>} 回复、会话状态、usage 和 Context Manifest。
      */
@@ -150,7 +164,7 @@ export function createChatRuntime({
       const input = normalizeRunInput(body);
       const validationError = validateRunInput(input);
       if (validationError) throw new RuntimeInputError(validationError);
-      const selectedModel = await resolveRunModel(gatewayClient, input.model);
+      const selectedModel = await resolveRunModel(gatewayClient, input.model, input.operation);
       const chainTraceId = randomUUID();
       const deadlineAt = Date.now() + runTimeoutMs;
       if (typeof delivery.onChainTraceStarted === "function") {
@@ -181,6 +195,7 @@ export function createChatRuntime({
               model: selectedModel,
               sourceRunId: input.sourceRunId || null,
               recoveryMode: input.recoveryMode || null,
+              operation: input.operation,
             }),
         );
         const effectiveChainTraceId = started.run.resilience?.traceId || chainTraceId;
@@ -215,6 +230,7 @@ export function createChatRuntime({
           partialText: "",
           contextManifest: null,
           model: selectedModel,
+          operation: input.operation,
           resilienceContext,
         };
         activeRuns.set(runId, activeRun);
@@ -300,6 +316,99 @@ export function createChatRuntime({
             });
           }
           throwIfAborted(abortSignal);
+          if (input.operation === IMAGE_GENERATION_OPERATION) {
+            if (!imageAssetStore || typeof gatewayClient?.generateImages !== "function") {
+              throw new RuntimeExecutionError({
+                error: "图片生成能力未配置",
+                detail: "当前 Runtime 尚未装配图片模型或图片资产存储。",
+                action: "请配置图片模型别名与资产目录后重试。",
+                code: "image_generation_unavailable",
+                retryable: false,
+                model: selectedModel,
+              }, 503);
+            }
+            const generated = await chainTracer.withSpan(
+              "runtime.image.generate",
+              {
+                ...traceAttributes,
+                "ai.platform.capability_scenario_id": "C2",
+                "ai.platform.image.size": input.imageOptions.size,
+              },
+              /** 通过 GatewayClient 单次调用图片模型，不把提示词写入 Trace。 */
+              () => gatewayClient.generateImages({
+                prompt: input.message,
+                model: selectedModel,
+                size: input.imageOptions.size,
+                resilienceContext,
+                abortSignal,
+              }),
+            );
+            const storedAssets = [];
+            let assetsCommitted = false;
+            try {
+              for (const generatedImage of generated.images || []) {
+                throwIfAborted(abortSignal);
+                const inspected = inspectGeneratedImage(generatedImage.bytes, generatedImage.mediaType);
+                const assetId = randomUUID();
+                const stored = await imageAssetStore.write({
+                  assetId,
+                  bytes: inspected.bytes,
+                  mediaType: inspected.mediaType,
+                });
+                storedAssets.push({
+                  assetId,
+                  storageKey: stored.storageKey,
+                  mediaType: inspected.mediaType,
+                  sizeBytes: inspected.sizeBytes,
+                  width: inspected.width,
+                  height: inspected.height,
+                  sha256: createHash("sha256").update(inspected.bytes).digest("hex"),
+                });
+              }
+              if (storedAssets.length === 0) {
+                throw new ImageGenerationPolicyError("图片模型没有返回可用图片", "image_generation_empty", 502);
+              }
+              throwIfAborted(abortSignal);
+              const completed = await chainTracer.withSpan(
+                "storage.complete_image_run",
+                {
+                  ...traceAttributes,
+                  "ai.platform.image.count": storedAssets.length,
+                },
+                /** 原子登记图片元数据、消息引用和 Run 完成状态。 */
+                () => store.completeImageRun({
+                  runId,
+                  assets: storedAssets,
+                  displayContent: `已生成 ${storedAssets.length} 张图片`,
+                  usage: generated.usage || null,
+                  model: generated.model || selectedModel,
+                  resilience: generated.resilience || null,
+                }),
+              );
+              assetsCommitted = true;
+              for (const artifact of completed.artifacts || []) {
+                if (typeof delivery.onArtifactCreated === "function") await delivery.onArtifactCreated(artifact);
+              }
+              return {
+                operation: input.operation,
+                content: completed.assistantMessage.displayContent,
+                artifacts: completed.artifacts || [],
+                usage: completed.run.usage,
+                model: completed.run.model,
+                context: null,
+                resilience: completed.run.resilience,
+                toolCalls: [],
+                conversation: store.getConversation(conversationId),
+                replayed: false,
+              };
+            } catch (error) {
+              if (!assetsCommitted) await cleanupImageAssets(imageAssetStore, storedAssets);
+              if (error && typeof error === "object" && !error.resilience && generated.resilience) {
+                error.resilience = generated.resilience;
+              }
+              throw error;
+            }
+          }
           let plan = await chainTracer.withSpan(
             "runtime.context.plan",
             traceAttributes,
@@ -460,7 +569,11 @@ export function createChatRuntime({
                   model: activeRun.model,
                   resilience:
                     error?.resilience ||
-                    buildCancellationResilience(resilienceContext, activeRun.partialText.length > 0),
+                    buildCancellationResilience(
+                      resilienceContext,
+                      activeRun.partialText.length > 0,
+                      input.operation === IMAGE_GENERATION_OPERATION ? "model.image.generate" : "model.generate",
+                    ),
                 }),
             );
             return buildCancelledRunResponse(cancelled, store.getConversation(conversationId));
@@ -507,8 +620,14 @@ function hasActiveRunForConversation(activeRuns, conversationId) {
 }
 
 /** 解析 Run 模型别名，并把目录校验异常转换为渠道安全错误。 */
-async function resolveRunModel(gatewayClient, requestedModel) {
+async function resolveRunModel(gatewayClient, requestedModel, operation) {
   try {
+    if (operation === IMAGE_GENERATION_OPERATION && typeof gatewayClient?.resolveImageModel === "function") {
+      return await gatewayClient.resolveImageModel(requestedModel);
+    }
+    if (operation === IMAGE_GENERATION_OPERATION) {
+      return String(requestedModel || gatewayClient?.imageModel || "image-default");
+    }
     if (typeof gatewayClient?.resolveModel === "function") return await gatewayClient.resolveModel(requestedModel);
     return String(requestedModel || gatewayClient?.model || "chat-default");
   } catch (error) {
@@ -526,7 +645,25 @@ function toRuntimeExecutionError(error, model) {
   const modelLabel = String(model || "所选模型");
   let payload;
 
-  if (errorType === "authorization" || statusCode === 401 || statusCode === 403 || /invalid_api_key|unauthorized|forbidden/.test(rawMessage)) {
+  if (error instanceof ImageGenerationPolicyError) {
+    payload = {
+      error: "图片生成结果无效",
+      detail: "图片模型返回的结果未通过平台格式、大小或尺寸校验。",
+      action: "请检查图片模型兼容性后重试。",
+      code: error.code,
+      retryable: false,
+      model: modelLabel,
+    };
+  } else if (error instanceof ImageAssetStoreError) {
+    payload = {
+      error: "图片资产保存失败",
+      detail: "图片已经生成，但未能保存为可访问的会话资产。",
+      action: "请检查图片资产目录权限与空间后重新发起生成。",
+      code: error.code,
+      retryable: false,
+      model: modelLabel,
+    };
+  } else if (errorType === "authorization" || statusCode === 401 || statusCode === 403 || /invalid_api_key|unauthorized|forbidden/.test(rawMessage)) {
     payload = {
       error: "模型鉴权失败",
       detail: `${modelLabel} 的上游访问凭据无效或没有权限。`,
@@ -719,7 +856,9 @@ function replayRun(result, conversation) {
     );
   }
   return {
+    operation: result.run.operation,
     content: result.assistantMessage.displayContent,
+    artifacts: result.artifacts || [],
     usage: result.run.usage,
     model: result.run.model,
     context: result.run.contextManifest,
@@ -737,6 +876,8 @@ function buildCancelledRunResponse(result, conversation) {
     run: result.run,
     assistantMessage: result.assistantMessage,
     content: result.assistantMessage?.displayContent || "",
+    operation: result.run.operation,
+    artifacts: result.artifacts || [],
     usage: result.run.usage,
     model: result.run.model,
     context: result.run.contextManifest,
@@ -745,6 +886,17 @@ function buildCancelledRunResponse(result, conversation) {
     conversation,
     replayed: false,
   };
+}
+
+/** 清理尚未进入 SQLite 稳定事实的图片二进制，清理失败不覆盖原始 Run 错误。 */
+async function cleanupImageAssets(imageAssetStore, assets) {
+  for (const asset of assets) {
+    try {
+      await imageAssetStore.delete(asset.storageKey);
+    } catch {
+      // 原始生成或事务错误优先返回；残留文件由后续资产清理任务处理。
+    }
+  }
 }
 
 /** 合并 Runtime 主动取消与可选调用方信号，任一来源终止都向下游传播。 */
@@ -763,13 +915,13 @@ function isCancellationError(error, signal) {
 }
 
 /** 构造取消端点可立即持久化且不包含业务正文的最小韧性证据。 */
-function buildCancellationResilience(context, outputStarted) {
+function buildCancellationResilience(context, outputStarted, operation = "model.generate") {
   return {
     traceId: context.traceId,
     requestId: context.requestId,
     conversationId: context.conversationId,
     runId: context.runId,
-    operation: "model.generate",
+    operation,
     attemptCount: 0,
     deadlineAt: new Date(context.deadlineAt).toISOString(),
     stage: "model.generate",

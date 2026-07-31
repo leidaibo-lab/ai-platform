@@ -19,6 +19,7 @@ export async function loadDemoConfig(rootDir) {
     gateway: {
       baseUrl: trimTrailingSlash(env.LITELLM_BASE_URL || "http://localhost:4000"),
       model: env.LITELLM_MODEL || "chat-default",
+      imageModel: env.LITELLM_IMAGE_MODEL || "image-default",
       apiKey: env.LITELLM_MASTER_KEY || "sk-local-admin-key",
       timeoutMs: runTimeoutMs,
       maxAttempts: readPositiveInteger(env.DEMO_MODEL_MAX_ATTEMPTS, 3),
@@ -45,6 +46,7 @@ export async function loadDemoConfig(rootDir) {
     },
     storage: {
       databasePath: resolve(rootDir, env.DEMO_DATABASE_PATH || ".data/ai-platform.sqlite"),
+      imageAssetDirectory: resolve(rootDir, env.DEMO_IMAGE_ASSET_DIR || ".data/image-assets"),
     },
     context: {
       maxContextTokens: readPositiveNumber(env.DEMO_MAX_CONTEXT_TOKENS, 12000),
