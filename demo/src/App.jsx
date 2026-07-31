@@ -135,6 +135,7 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [gatewayChecking, setGatewayChecking] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
+  const [composerMode, setComposerMode] = useState("conversation.chat");
   const [runError, setRunError] = useState("");
   const [lastLatency, setLastLatency] = useState(null);
   const [conversationQuery, setConversationQuery] = useState("");
@@ -542,6 +543,11 @@ export default function App() {
     setSelectedModelFact(value);
   }
 
+  /** 切换显式 Run 操作，避免依赖自然语言猜测是否调用图片模型。 */
+  function handleComposerModeChange(value) {
+    setComposerMode(value === "image.generate" ? "image.generate" : "conversation.chat");
+  }
+
   /** 将选中的建议填入 Sender，仍由用户决定是否发送。 */
   function handlePromptClick({ data }) {
     setComposerFact(data.label);
@@ -823,7 +829,9 @@ export default function App() {
       runId: null,
       status: "starting",
       model: payload.model,
+      operation: payload.operation,
       partialText: "",
+      artifacts: [],
       optimisticUser,
     };
     cancelRequestedRef.current = false;
@@ -841,7 +849,14 @@ export default function App() {
 
     /** 接收稳定 runId，并补偿 run-started 前已经点击的停止意图。 */
     function handleRunStarted(event) {
-      patchActiveRun({ runId: event.runId, status: cancelRequestedRef.current ? "stopping" : "running" });
+      patchActiveRun({
+        runId: event.runId,
+        status: cancelRequestedRef.current
+          ? "stopping"
+          : payload.operation === "image.generate"
+            ? "image-generating"
+            : "running",
+      });
       if (cancelRequestedRef.current) void cancelKnownRun(current.id, event.runId);
     }
 
@@ -863,6 +878,13 @@ export default function App() {
       patchActiveRun({ status: "running", toolTitle: "" });
     }
 
+    /** 将服务端已落库的图片资产追加到活动消息，最终由会话详情事实覆盖。 */
+    function handleArtifactCreated(artifact) {
+      const run = activeRunRef.current;
+      if (!run || run.conversationId !== current.id) return;
+      patchActiveRun({ artifacts: [...(run.artifacts || []), artifact], status: "image-generating" });
+    }
+
     /** 把 SSE 取消终止阶段映射为 UI 中的停止状态，最终仍由详情事实覆盖。 */
     function handleCancelled() {
       patchActiveRun({ status: "cancelled" });
@@ -872,6 +894,7 @@ export default function App() {
       const terminal = await runtimeAdapter.runConversationStream(current.id, payload, {
         onRunStarted: handleRunStarted,
         onToolEvent: handleToolEvent,
+        onArtifactCreated: handleArtifactCreated,
         onTextDelta: handleTextDelta,
         onCancelled: handleCancelled,
       });
@@ -909,12 +932,16 @@ export default function App() {
 
   /** 提交当前 Sender 输入；编辑恢复态会携带来源，但仍创建全新幂等 Run。 */
   function handleSubmit(value) {
+    const model = composerMode === "image.generate"
+      ? String(gateway?.imageModel || "").trim()
+      : selectedModelRef.current;
     const payload = buildRunPayload(
       value,
-      attachmentFactsRef.current,
-      referenceFactsRef.current,
-      selectedModelRef.current,
+      composerMode === "image.generate" ? [] : attachmentFactsRef.current,
+      composerMode === "image.generate" ? [] : referenceFactsRef.current,
+      model,
       pendingRecovery || undefined,
+      composerMode,
     );
     void executeRun(payload);
   }
@@ -1145,12 +1172,21 @@ export default function App() {
     conversationStatus: conversation?.status,
     gatewayOk: gateway?.ok,
     activeRun,
-    hasInput: composerValue.trim() || attachments.length > 0 || references.length > 0,
+    hasInput: composerMode === "image.generate"
+      ? Boolean(composerValue.trim() && readGatewayModels(gateway).includes(String(gateway?.imageModel || "")))
+      : composerValue.trim() || attachments.length > 0 || references.length > 0,
   });
-  const modelOptions = readGatewayModels(gateway).map(
+  const gatewayModels = readGatewayModels(gateway);
+  const modelOptions = gatewayModels.map(
     // Ant Design Select 只需要稳定别名，不暴露真实上游模型配置。
     (model) => ({ value: model, label: model }),
   );
+  const imageModel = String(gateway?.imageModel || "image-default");
+  const imageModelAvailable = gatewayModels.includes(imageModel);
+  const visibleModelOptions = composerMode === "image.generate"
+    ? [{ value: imageModel, label: imageModel }]
+    : modelOptions;
+  const visibleModel = composerMode === "image.generate" ? imageModel : selectedModel;
 
   /** 将附件、模型和发送动作收口到 Sender 底部工具栏，正文输入独占上层。 */
   function renderSenderFooter(originalNode, { components }) {
@@ -1159,7 +1195,7 @@ export default function App() {
         <Dropdown
           menu={attachmentMenu}
           trigger={["click"]}
-          disabled={Boolean(activeRun) || !conversation || conversation.status !== "active"}
+          disabled={Boolean(activeRun) || composerMode === "image.generate" || !conversation || conversation.status !== "active"}
         >
           <Tooltip title="添加附件">
             <Button
@@ -1172,12 +1208,24 @@ export default function App() {
           </Tooltip>
         </Dropdown>
         <div className="sender-footer-actions">
+          <Segmented
+            className="sender-mode-select"
+            size="small"
+            value={composerMode}
+            disabled={Boolean(activeRun)}
+            options={[
+              { value: "conversation.chat", label: "对话", icon: <Bot size={14} /> },
+              { value: "image.generate", label: "生图", icon: <FileImage size={14} /> },
+            ]}
+            aria-label="选择运行模式"
+            onChange={handleComposerModeChange}
+          />
           <div className="sender-model-select">
             <Select
               variant="borderless"
-              value={selectedModel || undefined}
-              options={modelOptions}
-              disabled={Boolean(activeRun) || gateway?.ok !== true || modelOptions.length === 0}
+              value={visibleModel || undefined}
+              options={visibleModelOptions}
+              disabled={Boolean(activeRun) || composerMode === "image.generate" || gateway?.ok !== true || visibleModelOptions.length === 0}
               placeholder="无可用模型"
               aria-label="选择模型"
               popupMatchSelectWidth={false}
@@ -1336,6 +1384,13 @@ export default function App() {
             />
           ) : null}
           {runError ? <Alert type="error" showIcon closable message={runError} onClose={clearRunError} /> : null}
+          {composerMode === "image.generate" && gateway?.ok === true && !imageModelAvailable ? (
+            <Alert
+              type="warning"
+              showIcon
+              message={`图片模型 ${imageModel} 不在当前 LiteLLM 模型列表中`}
+            />
+          ) : null}
           {pendingRecovery ? (
             <div className="pending-recovery" role="status">
               <RotateCcw size={14} />
@@ -1349,7 +1404,7 @@ export default function App() {
             value={composerValue}
             loading={Boolean(activeRun)}
             disabled={!conversation || conversation.status !== "active"}
-            placeholder={conversation?.status === "closed" ? "当前会话已结束" : "输入消息"}
+            placeholder={conversation?.status === "closed" ? "当前会话已结束" : composerMode === "image.generate" ? "描述要生成的图片" : "输入消息"}
             autoSize={{ minRows: 1, maxRows: 6 }}
             onChange={handleComposerChange}
             onSubmit={handleSubmit}
@@ -1643,7 +1698,7 @@ function MessageBody({
   onNavigateHeading,
   onCopyCode,
 }) {
-  const imageUrls = getMessageImageUrls(message);
+  const messageImages = getMessageImages(message);
   const hasDisplayContent = Boolean(String(message.displayContent || "").trim());
   const headings = message.role === "assistant"
     ? extractMarkdownHeadings(message.displayContent, message.id)
@@ -1686,9 +1741,9 @@ function MessageBody({
       {referenceMessages.length > 0 ? (
         <div className="message-references">{referenceNodes}</div>
       ) : null}
-      {imageUrls.length > 0 ? (
-        <div className="message-images">
-          {imageUrls.map(renderMessageImage)}
+      {messageImages.length > 0 ? (
+        <div className={`message-images${messageImages.some(isGeneratedMessageImage) ? " generated-images" : ""}`}>
+          {messageImages.map(renderMessageImage)}
         </div>
       ) : null}
       {streaming ? (
@@ -1835,9 +1890,31 @@ function ReferencedMessage({ message, onNavigate }) {
   );
 }
 
-/** 将消息中的图片 URL 渲染为受约束缩略图。 */
-function renderMessageImage(url) {
-  return <Image key={url.slice(0, 96)} src={url} alt="消息图片" width={112} height={84} />;
+/** 将消息图片渲染为稳定尺寸预览，生成资产额外提供受控下载入口。 */
+function renderMessageImage(image) {
+  return (
+    <div className="message-image-item" key={image.assetId || image.url.slice(0, 96)}>
+      <Image
+        src={image.url}
+        alt={image.generated ? "生成图片" : "消息图片"}
+        width={image.generated ? "100%" : 112}
+        height={image.generated ? undefined : 84}
+      />
+      {image.generated ? (
+        <Tooltip title="下载图片">
+          <Button
+            className="message-image-download"
+            type="text"
+            shape="circle"
+            icon={<Download size={16} />}
+            href={image.url}
+            download={`generated-${image.assetId}`}
+            aria-label="下载生成图片"
+          />
+        </Tooltip>
+      ) : null}
+    </div>
+  );
 }
 
 /** 渲染桌面快捷操作和移动端菜单；历史事实只允许派生新 Run，不提供删除或原位编辑。 */
@@ -2018,7 +2095,12 @@ function buildBubbleItems(messages, handlers) {
   }
   let lastRegeneratableMessageId = null;
   for (const message of persistedMessages) {
-    if (message.role === "assistant" && message.status !== "interrupted" && message.runId) {
+    if (
+      message.role === "assistant" &&
+      message.status !== "interrupted" &&
+      message.runId &&
+      (!Array.isArray(message.artifacts) || message.artifacts.length === 0)
+    ) {
       lastRegeneratableMessageId = message.id;
     }
   }
@@ -2098,6 +2180,7 @@ function buildVisibleMessages(conversation, activeRun, currentConversationId) {
     displayContent: activeRun.partialText,
     status: activeRun.status === "cancelled" ? "interrupted" : "committed",
     references: [],
+    artifacts: activeRun.artifacts || [],
     streaming: activeRun.status !== "cancelled",
     runStatus: activeRun.status,
     toolTitle: activeRun.toolTitle || "",
@@ -2121,8 +2204,8 @@ function resolveReferenceMessages(references, messages) {
   return resolved;
 }
 
-/** 生成包含当前输入、稳定引用、恢复来源和全新幂等标识的 Run 载荷。 */
-function buildRunPayload(value, attachments, references, model, recovery = {}) {
+/** 生成包含显式操作、当前输入、稳定引用、恢复来源和全新幂等标识的 Run 载荷。 */
+function buildRunPayload(value, attachments, references, model, recovery = {}, operation = "conversation.chat") {
   const imageUrls = [];
   const documentUrls = [];
   for (const attachment of attachments) {
@@ -2134,6 +2217,7 @@ function buildRunPayload(value, attachments, references, model, recovery = {}) {
     stableReferences.push({ type: "conversation_message", messageId: reference.messageId });
   }
   return {
+    operation,
     requestId: crypto.randomUUID(),
     clientMessageId: crypto.randomUUID(),
     model: String(model || "").trim(),
@@ -2141,6 +2225,7 @@ function buildRunPayload(value, attachments, references, model, recovery = {}) {
     imageUrls,
     documentUrls,
     references: stableReferences,
+    ...(operation === "image.generate" ? { imageOptions: { size: "1024x1024" } } : {}),
     ...(recovery.sourceRunId ? { sourceRunId: recovery.sourceRunId } : {}),
     ...(recovery.recoveryMode ? { recoveryMode: recovery.recoveryMode } : {}),
   };
@@ -2164,6 +2249,7 @@ function buildOptimisticUserMessage(conversationId, payload) {
     status: "local",
     references: payload.references,
     imageUrls: payload.imageUrls,
+    operation: payload.operation,
   };
 }
 
@@ -2181,15 +2267,35 @@ function formatDisplayInput(payload) {
   return sections.join("\n\n");
 }
 
-/** 从持久化多模态 content 或乐观快照提取图片地址。 */
-function getMessageImageUrls(message) {
-  if (Array.isArray(message.imageUrls)) return message.imageUrls;
-  const urls = [];
-  if (!Array.isArray(message.content)) return urls;
-  for (const part of message.content) {
-    if (part?.type === "image_url" && part.image_url?.url) urls.push(part.image_url.url);
+/** 从图片资产、多模态 content 或乐观快照提取可展示图片。 */
+function getMessageImages(message) {
+  const images = [];
+  for (const artifact of Array.isArray(message.artifacts) ? message.artifacts : []) {
+    if (artifact?.type === "image_asset" && artifact.url) {
+      images.push({
+        url: artifact.url,
+        assetId: artifact.assetId,
+        width: artifact.width,
+        height: artifact.height,
+        generated: artifact.source === "generated",
+      });
+    }
   }
-  return urls;
+  for (const url of Array.isArray(message.imageUrls) ? message.imageUrls : []) {
+    images.push({ url, generated: false });
+  }
+  if (!Array.isArray(message.content)) return images;
+  for (const part of message.content) {
+    if (part?.type === "image_url" && part.image_url?.url) {
+      images.push({ url: part.image_url.url, generated: false });
+    }
+  }
+  return images;
+}
+
+/** 判断图片展示项是否来自持久化生成资产。 */
+function isGeneratedMessageImage(image) {
+  return image.generated;
 }
 
 /** 把恢复出的图片和文档地址转换为受控 Attachments 项，并继续执行渠道数量上限。 */

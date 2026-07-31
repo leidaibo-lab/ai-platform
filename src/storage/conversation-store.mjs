@@ -83,8 +83,9 @@ export function createConversationStore({ databasePath }) {
       const conversation = getConversationOrThrow(database, conversationId);
       const messages = database
         .prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq ASC")
-        .all(conversationId)
-        .map(mapMessageRow);
+        .all(conversationId);
+      const mappedMessages = [];
+      for (const message of messages) mappedMessages.push(mapMessageWithArtifacts(database, message));
       const memoryItems = database
         .prepare("SELECT * FROM memory_items WHERE conversation_id = ? ORDER BY updated_seq ASC, created_at ASC")
         .all(conversationId)
@@ -102,9 +103,9 @@ export function createConversationStore({ databasePath }) {
 
       return {
         ...mapConversationRow(conversation),
-        messageCount: messages.length,
+        messageCount: mappedMessages.length,
         memoryCount: memoryItems.filter(isActiveMemoryRow).length,
-        messages,
+        messages: mappedMessages,
         memory: {
           version: Number(conversation.memory_version),
           summarizedThroughSeq: Number(conversation.summarized_through_seq),
@@ -158,6 +159,7 @@ export function createConversationStore({ databasePath }) {
       model = null,
       sourceRunId = null,
       recoveryMode = null,
+      operation = "conversation.chat",
     }) {
       // Run、用户消息、序号和事件必须在同一事务创建。
       return withTransaction(database, () => {
@@ -187,10 +189,10 @@ export function createConversationStore({ databasePath }) {
           .prepare(
             `INSERT INTO runs (
               id, conversation_id, request_id, source_run_id, recovery_mode,
-              status, model, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+              operation, status, model, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
           )
-          .run(runId, conversationId, requestId, sourceRunId, recoveryMode, model, now, now);
+          .run(runId, conversationId, requestId, sourceRunId, recoveryMode, operation, model, now, now);
         database
           .prepare(
             `INSERT INTO messages (
@@ -351,6 +353,98 @@ export function createConversationStore({ databasePath }) {
         insertEvent(database, run.conversation_id, "run.completed", { runId, messageId, seq, role: "assistant" });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
+    },
+
+    /**
+     * 在同一事务中登记已写入二进制存储的图片元数据、消息引用并完成图片 Run。
+     *
+     * @param {object} input - 图片 Run 完成事实。
+     * @returns {object} 已完成 Run、消息和图片产物。
+     */
+    completeImageRun({ runId, assets, displayContent, usage, model, resilience }) {
+      if (!Array.isArray(assets) || assets.length === 0) {
+        throw new ConversationStoreError("Image Run requires at least one asset", 400, "image_asset_required");
+      }
+      return withTransaction(database, () => {
+        const run = getRunOrThrow(database, runId);
+        if (run.status === "completed") return buildRunResult(database, run, true);
+        if (run.status !== "running" || run.operation !== "image.generate") {
+          throw new ConversationStoreError("Run is not an active image generation", 409, "run_not_active");
+        }
+
+        const conversation = getConversationOrThrow(database, run.conversation_id);
+        const messageId = randomUUID();
+        const seq = Number(conversation.next_seq) + 1;
+        const now = new Date().toISOString();
+        const content = String(displayContent || `已生成 ${assets.length} 张图片`);
+        database
+          .prepare(
+            `INSERT INTO messages (
+              id, conversation_id, seq, run_id, role, content_json,
+              display_content, status, usage_json, created_at
+            ) VALUES (?, ?, ?, ?, 'assistant', ?, ?, 'committed', ?, ?)`,
+          )
+          .run(messageId, run.conversation_id, seq, runId, JSON.stringify(content), content, jsonOrNull(usage), now);
+
+        let position = 0;
+        for (const asset of assets) {
+          database
+            .prepare(
+              `INSERT INTO image_assets (
+                id, conversation_id, run_id, version, media_type, size_bytes, width, height,
+                sha256, source, status, storage_key, created_at, expires_at
+              ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, 'generated', 'available', ?, ?, NULL)`,
+            )
+            .run(
+              asset.assetId,
+              run.conversation_id,
+              runId,
+              asset.mediaType,
+              asset.sizeBytes,
+              asset.width,
+              asset.height,
+              asset.sha256,
+              asset.storageKey,
+              now,
+            );
+          database
+            .prepare("INSERT INTO message_artifacts (message_id, asset_id, position) VALUES (?, ?, ?)")
+            .run(messageId, asset.assetId, position);
+          position += 1;
+          insertEvent(database, run.conversation_id, "artifact.created", {
+            runId,
+            messageId,
+            assetId: asset.assetId,
+            mediaType: asset.mediaType,
+          });
+        }
+
+        database
+          .prepare(
+            `UPDATE runs
+             SET assistant_message_id = ?, status = 'completed', model = ?, usage_json = ?,
+                 context_manifest_json = NULL, resilience_json = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(messageId, model, jsonOrNull(usage), jsonOrNull(resilience), now, runId);
+        database
+          .prepare("UPDATE conversations SET next_seq = ?, version = version + 1, updated_at = ? WHERE id = ?")
+          .run(seq, now, run.conversation_id);
+        insertEvent(database, run.conversation_id, "run.completed", { runId, messageId, seq, role: "assistant" });
+        return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
+      });
+    },
+
+    /** 读取当前会话拥有的可用图片资产及内部 storageKey，越权与缺失统一返回 404。 */
+    readImageAsset(conversationId, assetId) {
+      getConversationOrThrow(database, conversationId);
+      const row = database
+        .prepare("SELECT * FROM image_assets WHERE id = ? AND conversation_id = ? AND status = 'available'")
+        .get(assetId, conversationId);
+      if (!row || (row.expires_at && Date.parse(row.expires_at) <= Date.now())) {
+        throw new ConversationStoreError("Image asset not found", 404, "image_asset_not_found");
+      }
+      return { asset: mapImageAssetRow(row), storageKey: row.storage_key };
     },
 
     /** 将模型调用失败记录到 Run，同时保留已经落库的用户消息。 */
@@ -658,6 +752,7 @@ function migrate(database) {
       request_id TEXT NOT NULL,
       source_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
       recovery_mode TEXT,
+      operation TEXT NOT NULL DEFAULT 'conversation.chat',
       user_message_id TEXT,
       assistant_message_id TEXT,
       status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'cancelled', 'failed')),
@@ -753,6 +848,31 @@ function migrate(database) {
       UNIQUE(run_id, tool_call_id)
     );
       CREATE INDEX IF NOT EXISTS tool_calls_run_idx ON tool_calls(run_id, started_at);
+      CREATE TABLE IF NOT EXISTS image_assets (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      media_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('available', 'blocked', 'expired')),
+      storage_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT
+    );
+      CREATE INDEX IF NOT EXISTS image_assets_conversation_idx
+      ON image_assets(conversation_id, created_at);
+      CREATE TABLE IF NOT EXISTS message_artifacts (
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      asset_id TEXT NOT NULL REFERENCES image_assets(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      PRIMARY KEY(message_id, asset_id),
+      UNIQUE(message_id, position)
+    );
     `);
     ensureColumn(database, "runs", "resilience_json", "TEXT");
     ensureColumn(database, "messages", "references_json", "TEXT NOT NULL DEFAULT '[]'");
@@ -760,6 +880,7 @@ function migrate(database) {
     ensureColumn(database, "conversations", "archived_at", "TEXT");
     ensureColumn(database, "runs", "source_run_id", "TEXT REFERENCES runs(id) ON DELETE SET NULL");
     ensureColumn(database, "runs", "recovery_mode", "TEXT");
+    ensureColumn(database, "runs", "operation", "TEXT NOT NULL DEFAULT 'conversation.chat'");
     database.exec("CREATE INDEX IF NOT EXISTS conversations_archive_idx ON conversations(archived_at, updated_at DESC)");
   } finally {
     database.exec("PRAGMA foreign_keys = ON");
@@ -909,23 +1030,28 @@ function validateRecoverySource(database, conversationId, sourceRunId, recoveryM
 /** 将数据库 Run 行组合成可供 Runtime 重放的完整结果。 */
 function buildRunResult(database, run, replayed) {
   const userMessage = run.user_message_id
-    ? mapMessageRow(database.prepare("SELECT * FROM messages WHERE id = ?").get(run.user_message_id))
+    ? mapMessageWithArtifacts(database, database.prepare("SELECT * FROM messages WHERE id = ?").get(run.user_message_id))
     : null;
   const assistantMessage = run.assistant_message_id
-    ? mapMessageRow(database.prepare("SELECT * FROM messages WHERE id = ?").get(run.assistant_message_id))
+    ? mapMessageWithArtifacts(database, database.prepare("SELECT * FROM messages WHERE id = ?").get(run.assistant_message_id))
     : null;
   return {
     run: mapRunRow(run),
     userMessage,
     assistantMessage,
     toolCalls: listToolCallsForRun(database, run.id),
+    artifacts: listImageAssetsForRun(database, run.id),
     replayed,
   };
 }
 
-/** 为会话详情中的 Run 附加已持久化工具事实。 */
+/** 为会话详情中的 Run 附加已持久化工具事实和图片产物。 */
 function mapRunWithToolCalls(database, row) {
-  return { ...mapRunRow(row), toolCalls: listToolCallsForRun(database, row.id) };
+  return {
+    ...mapRunRow(row),
+    toolCalls: listToolCallsForRun(database, row.id),
+    artifacts: listImageAssetsForRun(database, row.id),
+  };
 }
 
 /** 查询并映射一个 Run 的全部工具调用。 */
@@ -934,6 +1060,30 @@ function listToolCallsForRun(database, runId) {
     .prepare("SELECT * FROM tool_calls WHERE run_id = ? ORDER BY started_at ASC, rowid ASC")
     .all(runId)
     .map(mapToolCallRow);
+}
+
+/** 查询一个 Run 已完成的全部图片资产引用。 */
+function listImageAssetsForRun(database, runId) {
+  return database
+    .prepare("SELECT * FROM image_assets WHERE run_id = ? AND status = 'available' ORDER BY created_at ASC, rowid ASC")
+    .all(runId)
+    .map(mapImageAssetRow);
+}
+
+/** 为消息附加经关联表解析的图片产物，不读取图片二进制。 */
+function mapMessageWithArtifacts(database, row) {
+  const message = mapMessageRow(row);
+  if (!message) return null;
+  const artifacts = database
+    .prepare(
+      `SELECT ia.* FROM message_artifacts ma
+       JOIN image_assets ia ON ia.id = ma.asset_id
+       WHERE ma.message_id = ? AND ia.status = 'available'
+       ORDER BY ma.position ASC`,
+    )
+    .all(row.id)
+    .map(mapImageAssetRow);
+  return { ...message, artifacts };
 }
 
 /** 写入会话事件日志，事件与业务状态共享外层事务。 */
@@ -1011,6 +1161,7 @@ function mapRunRow(row) {
     requestId: row.request_id,
     sourceRunId: row.source_run_id || null,
     recoveryMode: row.recovery_mode || null,
+    operation: row.operation || "conversation.chat",
     status: row.status,
     model: row.model,
     usage: parseJson(row.usage_json),
@@ -1019,6 +1170,27 @@ function mapRunRow(row) {
     error: row.error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+/** 将 image_assets 行转换为不包含物理 storageKey 的公开资产引用。 */
+function mapImageAssetRow(row) {
+  return {
+    type: "image_asset",
+    assetId: row.id,
+    conversationId: row.conversation_id,
+    runId: row.run_id,
+    version: Number(row.version),
+    mediaType: row.media_type,
+    sizeBytes: Number(row.size_bytes),
+    width: Number(row.width),
+    height: Number(row.height),
+    sha256: row.sha256,
+    source: row.source,
+    status: row.status,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at || null,
+    url: `/api/runtime/conversations/${encodeURIComponent(row.conversation_id)}/image-assets/${encodeURIComponent(row.id)}/content`,
   };
 }
 

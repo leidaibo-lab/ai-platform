@@ -1,3 +1,8 @@
+import { ImageGenerationPolicyError, normalizeImageGenerationOptions } from "./image-generation-policy.mjs";
+
+export const DEFAULT_RUN_OPERATION = "conversation.chat";
+export const IMAGE_GENERATION_OPERATION = "image.generate";
+
 /**
  * 归一化渠道提交的当前 Run 输入，不接收浏览器历史或摘要。
  *
@@ -6,6 +11,7 @@
  */
 export function normalizeRunInput(body) {
   return {
+    operation: String(body?.operation || DEFAULT_RUN_OPERATION).trim() || DEFAULT_RUN_OPERATION,
     requestId: String(body?.requestId || "").trim(),
     clientMessageId: String(body?.clientMessageId || "").trim(),
     model: String(body?.model || "").trim(),
@@ -15,6 +21,7 @@ export function normalizeRunInput(body) {
     imageUrls: normalizeUrlList(body?.imageUrls),
     documentUrls: normalizeUrlList(body?.documentUrls),
     references: normalizeReferences(body?.references),
+    imageOptions: body?.imageOptions,
   };
 }
 
@@ -31,6 +38,9 @@ export function validateRunInput(input) {
   if (input.model.length > 160 || /[\r\n\0]/.test(input.model)) {
     return { error: "model must be a valid model alias", code: "invalid_model" };
   }
+  if (![DEFAULT_RUN_OPERATION, IMAGE_GENERATION_OPERATION].includes(input.operation)) {
+    return { error: "Unsupported Run operation", code: "unsupported_run_operation" };
+  }
   const recoveryModes = new Set(["retry", "regenerate", "continue"]);
   if (Boolean(input.sourceRunId) !== Boolean(input.recoveryMode)) {
     return { error: "sourceRunId and recoveryMode must be provided together", code: "invalid_run_recovery" };
@@ -40,6 +50,25 @@ export function validateRunInput(input) {
   }
   if (!Array.isArray(input.references)) {
     return { error: "references must be an array", code: "invalid_references" };
+  }
+  if (input.operation === IMAGE_GENERATION_OPERATION) {
+    if (!input.message) {
+      return { error: "Image generation prompt is required", code: "image_prompt_required" };
+    }
+    if (input.message.length > 4000) {
+      return { error: "Image generation prompt is too long", code: "image_prompt_too_long" };
+    }
+    if (input.imageUrls.length > 0 || input.documentUrls.length > 0 || input.references.length > 0) {
+      return { error: "image.generate currently accepts prompt text only", code: "unsupported_image_generation_input" };
+    }
+    try {
+      input.imageOptions = normalizeImageGenerationOptions(input.imageOptions);
+    } catch (error) {
+      if (error instanceof ImageGenerationPolicyError) {
+        return { error: error.message, code: error.code };
+      }
+      throw error;
+    }
   }
   for (const reference of input.references) {
     if (reference.type !== "conversation_message") {

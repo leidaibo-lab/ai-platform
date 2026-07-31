@@ -27,6 +27,8 @@ async function testStreamingRunOverHttp() {
         LITELLM_BASE_URL: `http://127.0.0.1:${gatewayPort}`,
         LITELLM_MASTER_KEY: "sk-http-stream-test",
         LITELLM_MODEL: "chat-default",
+        LITELLM_IMAGE_MODEL: "image-default",
+        DEMO_IMAGE_ASSET_DIR: join(temporaryDirectory, "image-assets"),
         DEMO_MODEL_RETRY_BASE_DELAY_MS: "0",
         OTEL_ENABLED: "false",
       },
@@ -77,6 +79,49 @@ async function testStreamingRunOverHttp() {
     );
     assert.equal(detail.messages.length, 2);
     assert.equal(detail.messages.filter(isAssistantMessage).length, 1);
+
+    const imageInput = {
+      operation: "image.generate",
+      requestId: "http-image-request",
+      clientMessageId: "http-image-message",
+      model: "image-default",
+      message: "生成一枚红色印章",
+      imageOptions: { size: "1024x1024" },
+    };
+    const imageResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify(imageInput),
+      },
+    );
+    const imageEvents = await readSseEvents(imageResponse.body);
+    const imageCompleted = imageEvents.find(isCompletedEvent)?.data;
+    const imageArtifact = imageEvents.find(isArtifactCreatedEvent)?.data;
+    assert.deepEqual(imageEvents.map(readEventName), ["run-started", "artifact-created", "completed"]);
+    assert.equal(imageCompleted.operation, "image.generate");
+    assert.equal(imageCompleted.artifacts[0].assetId, imageArtifact.assetId);
+    assert.equal(imageCompleted.conversation.messages.at(-1).artifacts[0].assetId, imageArtifact.assetId);
+    const imageAssetResponse = await fetch(`${demoBaseUrl}${imageArtifact.url}`);
+    assert.equal(imageAssetResponse.status, 200);
+    assert.equal(imageAssetResponse.headers.get("content-type"), "image/png");
+    assert.ok((await imageAssetResponse.arrayBuffer()).byteLength > 0);
+
+    const imageReplayResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify(imageInput),
+      },
+    );
+    const imageReplayEvents = await readSseEvents(imageReplayResponse.body);
+    const imageReplay = imageReplayEvents.find(isCompletedEvent)?.data;
+    assert.deepEqual(imageReplayEvents.map(readEventName), ["run-started", "completed"]);
+    assert.equal(imageReplay.replayed, true);
+    assert.equal(imageReplay.artifacts[0].assetId, imageArtifact.assetId);
+    assert.equal(generatedModels.filter(isImageModel).length, 1);
 
     const archivedConversation = await requestJson(
       `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
@@ -227,7 +272,7 @@ function createFakeGatewayHandler(generatedModels) {
   return async function handleFakeGatewayRequest(req, res) {
     if (req.method === "GET" && req.url === "/v1/models") {
       req.resume();
-      sendJson(res, { data: [{ id: "chat-default" }, { id: "chat-quality" }] });
+      sendJson(res, { data: [{ id: "chat-default" }, { id: "chat-quality" }, { id: "image-default" }] });
       return;
     }
     if (req.method === "POST" && req.url === "/utils/token_counter") {
@@ -267,9 +312,29 @@ function createFakeGatewayHandler(generatedModels) {
       finishOpenAiStream(res, 2);
       return;
     }
+    if (req.method === "POST" && req.url === "/v1/images/generations") {
+      const requestBody = JSON.parse(await readRequestBody(req));
+      generatedModels.push(requestBody.model);
+      sendJson(res, {
+        data: [{
+          b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        }],
+      });
+      return;
+    }
     req.resume();
     sendJson(res, { error: "not found" }, 404);
   };
+}
+
+/** 判断 SSE 事件是否为图片资产完成事件。 */
+function isArtifactCreatedEvent(event) {
+  return event.name === "artifact-created";
+}
+
+/** 判断模型调用记录是否为图片模型别名。 */
+function isImageModel(model) {
+  return model === "image-default";
 }
 
 /** 判断 SSE 事件是否为失败终止事件。 */

@@ -12,6 +12,7 @@ import { createConversationCoordinator } from "../src/runtime/conversation-coord
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { createMemoryManager } from "../src/runtime/memory-manager.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
+import { createLocalImageAssetStore } from "../src/storage/image-asset-store.mjs";
 import { createToolRegistry } from "../src/tools/tool-registry.mjs";
 import { createWeatherToolDefinition } from "../src/tools/weather-tool.mjs";
 
@@ -21,6 +22,7 @@ const config = await loadDemoConfig(rootDir);
 const telemetryRuntime = initializeOpenTelemetry(config.observability);
 const chainTracer = telemetryRuntime.chainTracer;
 const store = createConversationStore(config.storage);
+const imageAssetStore = createLocalImageAssetStore({ directory: config.storage.imageAssetDirectory });
 const gatewayClient = createGatewayClient(config.gateway);
 const coordinator = createConversationCoordinator();
 const contextPlanner = createContextPlanner({
@@ -47,6 +49,7 @@ const chatRuntime = createChatRuntime({
   coordinator,
   contextPlanner,
   memoryManager,
+  imageAssetStore,
   toolRegistry,
   toolOptions: { maxSteps: config.tools.maxSteps },
   chainTracer,
@@ -151,6 +154,10 @@ async function handleConversationRoute(req, res, url, route) {
     openEventStream(req, res, url, route.conversationId);
     return;
   }
+  if (route.action === "image-asset-content" && req.method === "GET") {
+    await sendImageAsset(res, route.conversationId, route.assetId);
+    return;
+  }
   sendJson(res, 405, { error: "Method not allowed" });
 }
 
@@ -177,6 +184,14 @@ function parseConversationRoute(pathname) {
   const action = match[2] || "";
   if (["", "runs", "runs/stream", "close", "events"].includes(action)) {
     return { conversationId, action };
+  }
+  const imageAsset = action.match(/^image-assets\/([^/]+)\/content$/);
+  if (imageAsset) {
+    return {
+      conversationId,
+      action: "image-asset-content",
+      assetId: decodeURIComponent(imageAsset[1]),
+    };
   }
   const cancellation = action.match(/^runs\/([^/]+)\/cancel$/);
   if (!cancellation) return null;
@@ -224,10 +239,16 @@ async function streamConversationRun(req, res, conversationId) {
     writeSseEvent(res, `tool-${event.type}`, event);
   }
 
+  /** 将已持久化图片资产引用作为结构化 SSE 事件交付。 */
+  function sendArtifactCreated(artifact) {
+    writeSseEvent(res, "artifact-created", artifact);
+  }
+
   try {
     await runTracedConversation(conversationId, body, "sse", {
       onRunStarted: sendRunStarted,
       onToolEvent: sendToolEvent,
+      onArtifactCreated: sendArtifactCreated,
       onTextDelta: sendTextDelta,
       /** 在渠道交付阶段写入最终 completed 事件。 */
       onCompleted(result) {
@@ -259,9 +280,12 @@ async function streamConversationRun(req, res, conversationId) {
  */
 async function runTracedConversation(conversationId, body, transport, delivery) {
   const requestId = String(body?.requestId || "");
+  const operation = body?.operation === "image.generate" ? "image.generate" : "conversation.chat";
+  const scenarioId = operation === "image.generate" ? "C2" : "C1";
+  const rootSpanName = operation === "image.generate" ? "c2.image.generate" : "c1.conversation.run";
   return chainTracer.withSpan(
-    "c1.conversation.run",
-    buildRunTraceAttributes({ requestId, conversationId, transport }),
+    rootSpanName,
+    buildRunTraceAttributes({ requestId, conversationId, transport, scenarioId, operation }),
     /** 在根 Span 生命周期内执行排队、Runtime 和最终渠道交付。 */
     async (rootSpan) => {
       let runId = null;
@@ -285,6 +309,7 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
             if (typeof delivery.onRunStarted === "function") await delivery.onRunStarted(input);
           },
           onToolEvent: delivery.onToolEvent,
+          onArtifactCreated: delivery.onArtifactCreated,
           onTextDelta: delivery.onTextDelta,
         });
         const finalStatus = result.cancelled ? "cancelled" : "completed";
@@ -296,7 +321,7 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
         if (typeof finalDelivery === "function") {
           await chainTracer.withSpan(
             `channel.${transport}.delivery`,
-            buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: finalStatus }),
+            buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: finalStatus, scenarioId, operation }),
             /** 把最终完成或取消载荷交给当前渠道，Span 本身不记录载荷正文。 */
             () => finalDelivery(result),
           );
@@ -308,7 +333,7 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
         rootSpan.recordError(error);
         await chainTracer.withSpan(
           `channel.${transport}.delivery`,
-          buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: "failed" }),
+          buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: "failed", scenarioId, operation }),
           /** 把脱敏后的公开错误交给当前渠道。 */
           () => delivery.onError(error),
         );
@@ -319,16 +344,38 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
 }
 
 /** 生成根 Span 和渠道 Span 共用的安全业务关联属性。 */
-function buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status }) {
+function buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status, scenarioId = "C1", operation = "conversation.chat" }) {
   return {
     "ai.platform.request_id": requestId,
     "ai.platform.conversation_id": conversationId,
     ...(runId ? { "ai.platform.run_id": runId } : {}),
     ...(chainTraceId ? { "ai.platform.chain_trace_id": chainTraceId } : {}),
-    "ai.platform.scenario_id": "C1",
+    "ai.platform.scenario_id": scenarioId,
+    "ai.platform.operation": operation,
     "ai.platform.channel.transport": transport,
     ...(status ? { "ai.platform.run.status": status } : {}),
   };
+}
+
+/** 读取当前会话拥有的图片资产并以受控 MIME 返回，不公开 storageKey 或物理路径。 */
+async function sendImageAsset(res, conversationId, assetId) {
+  const { asset, storageKey } = store.readImageAsset(conversationId, assetId);
+  const content = await imageAssetStore.read(storageKey);
+  res.writeHead(200, {
+    "Content-Type": asset.mediaType,
+    "Content-Length": String(content.length),
+    "Cache-Control": "private, no-store",
+    "Content-Disposition": `inline; filename="${asset.assetId}${extensionForImageMediaType(asset.mediaType)}"`,
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.end(content);
+}
+
+/** 将已校验图片 MIME 转换为下载文件扩展名。 */
+function extensionForImageMediaType(mediaType) {
+  if (mediaType === "image/jpeg") return ".jpg";
+  if (mediaType === "image/webp") return ".webp";
+  return ".png";
 }
 
 /**

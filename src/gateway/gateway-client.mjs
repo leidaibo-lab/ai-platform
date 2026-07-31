@@ -1,4 +1,4 @@
-import { APICallError, Output, ToolLoopAgent, generateText, jsonSchema, stepCountIs, streamText } from "ai";
+import { APICallError, Output, ToolLoopAgent, generateImage, generateText, jsonSchema, stepCountIs, streamText } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { z } from "zod";
 import {
@@ -37,6 +37,7 @@ export { GatewayRequestError } from "./gateway-contract.mjs";
  * @param {object} options - LiteLLM 连接和模型配置。
  * @param {string} options.baseUrl - LiteLLM Proxy 根地址，不包含 `/v1`。
  * @param {string} options.model - Runtime 使用的 LiteLLM 模型别名。
+ * @param {string} [options.imageModel="image-default"] - Runtime 使用的 LiteLLM 图片模型别名。
  * @param {string} options.apiKey - LiteLLM master key 或 virtual key。
  * @param {number} [options.timeoutMs=120000] - 未传 Run 截止时间时使用的模型调用总预算。
  * @param {number} [options.maxAttempts=3] - 包含首次调用的最大模型尝试次数。
@@ -50,6 +51,7 @@ export function createGatewayClient(
   {
     baseUrl,
     model,
+    imageModel = "image-default",
     apiKey,
     timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
@@ -58,6 +60,7 @@ export function createGatewayClient(
     fetchImplementation = fetch,
   },
   {
+    generateImageImplementation = generateImage,
     generateTextImplementation = generateText,
     streamTextImplementation = streamText,
     stepCountIsImplementation = stepCountIs,
@@ -76,6 +79,7 @@ export function createGatewayClient(
   });
   const gatewayRootUrl = managementClient.baseUrl;
   const modelAlias = managementClient.model;
+  const imageModelAlias = String(imageModel || "image-default").trim() || "image-default";
   const key = apiKey || "sk-local-admin-key";
   const conversationProvider = createProvider({
     name: "litellm",
@@ -84,6 +88,12 @@ export function createGatewayClient(
     fetch: fetchImplementation,
     supportedUrls: getSupportedUrls,
     transformRequestBody: createAgentRequestBodyTransformer(),
+  });
+  const imageProvider = createProvider({
+    name: "litellm-image",
+    baseURL: `${gatewayRootUrl}/v1`,
+    apiKey: key,
+    fetch: fetchImplementation,
   });
   const conversationAgent = createToolLoopAgent({
     id: "ai-platform-conversation",
@@ -99,10 +109,93 @@ export function createGatewayClient(
     baseUrl: gatewayRootUrl,
     gatewayBaseUrl: managementClient.gatewayBaseUrl,
     model: modelAlias,
-    status: managementClient.status,
+    imageModel: imageModelAlias,
+    /** 返回模型网关可达性，并公开平台图片模型别名但不公开真实上游模型。 */
+    async status() {
+      return { ...(await managementClient.status()), imageModel: imageModelAlias };
+    },
     listModels: managementClient.listModels,
     resolveModel: managementClient.resolveModel,
+    /** 校验图片 Run 选择的别名；默认图片别名由服务端配置拥有。 */
+    async resolveImageModel(requestedModel) {
+      return resolveConfiguredImageModel(managementClient, imageModelAlias, requestedModel);
+    },
     countTokens: managementClient.countTokens,
+
+    /**
+     * 通过 AI SDK 图片模型接口经 LiteLLM 生成图片，固定关闭 SDK 和平台自动重试。
+     *
+     * @param {object} input - 规范化图片生成请求。
+     * @param {string} input.prompt - 用户可见提示词。
+     * @param {string} [input.model] - 平台图片模型别名。
+     * @param {string} [input.size="1024x1024"] - 平台白名单内尺寸。
+     * @param {import("../resilience/retry-executor.mjs").ResilienceContext} [input.resilienceContext] - Run 共享截止时间。
+     * @param {AbortSignal} [input.abortSignal] - Runtime 取消信号。
+     * @returns {Promise<object>} 图片字节、最小 usage 和无重试证据。
+     */
+    async generateImages({
+      prompt,
+      model: requestedModel,
+      size = "1024x1024",
+      resilienceContext,
+      abortSignal,
+    }) {
+      const selectedModel = await resolveConfiguredImageModel(
+        managementClient,
+        imageModelAlias,
+        requestedModel,
+      );
+      const operation = "model.image.generate";
+      const context = createResilienceContext({
+        ...(resilienceContext || {}),
+        deadlineAt: resilienceContext?.deadlineAt ?? nowImplementation() + timeoutMs,
+        stage: operation,
+      });
+      const policy = createImageGenerationRetryPolicy(operation);
+
+      /** 执行唯一一次图片模型调用；发起请求即越过不可静默重试边界。 */
+      async function generateImageAttempt({ remainingMs, markRetryBoundaryCrossed }) {
+        markRetryBoundaryCrossed();
+        const effectiveSignal = combineAbortSignalWithTimeout(abortSignal, remainingMs);
+        try {
+          const result = await generateImageImplementation({
+            model: imageProvider.imageModel(selectedModel),
+            prompt,
+            n: 1,
+            size,
+            maxRetries: 0,
+            abortSignal: effectiveSignal,
+          });
+          return {
+            model: selectedModel,
+            images: result.images.map(mapGeneratedImage),
+            usage: mapImageUsage(result.usage, result.images.length),
+            warnings: Array.isArray(result.warnings) ? result.warnings.length : 0,
+          };
+        } catch (error) {
+          throw mapAiSdkError(error, abortSignal?.aborted ? abortSignal : undefined, nowImplementation());
+        }
+      }
+
+      try {
+        const execution = await executeWithRetry({
+          context,
+          policy,
+          task: generateImageAttempt,
+          nowImplementation,
+          sleepImplementation,
+          abortSignal,
+        });
+        return { ...execution.value, resilience: execution.resilience };
+      } catch (error) {
+        if (error instanceof RetryExecutionError) {
+          const gatewayError = mapAiSdkError(error.cause, abortSignal, nowImplementation());
+          gatewayError.resilience = error.resilience;
+          throw gatewayError;
+        }
+        throw mapAiSdkError(error, abortSignal, nowImplementation());
+      }
+    },
 
     /**
      * 通过 AI SDK 生成文本，并映射回现有 OpenAI-compatible 响应结构。
@@ -262,6 +355,66 @@ export function createGatewayClient(
       }
     },
   };
+}
+
+/** 校验图片模型别名属于当前 LiteLLM key 可见目录。 */
+async function resolveConfiguredImageModel(managementClient, configuredModel, requestedModel) {
+  const candidate = String(requestedModel || configuredModel).trim() || configuredModel;
+  if (candidate === configuredModel) return candidate;
+  const aliases = await managementClient.listModels();
+  if (aliases.includes(candidate)) return candidate;
+  throw new GatewayRequestError("Unsupported image model alias", 400, {
+    error: "Unsupported image model alias",
+    code: "unsupported_model",
+    model: candidate,
+  });
+}
+
+/** 把 AI SDK GeneratedFile 复制为不依赖 SDK 对象生命周期的稳定二进制结果。 */
+function mapGeneratedImage(image) {
+  return {
+    bytes: Buffer.from(image.uint8Array),
+    mediaType: String(image.mediaType || "application/octet-stream").toLowerCase(),
+  };
+}
+
+/** 将图片模型用量映射为可持久化且不含 provider 元数据的稳定字段。 */
+function mapImageUsage(usage, generatedImages) {
+  return {
+    input_tokens: normalizeOptionalUsageNumber(usage?.inputTokens),
+    output_tokens: normalizeOptionalUsageNumber(usage?.outputTokens),
+    total_tokens: normalizeOptionalUsageNumber(usage?.totalTokens),
+    generated_images: generatedImages,
+  };
+}
+
+/** 将可选 usage 数值限制为非负有限值或 null。 */
+function normalizeOptionalUsageNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+/** 创建图片生成专用单次尝试策略，任何错误都不得自动重发付费请求。 */
+function createImageGenerationRetryPolicy(operation) {
+  return {
+    operation,
+    maxAttempts: 1,
+    /** 图片生成失败始终不进入自动重试。 */
+    shouldRetry() {
+      return false;
+    },
+    /** 图片生成无退避，因为最多只允许一次模型尝试。 */
+    calculateBackoffMs() {
+      return 0;
+    },
+    describeError: describeGatewayError,
+  };
+}
+
+/** 将 Runtime 取消信号与本次图片模型剩余时限组合为单一 AbortSignal。 */
+function combineAbortSignalWithTimeout(abortSignal, remainingMs) {
+  const timeoutSignal = AbortSignal.timeout(Math.max(1, remainingMs));
+  return abortSignal ? AbortSignal.any([abortSignal, timeoutSignal]) : timeoutSignal;
 }
 
 /** 声明 LiteLLM 可原样接收的图片 URL，阻止 AI SDK 在 Runtime 侧提前下载。 */

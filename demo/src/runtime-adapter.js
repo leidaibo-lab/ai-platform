@@ -8,6 +8,7 @@
  * @typedef {object} RunStreamHandlers
  * @property {(event: object) => Promise<void>|void} [onRunStarted] - 接收稳定 Run 身份。
  * @property {(event: object) => Promise<void>|void} [onToolEvent] - 接收服务端工具开始、完成或失败事实。
+ * @property {(artifact: object) => Promise<void>|void} [onArtifactCreated] - 接收已持久化图片资产引用。
  * @property {(delta: string) => Promise<void>|void} [onTextDelta] - 接收单个文本增量。
  * @property {(result: object) => Promise<void>|void} [onCompleted] - 接收完成事实。
  * @property {(result: object) => Promise<void>|void} [onCancelled] - 接收取消事实。
@@ -165,6 +166,10 @@ async function requestRunStream(fetchImpl, path, input, handlers) {
     }
     if (["tool-started", "tool-completed", "tool-failed"].includes(event.name)) {
       await handlers.onToolEvent?.({ ...event.data, event: event.name });
+      return;
+    }
+    if (event.name === "artifact-created") {
+      await handlers.onArtifactCreated?.(event.data);
       return;
     }
     if (event.name === "completed") {

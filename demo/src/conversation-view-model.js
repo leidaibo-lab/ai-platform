@@ -228,6 +228,7 @@ export function activeRunStageLabel(status, hasContent = false, toolTitle = "") 
   if (status === "stopping") return "正在停止生成";
   if (status === "starting") return "正在连接模型";
   if (status === "tool-running") return `正在查询${toolTitle || "外部数据"}`;
+  if (status === "image-generating") return "正在生成图片";
   return hasContent ? "正在生成回答" : "正在等待模型响应";
 }
 

@@ -104,7 +104,7 @@ MemoryDelta 仍由 Runtime 定义数据语义、字段归属、来源约束和 r
 | Embedding | `embed`、`embedMany` | C3 再接 | 文档解析、分块、权限过滤、索引版本和评测基线已定义 |
 | Rerank | `rerank` | C3 再接 | 已有候选检索集，并能独立评估召回与重排收益 |
 | MCP | `@ai-sdk/mcp` | 多 Connector 后 PoC | 出现跨项目工具复用、独立凭据或进程边界；生产优先 Streamable HTTP |
-| 图片生成 | `generateImage` | 不属于当前切片 | C2 出现明确生成场景、资产存储、审核和成本策略 |
+| 图片生成 | `generateImage` | C2 首个开发切片已采用 | 已经 GatewayClient、LiteLLM、单次尝试和本地 ImageAssetStore 跑通 fake 回归与一次 `gpt-image-2` 真实 happy-path；内容审核、成本、真实异常矩阵和尺寸归一化完成前不得宣称生产可用 |
 | 语音与转写 | speech/transcription APIs | 不属于当前切片 | 渠道需要音频输入输出，且文件、隐私和时延边界已定义 |
 | Realtime | Realtime 能力 | 不属于当前切片 | C5 需要低延迟双向音频或事件会话，不复用当前 POST SSE 硬承载 |
 | 测试工具 | Mock model/provider | 视复杂度采用 | 现有依赖注入和 fake LiteLLM 无法覆盖 provider 行为时 |
@@ -127,7 +127,7 @@ npm test
 openspec validate --specs --strict
 ```
 
-Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 schema 正反例校验、可复用 `ToolLoopAgent` 的动态 call options、真实两步工具调用、结构化工具请求回退 Core、首步强制路由、v7 结果字段、流错误和平台重试边界，以及工具开始后禁止整段重放、从 SQLite ToolResult 进行无工具恢复和恢复失败保留双段证据的 Runtime 集成回归。Runtime 测试额外覆盖恢复阶段继续通过原文本回调交付且只落一条助手消息；工具测试覆盖天气输入、默认值和 `contextSchema` 正反例校验。真实上游模型与天气 smoke test 仍需单独执行并记录，不能由 fake LiteLLM 回归替代。
+Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 schema 正反例校验、可复用 `ToolLoopAgent` 的动态 call options、真实两步工具调用、结构化工具请求回退 Core、首步强制路由、v7 结果字段、流错误和平台重试边界，以及工具开始后禁止整段重放、从 SQLite ToolResult 进行无工具恢复和恢复失败保留双段证据的 Runtime 集成回归。Runtime 测试额外覆盖恢复阶段继续通过原文本回调交付且只落一条助手消息；工具测试覆盖天气输入、默认值和 `contextSchema` 正反例校验。图片生成已用 `gpt-image-2` 完成一次真实 happy-path：请求 `1024x1024` 实际返回 `1254x1254` PNG，usage 只有生成张数而无 token/cost，因此 GatewayClient 保留请求尺寸白名单，资产层以实际返回尺寸为权威值。真实上游对话、天气、图片取消/超时/错误、内容安全与成本仍需分别执行并记录，不能由 fake LiteLLM 或单个成功样本替代。
 
 ## 官方资料
 

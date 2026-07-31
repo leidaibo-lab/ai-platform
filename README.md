@@ -39,7 +39,7 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 
 `scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
-当前交付聚焦 C1 对话问答的功能可用、确定性回归和能力理解，并以 Open-Meteo 跑通首个只读天气工具、ToolResult 持久化和工具后模型故障的无工具总结恢复。ChainTrace 的代码、稳定契约、Phoenix 选型和部署入口已经保留，但默认关闭；正式实例、真实 Runtime Trace 和四维运行态基线列为触发式 TODO，不作为日常启动或当前功能迭代的前置条件。共同底座只提供七条场景可复用的执行骨架，不代表图片、文档、企业业务查询、实时事件、操作执行和批量分析已经完成；具体边界见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
+当前交付以 C1 对话问答为基线，并以 Open-Meteo 跑通首个只读天气工具，同时增加 C2 文生图的首个开发切片：显式图片操作、独立图片模型别名、生成结果校验、本地图片资产、幂等重放、取消和 JSON/SSE 交付已经通过 fake 回归，并用 `gpt-image-2` 跑通一次真实模型 happy-path smoke。该单样本只证明当前 LiteLLM、AI SDK 与上游组合可生成并落存图片，不代表内容审核、精确尺寸、成本、取消/超时/错误或生产可用性已经验收；正式对象存储和图片理解资产输入也尚未完成。ChainTrace 的代码、稳定契约、Phoenix 选型和部署入口已经保留但默认关闭；具体边界见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
 
 ## 本地启动
 
@@ -61,18 +61,28 @@ cp .env.example .env
 
 ```bash
 UPSTREAM_API_BASE=https://你的中转站地址/v1
-UPSTREAM_API_KEY=你的中转站真实key
+UPSTREAM_API_KEY1=你的对话模型真实key
+UPSTREAM_API_KEY2=你的图片模型真实key
 LITELLM_MASTER_KEY=换成你自己的本地访问key
+LITELLM_MODEL=gpt-5.6
+LITELLM_IMAGE_MODEL=gpt-image-2
 ```
 
 再确认 `config.yaml` 里的模型映射：
 
 ```yaml
-model_name: chat-default
-model: openai/你的模型名
+model_list:
+  - model_name: gpt-5.6
+    litellm_params:
+      model: openai/gpt-5.6
+      api_key: os.environ/UPSTREAM_API_KEY1
+  - model_name: gpt-image-2
+    litellm_params:
+      model: openai/gpt-image-2
+      api_key: os.environ/UPSTREAM_API_KEY2
 ```
 
-`chat-default` 是 Runtime GatewayClient 使用的逻辑模型别名；`scripts/test-chat.sh` 仅在连通性诊断时复用该别名。`model` 是上游真实模型名，请改成你的中转站实际支持的模型。当前仓库配置以 `config.yaml` 为准。
+`model_name` 是 Runtime 使用的 LiteLLM 平台别名，`model` 是中转站实际支持的上游模型名。`LITELLM_MODEL` 与 `LITELLM_IMAGE_MODEL` 必须分别对应 `config.yaml` 中的对话和图片别名；真实模型名、上游地址和 key 只保留在 LiteLLM 配置与服务端 `.env`，不会进入浏览器或 Run 请求。
 
 启动：
 
@@ -121,7 +131,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "chat-default",
+    "model": "gpt-5.6",
     "messages": [{"role": "user", "content": "你好"}]
   }'
 ```
@@ -133,10 +143,22 @@ Agent Runtime 和模型连通性测试使用以下服务端配置：
 ```text
 Base URL: http://localhost:4000/v1
 API Key: 你的 LITELLM_MASTER_KEY
-Model: chat-default
+Chat model: gpt-5.6
+Image model: gpt-image-2
 ```
 
 这些配置不用于浏览器或普通业务客户端直连；业务请求统一通过 Agent Runtime API 进入平台。
+
+### C2 真实图片模型 PoC
+
+2026-07-31 使用锁定的 `ai@7.0.37`、`@ai-sdk/openai-compatible@3.0.14` 和当前 LiteLLM 配置，从 Runtime `image.generate` 主链完成一次真实模型 smoke：
+
+- 服务端使用平台别名 `gpt-image-2`，模型调用只尝试 1 次，约 41.7 秒完成。
+- 请求尺寸为 `1024x1024`，上游实际返回 `1254x1254` 的 `image/png`，共 1,091,928 字节；平台按真实返回内容计算并保存尺寸、MIME 和 SHA-256。
+- 返回 usage 只有 `generated_images: 1`，token 字段为空，也没有可用成本字段，因此当前不能据此建立成本基线。
+- 单张样本的提示词一致性和图片有效性观察通过，但内容安全、真实取消、超时、错误矩阵与多样本质量评测仍是 TODO。
+
+因此，`imageOptions.size` 当前是平台允许提交的请求值，不是上游精确输出尺寸承诺。模型能力目录和尺寸归一化完成前，渠道应以 `image_asset.width` / `height` 的实际返回值为准。
 
 ## 交互 Demo
 
@@ -169,14 +191,15 @@ npm run demo:ui
 npm run demo:check
 ```
 
-页面会请求本地 Demo Server，再由 Demo Server 装配的 Agent Runtime 通过 GatewayClient 和 AI SDK，使用 `.env` 里的 `LITELLM_MASTER_KEY` 调用 LiteLLM。浏览器不会拿到 `LITELLM_MASTER_KEY` 或 `UPSTREAM_API_KEY`。
+页面会请求本地 Demo Server，再由 Demo Server 装配的 Agent Runtime 通过 GatewayClient 和 AI SDK，使用 `.env` 里的 `LITELLM_MASTER_KEY` 调用 LiteLLM。浏览器不会拿到 `LITELLM_MASTER_KEY`、`UPSTREAM_API_KEY1` 或 `UPSTREAM_API_KEY2`。
 
 Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。工具型主对话复用 GatewayClient 内的 `ToolLoopAgent`，通过 `callOptionsSchema` / `prepareCall` 按 Run 动态注入模型、工具和执行设置，并在每次调用传入取消、超时及 Runtime/Tool Context；无工具普通调用、MemoryDelta 等动态结构化输出和原始 `responseFormat` 兼容调用继续使用 `generateText` / `streamText`。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
 
-会话输入区的模型选择器读取 `GET /api/gateway/status` 返回的 `models`，这些值是当前 `LITELLM_MASTER_KEY` 在 LiteLLM `/v1/models` 中可见的稳定别名，不是真实上游模型配置。当前 `config.yaml` 只配置 `chat-default` 时，选择器会只有一个选项；需要更多选项时，先在 LiteLLM `model_list` 中增加对应别名和上游映射。
+会话输入区的模型选择器读取 `GET /api/gateway/status` 返回的 `models`，这些值是当前 `LITELLM_MASTER_KEY` 在 LiteLLM `/v1/models` 中可见的稳定别名，不是真实上游模型配置。当前 `config.yaml` 分别配置 `gpt-5.6` 和 `gpt-image-2`；对话模式显示对话别名，生图模式固定显示服务端 `LITELLM_IMAGE_MODEL` 对应的图片别名。需要更多选项时，先在 LiteLLM `model_list` 中增加对应别名和上游映射。
 
 Demo 输入区支持：
 
+- 运行模式：显式选择“对话”或“生图”；生图固定使用服务端 `LITELLM_IMAGE_MODEL`，不会靠 Prompt 猜测，也不会允许浏览器选择真实 provider 参数。
 - 正文：直接输入问题或指令。
 - 图片：可以上传本地图片，也可以粘贴图片 URL；Demo Server 会按 OpenAI-compatible 的 `image_url` 多模态格式转发。
 - 文档链接：可以粘贴一个或多个链接，Demo Server 会把它们作为文本上下文附在用户消息里。
@@ -185,6 +208,7 @@ Demo 输入区支持：
 - 多会话工作台：Runtime 使用 SQLite 持久化会话和完整原始消息；渠道支持标题搜索、今天/昨天/最近 7 天/更早分组、当前/归档/全部筛选、重命名与独立归档。归档不删除事实，取消归档也不会重新打开 `closed` 会话。
 - 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK 标准事件流的文本增量；普通调用使用 `streamText`，工具型对话使用 `ToolLoopAgent.stream()`，由 X Markdown 渲染并在完整回答结束后一次性落库。
 - 停止生成：生成期间调用 Runtime 取消端点，中止模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
+- 图片产物：`image.generate` 固定单张和平台尺寸白名单，SDK 自动重试关闭；模型结果通过真实 MIME、字节和尺寸校验后写入 `DEMO_IMAGE_ASSET_DIR`，SQLite 只保存 `image_asset` 元数据与 Message/Run 引用，页面通过受控会话端点展示和下载。
 - 发送门禁：本地会话先独立加载，模型网关状态在后台刷新；网关未确认可达时仍可浏览和整理会话、编辑草稿和附件，但禁止提交无效 Run。该探测只验证 LiteLLM `/v1/models`，不代表上游模型生成一定可用。
 - 失败反馈与恢复：最近一次失败 Run 会在对应用户消息后说明鉴权、限流、超时、模型不可用或上游服务异常，并给出处理建议；页面不展示 provider 原始错误正文。失败可直接重试或编辑后发送，最后一条正常助手回答可重新生成，中断回答可继续生成；每次动作都使用新的幂等标识，并以 `sourceRunId + recoveryMode` 记录来源而不修改历史。
 - 多端同步：同一会话通过独立的 SSE 事件游标刷新已持久化事实；客户端不再保存或提交历史事实源。
@@ -200,6 +224,8 @@ Demo 输入区支持：
 当前服务端已为 `get_weather` 提供真实的 `tool-started`、`tool-completed` 和 `tool-failed` 阶段事件，页面据此展示“正在查询实时天气”；普通模型生成没有对应的服务端阶段证据，因此仍不展示 `Think` 或 `ThoughtChain`，也不会把模型原始思维链作为体验数据。
 
 注意：LiteLLM Proxy 只负责转发请求，不会自动打开文档链接、读取私有文档，也不会自动提取文档里的图片。如果要让模型处理文档里的图片，需要把图片单独上传，或提供可公开访问的图片直链，并确保当前上游模型支持视觉输入。
+
+当前图片生成已完成一次真实模型 smoke。后续更换图片模型、上游映射或 key 后，应重新启动 LiteLLM 与 Demo，在输入区切到“生图”并提交一条安全提示词；只有页面返回可打开的图片资产、会话刷新后仍可读取，才算新配置的 happy-path 复验通过。
 
 ## C1 ChainTrace 后端（预留，默认关闭）
 
@@ -227,14 +253,15 @@ Demo Server API 按层级暴露：
 
 | API | 说明 |
 | --- | --- |
-| `GET /api/gateway/status` | 检查 LiteLLM `/v1/models` 可达性，并返回 gateway base url、默认别名和当前 key 可见的 `models` |
+| `GET /api/gateway/status` | 检查 LiteLLM `/v1/models` 可达性，并返回 gateway base url、默认对话别名、服务端图片别名和当前 key 可见的 `models` |
 | `GET /api/runtime/conversations` | 列出持久化会话 |
 | `POST /api/runtime/conversations` | 创建会话 |
 | `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆和版本状态 |
 | `PATCH /api/runtime/conversations/{id}` | 更新 1-80 字符标题或独立归档状态，不改变会话生命周期 |
-| `POST /api/runtime/conversations/{id}/runs` | 发送当前输入并执行幂等 Run |
-| `POST /api/runtime/conversations/{id}/runs/stream` | 通过 SSE 接收 `run-started`、`text-delta` 和 `completed`、`cancelled` 或 `error` 终止事件 |
+| `POST /api/runtime/conversations/{id}/runs` | 按显式 `operation` 发送当前输入并执行幂等 Run；图片结果通过 `artifacts` 返回 |
+| `POST /api/runtime/conversations/{id}/runs/stream` | 通过 SSE 接收 `run-started`、文本 `text-delta` 或图片 `artifact-created`，再以 `completed`、`cancelled` 或 `error` 收口 |
 | `POST /api/runtime/conversations/{id}/runs/{runId}/cancel` | 主动取消模型调用与后续重试，并返回最终 Run 和可选中断消息 |
+| `GET /api/runtime/conversations/{id}/image-assets/{assetId}/content` | 校验资产属于当前会话后读取生成图片内容，不暴露物理路径 |
 | `POST /api/runtime/conversations/{id}/close` | 完成最终 checkpoint 并结束会话 |
 | `GET /api/runtime/conversations/{id}/events` | 订阅多端增量事件流 |
 
@@ -242,9 +269,10 @@ Run 请求包含模型别名、当前输入和幂等标识；恢复动作额外�
 
 ```json
 {
+  "operation": "conversation.chat",
   "requestId": "request-uuid",
   "clientMessageId": "message-uuid",
-  "model": "chat-default",
+  "model": "gpt-5.6",
   "message": "当前问题",
   "imageUrls": [],
   "documentUrls": [],
@@ -256,6 +284,21 @@ Run 请求包含模型别名、当前输入和幂等标识；恢复动作额外�
       "messageId": "当前会话中的消息 ID"
     }
   ]
+}
+```
+
+图片生成使用独立操作与服务端图片模型别名，不接受附件、引用或 provider 专属参数：
+
+```json
+{
+  "operation": "image.generate",
+  "requestId": "image-request-uuid",
+  "clientMessageId": "image-message-uuid",
+  "model": "gpt-image-2",
+  "message": "生成一张白底红色印章图片",
+  "imageOptions": {
+    "size": "1024x1024"
+  }
 }
 ```
 
@@ -273,6 +316,12 @@ npm test
 
 ```bash
 npm run test:architecture
+```
+
+只验证 C2 图片调用、结果校验、资产落存、幂等、取消和超时边界：
+
+```bash
+npm run test:images
 ```
 
 只验证 C1 ChainTrace 的 JSON/SSE Span 树、重试关联、失败脱敏、幂等重放和 Token 分段：
@@ -293,14 +342,16 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 
 ## 配置与密钥
 
-- `chat-default` 是 Runtime GatewayClient 使用的逻辑模型别名；模型连通性诊断复用该别名，浏览器和普通业务客户端不直接使用。
+- `gpt-5.6` 和 `gpt-image-2` 是当前 LiteLLM 对话与图片模型别名；Runtime 分别通过 `LITELLM_MODEL` 和 `LITELLM_IMAGE_MODEL` 使用，浏览器和普通业务客户端不接触真实上游配置。
 - `model_list[].litellm_params.model` 是 LiteLLM 转发给中转站的真实模型名。中转站是 OpenAI-compatible 时，通常保留 `openai/` 前缀。
 - `UPSTREAM_API_BASE` 通常要带 `/v1`。
-- `UPSTREAM_API_KEY` 是中转站真实 key，只应放在服务端 `.env`。
+- `UPSTREAM_API_KEY1` 和 `UPSTREAM_API_KEY2` 分别是当前对话、图片模型的上游真实 key，只应放在服务端 `.env`。
 - `LITELLM_MASTER_KEY` 是 Runtime 和模型连通性诊断访问内部模型网关的服务端凭据，不提供给浏览器或普通业务客户端；部署前请改成强随机值。
 - `LITELLM_BASE_URL` 是 Runtime 使用的 LiteLLM Proxy 根地址，默认 `http://localhost:4000`，不要追加 `/v1`。
-- `LITELLM_MODEL` 是 Runtime 请求的 LiteLLM 模型别名，默认 `chat-default`。
+- `LITELLM_MODEL` 是 Runtime 请求的对话模型别名；当前示例配置为 `gpt-5.6`。
+- `LITELLM_IMAGE_MODEL` 是 Runtime 请求的图片模型别名；当前示例配置为 `gpt-image-2`，必须与 `config.yaml` 的图片 `model_name` 完全一致。
 - `DEMO_DATABASE_PATH` 是 Runtime SQLite 文件，默认 `.data/ai-platform.sqlite`。
+- `DEMO_IMAGE_ASSET_DIR` 是开发阶段图片二进制目录，默认 `.data/image-assets`；SQLite 只保存资产元数据和引用。
 - `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
 - `DEMO_RUN_TIMEOUT_MS` 是排队、上下文规划和全部模型尝试共享的 Run 总时限，默认 `120000` 毫秒。
 - `DEMO_MODEL_MAX_ATTEMPTS` 默认 `3`，包含首次调用；退避由 `DEMO_MODEL_RETRY_BASE_DELAY_MS` 和 `DEMO_MODEL_RETRY_MAX_DELAY_MS` 控制。
@@ -329,6 +380,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | V1 只读工具循环、天气 Connector 和 LiteLLM digest 决策 | `docs/decisions/2026-07-30-v1-read-only-tool-loop-and-weather.md` |
 | ToolResult 持久化总结恢复决策 | `docs/decisions/2026-07-31-tool-result-summary-recovery.md` |
 | AI SDK Core v7 当前采用、延后与不采用的 API 边界 | `docs/ai-sdk-core-alignment.md` |
+| C2 图片理解与生成的场景归属、模型调用和资产边界 | `docs/decisions/2026-07-31-c2-image-understanding-and-generation-boundary.md` |
 | 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |

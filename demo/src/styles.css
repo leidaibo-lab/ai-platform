@@ -665,6 +665,41 @@ textarea {
   border-radius: 6px;
 }
 
+.message-images.generated-images {
+  display: grid;
+  width: min(100%, 680px);
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 10px;
+}
+
+.message-image-item {
+  position: relative;
+  min-width: 0;
+}
+
+.message-images.generated-images .message-image-item,
+.message-images.generated-images .ant-image,
+.message-images.generated-images img {
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 1 / 1;
+}
+
+.message-images.generated-images img {
+  display: block;
+  object-fit: contain;
+  background: #f6f8fa;
+}
+
+.message-image-download.ant-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  color: #24292f;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(31, 35, 40, 0.16);
+}
+
 .message-generation-status {
   display: flex;
   align-items: center;
@@ -895,6 +930,12 @@ textarea {
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
+}
+
+.sender-mode-select .ant-segmented-item-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .sender-tool-button.ant-btn {
@@ -1272,12 +1313,25 @@ textarea {
   }
 
   .sender-model-select .ant-select {
-    min-width: 112px;
-    max-width: 46vw;
+    min-width: 104px;
+    max-width: 32vw;
   }
 }
 
 @media (max-width: 520px) {
+  .sender-footer {
+    gap: 4px;
+  }
+
+  .sender-footer-actions {
+    gap: 2px;
+  }
+
+  .sender-mode-select .ant-segmented-item-label {
+    gap: 3px;
+    padding-inline: 5px;
+  }
+
   .chat-heading h4.ant-typography {
     font-size: 14px;
   }
