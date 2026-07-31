@@ -8,16 +8,22 @@ import {
 import {
   activeRunStageLabel,
   buildConversationAnchors,
+  buildConversationWorkspace,
   buildGatewayReachabilityCopy,
+  buildMessageWindow,
   buildRunFailureCopy,
   canSubmitRun,
   conversationStatusLabel,
+  deserializeConversationDrafts,
+  extractMarkdownHeadings,
   insertLatestRunFailure,
   isMessageListAtLatest,
+  isSafeMarkdownHref,
   readConversationDraft,
   readGatewayModels,
   recoverRunInput,
   scrollMessageListToLatest,
+  serializeConversationDrafts,
   storeConversationDraft,
 } from "../demo/src/conversation-view-model.js";
 
@@ -30,6 +36,8 @@ async function testCompletedRunStream() {
     return sseResponse([
       ": connected\n\n",
       "event: run-started\ndata: {\"runId\":\"run-1\",\"status\":\"running\"}\n",
+      "\nevent: tool-started\ndata: {\"toolCallId\":\"call-1\",\"toolName\":\"get_weather\",\"title\":\"实时天气\"}\n\n",
+      "event: tool-completed\ndata: {\"toolCallId\":\"call-1\",\"toolName\":\"get_weather\",\"source\":\"Open-Meteo\"}\n\n",
       "\nevent: text-delta\ndata: {\"delta\":\"流式\"}\n\n",
       "event: text-delta\ndata: {\"delta\":\"回复\"}\n\n",
       "event: completed\ndata: {\"content\":\"流式回复\",\"conversation\":{\"id\":\"conversation-1\"}}\n\n",
@@ -45,6 +53,10 @@ async function testCompletedRunStream() {
   function recordTextDelta(delta) {
     stages.push(`delta:${delta}`);
   }
+  /** 记录服务端产生的工具阶段。 */
+  function recordToolEvent(event) {
+    stages.push(`${event.event}:${event.toolName}`);
+  }
   /** 记录完成载荷。 */
   function recordCompleted(result) {
     stages.push(`completed:${result.content}`);
@@ -52,12 +64,19 @@ async function testCompletedRunStream() {
   const terminal = await adapter.runConversationStream(
     "conversation/1",
     { requestId: "request-1", clientMessageId: "message-1", model: "chat-quality", message: "验证" },
-    { onRunStarted: recordRunStarted, onTextDelta: recordTextDelta, onCompleted: recordCompleted },
+    { onRunStarted: recordRunStarted, onToolEvent: recordToolEvent, onTextDelta: recordTextDelta, onCompleted: recordCompleted },
   );
 
   assert.equal(terminal.type, "completed");
   assert.equal(terminal.data.content, "流式回复");
-  assert.deepEqual(stages, ["run:run-1", "delta:流式", "delta:回复", "completed:流式回复"]);
+  assert.deepEqual(stages, [
+    "run:run-1",
+    "tool-started:get_weather",
+    "tool-completed:get_weather",
+    "delta:流式",
+    "delta:回复",
+    "completed:流式回复",
+  ]);
   assert.equal(requests[0].path, "/api/runtime/conversations/conversation%2F1/runs/stream");
   assert.equal(requests[0].options.method, "POST");
   assert.equal(JSON.parse(requests[0].options.body).model, "chat-quality");
@@ -130,11 +149,15 @@ async function testJsonResourceMapping() {
   assert.equal((await adapter.listConversations()).length, 1);
   assert.equal((await adapter.createConversation()).status, "active");
   assert.equal((await adapter.getConversation("conversation-1")).messages.length, 0);
+  assert.equal((await adapter.updateConversation("conversation-1", { archived: true })).id, "conversation-1");
   assert.equal((await adapter.cancelRun("conversation-1", "run/1")).run.status, "cancelled");
   assert.equal((await adapter.closeConversation("conversation-1")).conversation.status, "closed");
-  assert.equal(requests[3].path, "/api/runtime/conversations/conversation-1/runs/run%2F1/cancel");
-  assert.equal(requests[3].options.method, "POST");
-  assert.equal(requests[4].path, "/api/runtime/conversations/conversation-1/close");
+  assert.equal(requests[3].path, "/api/runtime/conversations/conversation-1");
+  assert.equal(requests[3].options.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[3].options.body), { archived: true });
+  assert.equal(requests[4].path, "/api/runtime/conversations/conversation-1/runs/run%2F1/cancel");
+  assert.equal(requests[4].options.method, "POST");
+  assert.equal(requests[5].path, "/api/runtime/conversations/conversation-1/close");
 }
 
 /** 验证失败提示只锚定同 Run 用户消息，且不会把原始错误带入渠道消息。 */
@@ -295,6 +318,80 @@ function testConversationDraftIsolation() {
   assert.equal(cleared.get("conversation-2").value, "会话二草稿");
 }
 
+/** 验证会话工作台按归档、标题、时间与窗口组合筛选。 */
+function testConversationWorkspace() {
+  const conversations = [
+    { id: "today", title: "平台方案", updatedAt: "2026-07-30T08:00:00.000Z", archivedAt: null },
+    { id: "yesterday", title: "平台回归", updatedAt: "2026-07-29T08:00:00.000Z", archivedAt: null },
+    { id: "week", title: "其他主题", updatedAt: "2026-07-26T08:00:00.000Z", archivedAt: null },
+    { id: "archived", title: "平台旧稿", updatedAt: "2026-07-01T08:00:00.000Z", archivedAt: "2026-07-02T00:00:00.000Z" },
+  ];
+  const active = buildConversationWorkspace(conversations, {
+    query: "平台",
+    filter: "active",
+    limit: 1,
+    now: "2026-07-30T12:00:00.000Z",
+  });
+  assert.equal(active.total, 2);
+  assert.equal(active.hasMore, true);
+  assert.equal(active.conversations[0].id, "today");
+  assert.equal(active.conversations[0].timeGroup, "今天");
+  const all = buildConversationWorkspace(conversations, {
+    filter: "all",
+    limit: 10,
+    now: "2026-07-30T12:00:00.000Z",
+  });
+  // 读取每条会话的时间组，验证固定分组顺序。
+  assert.deepEqual(all.conversations.map((item) => item.timeGroup), ["今天", "昨天", "最近 7 天", "更早"]);
+  assert.deepEqual(
+    // 归档筛选只返回具有 archivedAt 的会话。
+    buildConversationWorkspace(conversations, { filter: "archived", limit: 10 }).conversations.map((item) => item.id),
+    ["archived"],
+  );
+}
+
+/** 验证草稿会话级持久化不会把本地图片 data URL 写入 sessionStorage。 */
+function testSessionConversationDrafts() {
+  const drafts = new Map([
+    ["conversation-1", {
+      value: "待发送",
+      attachments: [
+        { uid: "local", kind: "image", url: "data:image/png;base64,SECRET" },
+        { uid: "remote", kind: "document", url: "https://example.com/spec.pdf" },
+      ],
+      references: [{ messageId: "message-1" }],
+      model: "chat-default",
+    }],
+  ]);
+  const serialized = serializeConversationDrafts(drafts);
+  assert.equal(serialized.includes("SECRET"), false);
+  const restored = readConversationDraft(deserializeConversationDrafts(serialized), "conversation-1");
+  assert.equal(restored.value, "待发送");
+  // 恢复结果只保留可持久化的远程附件。
+  assert.deepEqual(restored.attachments.map((item) => item.uid), ["remote"]);
+  assert.equal(deserializeConversationDrafts("not-json").size, 0);
+}
+
+/** 验证长消息窗口、Markdown 标题与安全链接判断可确定回归。 */
+function testLongAnswerViewModel() {
+  // 用稳定递增 ID 构造长消息窗口 fixture。
+  const messages = Array.from({ length: 5 }, (_, index) => ({ id: `message-${index + 1}` }));
+  assert.deepEqual(buildMessageWindow(messages, 2), {
+    messages: [{ id: "message-4" }, { id: "message-5" }],
+    hiddenCount: 3,
+    hasMore: true,
+  });
+  assert.deepEqual(extractMarkdownHeadings("# 方案\n## 验证\n## 验证", "message-1"), [
+    { level: 1, title: "方案", id: "answer-heading-message-1-方案-1" },
+    { level: 2, title: "验证", id: "answer-heading-message-1-验证-1" },
+    { level: 2, title: "验证", id: "answer-heading-message-1-验证-2" },
+  ]);
+  assert.equal(isSafeMarkdownHref("https://example.com"), true);
+  assert.equal(isSafeMarkdownHref("/docs/start"), true);
+  assert.equal(isSafeMarkdownHref("javascript:alert(1)"), false);
+  assert.equal(isSafeMarkdownHref("data:text/html,unsafe"), false);
+}
+
 /** 验证长会话跟随阈值和活动 Run 状态只映射已有渠道事实。 */
 function testConversationProgressModel() {
   assert.equal(isMessageListAtLatest(0), true);
@@ -303,6 +400,7 @@ function testConversationProgressModel() {
   assert.equal(activeRunStageLabel("starting", false), "正在连接模型");
   assert.equal(activeRunStageLabel("running", false), "正在等待模型响应");
   assert.equal(activeRunStageLabel("running", true), "正在生成回答");
+  assert.equal(activeRunStageLabel("tool-running", false, "实时天气"), "正在查询实时天气");
   assert.equal(activeRunStageLabel("stopping", true), "正在停止生成");
 }
 
@@ -339,6 +437,9 @@ test("Demo view model recovers failed Run input", testRecoverRunInput);
 test("Demo view model guards submission and labels lifecycle", testChannelStatusModel);
 test("Demo view model builds conversation anchors", testConversationAnchors);
 test("Demo view model isolates conversation drafts", testConversationDraftIsolation);
+test("Demo view model builds the conversation workspace", testConversationWorkspace);
+test("Demo view model persists session-safe drafts", testSessionConversationDrafts);
+test("Demo view model windows long answers safely", testLongAnswerViewModel);
 test("Demo view model maps message progress", testConversationProgressModel);
 test("Demo view model guards message list mount scrolling", testMessageListReadyGuard);
 

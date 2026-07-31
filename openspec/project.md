@@ -13,15 +13,15 @@
 - 模型网关：LiteLLM、模型别名、provider key、virtual key、多模型路由、fallback、预算和限流。
 - 治理与可观测：身份上下文、审计事件、调用追踪、评测、反馈和安全策略。
 
-只有模型访问、模型路由、模型密钥和模型调用治理属于严格意义上的 AI Gateway。拆出的模型网关服务使用 `model-gateway`；项目改名不改变稳定 API 行为。当前版本只声明已落地的 Demo、Runtime 雏形、模型网关、连接器注册预留和 C1 旁路 ChainTrace，不把平台控制面、真实工具、知识库、多人治理或运营能力写成稳定可用能力。
+只有模型访问、模型路由、模型密钥和模型调用治理属于严格意义上的 AI Gateway。拆出的模型网关服务使用 `model-gateway`；项目改名不改变稳定 API 行为。当前版本声明已落地的 Demo、Runtime、模型网关、C1 旁路 ChainTrace，以及由 C1 入口触发的 AI SDK Core 有界只读工具调用、Open-Meteo 天气 Connector 和 ToolResult 事实；不把平台控制面、MCP、企业业务连接器、知识库、写操作、多人治理或运营能力写成稳定可用能力。
 
 ## Technology
 
-- LiteLLM Proxy 容器镜像：`ghcr.io/berriai/litellm:main-latest`
+- LiteLLM Proxy 容器镜像：`ghcr.io/berriai/litellm@sha256:89ccaccfda9083f7693777597ca27f8ffca12045e4fa9277155fb7c5f06e68b2`
 - Docker Compose 本地启动
 - Node.js 原生 HTTP Demo Server 与内置 SQLite 会话存储
 - AI SDK Core v7 与 `@ai-sdk/openai-compatible` Runtime 模型网关客户端
-- 静态 HTML Demo UI
+- React + Vite Demo UI
 - Shell 模型连通性诊断（非平台能力入口）
 
 ## Conventions
@@ -64,5 +64,5 @@ Demo 浏览器页面不直接调用 LiteLLM 或上游中转站，而是通过 `s
 - 每类事实数据只能有一个写入所有者；拆服务前先明确 API、事件和数据迁移边界，禁止多个服务共同写同一张表。
 - 不把 `.env` 中的真实值写入文档、OpenSpec 或日志说明。
 - 修改代理行为、鉴权、模型路由、Demo API、上下文预算或多模态输入契约时，先更新 OpenSpec 或同步补齐 OpenSpec。
-- 当前 `openspec/specs/ai-platform/spec.md` 描述 V0.6 持久化会话、结构化上下文和 C1 ChainTrace 切片；真正拆出服务时再按模型网关、Agent Runtime、连接器、治理与可观测和平台控制面分别建立稳定 spec。
+- 当前 `openspec/specs/ai-platform/spec.md` 描述 V0.6 持久化会话、结构化上下文、C1 ChainTrace 与 V1 只读工具切片；真正拆出服务时再按模型网关、Agent Runtime、连接器、治理与可观测和平台控制面分别建立稳定 spec。
 - 若目录不是 Git 仓库，最终说明需要明确“无法通过 git diff 检索变更”，改用文件扫描和本次编辑清单说明。

@@ -57,9 +57,14 @@ export async function loadDemoConfig(rootDir) {
     memory: {
       maxCompletionTokens: readPositiveNumber(env.DEMO_MEMORY_MAX_COMPLETION_TOKENS, 1200),
     },
+    tools: {
+      maxSteps: readBoundedInteger(env.DEMO_TOOL_MAX_STEPS, 4, 1, 8),
+      weatherEnabled: readBoolean(env.DEMO_WEATHER_TOOL_ENABLED, true),
+      weatherTimeoutMs: readPositiveNumber(env.DEMO_WEATHER_TIMEOUT_MS, 8000),
+    },
     prompts: {
       demoSystemPrompt:
-        "你是 AI 应用基础平台 Demo 助手。请优先结合 active 结构化记忆、相关历史片段、最近对话和当前用户消息回答；用户最新纠正优先。",
+        "你是 AI 应用基础平台 Demo 助手。请优先结合 active 结构化记忆、相关历史片段、最近对话和当前用户消息回答；用户最新纠正优先。涉及当前或明日天气时必须调用 get_weather，不得凭模型记忆声称实时结果；回答需说明地点、数据时间和来源。",
     },
   };
 }
@@ -120,6 +125,12 @@ function readPositiveNumber(value, fallback) {
 function readPositiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** 将环境变量限制为指定闭区间整数，异常值回退到默认值。 */
+function readBoundedInteger(value, fallback, min, max) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
 }
 
 /** 将环境变量转换为非负数配置，无效值回退到调用方提供的默认值。 */

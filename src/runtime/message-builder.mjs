@@ -9,6 +9,8 @@ export function normalizeRunInput(body) {
     requestId: String(body?.requestId || "").trim(),
     clientMessageId: String(body?.clientMessageId || "").trim(),
     model: String(body?.model || "").trim(),
+    sourceRunId: String(body?.sourceRunId || "").trim(),
+    recoveryMode: String(body?.recoveryMode || "").trim(),
     message: String(body?.message || "").trim(),
     imageUrls: normalizeUrlList(body?.imageUrls),
     documentUrls: normalizeUrlList(body?.documentUrls),
@@ -28,6 +30,13 @@ export function validateRunInput(input) {
   }
   if (input.model.length > 160 || /[\r\n\0]/.test(input.model)) {
     return { error: "model must be a valid model alias", code: "invalid_model" };
+  }
+  const recoveryModes = new Set(["retry", "regenerate", "continue"]);
+  if (Boolean(input.sourceRunId) !== Boolean(input.recoveryMode)) {
+    return { error: "sourceRunId and recoveryMode must be provided together", code: "invalid_run_recovery" };
+  }
+  if (input.recoveryMode && !recoveryModes.has(input.recoveryMode)) {
+    return { error: "Unsupported recoveryMode", code: "invalid_run_recovery", recoveryMode: input.recoveryMode };
   }
   if (!Array.isArray(input.references)) {
     return { error: "references must be an array", code: "invalid_references" };

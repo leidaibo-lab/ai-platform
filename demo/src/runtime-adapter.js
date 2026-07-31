@@ -7,6 +7,7 @@
 /**
  * @typedef {object} RunStreamHandlers
  * @property {(event: object) => Promise<void>|void} [onRunStarted] - 接收稳定 Run 身份。
+ * @property {(event: object) => Promise<void>|void} [onToolEvent] - 接收服务端工具开始、完成或失败事实。
  * @property {(delta: string) => Promise<void>|void} [onTextDelta] - 接收单个文本增量。
  * @property {(result: object) => Promise<void>|void} [onCompleted] - 接收完成事实。
  * @property {(result: object) => Promise<void>|void} [onCancelled] - 接收取消事实。
@@ -59,6 +60,11 @@ export function createRuntimeAdapter({
     /** 获取会话、消息、Run 和结构化记忆完整事实。 */
     getConversation(conversationId) {
       return requestJson(fetchImpl, conversationPath(conversationId));
+    },
+
+    /** 更新服务端会话标题或独立归档状态。 */
+    updateConversation(conversationId, input) {
+      return requestJson(fetchImpl, conversationPath(conversationId), { method: "PATCH", body: input });
     },
 
     /** 完成最终 checkpoint 并关闭会话。 */
@@ -155,6 +161,10 @@ async function requestRunStream(fetchImpl, path, input, handlers) {
     }
     if (event.name === "text-delta") {
       await handlers.onTextDelta?.(String(event.data.delta || ""));
+      return;
+    }
+    if (["tool-started", "tool-completed", "tool-failed"].includes(event.name)) {
+      await handlers.onToolEvent?.({ ...event.data, event: event.name });
       return;
     }
     if (event.name === "completed") {

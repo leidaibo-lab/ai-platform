@@ -14,8 +14,8 @@
 | --- | --- | --- | --- |
 | 渠道与体验层 | Demo、Web、IM、IDE、API 等入口适配；输入输出格式转换 | Agent 编排、工具执行、模型供应商密钥 | `demo/index.html`、`scripts/demo-server.mjs` 的静态页面和 HTTP 接入部分 |
 | 平台控制面 | 租户、用户、应用、Agent 定义、版本发布、配置和运营入口 | 执行单次 Agent 任务、直接调用上游模型 | 尚未实现；未来的大平台属于此区域，不只是更大的 Demo |
-| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位和 GatewayClient Port / Facade |
-| 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有工具注册预留，尚未接入真实工具和知识能力 |
+| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位、GatewayClient，以及有界只读工具循环和 ToolResult 事实 |
+| 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有只读 Tool Registry 和 Open-Meteo 天气 Connector；MCP、企业业务连接器和知识能力尚未实现 |
 | 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default` 和上游 key 收口 |
 | 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 已有默认关闭的 C1 ChainTracer + OTel 旁路、Phoenix + PostgreSQL 选型与部署入口、回归评测和治理契约；真实 Runtime Trace、审计与反馈仍未完成 |
 
@@ -233,22 +233,22 @@ Demo、正式 Web 平台、飞书、IDE 和 API Adapter 都应转换为统一的
 
 1. 保持 LiteLLM 为独立 `model-gateway`，当前已经具备这个部署边界。
 2. 把 `src/runtime/` 稳定为无渠道依赖的 `agent-runtime` 模块，再按复用需求独立部署。
-3. 第一个真实工具跑通后，把工具 schema、执行和凭据边界收敛到 `connector-service`。
+3. 当前先在单仓内稳定首个只读工具的 schema、执行、ToolResult 和固定端点边界；出现多个跨项目 Connector 或独立凭据边界后，再拆出 `connector-service`。
 4. 出现文档解析、索引资源或知识权限需求时，再从连接器区域拆出 `knowledge-service`。
 5. 出现多个项目、租户和 Agent 版本管理需求后，再建设 `platform-control`。
 6. 调用规模和治理要求上升后，把统一事件采集、评测和审计查询拆成 `governance-service`。
 
 ## 当前代码映射
 
-当前处于 `V0.6`，是带本地会话数据面的模块化 Demo Runtime 加独立 LiteLLM Proxy：
+当前在 `V0.6` 会话数据面基线上开始交付 V1：保留模块化 Demo Runtime 和独立 LiteLLM Proxy，并加入首个有界只读天气工具闭环。下图是 V0.6 基线，后面的 Mermaid 是当前可检索代码映射：
 
-![AI 应用基础平台 V0.6 全局链路](./assets/ai-platform-global-chain-v2.png)
+![AI 应用基础平台 V0.6 基线链路](./assets/ai-platform-global-chain-v2.png)
 
-全局链路图突出唯一 AI SDK 模型生成路径、LiteLLM 管理旁路和六个架构区域；模型连通性测试链被有意排除。[查看动态数据流图](./assets/ai-platform-data-flow-v3.html)，[SVG 源文件](./assets/ai-platform-global-chain-v2.svg)用于后续节点调整。下面的 Mermaid 保留可检索的当前代码映射。
+基线图突出唯一 AI SDK 模型生成路径、LiteLLM 管理旁路和六个架构区域；模型连通性测试链被有意排除。[查看动态数据流图](./assets/ai-platform-data-flow-v3.html)，[SVG 源文件](./assets/ai-platform-global-chain-v2.svg)保留 V0.6 快照。下面的 Mermaid 已同步 V1 首个工具切片。
 
 ```mermaid
 flowchart LR
-  subgraph CurrentPlatform["AI 应用基础平台当前 V0.6 / ai-platform"]
+  subgraph CurrentPlatform["AI 应用基础平台 V0.6 基线 + V1 首个工具切片 / ai-platform"]
     subgraph CurrentProcess["当前 Demo Server 进程 :4010"]
       DemoUi["demo/index.html<br/>渠道与体验层"]
       HttpAdapter["scripts/demo-server.mjs<br/>HTTP Adapter"]
@@ -256,8 +256,9 @@ flowchart LR
       ContextPlanner["Context Planner / 高低水位"]
       MemoryManager["Memory Manager / MemoryDelta Reducer"]
       ConversationStore["SQLite Conversation Store"]
-      ToolRegistry["src/tools<br/>连接器注册预留"]
-      GatewayClient["src/gateway<br/>AI SDK 模型网关客户端"]
+      ToolRegistry["src/tools<br/>只读 schema / allowlist"]
+      WeatherConnector["src/connectors<br/>Open-Meteo 天气 Connector"]
+      GatewayClient["src/gateway<br/>AI SDK Core 多步模型客户端"]
       ConfigLoader["src/config<br/>本地配置装配"]
     end
 
@@ -280,7 +281,9 @@ flowchart LR
   MemoryManager --> ConversationStore
   MemoryManager --> GatewayClient
   ContextPlanner --> GatewayClient
-  RuntimeCode -.-> ToolRegistry
+  RuntimeCode --> ToolRegistry
+  ToolRegistry --> WeatherConnector
+  WeatherConnector --> WeatherApi["Open-Meteo API"]
   RuntimeCode --> GatewayClient
   GatewayClient --> LiteLLM
   GatewayConfig --> LiteLLM
@@ -294,12 +297,12 @@ flowchart LR
 
 | 当前文件 | 归属区域 | 后续拆分方向 |
 | --- | --- | --- |
-| `demo/index.html` | 渠道与体验层 | 保留为开发 Demo；正式平台作为另一个调用方并存 |
+| `demo/src/`、`demo/index.html` | 渠道与体验层 | 保留为开发 Demo；正式平台作为另一个调用方并存 |
 | `scripts/demo-server.mjs` | 渠道 HTTP Adapter 与本地装配入口 | 渠道路由留在 adapter；Runtime 通过稳定 API 或模块接口调用 |
 | `src/runtime/chat-runtime.mjs`、`conversation-coordinator.mjs` | Agent Runtime | 稳定 Session/Run 契约后可独立为 `agent-runtime` |
 | `src/runtime/context-planner.mjs`、`memory-manager.mjs` | Agent Runtime | 上下文策略和结构化记忆保持 Runtime 所有 |
 | `src/storage/conversation-store.mjs` | Agent Runtime 数据面 | 本地 SQLite 可迁移到独立 Runtime 数据库 |
-| `src/tools/` | 连接器与知识层 | 增加真实 registry、executor 和 adapter 后可独立为 `connector-service` |
+| `src/tools/`、`src/connectors/` | 连接器与知识层 | 当前承载只读 Registry 和天气 Adapter；出现跨项目复用或独立凭据边界后可拆为 `connector-service` |
 | `src/gateway/gateway-contract.mjs`、`gateway-client.mjs`、`litellm-management-client.mjs` | Runtime 到模型网关的 AI SDK 客户端边界 | 模型生成统一使用 AI SDK；LiteLLM 管理端点保持独立，不承载模型网关服务端策略 |
 | `config.yaml`、`docker-compose.yml` | 模型网关 | LiteLLM 独立部署和治理 |
 | `openspec/`、调用日志和未来评测 | 治理与可观测 | 按区域建立契约，统一事件模型 |
@@ -311,8 +314,10 @@ flowchart LR
 | `GET /api/gateway/status` | Demo Server | 渠道层的聚合状态接口；底层调用模型网关健康检查 |
 | `GET/POST /api/runtime/conversations` | Demo Server | Agent Runtime 的 Session API |
 | `GET /api/runtime/conversations/{id}` | Demo Server | 会话、消息、结构化记忆和版本查询 |
+| `PATCH /api/runtime/conversations/{id}` | Demo Server | 标题与独立归档状态更新，不改变会话生命周期 |
 | `POST /api/runtime/conversations/{id}/runs` | Demo Server | 幂等 Run API |
-| `POST /api/runtime/conversations/{id}/runs/stream` | Demo Server | POST SSE 模型文本增量；完成后返回同一 Run 的持久化最终结果 |
+| `POST /api/runtime/conversations/{id}/runs/stream` | Demo Server | POST SSE 模型文本增量和真实工具阶段；完成后返回同一 Run 的持久化最终结果 |
+| `POST /api/runtime/conversations/{id}/runs/{runId}/cancel` | Demo Server | 取消当前模型、工具和后续重试，收口为独立 `cancelled` 状态 |
 | `POST /api/runtime/conversations/{id}/close` | Demo Server | 会话结束和最终 checkpoint |
 | `GET /api/runtime/conversations/{id}/events` | Demo Server | SQLite 事件游标驱动的持久化事实 SSE 增量同步 |
 | `POST /v1/chat/completions` | LiteLLM | Runtime 使用的模型网关标准接口；`test-chat.sh` 仅作连通性诊断 |
@@ -373,15 +378,16 @@ scripts/test-chat.sh
 - SQLite 持久化多会话、幂等 Run、POST SSE 模型文本流和独立的 SSE 多标签页事实同步。
 - 结构化 MemoryDelta、来源追溯、memoryVersion 乐观锁和最终 checkpoint。
 - Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
-- AI SDK Core v7 的 `generateText` / `streamText` 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端；AI SDK 内建重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
+- AI SDK Core v7 的 `generateText` / `streamText`、`Output.object` 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端；AI SDK 内建重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
+- AI SDK Core `generateText` / `streamText` 通过 `tools`、`stopWhen` 和 `prepareStep` 提供最多四步的模型工具编排；Runtime 负责只读 allowlist、ToolResult 持久化、幂等、SSE 阶段和脱敏 `runtime.tool.execute` Span，Open-Meteo Connector 负责固定端点天气读取。
 - 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
-- Agent Runtime 及其 GatewayClient、连接器注册和模型网关的模块边界雏形。
+- Agent Runtime 及其 GatewayClient、只读 Tool Registry、天气 Connector 和模型网关的模块边界。
 - OpenSpec、文档、回归评测和自动化架构边界检查的最小治理。
 
 暂未覆盖：
 
 - 平台控制面和正式多渠道接入。
-- 真实工具循环、MCP、业务 API 和人工确认。
+- MCP、企业业务 API、搜索、知识工具、有副作用工具和人工确认。
 - 私有文档解析、知识索引、RAG、引用和知识权限。
 - 多用户 virtual key、预算、RPM/TPM 限流、调用统计和多上游 fallback。
 - 多用户身份映射、跨主机数据库、统一 trace、审计和在线评测反馈闭环。
@@ -396,8 +402,8 @@ scripts/test-chat.sh
 | --- | --- | --- | --- |
 | V0 | 本地模型代理 + Demo | 渠道与体验、模型网关 | 模型代理链路和 Demo 可用 |
 | V0.5 | 分层 Demo Runtime | Agent Runtime 模块边界、模型网关客户端 | 分层 API 稳定 |
-| V0.6 当前 | 持久化上下文 Runtime | 会话数据面、结构化记忆、Context Planner、并发和评测 | 上下文契约稳定；确认第一个真实工具场景 |
-| V1 | 单应用工具型 Agent | Agent Runtime、连接器与知识 | 至少一个工具闭环；能区分普通问答、工具请求和人工确认；失败有兜底 |
+| V0.6 基线 | 持久化上下文 Runtime | 会话数据面、结构化记忆、Context Planner、并发和评测 | 上下文契约稳定；已选择第一个真实工具场景 |
+| V1 当前建设 | 单应用工具型 Agent | Agent Runtime、连接器与知识 | 天气只读闭环已进入代码和确定性回归；待真实模型验收、失败兜底基线和后续人工确认 |
 | V2 | 团队级受控模型入口 | 模型网关、治理与可观测 | 多调用方身份可区分；预算、限流、路由和 fallback 可追踪 |
 | V3 | 企业知识增强服务 | 连接器与知识、Agent Runtime | 文档解析、检索、权限和引用链路稳定 |
 | V4 | AI 应用基础平台 | 平台控制面、渠道与体验、全链路治理 | 多项目复用 Runtime、连接器和模型网关；配置发布和运营闭环稳定 |
@@ -406,7 +412,7 @@ scripts/test-chat.sh
 
 ## OpenSpec 与文档边界
 
-- `openspec/specs/ai-platform/spec.md` 固化 V0.6 Session/Run、结构化记忆、并发和上下文水位契约。
+- `openspec/specs/ai-platform/spec.md` 固化 V0.6 Session/Run、结构化记忆、并发和上下文水位契约，以及 V1 首个只读工具循环契约。
 - 首次真正拆出服务时，按模型网关、Agent Runtime、连接器或平台控制面分别建立稳定 spec，并在兼容期说明旧 API 到新服务契约的映射。
 - 修改代理行为、鉴权、模型路由、Runtime API、上下文预算或多模态输入契约时，必须同步 OpenSpec。
 - 只调整架构归属、拆分建议、启动说明或示例文案且不改变运行行为时，只需更新 README、docs 和项目级约定。
