@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { APICallError } from "ai";
+import { z } from "zod";
 import { createGatewayClient, GatewayRequestError, toAiSdkMessages } from "../src/gateway/gateway-client.mjs";
 import { createToolRegistry } from "../src/tools/tool-registry.mjs";
 import { createTestRuntime, run } from "./test-runtime.mjs";
@@ -18,6 +19,23 @@ function testAiSdkMessageConversion() {
         { type: "image_url", image_url: { url: "data:image/png;base64,YQ==" } },
       ],
     },
+    {
+      role: "assistant",
+      content: [
+        { type: "tool-call", toolCallId: "weather-call-recovery", toolName: "get_weather", input: { location: "深圳" } },
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "weather-call-recovery",
+          toolName: "get_weather",
+          output: { type: "json", value: { status: "success", temperature: 26 } },
+        },
+      ],
+    },
   ]);
 
   assert.deepEqual(messages[0], { role: "system", content: "系统规则" });
@@ -26,6 +44,10 @@ function testAiSdkMessageConversion() {
   assert.equal(messages[1].content[1].mediaType, "image");
   assert.equal(messages[1].content[1].data.url.toString(), "https://example.com/image.png");
   assert.equal(messages[1].content[2].data.url.toString(), "data:image/png;base64,YQ==");
+  assert.equal(messages[2].content[0].type, "tool-call");
+  assert.equal(messages[2].content[0].toolCallId, "weather-call-recovery");
+  assert.equal(messages[3].content[0].type, "tool-result");
+  assert.deepEqual(messages[3].content[0].output.value, { status: "success", temperature: 26 });
 }
 
 test("gateway client converts text and image_url message parts", testAiSdkMessageConversion);
@@ -38,7 +60,11 @@ function testAiSdkMessageValidation() {
     isInvalidMessageError,
   );
   assert.throws(
-    () => toAiSdkMessages([{ role: "assistant", content: [{ type: "text", text: "hello" }] }]),
+    () => toAiSdkMessages([{ role: "assistant", content: [{ type: "image_url", image_url: { url: "https://example.com/a.png" } }] }]),
+    isInvalidMessageError,
+  );
+  assert.throws(
+    () => toAiSdkMessages([{ role: "tool", content: [{ type: "tool-result", toolCallId: "call-1" }] }]),
     isInvalidMessageError,
   );
 }
@@ -116,7 +142,7 @@ async function testAiSdkProtocolMapping() {
 
 test("gateway client preserves LiteLLM request and response semantics", testAiSdkProtocolMapping);
 
-/** 验证 AI SDK `Output.object` 负责结构化输出请求、解析和 JSON Schema 校验。 */
+/** 验证 AI SDK `Output.object` 负责结构化输出请求、解析和 Standard Schema 校验。 */
 async function testAiSdkStructuredOutputMapping() {
   const requests = [];
   /** 返回符合 MemoryDelta 最小 schema 的结构化模型响应。 */
@@ -141,12 +167,7 @@ async function testAiSdkStructuredOutputMapping() {
     apiKey: "test-key",
     fetchImplementation: createFakeFetch(requests, handleStructuredRequest),
   });
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    required: ["status"],
-    properties: { status: { type: "string", enum: ["ok"] } },
-  };
+  const schema = z.object({ status: z.literal("ok") }).strict();
 
   const result = await client.chatCompletions({
     messages: [{ role: "user", content: "返回状态" }],
@@ -155,12 +176,125 @@ async function testAiSdkStructuredOutputMapping() {
 
   assert.equal(requests[0].body.response_format.type, "json_schema");
   assert.equal(requests[0].body.response_format.json_schema.name, "status_result");
-  assert.deepEqual(requests[0].body.response_format.json_schema.schema, schema);
+  assert.equal(requests[0].body.response_format.json_schema.schema.properties.status.const, "ok");
+  assert.equal(requests[0].body.response_format.json_schema.schema.additionalProperties, false);
   assert.deepEqual(result.output, { status: "ok" });
   assert.equal(result.usage.total_tokens, 16);
 }
 
 test("gateway client uses AI SDK Output.object for structured output", testAiSdkStructuredOutputMapping);
+
+/** 验证 `Output.object` 拒绝不符合 Standard Schema 的 provider 结果，且平台不会重试确定性解析错误。 */
+async function testAiSdkStructuredOutputValidation() {
+  const requests = [];
+  /** 返回可解析但不符合枚举约束的 JSON，隔离验证 AI SDK schema 校验。 */
+  function handleInvalidStructuredRequest() {
+    return jsonResponse({
+      id: "chatcmpl-invalid-structured",
+      created: 1720000000,
+      model: "structured-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: '{"status":"unexpected"}' },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    });
+  }
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    apiKey: "test-key",
+    retryBaseDelayMs: 0,
+    fetchImplementation: createFakeFetch(requests, handleInvalidStructuredRequest),
+  });
+
+  await assert.rejects(
+    client.chatCompletions({
+      messages: [{ role: "user", content: "返回状态" }],
+      outputSchema: {
+        name: "status_result",
+        schema: z.object({ status: z.literal("ok") }).strict(),
+      },
+    }),
+    isInvalidStructuredOutputError,
+  );
+  assert.equal(requests.length, 1);
+}
+
+test("gateway client rejects structured output that fails Standard Schema validation", testAiSdkStructuredOutputValidation);
+
+/** 验证动态结构化输出即使携带工具也保留 Core 路径，不误用定义级 `ToolLoopAgent.output`。 */
+async function testStructuredToolCallUsesCorePath() {
+  let agentGenerateCalls = 0;
+  let coreInput = null;
+  /** 创建只记录误调用的 Agent，正常路径不应执行其 generate。 */
+  function createToolLoopAgent() {
+    return {
+      /** 记录错误分流，便于断言结构化工具请求没有进入 Agent。 */
+      async generate() {
+        agentGenerateCalls += 1;
+        throw new Error("structured tool call must use generateText");
+      },
+    };
+  }
+  /** 返回带结构化结果的确定性 Core 响应，并保留最终调用参数。 */
+  async function generateTextImplementation(input) {
+    coreInput = input;
+    return {
+      text: '{"status":"ok"}',
+      output: { status: "ok" },
+      finishReason: "stop",
+      usage: { inputTokens: 8, outputTokens: 3, totalTokens: 11 },
+      finalStep: {
+        finishReason: "stop",
+        response: { id: "structured-tool", modelId: "chat-default", timestamp: new Date(1720000000000) },
+      },
+    };
+  }
+  const tools = { get_weather: { description: "查询天气" } };
+  /** 提供不会实际执行的测试工具上下文。 */
+  function ignoreToolExecution() {}
+  const toolsContext = { get_weather: { executeTool: ignoreToolExecution } };
+  const client = createGatewayClient(
+    {
+      baseUrl: "http://gateway.test",
+      model: "chat-default",
+      apiKey: "test-key",
+      fetchImplementation: createFakeFetch([], handleSuccessfulGatewayRequest),
+    },
+    { createToolLoopAgent, generateTextImplementation },
+  );
+
+  const result = await client.chatCompletions({
+    messages: [{ role: "user", content: "返回天气状态" }],
+    tools,
+    toolsContext,
+    requiredToolName: "get_weather",
+    outputSchema: { name: "status_result", schema: z.object({ status: z.literal("ok") }).strict() },
+  });
+
+  assert.equal(agentGenerateCalls, 0);
+  assert.equal(coreInput.tools, tools);
+  assert.equal(coreInput.toolsContext, toolsContext);
+  assert.equal(typeof coreInput.prepareStep, "function");
+  assert.ok(coreInput.output);
+  assert.deepEqual(result.output, { status: "ok" });
+}
+
+test("gateway client keeps tools with dynamic structured output on the Core path", testStructuredToolCallUsesCorePath);
+
+/** 判断异常是否为只执行一次的 AI SDK 结构化输出校验失败。 */
+function isInvalidStructuredOutputError(error) {
+  return (
+    error instanceof GatewayRequestError &&
+    error.status === 502 &&
+    error.resilience?.attemptCount === 1 &&
+    error.resilience.attempts[0].retryable === false
+  );
+}
 
 /** 为成功协议测试返回 models、token counter 或 chat completions 响应。 */
 function handleSuccessfulGatewayRequest(request) {
@@ -250,15 +384,26 @@ async function testGatewayStreamsTextDeltas() {
 
 test("gateway client streams text deltas and preserves the completion contract", testGatewayStreamsTextDeltas);
 
-/** 验证存在工具时 GatewayClient 使用 AI SDK Core 有界多步流，同时保持 completion 契约。 */
-async function testGatewayUsesBoundedCoreToolLoop() {
-  let sdkInput = null;
+/** 验证存在工具时 GatewayClient 使用可复用 ToolLoopAgent，并通过 call options 动态装配当前 Run。 */
+async function testGatewayUsesReusableToolLoopAgent() {
+  let agentSettings = null;
+  let agentCall = null;
+  let preparedCall = null;
+  let agentFactoryCalls = 0;
   let receivedStepLimit = null;
   const deltas = [];
-  /** 保存 GatewayClient 传入的 Core 多步参数并返回确定性文本流。 */
-  function streamTextImplementation(input) {
-    sdkInput = input;
-    return createStreamTextResult(streamValues("天气", "已查询"));
+  /** 创建记录 Agent 定义和调用参数的测试 Agent，并返回确定性文本流。 */
+  function createToolLoopAgent(settings) {
+    agentFactoryCalls += 1;
+    agentSettings = settings;
+    return {
+      /** 记录动态调用，并执行真实 prepareCall 以验证最终 Agent 设置。 */
+      async stream(input) {
+        agentCall = input;
+        preparedCall = await settings.prepareCall({ ...settings, ...input });
+        return createStreamTextResult(streamValues("天气", "已查询"));
+      },
+    };
   }
   /** 记录 GatewayClient 使用的 AI SDK 多步停止上限。 */
   function stepCountIsImplementation(limit) {
@@ -270,6 +415,9 @@ async function testGatewayUsesBoundedCoreToolLoop() {
     deltas.push(delta);
   }
   const tools = { get_weather: { description: "查询天气" } };
+  /** 提供不会实际执行的测试工具上下文。 */
+  function ignoreToolExecution() {}
+  const toolsContext = { get_weather: { executeTool: ignoreToolExecution } };
   const client = createGatewayClient(
     {
       baseUrl: "http://gateway.test",
@@ -278,7 +426,7 @@ async function testGatewayUsesBoundedCoreToolLoop() {
       fetchImplementation: createFakeFetch([], handleSuccessfulGatewayRequest),
     },
     {
-      streamTextImplementation,
+      createToolLoopAgent,
       stepCountIsImplementation,
     },
   );
@@ -286,30 +434,38 @@ async function testGatewayUsesBoundedCoreToolLoop() {
   const result = await client.chatCompletions({
     messages: [{ role: "user", content: "今天深圳天气" }],
     tools,
+    toolsContext,
     requiredToolName: "get_weather",
     maxToolSteps: 4,
     onTextDelta: collectDelta,
   });
 
-  assert.equal(sdkInput.tools, tools);
-  assert.equal(sdkInput.maxRetries, 0);
-  assert.equal(typeof sdkInput.onError, "function");
-  assert.deepEqual(sdkInput.stopWhen, { limit: 4 });
-  assert.deepEqual(sdkInput.prepareStep({ stepNumber: 0 }), {
+  const validatedOptions = await agentSettings.callOptionsSchema["~standard"].validate(agentCall.options);
+  assert.equal(validatedOptions.issues, undefined);
+  assert.equal(agentFactoryCalls, 1);
+  assert.equal(agentSettings.id, "ai-platform-conversation");
+  assert.equal(agentSettings.maxRetries, 0);
+  assert.equal(preparedCall.tools, tools);
+  assert.equal(agentCall.toolsContext, toolsContext);
+  assert.equal(typeof agentCall.onError, "function");
+  assert.deepEqual(preparedCall.stopWhen, { limit: 4 });
+  assert.deepEqual(agentSettings.prepareStep({ stepNumber: 0, runtimeContext: preparedCall.runtimeContext }), {
     activeTools: ["get_weather"],
     toolChoice: { type: "tool", toolName: "get_weather" },
   });
-  assert.deepEqual(sdkInput.prepareStep({ stepNumber: 1 }), { toolChoice: "auto" });
+  assert.deepEqual(agentSettings.prepareStep({ stepNumber: 1, runtimeContext: preparedCall.runtimeContext }), {
+    toolChoice: "auto",
+  });
   assert.equal(receivedStepLimit, 4);
-  assert.equal(sdkInput.messages[0].content, "今天深圳天气");
+  assert.equal(agentCall.messages[0].content, "今天深圳天气");
   assert.deepEqual(deltas, ["天气", "已查询"]);
   assert.equal(result.choices[0].message.content, "天气已查询");
 }
 
-test("gateway client uses a bounded AI SDK Core tool loop when Runtime provides tools", testGatewayUsesBoundedCoreToolLoop);
+test("gateway client uses a reusable ToolLoopAgent when Runtime provides tools", testGatewayUsesReusableToolLoopAgent);
 
-/** 验证真实 AI SDK Core 多步生成首步强制工具，执行结果后第二步恢复自动生成。 */
-async function testRealCoreToolLoopRoutesRequiredWeatherTool() {
+/** 验证真实 ToolLoopAgent 首步强制工具，执行结果后第二步恢复自动生成。 */
+async function testRealToolLoopAgentRoutesRequiredWeatherTool() {
   const requests = [];
   let toolExecutions = 0;
   /** 为模型目录和两步 chat completions 返回 OpenAI-compatible 响应。 */
@@ -374,12 +530,12 @@ async function testRealCoreToolLoopRoutesRequiredWeatherTool() {
       },
     },
   ]);
-  const tools = registry.buildAiSdkTools(
-    /** 直接执行测试定义，生产环境由 Runtime 包装持久化和 Trace。 */
-    async function executeTool(definition, input, options) {
-      return definition.execute(input, options);
-    },
-  );
+  const tools = registry.buildAiSdkTools();
+  /** 直接执行测试定义，生产环境由 Runtime 包装持久化和 Trace。 */
+  async function executeTool(definition, input, options) {
+    return definition.execute(input, options);
+  }
+  const toolsContext = registry.buildAiSdkToolsContext(executeTool);
   const client = createGatewayClient({
     baseUrl: "http://gateway.test",
     model: "chat-default",
@@ -390,6 +546,7 @@ async function testRealCoreToolLoopRoutesRequiredWeatherTool() {
   const result = await client.chatCompletions({
     messages: [{ role: "user", content: "今天深圳天气" }],
     tools,
+    toolsContext,
     requiredToolName: "get_weather",
   });
   const chatBodies = requests.filter(isChatRequest).map(getRequestBody);
@@ -403,7 +560,207 @@ async function testRealCoreToolLoopRoutesRequiredWeatherTool() {
   assert.equal(result.choices[0].message.content, "深圳当前 26°C，来源 Open-Meteo。");
 }
 
-test("real AI SDK Core tool loop forces the routed weather tool only on the first step", testRealCoreToolLoopRoutesRequiredWeatherTool);
+test("real ToolLoopAgent forces the routed weather tool only on the first step", testRealToolLoopAgentRoutesRequiredWeatherTool);
+
+/** 创建工具后模型失败场景，并允许测试选择无工具恢复成功或持续失败。 */
+function createPostToolRecoveryScenario({ recoveryFails = false } = {}) {
+  const requests = [];
+  let connectorCalls = 0;
+
+  /** 首步返回工具调用，原 Agent 后续步骤返回 503，无工具恢复按场景返回成功或失败。 */
+  function handlePostToolModelFailure(request) {
+    if (request.url.endsWith("/utils/token_counter")) {
+      return jsonResponse({ total_tokens: 24, model: "tool-boundary-model" });
+    }
+    const hasToolResult = request.body.messages.some(isToolResultMessage);
+    const hasToolSet = Array.isArray(request.body.tools) && request.body.tools.length > 0;
+    if (hasToolResult && hasToolSet) {
+      return jsonResponse({ error: { message: "temporary post-tool model failure" } }, 503);
+    }
+    if (hasToolResult) {
+      if (recoveryFails) {
+        return jsonResponse({ error: { message: "temporary recovery model failure" } }, 503);
+      }
+      return jsonResponse({
+        id: "chatcmpl-tool-recovered",
+        created: 1720000001,
+        model: "tool-boundary-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "深圳当前 26°C，来源 Open-Meteo。" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 28, completion_tokens: 9, total_tokens: 37 },
+      });
+    }
+    return jsonResponse({
+      id: "chatcmpl-tool-boundary",
+      created: 1720000000,
+      model: "tool-boundary-model",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "weather-call-retry-boundary",
+                type: "function",
+                function: { name: "get_weather", arguments: '{"location":"深圳","date":"today"}' },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+    });
+  }
+
+  const toolRegistry = createToolRegistry([
+    {
+      name: "get_weather",
+      title: "实时天气",
+      description: "查询今天或明天的实时天气。",
+      effect: "read",
+      inputSchema: z
+        .object({ location: z.string().min(1), date: z.enum(["today", "tomorrow"]).default("today") })
+        .strict(),
+      /** 将明确天气输入固定路由到当前只读工具。 */
+      matchesInput() {
+        return true;
+      },
+      /** 模拟 Connector 返回带来源和观测时间的稳定 ToolResult。 */
+      async execute(input) {
+        connectorCalls += 1;
+        return {
+          schemaVersion: "weather.v1",
+          location: { name: input.location, timezone: "Asia/Shanghai" },
+          forecast: { date: "2026-07-31", temperature: { current: 26 } },
+          observedAt: "2026-07-31T10:00",
+          source: { name: "Open-Meteo", retrievedAt: "2026-07-31T10:01:00.000Z" },
+        };
+      },
+    },
+  ]);
+  const gatewayClient = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    apiKey: "test-key",
+    retryBaseDelayMs: 0,
+    fetchImplementation: createFakeFetch(requests, handlePostToolModelFailure),
+  });
+  return {
+    gatewayClient,
+    requests,
+    toolRegistry,
+    /** 返回真实 Connector 执行次数，供成功和失败路径断言。 */
+    getConnectorCalls() {
+      return connectorCalls;
+    },
+  };
+}
+
+/** 验证工具后模型瞬时错误从持久化 ToolResult 恢复，且不重放 Connector。 */
+async function testRuntimeRecoversSummaryFromPersistedToolResult() {
+  const scenario = createPostToolRecoveryScenario();
+  const fixture = createTestRuntime(scenario);
+  const conversation = fixture.runtime.createConversation();
+
+  const response = await run(fixture.runtime, conversation.id, "tool-boundary", "今天深圳天气");
+  const detail = fixture.runtime.getConversation(conversation.id);
+  const chatRequests = scenario.requests.filter(isChatRequest);
+  const recoveryRequest = chatRequests[2].body;
+  const recoveredToolMessage = recoveryRequest.messages.find(isToolResultMessage);
+
+  assert.equal(scenario.getConnectorCalls(), 1);
+  assert.equal(chatRequests.length, 3);
+  assert.equal(Array.isArray(recoveryRequest.tools), false);
+  assert.equal(recoveryRequest.messages.some(isWeatherRecoveryToolCallMessage), true);
+  assert.equal(recoveredToolMessage.tool_call_id, "weather-call-retry-boundary");
+  assert.equal(JSON.parse(recoveredToolMessage.content).status, "success");
+  assert.equal(detail.latestRun.status, "completed");
+  assert.equal(detail.latestRun.toolCalls.length, 1);
+  assert.equal(detail.latestRun.toolCalls[0].status, "completed");
+  assert.equal(detail.latestRun.toolCalls[0].source, "Open-Meteo");
+  assert.equal(detail.messages.length, 2);
+  assert.equal(response.content, "深圳当前 26°C，来源 Open-Meteo。");
+  assert.equal(detail.latestRun.resilience.recovered, true);
+  assert.equal(detail.latestRun.resilience.retryBoundaryCrossed, true);
+  assert.equal(detail.latestRun.resilience.attempts[0].stopReason, "retry-boundary-crossed");
+  assert.equal(detail.latestRun.resilience.recovery.status, "completed");
+  assert.equal(detail.latestRun.resilience.recovery.execution.operation, "model.tool_result_summary");
+  assert.equal(detail.latestRun.resilience.recovery.execution.attemptCount, 1);
+  fixture.store.close();
+}
+
+test(
+  "runtime recovers the final summary from persisted ToolResult without replaying the connector",
+  testRuntimeRecoversSummaryFromPersistedToolResult,
+);
+
+/** 验证无工具恢复耗尽预算后 Run 失败，同时保留两段证据且不重复 Connector。 */
+async function testRuntimeFailsAfterToolResultSummaryRecoveryExhaustsBudget() {
+  const scenario = createPostToolRecoveryScenario({ recoveryFails: true });
+  const fixture = createTestRuntime(scenario);
+  const conversation = fixture.runtime.createConversation();
+
+  await assert.rejects(
+    run(fixture.runtime, conversation.id, "tool-recovery-failure", "今天深圳天气"),
+    isToolResultRecoveryFailure,
+  );
+  const detail = fixture.runtime.getConversation(conversation.id);
+  const chatRequests = scenario.requests.filter(isChatRequest);
+
+  assert.equal(scenario.getConnectorCalls(), 1);
+  assert.equal(chatRequests.length, 5);
+  assert.equal(chatRequests.slice(2).every(hasNoToolSet), true);
+  assert.equal(detail.latestRun.status, "failed");
+  assert.equal(detail.latestRun.toolCalls[0].status, "completed");
+  assert.equal(detail.latestRun.resilience.recovered, false);
+  assert.equal(detail.latestRun.resilience.attempts[0].stopReason, "retry-boundary-crossed");
+  assert.equal(detail.latestRun.resilience.recovery.status, "failed");
+  assert.equal(detail.latestRun.resilience.recovery.execution.attemptCount, 3);
+  fixture.store.close();
+}
+
+test(
+  "runtime fails with both resilience traces when ToolResult summary recovery exhausts its budget",
+  testRuntimeFailsAfterToolResultSummaryRecoveryExhaustsBudget,
+);
+
+/** 判断恢复阶段最终失败是否保留原边界和三次无工具尝试证据。 */
+function isToolResultRecoveryFailure(error) {
+  return (
+    error?.payload?.code === "model_provider_unavailable" &&
+    error?.resilience?.attemptCount === 1 &&
+    error.resilience.retryBoundaryCrossed === true &&
+    error.resilience.recovery?.status === "failed" &&
+    error.resilience.recovery.execution?.attemptCount === 3
+  );
+}
+
+/** 判断恢复请求没有携带任何可执行 ToolSet。 */
+function hasNoToolSet(request) {
+  return !Array.isArray(request.body.tools);
+}
+
+/** 判断 OpenAI-compatible 消息是否重建了指定天气工具调用。 */
+function isWeatherRecoveryToolCallMessage(message) {
+  return (
+    message.role === "assistant" &&
+    message.tool_calls?.[0]?.id === "weather-call-retry-boundary" &&
+    message.tool_calls[0].function?.name === "get_weather"
+  );
+}
+
+/** 判断模型请求消息中是否已回填任意工具结果。 */
+function isToolResultMessage(message) {
+  return message.role === "tool";
+}
 
 /** 验证首个文本增量前的瞬时错误仍可由平台统一预算重试。 */
 async function testGatewayRetriesBeforeFirstTextDelta() {

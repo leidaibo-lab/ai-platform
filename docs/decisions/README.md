@@ -23,8 +23,9 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
-| 2026-07-31 | [AI SDK Core v7 调用边界对齐](./2026-07-31-ai-sdk-core-v7-alignment.md) | 接受 | 动态 Run 采用 Core 有界多步调用与 `Output.object`；暂不以 `ToolLoopAgent` 作为默认入口，并停止依赖 v7 弃用结果字段 |
-| 2026-07-30 | [V1 只读工具循环与天气 Connector](./2026-07-30-v1-read-only-tool-loop-and-weather.md) | 接受 | 固定 LiteLLM digest；以 Open-Meteo 跑通首个无副作用只读工具；其中 `ToolLoopAgent` 实现选择已由后续 Core v7 决策替代 |
+| 2026-07-31 | [ToolResult 持久化总结恢复](./2026-07-31-tool-result-summary-recovery.md) | 接受 | 工具后模型瞬时失败且尚未交付正文时，从 SQLite ToolResult 构造 AI SDK 结构化消息做无工具恢复；不重复 Connector，也不建设工作流引擎 |
+| 2026-07-31 | [AI SDK Core v7 调用边界对齐](./2026-07-31-ai-sdk-core-v7-alignment.md) | 接受 | 工具型对话复用 `ToolLoopAgent` 并按 Run 动态配置；普通调用和动态结构化输出保留 Core 函数路径，同时停止依赖 v7 弃用结果字段 |
+| 2026-07-30 | [V1 只读工具循环与天气 Connector](./2026-07-30-v1-read-only-tool-loop-and-weather.md) | 接受 | 固定 LiteLLM digest；以 Open-Meteo 跑通首个无副作用只读工具，并由后续 Core v7 决策细化 Agent 复用和调用分流边界 |
 | 2026-07-30 | [C1 渠道体验连续批次 I1-I4](./2026-07-30-c1-channel-experience-batches-i1-i4.md) | 接受 | 继续适配 Ant Design X 与现有 Runtime Adapter，连续补齐会话管理、Run 恢复、结果消费和体验质量基线；I5/I6 明确延期 |
 | 2026-07-30 | [C1 ChainTrace 运行态验收延期](./2026-07-30-c1-chaintrace-runtime-validation-deferral.md) | 接受 | 保留默认关闭的技术接入和 Phoenix 选型；正式实例、真实 Runtime Trace 与四维运行态基线转为触发式 TODO |
 | 2026-07-30 | [C1 ChainTrace 最终后端采用 Phoenix](./2026-07-30-c1-chaintrace-backend-phoenix.md) | 接受 | 采用 Phoenix 19.10.0 + PostgreSQL 17；保留后端中立 OTLP/ChainTracer，并以 Auth、精确检索和升级回滚实测为门禁 |
