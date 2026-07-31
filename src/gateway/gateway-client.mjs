@@ -1,5 +1,6 @@
-import { APICallError, Output, generateText, jsonSchema, stepCountIs, streamText } from "ai";
+import { APICallError, Output, ToolLoopAgent, generateText, jsonSchema, stepCountIs, streamText } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { z } from "zod";
 import {
   RetryDeadlineError,
   RetryExecutionError,
@@ -14,7 +15,18 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 const DEFAULT_RETRY_MAX_DELAY_MS = 5000;
 const RETRYABLE_MODEL_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
-const SUPPORTED_MESSAGE_ROLES = new Set(["system", "user", "assistant"]);
+const SUPPORTED_MESSAGE_ROLES = new Set(["system", "user", "assistant", "tool"]);
+const CONVERSATION_AGENT_CALL_OPTIONS_SCHEMA = z
+  .object({
+    model: z.string().min(1),
+    tools: z.record(z.string(), z.custom(isAiSdkTool)),
+    requiredToolName: z.string().min(1).nullable(),
+    maxToolSteps: z.number().int().min(1).max(8),
+    temperature: z.number().optional(),
+    maxCompletionTokens: z.number().optional(),
+    operation: z.string().min(1),
+  })
+  .strict();
 
 export { GatewayRequestError } from "./gateway-contract.mjs";
 
@@ -49,6 +61,7 @@ export function createGatewayClient(
     generateTextImplementation = generateText,
     streamTextImplementation = streamText,
     stepCountIsImplementation = stepCountIs,
+    createToolLoopAgent = createToolLoopAgentInstance,
     createProvider = createOpenAICompatible,
     nowImplementation = Date.now,
     sleepImplementation,
@@ -64,6 +77,23 @@ export function createGatewayClient(
   const gatewayRootUrl = managementClient.baseUrl;
   const modelAlias = managementClient.model;
   const key = apiKey || "sk-local-admin-key";
+  const conversationProvider = createProvider({
+    name: "litellm",
+    baseURL: `${gatewayRootUrl}/v1`,
+    apiKey: key,
+    fetch: fetchImplementation,
+    supportedUrls: getSupportedUrls,
+    transformRequestBody: createAgentRequestBodyTransformer(),
+  });
+  const conversationAgent = createToolLoopAgent({
+    id: "ai-platform-conversation",
+    model: conversationProvider.chatModel(modelAlias),
+    allowSystemInMessages: true,
+    maxRetries: 0,
+    callOptionsSchema: CONVERSATION_AGENT_CALL_OPTIONS_SCHEMA,
+    prepareCall: createConversationAgentCallPreparer({ conversationProvider, stepCountIsImplementation }),
+    prepareStep: prepareConversationAgentStep,
+  });
 
   return {
     baseUrl: gatewayRootUrl,
@@ -83,8 +113,9 @@ export function createGatewayClient(
      * @param {number} [input.temperature] - 可选采样温度。
      * @param {number} [input.maxCompletionTokens] - 模型输出硬上限。
      * @param {object} [input.responseFormat] - 兼容既有调用的 LiteLLM 原始结构化输出约束。
-     * @param {{name?: string, description?: string, schema: object}} [input.outputSchema] - AI SDK `Output.object` 结构化输出约束。
+     * @param {{name?: string, description?: string, schema: object}} [input.outputSchema] - AI SDK `Output.object` 结构化输出约束；优先传入带本地校验的 Standard Schema。
      * @param {Record<string, object>} [input.tools] - Runtime allowlist 生成的 AI SDK 只读工具集合。
+     * @param {Record<string, object>} [input.toolsContext] - AI SDK 按工具名校验的服务端执行上下文。
      * @param {string} [input.requiredToolName] - 确定性任务路由要求首步调用的 allowlist 工具名。
      * @param {number} [input.maxToolSteps=4] - 单次 AI SDK 多步工具生成的模型步骤上限。
      * @param {import("../resilience/retry-executor.mjs").ResilienceContext} [input.resilienceContext] - Runtime 共享截止时间和幂等边界。
@@ -101,6 +132,7 @@ export function createGatewayClient(
       responseFormat,
       outputSchema,
       tools,
+      toolsContext,
       requiredToolName,
       maxToolSteps = 4,
       resilienceContext,
@@ -109,21 +141,25 @@ export function createGatewayClient(
       abortSignal,
     }) {
       const selectedModel = await managementClient.resolveModel(requestedModel);
-      const provider = createProvider({
-        name: "litellm",
-        baseURL: `${gatewayRootUrl}/v1`,
-        apiKey: key,
-        fetch: fetchImplementation,
-        supportsStructuredOutputs: outputSchema !== undefined && outputSchema !== null,
-        supportedUrls: getSupportedUrls,
-        transformRequestBody: createRequestBodyTransformer({
-          maxCompletionTokens,
-          responseFormat,
-        }),
-      });
-      const requestModel = provider.chatModel(selectedModel);
       const modelMessages = toAiSdkMessages(messages);
       const output = createStructuredOutput(outputSchema);
+      const useConversationAgent = shouldUseConversationAgent({ tools, outputSchema, responseFormat });
+      let requestModel = null;
+      if (!useConversationAgent) {
+        const provider = createProvider({
+          name: "litellm",
+          baseURL: `${gatewayRootUrl}/v1`,
+          apiKey: key,
+          fetch: fetchImplementation,
+          supportsStructuredOutputs: outputSchema !== undefined && outputSchema !== null,
+          supportedUrls: getSupportedUrls,
+          transformRequestBody: createRequestBodyTransformer({
+            maxCompletionTokens,
+            responseFormat,
+          }),
+        });
+        requestModel = provider.chatModel(selectedModel);
+      }
       const context = createResilienceContext({
         ...(resilienceContext || {}),
         deadlineAt: resilienceContext?.deadlineAt ?? nowImplementation() + timeoutMs,
@@ -138,11 +174,32 @@ export function createGatewayClient(
       });
 
       /** 执行一次 AI SDK 模型调用，并把 SDK 内建重试固定为关闭。 */
-      async function generateAttempt({ attempt, remainingMs, markOutputStarted }) {
+      async function generateAttempt({ attempt, remainingMs, markOutputStarted, markRetryBoundaryCrossed }) {
         const telemetryInput = createAiSdkTelemetryInput(context, attempt, operation);
         try {
+          if (useConversationAgent) {
+            return await executeConversationAgentAttempt({
+              agent: conversationAgent,
+              modelMessages,
+              selectedModel,
+              tools,
+              toolsContext,
+              requiredToolName,
+              maxToolSteps,
+              temperature,
+              maxCompletionTokens,
+              operation,
+              remainingMs,
+              abortSignal,
+              onTextDelta,
+              markOutputStarted,
+              markRetryBoundaryCrossed,
+              runtimeContext: telemetryInput.runtimeContext,
+            });
+          }
           const toolLoopInput = createToolLoopInput({
             tools,
+            toolsContext,
             requiredToolName,
             maxToolSteps,
             stepCountIsImplementation,
@@ -157,6 +214,7 @@ export function createGatewayClient(
               abortSignal,
               onTextDelta,
               markOutputStarted,
+              markRetryBoundaryCrossed,
               streamTextImplementation,
               fallbackModel: selectedModel,
               output,
@@ -172,6 +230,7 @@ export function createGatewayClient(
             ...(maxCompletionTokens === undefined ? {} : { maxOutputTokens: maxCompletionTokens }),
             ...(output ? { output } : {}),
             ...toolLoopInput,
+            onToolExecutionStart: markRetryBoundaryCrossed,
             maxRetries: 0,
             timeout: Math.max(1, remainingMs),
             ...(abortSignal === undefined ? {} : { abortSignal }),
@@ -212,7 +271,7 @@ function getSupportedUrls() {
   };
 }
 
-/** 将 OpenAI-compatible 消息数组转换为 AI SDK v7 ModelMessage。 */
+/** 将 OpenAI-compatible 消息与 Runtime 结构化工具续接消息转换为 AI SDK v7 ModelMessage。 */
 export function toAiSdkMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new GatewayRequestError("messages must be a non-empty array", 400, {
@@ -231,27 +290,30 @@ function toAiSdkMessage(message) {
     });
   }
   if (!Array.isArray(message?.content)) {
-    if (typeof message?.content !== "string") {
+    if (typeof message?.content !== "string" || message.role === "tool") {
       throw new GatewayRequestError("Model message content must be text or content parts", 400, {
         error: "Invalid model message content",
       });
     }
     return { role: message.role, content: String(message.content || "") };
   }
-  if (message.role !== "user") {
-    throw new GatewayRequestError("Content parts are only supported for user messages", 400, {
-      error: "Invalid model message content",
-      role: message.role,
-    });
+  if (message.role === "user") {
+    return { role: message.role, content: message.content.map(toAiSdkUserContentPart) };
   }
-  return {
+  if (message.role === "assistant") {
+    return { role: message.role, content: message.content.map(toAiSdkAssistantContentPart) };
+  }
+  if (message.role === "tool") {
+    return { role: message.role, content: message.content.map(toAiSdkToolContentPart) };
+  }
+  throw new GatewayRequestError("Content parts are not supported for system messages", 400, {
+    error: "Invalid model message content",
     role: message.role,
-    content: message.content.map(toAiSdkContentPart),
-  };
+  });
 }
 
 /** 将文本或 OpenAI `image_url` part 转换为 AI SDK v7 content part。 */
-function toAiSdkContentPart(part) {
+function toAiSdkUserContentPart(part) {
   if (part?.type === "text") return { type: "text", text: String(part.text || "") };
   if (part?.type === "image_url" && part.image_url?.url) {
     return {
@@ -264,6 +326,55 @@ function toAiSdkContentPart(part) {
     error: "Unsupported model message content",
     type: part?.type || "unknown",
   });
+}
+
+/** 校验 Runtime 构造的 assistant 文本或工具调用 part，并复制为 AI SDK 消息。 */
+function toAiSdkAssistantContentPart(part) {
+  if (part?.type === "text") return { type: "text", text: String(part.text || "") };
+  if (part?.type === "tool-call" && part.toolCallId && part.toolName && part.input !== undefined) {
+    return {
+      type: "tool-call",
+      toolCallId: String(part.toolCallId),
+      toolName: String(part.toolName),
+      input: part.input,
+    };
+  }
+  throw new GatewayRequestError("Unsupported assistant message content", 400, {
+    error: "Invalid structured assistant message",
+    type: part?.type || "unknown",
+  });
+}
+
+/** 校验持久化 ToolResult 的结构化消息，并保持工具调用关联字段。 */
+function toAiSdkToolContentPart(part) {
+  if (part?.type !== "tool-result" || !part.toolCallId || !part.toolName) {
+    throw new GatewayRequestError("Unsupported tool message content", 400, {
+      error: "Invalid structured tool message",
+      type: part?.type || "unknown",
+    });
+  }
+  const output = part.output;
+  if (!isSupportedToolResultOutput(output)) {
+    throw new GatewayRequestError("Unsupported tool result output", 400, {
+      error: "Invalid structured tool result",
+      type: output?.type || "unknown",
+    });
+  }
+  return {
+    type: "tool-result",
+    toolCallId: String(part.toolCallId),
+    toolName: String(part.toolName),
+    output,
+  };
+}
+
+/** 判断工具结果是否属于 AI SDK v7 支持且当前可安全续接的 JSON 或文本形态。 */
+function isSupportedToolResultOutput(output) {
+  if (!output || typeof output !== "object") return false;
+  if (["json", "text", "error-json", "error-text"].includes(output.type)) {
+    return Object.hasOwn(output, "value");
+  }
+  return output.type === "execution-denied";
 }
 
 /** 创建最终请求体转换器，保留现有 LiteLLM 字段语义。 */
@@ -281,20 +392,137 @@ function createRequestBodyTransformer({ maxCompletionTokens, responseFormat }) {
   return transformRequestBody;
 }
 
-/** 将平台 JSON Schema 适配为 AI SDK v7 `Output.object`，未配置时保持普通文本生成。 */
+/** 为可复用对话 Agent 把 AI SDK 的输出上限字段转换为当前 LiteLLM 契约。 */
+function createAgentRequestBodyTransformer() {
+  /** 仅在 AI SDK 实际发送输出上限时改写字段，避免注入未配置值。 */
+  function transformRequestBody(body) {
+    if (body.max_tokens === undefined) return body;
+    const transformed = { ...body, max_completion_tokens: body.max_tokens };
+    delete transformed.max_tokens;
+    return transformed;
+  }
+  return transformRequestBody;
+}
+
+/** 创建 ToolLoopAgent 实例的默认工厂，并为协议测试保留可替换边界。 */
+function createToolLoopAgentInstance(settings) {
+  return new ToolLoopAgent(settings);
+}
+
+/** 判断对象是否可作为 AI SDK 工具定义进入动态 Agent call options。 */
+function isAiSdkTool(value) {
+  return value !== null && typeof value === "object";
+}
+
+/**
+ * 创建可复用对话 Agent 的按调用配置器，动态选择 LiteLLM 模型、工具和步骤预算。
+ * `output` 不在此动态切换，结构化一次性任务继续走 Core 函数路径。
+ */
+function createConversationAgentCallPreparer({ conversationProvider, stepCountIsImplementation }) {
+  /** 校验当前工具路由并将调用选项转换为 ToolLoopAgent 的实际生成设置。 */
+  function prepareConversationAgentCall({ options, ...settings }) {
+    validateRequiredToolName(options.requiredToolName, options.tools);
+    return {
+      ...settings,
+      model: conversationProvider.chatModel(options.model),
+      tools: options.tools,
+      stopWhen: stepCountIsImplementation(options.maxToolSteps),
+      temperature: options.temperature,
+      maxOutputTokens: options.maxCompletionTokens,
+      runtimeContext: {
+        ...(settings.runtimeContext || {}),
+        requiredToolName: options.requiredToolName || undefined,
+      },
+      telemetry: createAiSdkTelemetryOptions(options.operation),
+    };
+  }
+  return prepareConversationAgentCall;
+}
+
+/** 在对话 Agent 首步应用确定性工具路由，后续步骤恢复模型自动选择。 */
+function prepareConversationAgentStep({ stepNumber, runtimeContext }) {
+  return selectRequiredToolStep(stepNumber, runtimeContext?.requiredToolName);
+}
+
+/** 判断当前请求是否属于 ToolLoopAgent 负责的纯文本工具型对话。 */
+function shouldUseConversationAgent({ tools, outputSchema, responseFormat }) {
+  return hasAgentTools(tools) && outputSchema == null && responseFormat == null;
+}
+
+/** 使用可复用 ToolLoopAgent 执行一次工具型对话，并映射回稳定 GatewayClient 契约。 */
+async function executeConversationAgentAttempt({
+  agent,
+  modelMessages,
+  selectedModel,
+  tools,
+  toolsContext,
+  requiredToolName,
+  maxToolSteps,
+  temperature,
+  maxCompletionTokens,
+  operation,
+  remainingMs,
+  abortSignal,
+  onTextDelta,
+  markOutputStarted,
+  markRetryBoundaryCrossed,
+  runtimeContext,
+}) {
+  const call = {
+    messages: modelMessages,
+    options: {
+      model: selectedModel,
+      tools,
+      requiredToolName: requiredToolName ? String(requiredToolName) : null,
+      maxToolSteps: normalizeToolStepLimit(maxToolSteps),
+      temperature,
+      maxCompletionTokens,
+      operation,
+    },
+    runtimeContext,
+    ...(toolsContext === undefined ? {} : { toolsContext }),
+    timeout: Math.max(1, remainingMs),
+    onToolExecutionStart: markRetryBoundaryCrossed,
+    ...(abortSignal === undefined ? {} : { abortSignal }),
+  };
+  if (typeof onTextDelta !== "function") {
+    const result = await agent.generate(call);
+    return mapGenerateTextResult(result, selectedModel);
+  }
+  // v7 AgentStreamParameters 未公开 onError，但 ToolLoopAgent 会把该选项透传给底层 streamText。
+  const result = await agent.stream({ ...call, onError: suppressAiSdkStreamErrorLogging });
+  return consumeTextStreamResult({
+    result,
+    onTextDelta,
+    markOutputStarted,
+    fallbackModel: selectedModel,
+  });
+}
+
+/** 将平台结构化 schema 适配为 AI SDK v7 `Output.object`，未配置时保持普通文本生成。 */
 function createStructuredOutput(outputSchema) {
   if (outputSchema === undefined || outputSchema === null) return null;
   if (!isPlainObject(outputSchema) || !isPlainObject(outputSchema.schema)) {
-    throw new GatewayRequestError("outputSchema.schema must be a JSON Schema object", 400, {
+    throw new GatewayRequestError("outputSchema.schema must be a schema object", 400, {
       error: "Invalid structured output schema",
       code: "invalid_output_schema",
     });
   }
   return Output.object({
-    schema: jsonSchema(outputSchema.schema),
+    schema: toAiSdkSchema(outputSchema.schema),
     ...(outputSchema.name ? { name: String(outputSchema.name) } : {}),
     ...(outputSchema.description ? { description: String(outputSchema.description) } : {}),
   });
+}
+
+/** 保留 Zod 等 Standard Schema 的本地校验器；原始 JSON Schema 只用于兼容透传。 */
+function toAiSdkSchema(schema) {
+  return isStandardSchema(schema) ? schema : jsonSchema(schema);
+}
+
+/** 判断 schema 是否实现 Standard Schema v1 校验协议。 */
+function isStandardSchema(schema) {
+  return typeof schema?.["~standard"]?.validate === "function";
 }
 
 /** 将 AI SDK `generateText` 结果映射为现有 chat completions 结果。 */
@@ -333,6 +561,7 @@ async function streamGenerateAttempt({
   abortSignal,
   onTextDelta,
   markOutputStarted,
+  markRetryBoundaryCrossed,
   streamTextImplementation,
   fallbackModel,
   output,
@@ -348,6 +577,7 @@ async function streamGenerateAttempt({
     ...(maxCompletionTokens === undefined ? {} : { maxOutputTokens: maxCompletionTokens }),
     ...(output ? { output } : {}),
     ...toolLoopInput,
+    onToolExecutionStart: markRetryBoundaryCrossed,
     maxRetries: 0,
     timeout: Math.max(1, remainingMs),
     ...(abortSignal === undefined ? {} : { abortSignal }),
@@ -395,12 +625,13 @@ function hasAgentTools(tools) {
   return Boolean(tools && typeof tools === "object" && Object.keys(tools).length > 0);
 }
 
-/** 为 AI SDK Core 多步生成构造工具、停止条件和首步路由设置。 */
-function createToolLoopInput({ tools, requiredToolName, maxToolSteps, stepCountIsImplementation }) {
+/** 为需要动态 Output 的 Core 特殊路径构造工具、上下文、停止条件和首步路由设置。 */
+function createToolLoopInput({ tools, toolsContext, requiredToolName, maxToolSteps, stepCountIsImplementation }) {
   if (!hasAgentTools(tools)) return {};
   const prepareStep = createRequiredToolStepRouter(requiredToolName, tools);
   return {
     tools,
+    ...(toolsContext === undefined ? {} : { toolsContext }),
     stopWhen: stepCountIsImplementation(normalizeToolStepLimit(maxToolSteps)),
     ...(prepareStep ? { prepareStep } : {}),
   };
@@ -409,6 +640,17 @@ function createToolLoopInput({ tools, requiredToolName, maxToolSteps, stepCountI
 /** 仅在首个模型步骤强制确定性路由工具，ToolResult 回填后恢复自动选择以生成最终回答。 */
 function createRequiredToolStepRouter(requiredToolName, tools) {
   if (!requiredToolName) return null;
+  const toolName = validateRequiredToolName(requiredToolName, tools);
+  /** 根据 AI SDK stepNumber 只约束首步，避免每一步重复强制同一工具。 */
+  function routeRequiredTool({ stepNumber }) {
+    return selectRequiredToolStep(stepNumber, toolName);
+  }
+  return routeRequiredTool;
+}
+
+/** 校验确定性路由目标属于当前服务端 ToolSet，并返回稳定工具名。 */
+function validateRequiredToolName(requiredToolName, tools) {
+  if (!requiredToolName) return null;
   const toolName = String(requiredToolName);
   if (!Object.hasOwn(tools || {}, toolName)) {
     throw new GatewayRequestError("Required tool is not registered", 400, {
@@ -416,13 +658,15 @@ function createRequiredToolStepRouter(requiredToolName, tools) {
       code: "required_tool_not_registered",
     });
   }
-  /** 根据 AI SDK stepNumber 只约束首步，避免每一步重复强制同一工具。 */
-  function routeRequiredTool({ stepNumber }) {
-    return stepNumber === 0
-      ? { activeTools: [toolName], toolChoice: { type: "tool", toolName } }
-      : { toolChoice: "auto" };
-  }
-  return routeRequiredTool;
+  return toolName;
+}
+
+/** 根据当前步骤返回确定性工具选择；无强制工具时不覆盖 Agent 默认设置。 */
+function selectRequiredToolStep(stepNumber, requiredToolName) {
+  if (!requiredToolName) return {};
+  return stepNumber === 0
+    ? { activeTools: [requiredToolName], toolChoice: { type: "tool", toolName: requiredToolName } }
+    : { toolChoice: "auto" };
 }
 
 /** 将工具步骤上限限制为 1 到 8，当前 Runtime 默认使用 4。 */
@@ -447,19 +691,24 @@ function createAiSdkTelemetryInput(context, attempt, operation) {
   };
   return {
     runtimeContext,
-    telemetry: {
-      functionId: operation === "memory.compact" ? "c1.memory.compact" : "c1.model.generate",
-      recordInputs: false,
-      recordOutputs: false,
-      includeRuntimeContext: {
-        chainTraceId: true,
-        requestId: true,
-        conversationId: true,
-        runId: true,
-        attempt: true,
-        scenarioId: true,
-        operation: true,
-      },
+    telemetry: createAiSdkTelemetryOptions(operation),
+  };
+}
+
+/** 创建不记录业务正文、只关联安全 Runtime 标识的 AI SDK Telemetry 设置。 */
+function createAiSdkTelemetryOptions(operation) {
+  return {
+    functionId: operation === "memory.compact" ? "c1.memory.compact" : "c1.model.generate",
+    recordInputs: false,
+    recordOutputs: false,
+    includeRuntimeContext: {
+      chainTraceId: true,
+      requestId: true,
+      conversationId: true,
+      runId: true,
+      attempt: true,
+      scenarioId: true,
+      operation: true,
     },
   };
 }

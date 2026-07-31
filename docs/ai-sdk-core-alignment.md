@@ -29,13 +29,17 @@ AI SDK 是 Agent Runtime 下游的模型与工具执行基础库，不是平台�
 
 | Core 能力 | 当前选择 | 项目映射与边界 |
 | --- | --- | --- |
-| `generateText` | 已采用 | JSON Run 和记忆提取的非流式模型调用；AI SDK 内建重试固定为 `0` |
-| `streamText` | 已采用 | POST SSE 的模型文本增量；Runtime 在首个有效增量后禁止透明重试 |
-| `Output.object` + `jsonSchema` | 已采用 | MemoryDelta 使用 schema 驱动请求、解析和校验；provider 不兼容时仅对 `400` 保留纯 JSON 提示降级 |
-| `tool` + `jsonSchema` | 已采用 | Tool Registry 把服务端只读 allowlist 适配为 AI SDK ToolSet，执行仍由 Runtime 包装 |
-| `stopWhen` + `stepCountIs` | 已采用 | 当前一次 Run 最多四个模型步骤，不自研通用工具消息循环 |
-| `prepareStep` | 已采用 | 只在天气任务首步强制 `get_weather`，ToolResult 回填后恢复 `auto` |
-| `runtimeContext` | 已采用 | 只携带安全业务 ID、attempt、scenario 和 operation，供 AI SDK Telemetry 关联 |
+| `generateText` | 已采用 | 无工具的普通非流式生成、MemoryDelta 等一次性结构化任务，以及需要动态 `Output` 的特殊工具调用；AI SDK 内建重试固定为 `0` |
+| `streamText` | 已采用 | 无工具或原始 `responseFormat` 兼容调用的 POST SSE 文本增量；Runtime 在首个有效增量后禁止透明重试 |
+| `ToolLoopAgent` | 已采用 | GatewayClient 生命周期内复用一个工具型对话 Agent；纯文本工具请求通过 `generate()` / `stream()` 执行有界循环 |
+| `callOptionsSchema` + `prepareCall` | 已采用 | 按 Run 校验并动态注入模型、ToolSet、步骤上限、温度、输出上限和 Telemetry；当前 instructions 仍来自 Context Planner，provider options 仍受模型策略白名单约束 |
+| `Output.object` + Zod Standard Schema | 已采用 | MemoryDelta 同时生成 provider JSON Schema 并在 Runtime 本地解析校验；provider 不兼容时仅对 `400` 保留纯 JSON 提示降级 |
+| `tool` + Zod Standard Schema | 已采用 | Tool Registry 把服务端只读 allowlist 适配为带本地输入校验的静态 AI SDK ToolSet，执行仍由 Runtime 包装 |
+| `stopWhen` + `stepCountIs` | 已采用 | Agent 通过 `prepareCall` 按 Run 设置最多四个模型步骤；动态 `Output` 特殊路径直接向 Core 函数传入相同停止条件 |
+| `prepareStep` | 已采用 | Agent 读取 `runtimeContext`，只在天气任务首步强制 `get_weather`，ToolResult 回填后恢复 `auto` |
+| `runtimeContext` + `toolsContext` | 已采用 | 前者携带安全业务 ID 和首步路由信息；后者按工具名携带经 `contextSchema` 校验的 Runtime 执行包装器，不进入模型 Prompt |
+| 每次调用 `abortSignal` + `timeout` | 已采用 | Agent 与 Core 路径都复用当前 Run 的取消信号和剩余绝对截止时间，不另建超时或重试预算 |
+| `onToolExecutionStart` | 已采用 | Connector 执行前越过整段生成尝试的自动重试边界，避免后续模型故障重复执行工具 |
 | `telemetry` | 已采用 | 默认关闭；启用时接入项目的 OpenTelemetry Facade，输入和输出正文不入 Trace |
 | `APICallError` | 已采用 | 映射 provider 状态、公开错误和 `Retry-After`，不把原始响应正文交给渠道 |
 | ModelMessage 内容 part | 部分采用 | 当前支持文本、图片 URL 和图片 data URL；媒体治理仍属于 C2 后续能力 |
@@ -54,21 +58,34 @@ AI SDK 是 Agent Runtime 下游的模型与工具执行基础库，不是平台�
 
 GatewayClient 再把这些字段映射为现有 chat completions 契约：`choices`、`model`、`usage` 和 `finish_reason`。Runtime 不直接依赖 AI SDK Result 类型，因此后续升级只需在这个 Adapter 内处理。
 
-## Core 多步调用与 Agent 抽象
+## 调用分流与 Agent 抽象
 
-AI SDK 提供两种都合理但用途不同的入口：
+GatewayClient 不把所有模型调用强制改成同一种抽象，而是按任务语义分流：
 
-- `generateText` / `streamText` 配合 `tools`、`stopWhen`、`prepareStep`：适合每个 Run 动态选择模型、工具、截止时间、Telemetry 和任务路由的当前 GatewayClient。
-- `ToolLoopAgent`：适合把稳定的模型、instructions、ToolSet、停止条件和调用选项定义一次，再从多个入口复用同一个 Agent 定义。
+| 调用类型 | AI SDK 入口 | 原因 |
+| --- | --- | --- |
+| 有工具、最终输出为普通文本 | 复用 `ToolLoopAgent` | SDK 原生拥有工具消息回填、停止条件和步骤循环；`callOptionsSchema` / `prepareCall` 负责每个 Run 的动态模型、工具和调用设置 |
+| 无工具的普通文本 | `generateText` / `streamText` | 没有工具循环，不需要额外 Agent 抽象，继续保持最短调用链 |
+| MemoryDelta 等动态结构化任务 | `generateText` + `Output.object` | `output` 是 Agent 定义级泛型和构造设置，不在锁定版本 `prepareCall` 的可动态返回字段中 |
+| 原始 `responseFormat` 兼容调用 | `generateText` / `streamText` | 需要保留 GatewayClient 既有 LiteLLM/OpenAI-compatible 请求体转换语义 |
+| 工具 + 动态 `outputSchema` / `responseFormat` | Core 函数特殊路径 | 同时保留 ToolSet 有界执行与当前调用的动态输出契约，避免为每种 schema 临时创建 Agent |
 
-当前项目每个 Run 都要按模型别名、只读 allowlist、用户取消信号、剩余截止时间和业务 Trace 动态装配调用参数，因此采用 Core 多步调用。`ToolLoopAgent` 保留为未来“版本化 AgentDefinition 已由控制面发布且需要跨入口复用”时的候选，不在每次请求内临时创建。
+工具型对话 Agent 在 `createGatewayClient` 时创建一次，不在每个 Run 内临时创建。每次 `generate()` / `stream()` 直接传入 `abortSignal`、`timeout`、`runtimeContext` 和 `toolsContext`；模型、工具、步骤预算、温度、输出上限和 Telemetry 由类型校验后的 call options 经 `prepareCall` 注入。AI SDK 已提供的循环和上下文能力不再由项目重复实现。
+
+官方文档说明 `prepareCall` 可以动态修改 Agent 设置；锁定版本 `ai@7.0.37` 的类型声明进一步限定其返回字段，其中包含模型、工具、instructions、provider options 和 runtime context，但不包含 `output`。因此结构化任务保留 Core 路径是明确的 SDK 能力边界，不是因为动态 Run 无法复用 Agent。
+
+锁定版本还有一个流错误兼容点：`AgentStreamParameters` 没有公开 `onError`，但 `ToolLoopAgent.stream()` 实现会把该选项透传给底层 `streamText`。GatewayClient 集中注入空错误处理器，避免 SDK 默认向 stderr 打印 provider 原始响应；公开错误仍由现有映射返回。真实 HTTP 测试会在升级后验证该透传行为，失效时必须重新评估适配方式。
+
+Runtime 的平台自动重试单位是一次完整生成尝试。在尚未交付文本且尚未开始工具执行时，可按统一预算重试模型瞬时故障；`onToolExecutionStart` 触发后记录 `retryBoundaryCrossed=true`，后续模型步骤失败时保留已持久化 ToolResult，并以 `retry-boundary-crossed` 停止整段循环重放。若此时尚未交付正文且 SQLite 至少存在一个 completed ToolResult，Runtime 会重新读取事实，使用 AI SDK 结构化 `tool-call` / `tool-result` ModelMessage 发起不携带 ToolSet 的总结恢复；成功和失败分别保存两段 resilience，具体边界见 [`ToolResult 持久化总结恢复`](./decisions/2026-07-31-tool-result-summary-recovery.md)。
 
 ## 结构化输出边界
 
 当前存在两条有意区分的路径：
 
-- 新的 Runtime 内部强类型任务使用 `outputSchema -> Output.object({ schema: jsonSchema(...) })`，由 AI SDK 负责响应格式、JSON 解析和 schema 校验。
+- 新的 Runtime 内部强类型任务使用 `outputSchema -> Output.object({ schema: zodSchema })`，由 AI SDK 负责响应格式、JSON 解析和本地 schema 校验。`zod@4.4.3` 与当前 AI SDK 依赖树对齐，并作为项目直接依赖锁定。
 - GatewayClient 继续保留 `responseFormat` 原样透传，兼容尚未迁移的 LiteLLM/OpenAI-compatible 调用；新业务不得继续用它复制一套手写解析逻辑。
+
+原始 `jsonSchema(schema)` 默认只向 provider 提供 JSON Schema；没有 `validate` 回调时不提供本地校验。因此 Runtime 内部需要可信结构化结果或工具参数时必须传入 Zod/Standard Schema，不能只根据 provider 声称支持结构化输出就假设结果已经验证。
 
 MemoryDelta 仍由 Runtime 定义数据语义、字段归属、来源约束和 reducer。AI SDK 只负责生成结果的语法与 schema 校验，不成为 Memory 的事实源。
 
@@ -77,13 +94,13 @@ MemoryDelta 仍由 Runtime 定义数据语义、字段归属、来源约束和 r
 | 能力组 | 代表 API | 项目结论 | 触发条件 |
 | --- | --- | --- | --- |
 | 其他结构化输出 | `Output.array`、`Output.choice`、`Output.json` | 按需采用，不预接 | 出现数组流式抽取、有限枚举分类或无固定 schema JSON |
-| 可复用 Agent | `ToolLoopAgent` | 当前不作为默认入口 | 控制面发布稳定 AgentDefinition，并需要被多个渠道复用 |
+| 可复用 Agent | `ToolLoopAgent` | 工具型对话已采用 | 控制面发布 AgentDefinition 后，再把当前代码级定义升级为版本化控制面定义 |
 | 工具审批 | `toolApproval`、`needsApproval` | 延后到 C6 | 首个有副作用工具进入设计，且权限、预览、人工确认、幂等和回读已定义 |
-| Tool/Runtime Context | `toolsContext`、`runtimeContext` | `runtimeContext` 已用，其他按需 | 工具需要共享强类型请求上下文，但不得替代平台身份与权限事实 |
+| Tool/Runtime Context | `toolsContext`、`runtimeContext` | 已采用 | 新增身份或权限字段前仍需稳定契约；上下文不得替代平台身份与权限事实 |
 | Provider 管理 | Provider Registry、自定义 Provider | 当前不引入 | Runtime 需要直连多种非 LiteLLM provider；当前统一经 LiteLLM，无第二套路由收益 |
 | Model Middleware | `wrapLanguageModel` 等 | 当前不引入 | 出现可跨 provider 复用且无法由 GatewayClient、LiteLLM 或 OTel 承担的明确横切需求 |
 | 模型设置与 reasoning | settings、provider options、reasoning | 保持 GatewayClient 白名单 | 模型能力目录和版本化 ModelPolicy 能校验差异，不允许渠道透传任意 provider 参数 |
-| 生命周期回调 | start/step/model/tool/end callbacks | 部分由 Telemetry 与 Runtime 包装覆盖 | 需要新增稳定审计事实时先判断归属，不能同时写多份事实源 |
+| 生命周期回调 | start/step/model/tool/end callbacks | 采用 `onToolExecutionStart` 标记重试边界，其余部分由 Telemetry 与 Runtime 包装覆盖 | 需要新增稳定审计事实时先判断归属，不能同时写多份事实源 |
 | Embedding | `embed`、`embedMany` | C3 再接 | 文档解析、分块、权限过滤、索引版本和评测基线已定义 |
 | Rerank | `rerank` | C3 再接 | 已有候选检索集，并能独立评估召回与重排收益 |
 | MCP | `@ai-sdk/mcp` | 多 Connector 后 PoC | 出现跨项目工具复用、独立凭据或进程边界；生产优先 Streamable HTTP |
@@ -110,7 +127,7 @@ npm test
 openspec validate --specs --strict
 ```
 
-Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与 schema 校验、Core 多步工具调用、首步强制路由、v7 结果字段、流错误和平台重试边界。真实上游模型与天气 smoke test 仍需单独执行并记录，不能由 fake LiteLLM 回归替代。
+Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 schema 正反例校验、可复用 `ToolLoopAgent` 的动态 call options、真实两步工具调用、结构化工具请求回退 Core、首步强制路由、v7 结果字段、流错误和平台重试边界，以及工具开始后禁止整段重放、从 SQLite ToolResult 进行无工具恢复和恢复失败保留双段证据的 Runtime 集成回归。Runtime 测试额外覆盖恢复阶段继续通过原文本回调交付且只落一条助手消息；工具测试覆盖天气输入、默认值和 `contextSchema` 正反例校验。真实上游模型与天气 smoke test 仍需单独执行并记录，不能由 fake LiteLLM 回归替代。
 
 ## 官方资料
 
@@ -122,3 +139,4 @@ Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与 schema �
 - [Error Handling](https://ai-sdk.dev/docs/ai-sdk-core/error-handling)
 - [Telemetry](https://ai-sdk.dev/docs/ai-sdk-core/telemetry)
 - [Building Agents](https://ai-sdk.dev/docs/agents/building-agents)
+- [Configuring Call Options](https://ai-sdk.dev/docs/agents/configuring-call-options)
