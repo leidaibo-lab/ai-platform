@@ -451,27 +451,42 @@ textarea {
   overflow-wrap: anywhere;
 }
 
-.message-body-content .x-markdown {
+.message-body-content .message-markdown {
+  --heading-color: #1f2328;
+  --text-color: #1f2328;
+  --border-color: #d0d7de;
+  --line-color: #d8dee4;
+  --light-bg: #f6f8fa;
+  --table-head-bg: #f6f8fa;
+  --table-body-bg: #ffffff;
+  --cite-bg: #f6f8fa;
+  --cite-hover-bg: #eef1f4;
+  --margin-block: 0 0 12px 0;
+  --margin-ul-ol: 0 0 12px 22px;
+  --margin-li: 0 0 5px 0;
+  --table-margin: 4px 0 16px 0;
+  --margin-pre: 0;
   color: inherit;
   font-size: 14px;
   line-height: 1.7;
 }
 
-.message-body-content .x-markdown > :first-child {
+.message-body-content .message-markdown > :first-child {
   margin-top: 0;
 }
 
-.message-body-content .x-markdown > :last-child {
+.message-body-content .message-markdown > :last-child {
   margin-bottom: 0;
 }
 
-.message-body-content .x-markdown pre {
+.message-body-content .message-markdown pre {
+  margin: 0;
   max-width: 100%;
   overflow-x: auto;
-  border-radius: 6px;
+  border-radius: 0;
 }
 
-.message-body-content .x-markdown table {
+.message-body-content .message-markdown table {
   display: block;
   width: max-content;
   max-width: 100%;
@@ -479,31 +494,69 @@ textarea {
   white-space: nowrap;
 }
 
-.message-body-content .x-markdown h1,
-.message-body-content .x-markdown h2,
-.message-body-content .x-markdown h3,
-.message-body-content .x-markdown h4,
-.message-body-content .x-markdown h5,
-.message-body-content .x-markdown h6 {
+.message-body-content .message-markdown h1,
+.message-body-content .message-markdown h2,
+.message-body-content .message-markdown h3,
+.message-body-content .message-markdown h4,
+.message-body-content .message-markdown h5,
+.message-body-content .message-markdown h6 {
   scroll-margin-top: 16px;
 }
 
 .markdown-code-block {
-  position: relative;
+  margin: 4px 0 16px;
   max-width: 100%;
+  overflow: hidden;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
 }
 
-.markdown-code-block > pre {
-  padding-top: 38px !important;
+.markdown-code-header {
+  display: flex;
+  min-height: 34px;
+  padding: 0 5px 0 12px;
+  align-items: center;
+  justify-content: space-between;
+  color: #57606a;
+  font-size: 12px;
+  background: #eef1f4;
+  border-bottom: 1px solid #d0d7de;
+}
+
+.markdown-code-block > pre > code {
+  display: block;
+  min-width: max-content;
+  padding: 13px 15px !important;
+  margin: 0 !important;
+  color: #1f2328 !important;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px !important;
+  line-height: 1.65 !important;
+  white-space: pre;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.markdown-code-block.is-plain-text > pre > code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-code-copy {
-  position: absolute;
-  z-index: 2;
-  top: 5px;
-  right: 5px;
+  flex: 0 0 auto;
   color: #57606a;
-  background: rgba(255, 255, 255, 0.86);
+}
+
+.markdown-code-copy:hover,
+.markdown-code-copy:focus-visible {
+  color: #1f2328 !important;
+  background: #ffffff !important;
 }
 
 .answer-heading-nav {
@@ -549,7 +602,7 @@ textarea {
   color: #57606a;
 }
 
-.message-body-content .x-markdown img {
+.message-body-content .message-markdown img {
   max-width: 100%;
 }
 
