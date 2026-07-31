@@ -17,7 +17,7 @@
 
 当前项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。模型网关仍是平台内部区域，不得用 `ai-platform` 代替模型网关领域名称。
 
-当前代码落地这个目标结构里的 V0.6 切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、连接器注册预留、默认关闭的 C1 ChainTrace OpenTelemetry 旁路与已选定的 Phoenix 后端，以及 OpenSpec/docs/回归评测的最小治理。正式实例和真实 Runtime Trace 验收当前为触发式 TODO，不得写成已完成运行态能力。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
+当前代码以 V0.6 会话与上下文基线为主体，并落地 V1 首个只读工具切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、AI SDK Core 有界多步工具调用与 `Output.object` 结构化输出、Open-Meteo 天气 Connector、ToolResult 事实、默认关闭的 C1 ChainTrace OpenTelemetry 旁路与已选定的 Phoenix 后端，以及 OpenSpec/docs/回归评测的最小治理。正式实例、真实 Runtime Trace、真实模型天气 smoke test 和完整 C4 业务数据能力当前仍是触发式 TODO 或未完成边界，不得写成已完成运行态能力。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
@@ -48,6 +48,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `README.md`：面向使用者的启动、Runtime 配置和模型连通性测试说明。
 - `docs/README.md`：项目文档索引。
 - `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。
+- `docs/ai-sdk-core-alignment.md`：AI SDK Core v7 当前采用、兼容、延后和不采用的 API 边界。
 - `docs/scenario-interaction-chains.md`：定义共同底座与场景能力边界，按输入场景拆分业务链路；当前聚焦 C1 功能可用和确定性回归，ChainTrace 运行态验收按触发条件恢复。
 - `docs/solution-selection-governance.md`：方案发现、成熟能力复用、`采用 / 适配 / 自研` 决策门禁、完成定义和存量能力审计规则。
 - `docs/decisions/`：保存可追溯的方案决策记录；新记录从 `docs/decisions/TEMPLATE.md` 创建，保留采用理由、未采用理由和重评条件。
@@ -114,9 +115,11 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `src/observability/chain-tracer.mjs`：Runtime 依赖的后端中立 `ChainTracer` Port，负责 C1 阶段 Span、业务标识和错误脱敏语义。
 - `src/observability/otel-runtime.mjs`：OpenTelemetry Facade，负责默认关闭、OTLP/HTTP protobuf exporter、采样、AI SDK Telemetry 和进程生命周期。
 - `src/gateway/gateway-contract.mjs`：Runtime 依赖的 GatewayClient 数据契约和统一错误类型。
-- `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 的 `generateText` / `streamText` 和 `@ai-sdk/openai-compatible` 调用 LiteLLM，并保持 Runtime 的 chat completions 契约。
+- `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 的 `generateText` / `streamText`、`tools + stopWhen + prepareStep` 和 `Output.object`，通过 `@ai-sdk/openai-compatible` 调用 LiteLLM，并保持 Runtime 的 chat completions 契约。
 - `src/gateway/litellm-management-client.mjs`：LiteLLM 专属管理客户端，仅封装 `/v1/models` 和 token counter，不负责模型生成。
-- `src/tools/tool-registry.mjs`：连接器与知识层的工具注册和工具意图判断预留入口，当前不启用真实工具循环。
+- `src/tools/tool-registry.mjs`：连接器与知识层的服务端只读工具 allowlist，并把平台工具定义适配为 AI SDK ToolSet。
+- `src/tools/weather-tool.mjs`：当前首个 `get_weather` 只读工具定义，收敛输入 schema 与公开错误。
+- `src/connectors/open-meteo-weather.mjs`：固定访问 Open-Meteo HTTPS 端点的天气 Adapter，返回稳定 `weather.v1` ToolResult。
 - `.agents/skills/company-public/skill-governance/SKILL.md`：Skill 创建、更新、迁移和校验规范。
 - `.agents/skills/company-public/skill-governance/scripts/validate-skills.mjs`：Skill 目录与 frontmatter 校验脚本。
 - `.agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eval.mjs`：100 轮上下文记忆确定性评测入口。

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APICallError } from "ai";
 import { createGatewayClient, GatewayRequestError, toAiSdkMessages } from "../src/gateway/gateway-client.mjs";
+import { createToolRegistry } from "../src/tools/tool-registry.mjs";
 import { createTestRuntime, run } from "./test-runtime.mjs";
 
 /** 验证 OpenAI-compatible 多模态消息转换为 AI SDK v7 FilePart。 */
@@ -115,6 +116,52 @@ async function testAiSdkProtocolMapping() {
 
 test("gateway client preserves LiteLLM request and response semantics", testAiSdkProtocolMapping);
 
+/** 验证 AI SDK `Output.object` 负责结构化输出请求、解析和 JSON Schema 校验。 */
+async function testAiSdkStructuredOutputMapping() {
+  const requests = [];
+  /** 返回符合 MemoryDelta 最小 schema 的结构化模型响应。 */
+  function handleStructuredRequest() {
+    return jsonResponse({
+      id: "chatcmpl-structured",
+      created: 1720000000,
+      model: "structured-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: '{"status":"ok"}' },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    });
+  }
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch(requests, handleStructuredRequest),
+  });
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["status"],
+    properties: { status: { type: "string", enum: ["ok"] } },
+  };
+
+  const result = await client.chatCompletions({
+    messages: [{ role: "user", content: "返回状态" }],
+    outputSchema: { name: "status_result", description: "固定状态结果", schema },
+  });
+
+  assert.equal(requests[0].body.response_format.type, "json_schema");
+  assert.equal(requests[0].body.response_format.json_schema.name, "status_result");
+  assert.deepEqual(requests[0].body.response_format.json_schema.schema, schema);
+  assert.deepEqual(result.output, { status: "ok" });
+  assert.equal(result.usage.total_tokens, 16);
+}
+
+test("gateway client uses AI SDK Output.object for structured output", testAiSdkStructuredOutputMapping);
+
 /** 为成功协议测试返回 models、token counter 或 chat completions 响应。 */
 function handleSuccessfulGatewayRequest(request) {
   if (request.url.endsWith("/v1/models")) {
@@ -203,6 +250,161 @@ async function testGatewayStreamsTextDeltas() {
 
 test("gateway client streams text deltas and preserves the completion contract", testGatewayStreamsTextDeltas);
 
+/** 验证存在工具时 GatewayClient 使用 AI SDK Core 有界多步流，同时保持 completion 契约。 */
+async function testGatewayUsesBoundedCoreToolLoop() {
+  let sdkInput = null;
+  let receivedStepLimit = null;
+  const deltas = [];
+  /** 保存 GatewayClient 传入的 Core 多步参数并返回确定性文本流。 */
+  function streamTextImplementation(input) {
+    sdkInput = input;
+    return createStreamTextResult(streamValues("天气", "已查询"));
+  }
+  /** 记录 GatewayClient 使用的 AI SDK 多步停止上限。 */
+  function stepCountIsImplementation(limit) {
+    receivedStepLimit = limit;
+    return { limit };
+  }
+  /** 收集 Agent 最终回答文本增量。 */
+  function collectDelta(delta) {
+    deltas.push(delta);
+  }
+  const tools = { get_weather: { description: "查询天气" } };
+  const client = createGatewayClient(
+    {
+      baseUrl: "http://gateway.test",
+      model: "chat-default",
+      apiKey: "test-key",
+      fetchImplementation: createFakeFetch([], handleSuccessfulGatewayRequest),
+    },
+    {
+      streamTextImplementation,
+      stepCountIsImplementation,
+    },
+  );
+
+  const result = await client.chatCompletions({
+    messages: [{ role: "user", content: "今天深圳天气" }],
+    tools,
+    requiredToolName: "get_weather",
+    maxToolSteps: 4,
+    onTextDelta: collectDelta,
+  });
+
+  assert.equal(sdkInput.tools, tools);
+  assert.equal(sdkInput.maxRetries, 0);
+  assert.equal(typeof sdkInput.onError, "function");
+  assert.deepEqual(sdkInput.stopWhen, { limit: 4 });
+  assert.deepEqual(sdkInput.prepareStep({ stepNumber: 0 }), {
+    activeTools: ["get_weather"],
+    toolChoice: { type: "tool", toolName: "get_weather" },
+  });
+  assert.deepEqual(sdkInput.prepareStep({ stepNumber: 1 }), { toolChoice: "auto" });
+  assert.equal(receivedStepLimit, 4);
+  assert.equal(sdkInput.messages[0].content, "今天深圳天气");
+  assert.deepEqual(deltas, ["天气", "已查询"]);
+  assert.equal(result.choices[0].message.content, "天气已查询");
+}
+
+test("gateway client uses a bounded AI SDK Core tool loop when Runtime provides tools", testGatewayUsesBoundedCoreToolLoop);
+
+/** 验证真实 AI SDK Core 多步生成首步强制工具，执行结果后第二步恢复自动生成。 */
+async function testRealCoreToolLoopRoutesRequiredWeatherTool() {
+  const requests = [];
+  let toolExecutions = 0;
+  /** 为模型目录和两步 chat completions 返回 OpenAI-compatible 响应。 */
+  function handleToolLoopRequest(request) {
+    if (request.url.endsWith("/v1/models")) return jsonResponse({ data: [{ id: "chat-default" }] });
+    const chatRequests = requests.filter(isChatRequest);
+    if (chatRequests.length === 1) {
+      return jsonResponse({
+        id: "chatcmpl-tool-call",
+        created: 1720000000,
+        model: "tool-model",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "weather-call-real-agent",
+                  type: "function",
+                  function: { name: "get_weather", arguments: '{"location":"深圳","date":"today"}' },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+        usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+      });
+    }
+    return jsonResponse({
+      id: "chatcmpl-tool-answer",
+      created: 1720000001,
+      model: "tool-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "深圳当前 26°C，来源 Open-Meteo。" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+    });
+  }
+  const registry = createToolRegistry([
+    {
+      name: "get_weather",
+      title: "实时天气",
+      description: "查询今天或明天的实时天气。",
+      effect: "read",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["location"],
+        properties: { location: { type: "string" }, date: { type: "string", enum: ["today", "tomorrow"] } },
+      },
+      /** 返回固定 ToolResult，并记录真实 Core 多步生成的执行次数。 */
+      async execute(input) {
+        toolExecutions += 1;
+        return { location: input.location, temperature: 26, source: "Open-Meteo" };
+      },
+    },
+  ]);
+  const tools = registry.buildAiSdkTools(
+    /** 直接执行测试定义，生产环境由 Runtime 包装持久化和 Trace。 */
+    async function executeTool(definition, input, options) {
+      return definition.execute(input, options);
+    },
+  );
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch(requests, handleToolLoopRequest),
+  });
+
+  const result = await client.chatCompletions({
+    messages: [{ role: "user", content: "今天深圳天气" }],
+    tools,
+    requiredToolName: "get_weather",
+  });
+  const chatBodies = requests.filter(isChatRequest).map(getRequestBody);
+
+  assert.equal(toolExecutions, 1);
+  assert.equal(chatBodies.length, 2);
+  assert.deepEqual(chatBodies[0].tool_choice, { type: "function", function: { name: "get_weather" } });
+  assert.equal(chatBodies[0].tools[0].function.name, "get_weather");
+  assert.equal(chatBodies[1].tool_choice, "auto");
+  assert.equal(chatBodies[1].messages.some(isWeatherToolResultMessage), true);
+  assert.equal(result.choices[0].message.content, "深圳当前 26°C，来源 Open-Meteo。");
+}
+
+test("real AI SDK Core tool loop forces the routed weather tool only on the first step", testRealCoreToolLoopRoutesRequiredWeatherTool);
+
 /** 验证首个文本增量前的瞬时错误仍可由平台统一预算重试。 */
 async function testGatewayRetriesBeforeFirstTextDelta() {
   const deltas = [];
@@ -276,8 +478,8 @@ async function testGatewayDoesNotRetryAfterTextDelta() {
 
 test("gateway client does not retry after the first text delta", testGatewayDoesNotRetryAfterTextDelta);
 
-/** 验证 AI SDK fullStream 中的原始 API 错误不会被 textStream 包装成通用 502。 */
-async function testGatewayPreservesFullStreamApiError() {
+/** 验证 AI SDK 标准事件流中的原始 API 错误不会被文本流包装成通用 502。 */
+async function testGatewayPreservesEventStreamApiError() {
   const apiError = new APICallError({
     message: "INVALID_API_KEY provider secret",
     url: "http://gateway.test/v1/chat/completions",
@@ -285,9 +487,9 @@ async function testGatewayPreservesFullStreamApiError() {
     statusCode: 401,
     data: { error: { message: "INVALID_API_KEY provider secret" } },
   });
-  /** 返回包含原始鉴权错误事件的 AI SDK 完整流。 */
+  /** 返回包含原始鉴权错误事件的 AI SDK 标准事件流。 */
   function streamTextImplementation() {
-    return createFullStreamResult(streamParts({ type: "error", error: apiError }));
+    return createEventStreamResult(streamParts({ type: "error", error: apiError }));
   }
   const client = createGatewayClient(
     {
@@ -308,7 +510,7 @@ async function testGatewayPreservesFullStreamApiError() {
   );
 }
 
-test("gateway client preserves API errors from AI SDK fullStream", testGatewayPreservesFullStreamApiError);
+test("gateway client preserves API errors from the AI SDK event stream", testGatewayPreservesEventStreamApiError);
 
 /** 判断异常是否为保留一次尝试证据的 401 鉴权错误。 */
 function isAuthorizationGatewayError(error) {
@@ -359,22 +561,23 @@ function createStreamTextResult(textStream) {
   return {
     textStream,
     usage: Promise.resolve({ inputTokens: 9, outputTokens: 3, totalTokens: 12 }),
-    finishReason: Promise.resolve("stop"),
-    response: Promise.resolve({
-      id: "stream-test",
-      modelId: "resolved-stream-model",
-      timestamp: new Date("2026-07-28T00:00:00.000Z"),
+    finalStep: Promise.resolve({
+      finishReason: "stop",
+      response: {
+        id: "stream-test",
+        modelId: "resolved-stream-model",
+        timestamp: new Date("2026-07-28T00:00:00.000Z"),
+      },
     }),
   };
 }
 
-/** 创建使用 fullStream 的最小 AI SDK 流式结果。 */
-function createFullStreamResult(fullStream) {
+/** 创建使用标准事件流的最小 AI SDK 流式结果。 */
+function createEventStreamResult(stream) {
   return {
-    fullStream,
+    stream,
     usage: Promise.resolve({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
-    finishReason: Promise.resolve("error"),
-    response: Promise.resolve({}),
+    finalStep: Promise.resolve({ finishReason: "error", response: {} }),
   };
 }
 
@@ -383,7 +586,7 @@ async function* streamValues(...values) {
   for (const value of values) yield value;
 }
 
-/** 依次产生 AI SDK fullStream 事件。 */
+/** 依次产生 AI SDK 标准流事件。 */
 async function* streamParts(...parts) {
   for (const part of parts) yield part;
 }
@@ -637,6 +840,11 @@ function hasMemoryExtractorPrompt(message) {
 /** 判断记录是否为 chat completions 请求。 */
 function isChatRequest(request) {
   return request.url.endsWith("/v1/chat/completions");
+}
+
+/** 判断 OpenAI-compatible 消息是否携带天气工具执行结果。 */
+function isWeatherToolResultMessage(message) {
+  return message.role === "tool" && message.tool_call_id === "weather-call-real-agent";
 }
 
 /** 返回记录的 JSON 请求体。 */

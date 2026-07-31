@@ -3,6 +3,12 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+const RECOVERY_SOURCE_STATUS = Object.freeze({
+  retry: "failed",
+  regenerate: "completed",
+  continue: "cancelled",
+});
+
 export class ConversationStoreError extends Error {
   /**
    * 表示会话存储层可映射为 HTTP 响应的业务错误。
@@ -88,10 +94,10 @@ export function createConversationStore({ databasePath }) {
         .all(conversationId)
         .map(mapEpisodeRow);
       const lastRunRow = database
-        .prepare("SELECT * FROM runs WHERE conversation_id = ? AND status = 'completed' ORDER BY updated_at DESC LIMIT 1")
+        .prepare("SELECT * FROM runs WHERE conversation_id = ? AND status = 'completed' ORDER BY updated_at DESC, rowid DESC LIMIT 1")
         .get(conversationId);
       const latestRunRow = database
-        .prepare("SELECT * FROM runs WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1")
+        .prepare("SELECT * FROM runs WHERE conversation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1")
         .get(conversationId);
 
       return {
@@ -105,9 +111,35 @@ export function createConversationStore({ databasePath }) {
           items: memoryItems,
           episodes,
         },
-        lastRun: lastRunRow ? mapRunRow(lastRunRow) : null,
-        latestRun: latestRunRow ? mapRunRow(latestRunRow) : null,
+        lastRun: lastRunRow ? mapRunWithToolCalls(database, lastRunRow) : null,
+        latestRun: latestRunRow ? mapRunWithToolCalls(database, latestRunRow) : null,
       };
+    },
+
+    /** 原子更新会话标题或独立归档状态，不改变 active/closed 生命周期。 */
+    updateConversation(conversationId, { title, archived } = {}) {
+      return withTransaction(database, () => {
+        const conversation = getConversationOrThrow(database, conversationId);
+        const nextTitle = title === undefined ? conversation.title : String(title);
+        const now = new Date().toISOString();
+        const nextArchivedAt = archived === undefined ? conversation.archived_at : archived ? now : null;
+        if (nextTitle === conversation.title && nextArchivedAt === conversation.archived_at) {
+          return getConversationSummaryOrThrow(database, conversationId);
+        }
+        database
+          .prepare(
+            `UPDATE conversations
+             SET title = ?, archived_at = ?, version = version + 1, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(nextTitle, nextArchivedAt, now, conversationId);
+        insertEvent(database, conversationId, "conversation.updated", {
+          conversationId,
+          titleChanged: nextTitle !== conversation.title,
+          archivedChanged: nextArchivedAt !== conversation.archived_at,
+        });
+        return getConversationSummaryOrThrow(database, conversationId);
+      });
     },
 
     /**
@@ -116,7 +148,17 @@ export function createConversationStore({ databasePath }) {
      * @param {object} input - Run 和用户消息输入。
      * @returns {object} 新建或重放的 Run 状态。
      */
-    startRun({ conversationId, requestId, clientMessageId, content, displayContent, references = [], model = null }) {
+    startRun({
+      conversationId,
+      requestId,
+      clientMessageId,
+      content,
+      displayContent,
+      references = [],
+      model = null,
+      sourceRunId = null,
+      recoveryMode = null,
+    }) {
       // Run、用户消息、序号和事件必须在同一事务创建。
       return withTransaction(database, () => {
         const existing = database
@@ -134,6 +176,7 @@ export function createConversationStore({ databasePath }) {
         if (duplicateMessage) {
           throw new ConversationStoreError("clientMessageId has already been used", 409, "duplicate_client_message");
         }
+        validateRecoverySource(database, conversationId, sourceRunId, recoveryMode);
 
         const runId = randomUUID();
         const messageId = randomUUID();
@@ -142,10 +185,12 @@ export function createConversationStore({ databasePath }) {
         const title = conversation.next_seq === 0 ? buildConversationTitle(displayContent) : conversation.title;
         database
           .prepare(
-            `INSERT INTO runs (id, conversation_id, request_id, status, model, created_at, updated_at)
-             VALUES (?, ?, ?, 'running', ?, ?, ?)`,
+            `INSERT INTO runs (
+              id, conversation_id, request_id, source_run_id, recovery_mode,
+              status, model, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
           )
-          .run(runId, conversationId, requestId, model, now, now);
+          .run(runId, conversationId, requestId, sourceRunId, recoveryMode, model, now, now);
         database
           .prepare(
             `INSERT INTO messages (
@@ -177,6 +222,89 @@ export function createConversationStore({ databasePath }) {
         insertEvent(database, conversationId, "message.created", { messageId, seq, role: "user" });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
+    },
+
+    /** 幂等登记一次模型生成的工具调用，并与当前 running Run 绑定。 */
+    startToolCall({ conversationId, runId, toolCallId, toolName, input }) {
+      return withTransaction(database, () => {
+        const run = getRunOrThrow(database, runId);
+        if (run.conversation_id !== conversationId || run.status !== "running") {
+          throw new ConversationStoreError("Run is not active", 409, "run_not_active");
+        }
+        const existing = database
+          .prepare("SELECT * FROM tool_calls WHERE run_id = ? AND tool_call_id = ?")
+          .get(runId, toolCallId);
+        if (existing) return { ...mapToolCallRow(existing), replayed: true };
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        database
+          .prepare(
+            `INSERT INTO tool_calls (
+              id, conversation_id, run_id, tool_call_id, tool_name, status,
+              input_json, started_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+          )
+          .run(id, conversationId, runId, toolCallId, toolName, JSON.stringify(input), now, now);
+        insertEvent(database, conversationId, "tool.started", { runId, toolCallId, toolName });
+        return { ...mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(id)), replayed: false };
+      });
+    },
+
+    /** 将结构化 ToolResult、来源和数据时间原子保存为 completed 工具事实。 */
+    completeToolCall({ runId, toolCallId, output, source = null, observedAt = null }) {
+      return withTransaction(database, () => {
+        const row = getToolCallOrThrow(database, runId, toolCallId);
+        if (row.status === "completed") return mapToolCallRow(row);
+        if (row.status !== "running") {
+          throw new ConversationStoreError("Tool call is not active", 409, "tool_call_not_active");
+        }
+        const now = new Date().toISOString();
+        database
+          .prepare(
+            `UPDATE tool_calls
+             SET status = 'completed', output_json = ?, source_name = ?, observed_at = ?,
+                 error_code = NULL, error_message = NULL, retryable = 0, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(JSON.stringify(output), source, observedAt, now, row.id);
+        insertEvent(database, row.conversation_id, "tool.completed", {
+          runId,
+          toolCallId,
+          toolName: row.tool_name,
+          source,
+          observedAt,
+        });
+        return mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(row.id));
+      });
+    },
+
+    /** 以安全错误码和公开说明收口工具失败，不保存外部原始响应。 */
+    failToolCall({ runId, toolCallId, code, message, retryable = false }) {
+      return withTransaction(database, () => {
+        const row = getToolCallOrThrow(database, runId, toolCallId);
+        if (row.status !== "running") return mapToolCallRow(row);
+        const now = new Date().toISOString();
+        database
+          .prepare(
+            `UPDATE tool_calls
+             SET status = 'failed', error_code = ?, error_message = ?, retryable = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(String(code || "tool_execution_failed"), String(message || "工具执行失败。"), retryable ? 1 : 0, now, row.id);
+        insertEvent(database, row.conversation_id, "tool.failed", {
+          runId,
+          toolCallId,
+          toolName: row.tool_name,
+          code: String(code || "tool_execution_failed"),
+          retryable: Boolean(retryable),
+        });
+        return mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(row.id));
+      });
+    },
+
+    /** 按开始顺序返回一个 Run 的全部工具事实，供重放、API 和验收使用。 */
+    listToolCalls(runId) {
+      return listToolCallsForRun(database, runId);
     },
 
     /** 在同一事务中写入助手消息、usage、Context Manifest、韧性证据并完成 Run。 */
@@ -516,6 +644,7 @@ function migrate(database) {
       user_id TEXT NOT NULL,
       title TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('active', 'closed')),
+      archived_at TEXT,
       version INTEGER NOT NULL,
       memory_version INTEGER NOT NULL,
       summarized_through_seq INTEGER NOT NULL,
@@ -527,6 +656,8 @@ function migrate(database) {
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       request_id TEXT NOT NULL,
+      source_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+      recovery_mode TEXT,
       user_message_id TEXT,
       assistant_message_id TEXT,
       status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'cancelled', 'failed')),
@@ -603,10 +734,33 @@ function migrate(database) {
       payload_json TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+      CREATE TABLE IF NOT EXISTS tool_calls (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      tool_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+      input_json TEXT NOT NULL,
+      output_json TEXT,
+      source_name TEXT,
+      observed_at TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      retryable INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(run_id, tool_call_id)
+    );
+      CREATE INDEX IF NOT EXISTS tool_calls_run_idx ON tool_calls(run_id, started_at);
     `);
     ensureColumn(database, "runs", "resilience_json", "TEXT");
     ensureColumn(database, "messages", "references_json", "TEXT NOT NULL DEFAULT '[]'");
     migrateCancelledRunStatus(database);
+    ensureColumn(database, "conversations", "archived_at", "TEXT");
+    ensureColumn(database, "runs", "source_run_id", "TEXT REFERENCES runs(id) ON DELETE SET NULL");
+    ensureColumn(database, "runs", "recovery_mode", "TEXT");
+    database.exec("CREATE INDEX IF NOT EXISTS conversations_archive_idx ON conversations(archived_at, updated_at DESC)");
   } finally {
     database.exec("PRAGMA foreign_keys = ON");
   }
@@ -733,6 +887,25 @@ function getRunOrThrow(database, runId) {
   return row;
 }
 
+/** 查询指定 Run 中的工具调用，不存在时抛出稳定业务错误。 */
+function getToolCallOrThrow(database, runId, toolCallId) {
+  const row = database
+    .prepare("SELECT * FROM tool_calls WHERE run_id = ? AND tool_call_id = ?")
+    .get(runId, toolCallId);
+  if (!row) throw new ConversationStoreError("Tool call not found", 404, "tool_call_not_found");
+  return row;
+}
+
+/** 校验恢复来源属于当前会话且终止状态与恢复模式匹配。 */
+function validateRecoverySource(database, conversationId, sourceRunId, recoveryMode) {
+  if (!sourceRunId && !recoveryMode) return;
+  const expectedStatus = RECOVERY_SOURCE_STATUS[recoveryMode];
+  const source = sourceRunId ? database.prepare("SELECT * FROM runs WHERE id = ? AND conversation_id = ?").get(sourceRunId, conversationId) : null;
+  if (!source || !expectedStatus || source.status !== expectedStatus) {
+    throw new ConversationStoreError("Recovery source is not valid for this mode", 409, "invalid_run_recovery_source");
+  }
+}
+
 /** 将数据库 Run 行组合成可供 Runtime 重放的完整结果。 */
 function buildRunResult(database, run, replayed) {
   const userMessage = run.user_message_id
@@ -745,8 +918,22 @@ function buildRunResult(database, run, replayed) {
     run: mapRunRow(run),
     userMessage,
     assistantMessage,
+    toolCalls: listToolCallsForRun(database, run.id),
     replayed,
   };
+}
+
+/** 为会话详情中的 Run 附加已持久化工具事实。 */
+function mapRunWithToolCalls(database, row) {
+  return { ...mapRunRow(row), toolCalls: listToolCallsForRun(database, row.id) };
+}
+
+/** 查询并映射一个 Run 的全部工具调用。 */
+function listToolCallsForRun(database, runId) {
+  return database
+    .prepare("SELECT * FROM tool_calls WHERE run_id = ? ORDER BY started_at ASC, rowid ASC")
+    .all(runId)
+    .map(mapToolCallRow);
 }
 
 /** 写入会话事件日志，事件与业务状态共享外层事务。 */
@@ -785,6 +972,7 @@ function mapConversationRow(row) {
     userId: row.user_id,
     title: row.title,
     status: row.status,
+    archivedAt: row.archived_at || null,
     version: Number(row.version),
     memoryVersion: Number(row.memory_version),
     summarizedThroughSeq: Number(row.summarized_through_seq),
@@ -821,6 +1009,8 @@ function mapRunRow(row) {
     id: row.id,
     conversationId: row.conversation_id,
     requestId: row.request_id,
+    sourceRunId: row.source_run_id || null,
+    recoveryMode: row.recovery_mode || null,
     status: row.status,
     model: row.model,
     usage: parseJson(row.usage_json),
@@ -828,6 +1018,31 @@ function mapRunRow(row) {
     resilience: parseJson(row.resilience_json),
     error: row.error,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 将 tool_calls 行转换为稳定的 camelCase ToolResult 审计结构。 */
+function mapToolCallRow(row) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    runId: row.run_id,
+    toolCallId: row.tool_call_id,
+    toolName: row.tool_name,
+    status: row.status,
+    input: parseJson(row.input_json, {}),
+    output: parseJson(row.output_json),
+    source: row.source_name || null,
+    observedAt: row.observed_at || null,
+    error: row.error_code
+      ? {
+          code: row.error_code,
+          message: row.error_message || "工具执行失败。",
+          retryable: Boolean(row.retryable),
+        }
+      : null,
+    startedAt: row.started_at,
     updatedAt: row.updated_at,
   };
 }

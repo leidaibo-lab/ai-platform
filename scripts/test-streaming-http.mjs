@@ -78,6 +78,41 @@ async function testStreamingRunOverHttp() {
     assert.equal(detail.messages.length, 2);
     assert.equal(detail.messages.filter(isAssistantMessage).length, 1);
 
+    const archivedConversation = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
+      { method: "PATCH", body: { title: "HTTP 工作台", archived: true } },
+    );
+    assert.equal(archivedConversation.title, "HTTP 工作台");
+    assert.ok(archivedConversation.archivedAt);
+    const unarchivedConversation = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
+      { method: "PATCH", body: { archived: false } },
+    );
+    assert.equal(unarchivedConversation.archivedAt, null);
+
+    const regenerateResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: "http-regenerate-request",
+          clientMessageId: "http-regenerate-message",
+          model: "chat-quality",
+          sourceRunId: detail.latestRun.id,
+          recoveryMode: "regenerate",
+          message: "验证 HTTP 流",
+        }),
+      },
+    );
+    const regenerateEvents = await readSseEvents(regenerateResponse.body);
+    assert.deepEqual(regenerateEvents.map(readEventName), ["run-started", "text-delta", "text-delta", "completed"]);
+    const regeneratedDetail = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
+    );
+    assert.equal(regeneratedDetail.latestRun.sourceRunId, detail.latestRun.id);
+    assert.equal(regeneratedDetail.latestRun.recoveryMode, "regenerate");
+
     const authorizationResponse = await fetch(
       `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
       {

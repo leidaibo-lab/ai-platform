@@ -1,6 +1,6 @@
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ghcr.io/berriai/litellm@sha256:89ccaccfda9083f7693777597ca27f8ffca12045e4fa9277155fb7c5f06e68b2
     container_name: ai-platform-model-gateway
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     env_file:
