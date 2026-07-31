@@ -121,7 +121,7 @@ export function selectCompactionRange(messages, lowTokenBudget) {
   return messages.slice(0, Math.max(0, cutIndex));
 }
 
-/** 调用模型提取 MemoryDelta，并在响应格式不兼容时退回纯 JSON 提示。 */
+/** 调用 AI SDK 结构化输出提取 MemoryDelta，并在 provider 不兼容时退回纯 JSON 提示。 */
 async function extractMemoryDelta({ gatewayClient, memoryItems, messages, maxCompletionTokens, resilienceContext }) {
   const prompt = buildExtractionPrompt(memoryItems, messages);
   const request = {
@@ -135,7 +135,7 @@ async function extractMemoryDelta({ gatewayClient, memoryItems, messages, maxCom
     ],
     temperature: 0.1,
     maxCompletionTokens,
-    responseFormat: buildMemoryResponseFormat(),
+    outputSchema: buildMemoryOutputSchema(),
     resilienceContext,
     operation: "memory.compact",
   };
@@ -147,12 +147,12 @@ async function extractMemoryDelta({ gatewayClient, memoryItems, messages, maxCom
     if (error?.status !== 400) throw error;
     data = await gatewayClient.chatCompletions({
       ...request,
-      responseFormat: undefined,
+      outputSchema: undefined,
     });
   }
   const content = data?.choices?.[0]?.message?.content || "";
   return {
-    delta: normalizeMemoryDelta(parseModelJson(content), messages),
+    delta: normalizeMemoryDelta(data?.output ?? parseModelJson(content), messages),
     usage: data?.usage || null,
     model: data?.model || gatewayClient.model,
   };
@@ -190,66 +190,63 @@ function buildExtractionPrompt(memoryItems, messages) {
   ].join("\n\n");
 }
 
-/** 定义 MemoryDelta 的严格 JSON Schema。 */
-function buildMemoryResponseFormat() {
+/** 定义交给 AI SDK `Output.object` 的 MemoryDelta JSON Schema 和模型提示元数据。 */
+function buildMemoryOutputSchema() {
   const itemProperties = {
     type: { type: "string", enum: [...ALLOWED_TYPES] },
     entity: { type: "string" },
     key: { type: "string" },
   };
   return {
-    type: "json_schema",
-    json_schema: {
-      name: "conversation_memory_delta",
-      strict: true,
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["upserts", "supersedes", "episode"],
-        properties: {
-          upserts: {
-            type: "array",
-            items: {
+    name: "conversation_memory_delta",
+    description: "长期会话记忆的新增、纠正和 Episode 摘要",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["upserts", "supersedes", "episode"],
+      properties: {
+        upserts: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "entity", "key", "value", "reason", "itemStatus", "priority", "sourceMessageIds"],
+            properties: {
+              ...itemProperties,
+              value: { type: "string" },
+              reason: { type: "string" },
+              itemStatus: { type: "string" },
+              priority: { type: "string", enum: [...ALLOWED_PRIORITIES] },
+              sourceMessageIds: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+        supersedes: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "entity", "key", "sourceMessageIds"],
+            properties: {
+              ...itemProperties,
+              sourceMessageIds: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+        episode: {
+          anyOf: [
+            { type: "null" },
+            {
               type: "object",
               additionalProperties: false,
-              required: ["type", "entity", "key", "value", "reason", "itemStatus", "priority", "sourceMessageIds"],
+              required: ["topic", "summary", "sourceMessageIds"],
               properties: {
-                ...itemProperties,
-                value: { type: "string" },
-                reason: { type: "string" },
-                itemStatus: { type: "string" },
-                priority: { type: "string", enum: [...ALLOWED_PRIORITIES] },
+                topic: { type: "string" },
+                summary: { type: "string" },
                 sourceMessageIds: { type: "array", items: { type: "string" } },
               },
             },
-          },
-          supersedes: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              required: ["type", "entity", "key", "sourceMessageIds"],
-              properties: {
-                ...itemProperties,
-                sourceMessageIds: { type: "array", items: { type: "string" } },
-              },
-            },
-          },
-          episode: {
-            anyOf: [
-              { type: "null" },
-              {
-                type: "object",
-                additionalProperties: false,
-                required: ["topic", "summary", "sourceMessageIds"],
-                properties: {
-                  topic: { type: "string" },
-                  summary: { type: "string" },
-                  sourceMessageIds: { type: "array", items: { type: "string" } },
-                },
-              },
-            ],
-          },
+          ],
         },
       },
     },

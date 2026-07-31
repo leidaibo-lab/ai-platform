@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDemoConfig } from "../src/config/env.mjs";
+import { createOpenMeteoWeatherConnector } from "../src/connectors/open-meteo-weather.mjs";
 import { GatewayRequestError, createGatewayClient } from "../src/gateway/gateway-client.mjs";
 import { initializeOpenTelemetry } from "../src/observability/otel-runtime.mjs";
 import { RuntimeExecutionError, RuntimeInputError, createChatRuntime } from "../src/runtime/chat-runtime.mjs";
@@ -11,6 +12,8 @@ import { createConversationCoordinator } from "../src/runtime/conversation-coord
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { createMemoryManager } from "../src/runtime/memory-manager.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
+import { createToolRegistry } from "../src/tools/tool-registry.mjs";
+import { createWeatherToolDefinition } from "../src/tools/weather-tool.mjs";
 
 const rootDir = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
 const demoDir = join(rootDir, "demo", "dist");
@@ -33,6 +36,10 @@ const memoryManager = createMemoryManager({
   memoryOptions: config.memory,
   onError: reportBackgroundMemoryError,
 });
+const weatherConnector = createOpenMeteoWeatherConnector({ timeoutMs: config.tools.weatherTimeoutMs });
+const toolRegistry = createToolRegistry(
+  config.tools.weatherEnabled ? [createWeatherToolDefinition(weatherConnector)] : [],
+);
 const chatRuntime = createChatRuntime({
   gatewayClient,
   contextOptions: config.context,
@@ -40,6 +47,8 @@ const chatRuntime = createChatRuntime({
   coordinator,
   contextPlanner,
   memoryManager,
+  toolRegistry,
+  toolOptions: { maxSteps: config.tools.maxSteps },
   chainTracer,
   resilienceOptions: config.resilience,
 });
@@ -116,6 +125,10 @@ async function handleConversationCollection(req, res) {
 async function handleConversationRoute(req, res, url, route) {
   if (!route.action && req.method === "GET") {
     sendJson(res, 200, chatRuntime.getConversation(route.conversationId));
+    return;
+  }
+  if (!route.action && req.method === "PATCH") {
+    sendJson(res, 200, chatRuntime.updateConversation(route.conversationId, await readJson(req)));
     return;
   }
   if (route.action === "runs" && req.method === "POST") {
@@ -206,9 +219,15 @@ async function streamConversationRun(req, res, conversationId) {
     writeSseEvent(res, "text-delta", { delta });
   }
 
+  /** 将 Runtime 工具阶段映射为命名 SSE 事件，不发送工具输入或完整结果。 */
+  function sendToolEvent(event) {
+    writeSseEvent(res, `tool-${event.type}`, event);
+  }
+
   try {
     await runTracedConversation(conversationId, body, "sse", {
       onRunStarted: sendRunStarted,
+      onToolEvent: sendToolEvent,
       onTextDelta: sendTextDelta,
       /** 在渠道交付阶段写入最终 completed 事件。 */
       onCompleted(result) {
@@ -265,6 +284,7 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
             });
             if (typeof delivery.onRunStarted === "function") await delivery.onRunStarted(input);
           },
+          onToolEvent: delivery.onToolEvent,
           onTextDelta: delivery.onTextDelta,
         });
         const finalStatus = result.cancelled ? "cancelled" : "completed";

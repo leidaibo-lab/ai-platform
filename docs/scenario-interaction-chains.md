@@ -36,6 +36,7 @@
   -> Agent Runtime / Run 状态 / 幂等
   -> 上下文装箱 / Token 预算
   -> GatewayClient / AI SDK / LiteLLM / 上游模型
+       -> [按需] Runtime 工具 allowlist / 只读 Connector / ToolResult 回填
   -> 结果校验 / 错误分类 / 状态交付
   -> 准确度 / 实时性 / 稳定性 / Token 观测
 ```
@@ -43,9 +44,9 @@
 | 能力类型 | 共同底座负责 | 场景链路仍需补齐 |
 | --- | --- | --- |
 | 输入 | 统一身份、基础校验、`requestId`、`conversationId` | 媒体、文档、业务数据、事件和批量输入的专属治理 |
-| 执行 | Agent Runtime、Run 状态、幂等和模型调用边界 | 检索、工具循环、确认执行、事件消费和异步任务 |
-| 上下文 | Context Planner、结构化记忆和 Token 预算 | 引用证据、ToolResult、事件富化结果和分片结果的装箱策略 |
-| 输出 | 统一错误、结果状态和基础交付 | 逐图错误、文档引用、数据时间、执行回读和批量覆盖率 |
+| 执行 | Agent Runtime、Run 状态、幂等、模型调用边界、服务端工具 allowlist 和有界只读工具循环 | 各领域 Connector、检索、写操作确认、事件消费和异步任务 |
+| 上下文 | Context Planner、结构化记忆、Token 预算，以及当前 Run 内 ToolResult 回填 | 跨 Run 引用证据、业务结果投影、事件富化结果和分片结果的装箱策略 |
+| 输出 | 统一错误、结果状态、工具阶段事实和基础交付 | 逐图错误、文档引用、业务口径、执行回读和批量覆盖率 |
 | 质量 | 统一 trace 字段和四维指标框架 | 每个场景独立的 fixture、基线、阈值和失败判定 |
 
 因此，“输入被拼入 Prompt 且模型返回内容”不能作为一个场景完成的定义。只有场景专属节点和四维验收证据同时具备，才可以声明该场景达到基础可用。
@@ -58,10 +59,10 @@
 
 | 场景 | 引用类型方向 | 核心标识与语义 | 数据所有者 | 当前契约状态 |
 | --- | --- | --- | --- | --- |
-| C1 对话问答 | `conversation_message` | `messageId`；引用当前会话中已持久化的用户或助手消息 | Agent Runtime | 本次进入稳定契约，待实现 |
+| C1 对话问答 | `conversation_message` | `messageId`；引用当前会话中已持久化的用户或助手消息 | Agent Runtime | 已进入稳定契约并实现 |
 | C2 图片理解 | `image_asset` | 受控资产 ID、内容摘要、MIME 和版本；不能只依赖临时 URL | 媒体连接器 | 目标分类，未实现 |
 | C3 文档知识问答 | `document_chunk`、`web_page_snapshot` | 文档/片段或网页快照 ID、版本、抓取时间和可打开来源 | 文档与知识连接器 | 目标分类，未实现 |
-| C4 业务数据查询 | `business_record`、`tool_result` | 业务主键、查询口径、数据时间、工具调用 ID 和 schema 版本 | 业务连接器 | 目标分类，未实现 |
+| C4 业务数据查询 | `business_record`、`tool_result` | 业务主键、查询口径、数据时间、工具调用 ID 和 schema 版本 | 业务连接器 | `tool_result` 已由天气只读工具进入稳定契约；企业业务记录仍未实现 |
 | C5 实时事件处理 | `event_record` | 事件 ID、来源、发生时间、接收时间和去重语义 | 事件连接器 | 目标分类，未实现 |
 | C6 操作执行 | `operation_preview`、`operation_result` | 操作 ID、确认版本、副作用状态和结果回读 | Agent Runtime 与业务连接器 | 目标分类，未实现 |
 | C7 批量分析 | `batch_artifact` | 任务/分片 ID、数据截止时间、覆盖范围和产物版本 | 批任务与产物存储 | 目标分类，未实现 |
@@ -101,7 +102,7 @@
 | Memory Manager | `[当前]` `memoryVersion` 冲突后重读并重算，最多尝试三次 | 只重算尚未压缩的连续区间，不回滚原始消息或主 Run |
 | 模型生成 | `[当前]` AI SDK `maxRetries: 0`，平台统一重试执行器拥有唯一尝试预算并将证据写入 Run | 默认 `maxAttempts: 3`，即首次调用加两次重试；只处理瞬时网络错误、408、429、500、502、503、504，并遵守 `Retry-After` |
 | 流式交付 | `[当前]` `POST .../runs/stream` 通过 SSE 交付 AI SDK 文本增量；独立事件流按 SQLite 游标同步已落库事实 | 首个有效文本增量前可重试模型；开始输出后不静默重生成。浏览器断线后查询 Run 最终状态，不要求 Token 级断点续传 |
-| 未来只读 Connector | `[目标]` 尚未实现 | 只有操作本身幂等、错误明确可重试且仍在 Run 总预算内时才自动重试 |
+| 当前只读 Connector | `[当前]` Open-Meteo 查询共享 Run 截止时间和取消信号；失败保存安全 ToolResult 并回填模型 | 当前不自动重试 Connector；已完成 Run 的幂等重放直接返回工具事实，不再次访问外部服务 |
 | 未来写操作 | `[目标]` 尚未实现 | 必须具备业务幂等键、结果回读和不确定状态处理；未知结果不得自动重放 |
 
 ### C1 当前模型重试策略
@@ -124,9 +125,9 @@ durability: one Run + one final assistant message
 | C1 对话问答 | Web 文本；未来 IM、IDE、API 文本 | 连续、可纠正的自然语言回答 | V0.6 Demo 已跑通；ChainTrace 技术接入默认关闭，真实 Runtime 验收为 TODO | 保持功能回归；按触发条件恢复运行态验收 |
 | C2 图片理解 | 图片 URL、图片 data URL | 图片分析、问答或结构化识别结果 | 已透传到视觉模型，缺少媒体治理 | 补媒体校验、能力路由和视觉评测 |
 | C3 文档知识问答 | 文档链接、文件、知识库 | 带引用和时效说明的回答 | 当前只把 URL 当文本，不读取文档 | 跑通单一文档源的解析、检索、引用 |
-| C4 业务数据查询 | 业务 API、数据库、MCP、搜索 | 基于实时业务事实的可验证回答 | 只有 Tool Registry 预留 | 跑通一个真实只读工具闭环 |
+| C4 业务数据查询 | 业务 API、数据库、MCP、搜索 | 基于实时业务事实的可验证回答 | 已通过 C1 渠道跑通 Open-Meteo 只读天气的确定性工具闭环；企业业务数据仍未实现 | 补真实模型天气验收、追问复用证据和更多业务 Connector 的选型 |
 | C5 实时事件处理 | Webhook、IM 事件、消息队列、告警 | 分类、摘要、建议或及时通知 | 未实现；当前 SSE 仅用于模型文本交付和会话事实同步 | 跑通单一事件源的去重、富化和通知 |
-| C6 操作执行 | 用户指令、审批动作、Agent 计划 | 可确认、可审计、可验证的业务操作 | 未实现真实工具循环和人工确认 | 在只读工具稳定后增加一项低风险写操作 |
+| C6 操作执行 | 用户指令、审批动作、Agent 计划 | 可确认、可审计、可验证的业务操作 | 已有只读工具循环，但写操作、人工确认和结果回读未实现 | 先补权限、预览、业务幂等和人工确认，再增加一项低风险写操作 |
 | C7 批量分析 | 多文件、表格、历史记录、离线任务 | 完整报告、清单或结构化结果集 | 未实现 | 建立可分片、可恢复、可控预算的异步任务 |
 
 ## 当前建设焦点：C1 功能可用与确定性回归
@@ -139,11 +140,12 @@ durability: one Run + one final assistant message
 
 | 范围 | 当前已有基础 | C1 仍需补齐 |
 | --- | --- | --- |
-| 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行 | 把重复、并发、失败和恢复结果统一纳入链路证据 |
+| 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行；标题与独立归档事实；恢复 Run 来源关系 | 把跨进程并发与更多异常恢复结果纳入链路证据 |
 | 上下文与记忆 | 结构化记忆、Context Planner、Context Manifest、token 高低水位 | 用真实模型验证纠正、实体隔离、任务状态和来源追溯 |
 | 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通；Run 可选择网关可见模型别名并保存实际模型与 usage | 固定评测模型、Prompt、fixture 和参数，建立可重复比较的四维基线 |
-| 结果交付 | JSON Run、POST SSE 模型文本流、助手消息最终单次落库和 SSE 多端同步；渠道交付 Span 已完成代码接入 | 当前以功能回归为主；正式阶段耗时基线按 TODO 触发条件恢复 |
-| 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace 埋点 | 当前保持自动化回归；真实模型超时、网关错误、断连和取消的运行态样本延期 |
+| 只读工具 | C1 渠道可按模型决策调用服务端 `get_weather`；Runtime 校验 allowlist、持久化 ToolResult，并通过 SSE 交付真实工具阶段 | 补真实模型天气验收和追问证据；该切片只证明天气工具闭环，不代表完整 C4 业务数据能力 |
+| 结果交付 | JSON Run、POST SSE 模型文本流、助手消息最终单次落库和 SSE 多端同步；渠道支持安全 Markdown、长列表窗口、键盘与移动端基线 | 当前以功能回归和 gzip 预算为主；正式阶段耗时基线按 TODO 触发条件恢复 |
+| 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace；渠道可创建 `retry / regenerate / continue` 新 Run | 当前保持自动化回归；真实模型超时、网关错误和更复杂断连样本延期 |
 | 可观测 | 已有后端中立 `ChainTracer`、OTLP/HTTP protobuf、Phoenix 选型、部署入口、PoC 业务 ID 查询和敏感正文脱敏 | TODO：正式实例真实 JSON/SSE Run、三业务 ID 查询、隐私复核、故障隔离和四维基线 |
 
 ### C1 完整运行态验收定义（TODO）
@@ -184,21 +186,27 @@ C1 当前功能可用以浏览器/API 主链和自动化回归为证据；不宣
 ```mermaid
 flowchart LR
   Source["[当前] 浏览器文本 / 模型选择<br/>[目标] IM / IDE / API 文本"]
-  Adapter["渠道 Adapter<br/>身份映射 / requestId / conversationId / model"]
+  Adapter["渠道 Adapter<br/>身份映射 / requestId / conversationId / model<br/>可选 sourceRunId / recoveryMode"]
   Normalize["[当前] 输入与模型别名归一化校验"]
   Runtime["[当前] Agent Runtime<br/>幂等 Run / 同会话串行"]
   StoreIn["[当前] SQLite 先写用户消息"]
   Planner["[当前] Context Planner<br/>记忆 / Episode / 最近消息"]
-  Gateway["[当前] GatewayClient<br/>平台统一重试执行器"]
-  AiSdk["[当前] AI SDK"]
+  Gateway["[当前] GatewayClient<br/>平台统一重试 / Core 多步调用"]
+  AiSdk["[当前] AI SDK<br/>文本生成 / 工具消息编排"]
   LiteLLM["[当前] LiteLLM"]
   Model["[当前] 上游模型"]
+  Registry["[当前] Runtime Tool Registry<br/>只读 allowlist / schema"]
+  Weather["[当前] get_weather / Open-Meteo<br/>固定 HTTPS 端点"]
+  ToolResult["[当前] ToolResult 事实<br/>状态 / 来源 / 数据时间"]
   StoreOut["[当前] 写回答 / usage / Context Manifest"]
   Delivery["[当前] POST SSE 文本流 / 事实同步<br/>分类失败原因 / 恢复入口"]
   Memory["[当前] Memory Manager 异步压缩"]
 
   Source --> Adapter --> Normalize --> Runtime --> StoreIn --> Planner
   Planner --> Gateway --> AiSdk --> LiteLLM --> Model
+  Model -->|工具调用| AiSdk
+  AiSdk -->|Runtime 执行包装器| Registry --> Weather --> ToolResult --> AiSdk
+  ToolResult -->|tool-started / completed / failed| Delivery
   Model -->|文本增量| Delivery
   Model -->|最终结果| StoreOut -->|completed / 事实同步| Delivery
   StoreOut -.-> Memory
@@ -212,7 +220,7 @@ flowchart LR
 | 稳定性 | 保留 `requestId` 和 `clientMessageId` 幂等；区分输入错误、Run 冲突、鉴权、限流、模型超时、上游故障和空响应，并向渠道返回安全处理建议 |
 | Token 合理性 | 记录系统规则、当前输入、结构化记忆、Episode、历史消息和输出的分段 token；检查被排除内容是否符合优先级 |
 
-友好交互要求：收到输入后明确当前状态；用户可选择网关授权的模型别名；生成失败时在对应输入后说明安全原因和处理建议；问题缺少关键条件时先澄清；回答中区分已知事实、推断和不确定项；用户纠正后能在后续轮次稳定使用新事实。
+友好交互要求：收到输入后明确当前状态；用户可选择网关授权的模型别名；本地会话加载不依赖网关探测完成；工具阶段只能由服务端事实驱动，并在实时天气回答中说明地点、数据时间和来源；生成失败时在对应输入后说明安全原因和处理建议，并允许用新 Run 重试、编辑后发送、重新生成或继续生成；长回答可导航和消费；问题缺少关键条件时先澄清；回答中区分已知事实、推断和不确定项；用户纠正后能在后续轮次稳定使用新事实。
 
 ## C2 图片理解链路
 
@@ -287,27 +295,29 @@ flowchart LR
 
 ### 适用范围
 
-适用于查询项目、需求、订单、监控、代码仓库或其他实时业务数据。第一步只接一个真实只读工具，完整跑通选择、参数校验、权限、执行、结果回填和失败处理。
+适用于查询项目、需求、订单、监控、代码仓库或其他实时业务数据。当前以 Open-Meteo 天气查询作为第一个真实只读工具，验证选择、参数校验、allowlist、执行、结果回填和失败处理；企业业务数据连接器仍未实现。
 
 ```mermaid
 flowchart LR
-  Source["[目标] Web / IM / API 查询"]
+  Source["[当前] C1 浏览器查询<br/>[目标] IM / API 查询"]
   Adapter["渠道 Adapter<br/>统一身份与当前问题"]
-  Runtime["Agent Runtime<br/>意图判断 / 澄清 / Run 状态"]
-  Registry["[当前预留] Tool Registry<br/>工具 schema / allowlist"]
-  Connector["[下一步] 只读 Connector<br/>权限 / 参数 / 超时 / 脱敏"]
-  Business["[目标] 业务 API / DB / MCP / Search"]
-  Result["[下一步] 结构化 ToolResult<br/>来源 / 时间 / 可重试性"]
-  Pack["Runtime<br/>问题 + 业务事实 + 会话上下文"]
-  Gateway["GatewayClient"]
-  AiSdk["AI SDK"]
-  LiteLLM["LiteLLM"]
-  Model["上游模型"]
-  Validate["[下一步] schema / 事实引用校验"]
-  Delivery["渠道输出<br/>答案 + 数据时间 + 来源"]
+  Runtime["[当前] Agent Runtime<br/>Run / 工具事实 / 幂等"]
+  Gateway["[当前] GatewayClient<br/>Core 多步调用"]
+  AiSdk["[当前] AI SDK<br/>工具消息编排"]
+  LiteLLM["[当前] LiteLLM"]
+  Model["[当前] 上游模型"]
+  Registry["[当前] Tool Registry<br/>schema / 只读 allowlist"]
+  Connector["[当前] Open-Meteo Connector<br/>参数 / 超时 / 脱敏"]
+  Business["[当前] Open-Meteo API<br/>[目标] 业务 API / DB / MCP / Search"]
+  Result["[当前] weather.v1 ToolResult<br/>来源 / 时间 / 可重试性"]
+  Validate["[当前] schema / 来源与时间约束<br/>[目标] 企业事实引用校验"]
+  Delivery["[当前] C1 渠道输出<br/>答案 + 数据时间 + 来源"]
 
-  Source --> Adapter --> Runtime --> Registry --> Connector --> Business --> Result --> Pack
-  Pack --> Gateway --> AiSdk --> LiteLLM --> Model --> Validate --> Delivery
+  Source --> Adapter --> Runtime --> Gateway --> AiSdk --> LiteLLM --> Model
+  Model -->|get_weather 调用| AiSdk
+  AiSdk -->|Runtime 执行包装器| Registry --> Connector --> Business --> Result --> AiSdk
+  Result -->|工具阶段事实| Delivery
+  Model -->|最终回答| Validate --> Delivery
 ```
 
 | 质量维度 | 本链路控制点 |
