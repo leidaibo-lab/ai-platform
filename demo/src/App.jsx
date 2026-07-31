@@ -19,6 +19,7 @@ import {
   Input,
   Modal,
   Progress,
+  Segmented,
   Select,
   Tag,
   Tooltip,
@@ -27,12 +28,14 @@ import {
 } from "antd";
 import {
   Archive,
+  ArchiveRestore,
   ArrowDown,
   Bot,
   Brain,
   CircleAlert,
   Copy,
   Database,
+  Download,
   Ellipsis,
   FileImage,
   FileText,
@@ -42,26 +45,33 @@ import {
   Menu,
   MessageSquareQuote,
   PanelRight,
-  Paperclip,
   Plus,
+  Pencil,
   Quote,
   RefreshCw,
   RotateCcw,
+  Search,
   X,
 } from "lucide-react";
 import {
   activeRunStageLabel,
+  buildConversationWorkspace,
   buildGatewayReachabilityCopy,
+  buildMessageWindow,
   buildMessagePreview,
   buildRunFailureCopy,
   canSubmitRun,
   conversationStatusLabel,
+  deserializeConversationDrafts,
+  extractMarkdownHeadings,
   insertLatestRunFailure,
   isMessageListAtLatest,
+  isSafeMarkdownHref,
   readGatewayModels,
   readConversationDraft,
   recoverRunInput,
   scrollMessageListToLatest as scrollReadyMessageListToLatest,
+  serializeConversationDrafts,
   storeConversationDraft,
 } from "./conversation-view-model.js";
 import ConversationAnchorRail from "./conversation-anchor-rail.jsx";
@@ -72,6 +82,9 @@ const MAX_ATTACHMENTS = 8;
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_REFERENCES = 3;
+const CONVERSATION_PAGE_SIZE = 40;
+const MESSAGE_PAGE_SIZE = 80;
+const DRAFT_STORAGE_KEY = "ai-platform:c1:conversation-drafts:v1";
 
 let workspaceInitializationPromise = null;
 
@@ -81,16 +94,13 @@ function initializeWorkspace() {
   return workspaceInitializationPromise;
 }
 
-/** 同时读取网关与会话事实；没有会话时创建唯一初始会话。 */
+/** 读取本地会话事实；没有会话时创建唯一初始会话。 */
 async function loadInitialWorkspace() {
-  const [gateway, initialConversations] = await Promise.all([
-    loadGatewayStatusSafely(),
-    runtimeAdapter.listConversations(),
-  ]);
+  const initialConversations = await runtimeAdapter.listConversations();
   const conversations = [...initialConversations];
   if (conversations.length === 0) conversations.push(await runtimeAdapter.createConversation());
   const conversation = await runtimeAdapter.getConversation(conversations[0].id);
-  return { gateway, conversations, conversation };
+  return { conversations, conversation };
 }
 
 /** 网关不可用时保留渠道页面与本地会话能力，并返回可展示的失败状态。 */
@@ -99,6 +109,15 @@ async function loadGatewayStatusSafely() {
     return await runtimeAdapter.getGatewayStatus();
   } catch (error) {
     return { ok: false, error: error.message, model: "-", models: [], gatewayBaseUrl: "-" };
+  }
+}
+
+/** 从当前标签页的 sessionStorage 读取渠道草稿；不可用时退化为空集合。 */
+function loadStoredConversationDrafts() {
+  try {
+    return deserializeConversationDrafts(globalThis.sessionStorage?.getItem(DRAFT_STORAGE_KEY));
+  } catch {
+    return new Map();
   }
 }
 
@@ -118,6 +137,12 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState("");
   const [runError, setRunError] = useState("");
   const [lastLatency, setLastLatency] = useState(null);
+  const [conversationQuery, setConversationQuery] = useState("");
+  const [conversationFilter, setConversationFilter] = useState("active");
+  const [conversationLimit, setConversationLimit] = useState(CONVERSATION_PAGE_SIZE);
+  const [messageLimit, setMessageLimit] = useState(MESSAGE_PAGE_SIZE);
+  const [pendingRecovery, setPendingRecovery] = useState(null);
+  const [renameDraft, setRenameDraft] = useState({ open: false, conversation: null, value: "", error: "" });
   const [conversationDrawerOpen, setConversationDrawerOpen] = useState(false);
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
   const [contextExpanded, setContextExpanded] = useState(false);
@@ -130,7 +155,7 @@ export default function App() {
   const attachmentFactsRef = useRef([]);
   const referenceFactsRef = useRef([]);
   const selectedModelRef = useRef("");
-  const conversationDraftsRef = useRef(new Map());
+  const conversationDraftsRef = useRef(loadStoredConversationDrafts());
   const visibleMessageCountRef = useRef({ conversationId: null, count: 0 });
   const activeRunRef = useRef(null);
   const cancelRequestedRef = useRef(false);
@@ -143,11 +168,11 @@ export default function App() {
       try {
         const data = await initializeWorkspace();
         if (disposed) return;
-        setGateway(data.gateway);
-        setSelectedModelFact(resolveSelectedModel(data.gateway));
         setConversations(data.conversations);
         setCurrentConversationId(data.conversation.id);
         setConversation(data.conversation);
+        restoreConversationDraft(data.conversation.id);
+        void refreshGatewayStatus();
       } catch (error) {
         if (!disposed) setRunError(error.message);
       } finally {
@@ -160,6 +185,34 @@ export default function App() {
       disposed = true;
     };
   }, []);
+
+  // 顶层统一处理会话搜索和新建快捷键，避免桌面与移动面板重复响应。
+  useEffect(() => {
+    /** 聚焦当前可见会话搜索框，或在允许时创建新会话。 */
+    function handleWorkspaceShortcut(event) {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        const inputs = document.querySelectorAll("[data-conversation-search]");
+        for (const input of inputs) {
+          if (input.offsetParent !== null) {
+            input.focus();
+            break;
+          }
+        }
+        return;
+      }
+      if (event.shiftKey && event.key.toLocaleLowerCase() === "o" && !activeRunRef.current) {
+        event.preventDefault();
+        void handleCreateConversation();
+      }
+    }
+    document.addEventListener("keydown", handleWorkspaceShortcut);
+    /** 卸载页面时移除全局快捷键监听。 */
+    return function disposeWorkspaceShortcut() {
+      document.removeEventListener("keydown", handleWorkspaceShortcut);
+    };
+  }, [currentConversationId]);
 
   // 当前会话变化时重建事实 SSE，并合并短时间内的事件刷新。
   useEffect(() => {
@@ -234,6 +287,18 @@ export default function App() {
     setSelectedModel(normalized);
   }
 
+  /** 将渠道草稿集合写入当前标签页，序列化层会过滤本地图片 data URL。 */
+  function persistConversationDrafts() {
+    try {
+      globalThis.sessionStorage?.setItem(
+        DRAFT_STORAGE_KEY,
+        serializeConversationDrafts(conversationDraftsRef.current),
+      );
+    } catch {
+      // 浏览器禁用存储或达到配额时仍保留当前页面内存草稿。
+    }
+  }
+
   /** 在网关可见别名中保留当前选择，不可用时回退默认或第一个别名。 */
   function resolveSelectedModel(nextGateway, requestedModel = selectedModelRef.current) {
     const models = readGatewayModels(nextGateway);
@@ -255,15 +320,16 @@ export default function App() {
         model: selectedModelRef.current,
       },
     );
+    persistConversationDrafts();
   }
 
   /** 恢复目标会话的独立渠道草稿，不把其他会话输入带入当前 Sender。 */
-  function restoreConversationDraft(conversationId) {
+  function restoreConversationDraft(conversationId, nextGateway = gateway) {
     const draft = readConversationDraft(conversationDraftsRef.current, conversationId);
     setComposerFact(draft.value);
     setAttachmentFacts(draft.attachments);
     setReferenceFacts(draft.references);
-    setSelectedModelFact(resolveSelectedModel(gateway, draft.model));
+    setSelectedModelFact(resolveSelectedModel(nextGateway, draft.model));
   }
 
   /** 删除指定会话已经发送或主动结束的渠道草稿。 */
@@ -273,7 +339,24 @@ export default function App() {
       conversationId,
       { value: "", attachments: [], references: [], model: selectedModelRef.current },
     );
+    persistConversationDrafts();
   }
+
+  // 输入变化时持续保存当前会话草稿；本地图片只保留在内存 Map 中。
+  useEffect(() => {
+    if (!currentConversationId) return;
+    conversationDraftsRef.current = storeConversationDraft(
+      conversationDraftsRef.current,
+      currentConversationId,
+      {
+        value: composerValue,
+        attachments,
+        references,
+        model: selectedModel,
+      },
+    );
+    persistConversationDrafts();
+  }, [currentConversationId, composerValue, attachments, references, selectedModel]);
 
   /** 同步 React 与 ref 中的活动 Run，供事实 SSE effect 读取最新生成状态。 */
   function setActiveRunFact(next) {
@@ -318,6 +401,8 @@ export default function App() {
     restoreConversationDraft(conversationId);
     setIsFollowingLatest(true);
     setUnseenMessageCount(0);
+    setMessageLimit(MESSAGE_PAGE_SIZE);
+    setPendingRecovery(null);
     setConversationDrawerOpen(false);
     try {
       setConversation(await runtimeAdapter.getConversation(conversationId));
@@ -339,7 +424,76 @@ export default function App() {
       restoreConversationDraft(created.id);
       setIsFollowingLatest(true);
       setUnseenMessageCount(0);
+      setMessageLimit(MESSAGE_PAGE_SIZE);
+      setPendingRecovery(null);
       setConversationDrawerOpen(false);
+    } catch (error) {
+      setRunError(error.message);
+    }
+  }
+
+  /** 更新会话搜索词并把渐进窗口重置到首批。 */
+  function handleConversationQueryChange(event) {
+    setConversationQuery(event.target.value);
+    setConversationLimit(CONVERSATION_PAGE_SIZE);
+  }
+
+  /** 更新归档筛选并把渐进窗口重置到首批。 */
+  function handleConversationFilterChange(value) {
+    setConversationFilter(value);
+    setConversationLimit(CONVERSATION_PAGE_SIZE);
+  }
+
+  /** 为会话列表追加下一批摘要。 */
+  function handleLoadMoreConversations() {
+    setConversationLimit(conversationLimit + CONVERSATION_PAGE_SIZE);
+  }
+
+  /** 打开受控重命名对话框，标题仍由 Runtime 校验并持久化。 */
+  function handleOpenConversationRename(item) {
+    if (activeRunRef.current) return;
+    setRenameDraft({ open: true, conversation: item, value: item.title || "", error: "" });
+  }
+
+  /** 更新重命名输入并清除旧校验错误。 */
+  function handleConversationRenameChange(event) {
+    setRenameDraft({ ...renameDraft, value: event.target.value, error: "" });
+  }
+
+  /** 关闭会话重命名对话框。 */
+  function closeConversationRename() {
+    setRenameDraft({ open: false, conversation: null, value: "", error: "" });
+  }
+
+  /** 提交标题更新并用服务端返回事实刷新当前详情和摘要列表。 */
+  async function confirmConversationRename() {
+    const title = renameDraft.value.trim();
+    if (!title || title.length > 80) {
+      setRenameDraft({ ...renameDraft, error: "标题需为 1-80 个字符" });
+      return;
+    }
+    try {
+      const updated = await runtimeAdapter.updateConversation(renameDraft.conversation.id, { title });
+      const items = await runtimeAdapter.listConversations();
+      setConversations(items);
+      if (updated.id === currentConversationId) setConversation(updated);
+      closeConversationRename();
+      toastApi.success("会话标题已更新");
+    } catch (error) {
+      setRenameDraft({ ...renameDraft, error: error.message });
+    }
+  }
+
+  /** 切换独立归档状态，不改变 active/closed 生命周期。 */
+  async function handleConversationArchive(item) {
+    if (activeRunRef.current) return;
+    try {
+      const archived = !item.archivedAt;
+      const updated = await runtimeAdapter.updateConversation(item.id, { archived });
+      const items = await runtimeAdapter.listConversations();
+      setConversations(items);
+      if (updated.id === currentConversationId) setConversation(updated);
+      toastApi.success(archived ? "会话已归档" : "会话已取消归档");
     } catch (error) {
       setRunError(error.message);
     }
@@ -427,8 +581,8 @@ export default function App() {
     setReferenceFacts(next);
   }
 
-  /** 用服务端消息事实恢复失败 Run 的正文、附件和引用，生成新 Run 时再创建新幂等标识。 */
-  function restoreFailedInput(sourceMessageId) {
+  /** 用服务端消息事实恢复 Run 的正文、附件和引用，生成新 Run 时再创建新幂等标识。 */
+  function restoreRunInput(sourceMessageId, sourceRunId, recoveryMode) {
     const sourceMessage = conversation?.messages?.find(
       // 恢复只认稳定 messageId，不能从失败提示里的展示文本反推输入。
       (message) => message.id === sourceMessageId,
@@ -443,15 +597,16 @@ export default function App() {
     setComposerFact(recovered.message);
     setAttachmentFacts(recoveredAttachments);
     setReferenceFacts(recoveredReferences);
+    setPendingRecovery({ sourceRunId, recoveryMode });
     setRunError("");
     toastApi.success("原输入已恢复，可调整后重新发送");
   }
 
   /** 恢复失败输入前保护当前草稿，避免覆盖用户尚未发送的内容。 */
-  function handleRestoreFailedInput(sourceMessageId) {
+  function handleEditRecoveryInput(sourceMessageId, sourceRunId, recoveryMode = "retry") {
     const hasDraft = Boolean(composerValue.trim() || attachments.length > 0 || references.length > 0);
     if (!hasDraft) {
-      restoreFailedInput(sourceMessageId);
+      restoreRunInput(sourceMessageId, sourceRunId, recoveryMode);
       return;
     }
     Modal.confirm({
@@ -461,9 +616,63 @@ export default function App() {
       cancelText: "保留草稿",
       /** 用户确认后才覆盖当前渠道草稿。 */
       onOk() {
-        restoreFailedInput(sourceMessageId);
+        restoreRunInput(sourceMessageId, sourceRunId, recoveryMode);
       },
     });
+  }
+
+  /** 取消待发送输入与历史 Run 的恢复关系，不清空用户已经编辑的草稿。 */
+  function clearPendingRecovery() {
+    setPendingRecovery(null);
+  }
+
+  /** 从指定历史 Run 的持久化用户消息构造新的恢复 Run 载荷。 */
+  function buildRecoveryRunPayload(sourceRunId, recoveryMode) {
+    const sourceMessage = conversation?.messages?.find(
+      // 重新执行必须读取服务端稳定用户消息，不能从助手展示文本反推原请求。
+      (message) => message.runId === sourceRunId && message.role === "user",
+    );
+    if (!sourceMessage) return null;
+    const recovered = recoverRunInput(sourceMessage);
+    return buildRunPayload(
+      recovered.message,
+      buildRecoveredAttachments(recovered.imageUrls, recovered.documentUrls),
+      buildRecoveredReferences(recovered.references, conversation.messages),
+      selectedModelRef.current,
+      { sourceRunId, recoveryMode },
+    );
+  }
+
+  /** 直接重试失败 Run，并完整保留当前尚未发送的草稿。 */
+  function handleRetryRun(sourceRunId) {
+    const payload = buildRecoveryRunPayload(sourceRunId, "retry");
+    if (!payload) {
+      toastApi.error("未找到失败 Run 对应的用户消息");
+      return;
+    }
+    void executeRun(payload, { preserveDraft: true });
+  }
+
+  /** 重新生成已完成 Run，并完整保留当前尚未发送的草稿。 */
+  function handleRegenerateRun(sourceRunId) {
+    const payload = buildRecoveryRunPayload(sourceRunId, "regenerate");
+    if (!payload) {
+      toastApi.error("未找到已完成 Run 对应的用户消息");
+      return;
+    }
+    void executeRun(payload, { preserveDraft: true });
+  }
+
+  /** 用显式用户输入继续已取消 Run，不尝试 Token 级断点续传。 */
+  function handleContinueRun(sourceRunId) {
+    const payload = buildRunPayload(
+      "请从上次中断处继续回答，避免重复已经生成的内容。",
+      [],
+      [],
+      selectedModelRef.current,
+      { sourceRunId, recoveryMode: "continue" },
+    );
+    void executeRun(payload, { preserveDraft: true });
   }
 
   /** 触发 Ant Design X Attachments 的隐藏图片选择器。 */
@@ -592,8 +801,8 @@ export default function App() {
     if (run.runId) void cancelKnownRun(run.conversationId, run.runId);
   }
 
-  /** 提交当前文本、附件和稳定消息引用，并消费服务端 POST SSE。 */
-  async function handleSubmit(value) {
+  /** 执行一个已经归一化的 Run 载荷，并按选项保留用户当前草稿。 */
+  async function executeRun(payload, { preserveDraft = false } = {}) {
     const current = conversation;
     if (!current || current.status !== "active" || activeRunRef.current) return;
     if (gateway?.ok !== true) {
@@ -604,12 +813,6 @@ export default function App() {
       toastApi.warning("当前没有可用模型，请重新检测模型网关");
       return;
     }
-    const payload = buildRunPayload(
-      value,
-      attachmentFactsRef.current,
-      referenceFactsRef.current,
-      selectedModelRef.current,
-    );
     if (!hasRunInput(payload)) return;
 
     const startedAt = performance.now();
@@ -626,10 +829,15 @@ export default function App() {
     cancelRequestedRef.current = false;
     setActiveRunFact(runState);
     setRunError("");
-    clearConversationDraft(current.id);
-    setComposerFact("");
-    setAttachmentFacts([]);
-    setReferenceFacts([]);
+    if (!preserveDraft) {
+      clearConversationDraft(current.id);
+      setComposerFact("");
+      setAttachmentFacts([]);
+      setReferenceFacts([]);
+      setPendingRecovery(null);
+    } else {
+      saveCurrentConversationDraft();
+    }
 
     /** 接收稳定 runId，并补偿 run-started 前已经点击的停止意图。 */
     function handleRunStarted(event) {
@@ -644,6 +852,17 @@ export default function App() {
       patchActiveRun({ partialText: `${run.partialText}${delta}`, status: "running" });
     }
 
+    /** 根据服务端工具事实更新回答附近阶段，工具结束后继续等待模型组织结果。 */
+    function handleToolEvent(event) {
+      const run = activeRunRef.current;
+      if (!run || run.conversationId !== current.id) return;
+      if (event.event === "tool-started") {
+        patchActiveRun({ status: "tool-running", toolTitle: event.title || event.toolName });
+        return;
+      }
+      patchActiveRun({ status: "running", toolTitle: "" });
+    }
+
     /** 把 SSE 取消终止阶段映射为 UI 中的停止状态，最终仍由详情事实覆盖。 */
     function handleCancelled() {
       patchActiveRun({ status: "cancelled" });
@@ -652,6 +871,7 @@ export default function App() {
     try {
       const terminal = await runtimeAdapter.runConversationStream(current.id, payload, {
         onRunStarted: handleRunStarted,
+        onToolEvent: handleToolEvent,
         onTextDelta: handleTextDelta,
         onCancelled: handleCancelled,
       });
@@ -685,6 +905,18 @@ export default function App() {
       cancelRequestedRef.current = false;
       setActiveRunFact(null);
     }
+  }
+
+  /** 提交当前 Sender 输入；编辑恢复态会携带来源，但仍创建全新幂等 Run。 */
+  function handleSubmit(value) {
+    const payload = buildRunPayload(
+      value,
+      attachmentFactsRef.current,
+      referenceFactsRef.current,
+      selectedModelRef.current,
+      pendingRecovery || undefined,
+    );
+    void executeRun(payload);
   }
 
   /** 清除当前非持久化错误提示。 */
@@ -747,9 +979,35 @@ export default function App() {
   function handleNavigateToMessage(messageId) {
     const element = document.getElementById(messageElementId(messageId));
     if (!element) {
+      const existsOutsideWindow = visibleMessages.some(
+        // 当前完整详情中存在时先扩展窗口，再等待 React 提交 DOM。
+        (message) => message.id === messageId,
+      );
+      if (existsOutsideWindow) {
+        setMessageLimit(Math.max(MESSAGE_PAGE_SIZE, visibleMessages.length));
+        requestAnimationFrame(
+          /** 下一帧等待消息窗口扩展完成后再次定位。 */
+          function retryMessageNavigation() {
+            requestAnimationFrame(
+              /** 第二帧使用已经提交的消息 DOM 完成定位。 */
+              function navigateExpandedMessage() {
+                focusMessageTarget(messageId);
+              },
+            );
+          },
+        );
+        return;
+      }
       toastApi.warning("当前消息暂时不可定位");
       return;
     }
+    focusMessageTarget(messageId);
+  }
+
+  /** 高亮并聚焦已经进入 DOM 的消息目标。 */
+  function focusMessageTarget(messageId) {
+    const element = document.getElementById(messageElementId(messageId));
+    if (!element) return;
     element.classList.remove("is-reference-target");
     void element.offsetWidth;
     element.classList.add("is-reference-target");
@@ -772,10 +1030,67 @@ export default function App() {
     }
   }
 
+  /** 复制回答中的代码块，并复用统一的可见反馈。 */
+  async function handleCopyCode(value) {
+    try {
+      await navigator.clipboard.writeText(String(value || ""));
+      toastApi.success("已复制代码");
+    } catch {
+      toastApi.error("复制失败，请手动选择代码");
+    }
+  }
+
+  /** 将助手原始 Markdown 下载为本地文件，不改写服务端消息正文。 */
+  function handleDownloadMessage(message) {
+    const blob = new Blob([String(message.displayContent || "")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `ai-answer-${String(message.id || "message").replace(/[^a-zA-Z0-9_-]/g, "-")}.md`;
+    anchor.hidden = true;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(
+      /** 让浏览器先接管 Blob 下载，再释放页面局部 URL。 */
+      function releaseDownloadUrl() {
+        URL.revokeObjectURL(url);
+      },
+      0,
+    );
+  }
+
+  /** 定位长回答中的 Markdown 标题并把焦点交给目标标题。 */
+  function handleNavigateToHeading(headingId) {
+    const element = document.getElementById(headingId);
+    if (!element) return;
+    element.scrollIntoView({ behavior: "smooth", block: "start" });
+    element.focus({ preventScroll: true });
+  }
+
+  /** 加载下一批更早消息，保持最近消息仍在当前窗口中。 */
+  function handleLoadEarlierMessages() {
+    setMessageLimit(messageLimit + MESSAGE_PAGE_SIZE);
+  }
+
   const visibleMessages = useMemo(
     // 服务端消息是基线，活动 Run 只追加当前渠道的乐观用户与助手消息。
     () => buildVisibleMessages(conversation, activeRun, currentConversationId),
     [conversation, activeRun, currentConversationId],
+  );
+  const messageWindow = useMemo(
+    // 消息渐进窗口只影响浏览器渲染，SQLite 详情仍是完整事实。
+    () => buildMessageWindow(visibleMessages, messageLimit),
+    [visibleMessages, messageLimit],
+  );
+  const conversationWorkspace = useMemo(
+    // 会话检索、归档筛选和时间分组均为渠道派生状态。
+    () => buildConversationWorkspace(conversations, {
+      query: conversationQuery,
+      filter: conversationFilter,
+      limit: conversationLimit,
+    }),
+    [conversations, conversationQuery, conversationFilter, conversationLimit],
   );
 
   // 用户主动发送新消息时回到底部；后续向上浏览仍由 onScroll 关闭跟随。
@@ -810,14 +1125,21 @@ export default function App() {
 
   const bubbleItems = useMemo(
     // Bubble 项只承载展示状态，messageId 和正文事实仍来自服务端消息。
-    () => buildBubbleItems(visibleMessages, {
+    () => buildBubbleItems(messageWindow.messages, {
+      busy: Boolean(activeRun),
       onQuote: handleQuoteMessage,
       onCopy: handleCopyMessage,
+      onCopyCode: handleCopyCode,
+      onDownload: handleDownloadMessage,
       onNavigateReference: handleNavigateToMessage,
-      onRestoreFailedInput: handleRestoreFailedInput,
+      onNavigateHeading: handleNavigateToHeading,
+      onEditRecoveryInput: handleEditRecoveryInput,
+      onRetryRun: handleRetryRun,
+      onRegenerateRun: handleRegenerateRun,
+      onContinueRun: handleContinueRun,
       onOpenContext: openRunContext,
     }),
-    [visibleMessages],
+    [messageWindow.messages],
   );
   const canSubmit = canSubmitRun({
     conversationStatus: conversation?.status,
@@ -830,27 +1152,41 @@ export default function App() {
     (model) => ({ value: model, label: model }),
   );
 
-  /** 使用 Sender 提供的原生发送按钮，同时允许附件或引用作为唯一输入。 */
-  function renderSenderSuffix(originalNode, { components }) {
-    if (activeRun) return originalNode;
-    return <components.SendButton disabled={!canSubmit} />;
-  }
-
-  /** 在 Sender footer 中只渲染当前 Run 模型选择，发送动作继续由 suffix 唯一承载。 */
-  function renderSenderFooter() {
+  /** 将附件、模型和发送动作收口到 Sender 底部工具栏，正文输入独占上层。 */
+  function renderSenderFooter(originalNode, { components }) {
     return (
       <div className="sender-footer">
-        <div className="sender-model-select">
-          <Text type="secondary">模型</Text>
-          <Select
-            size="small"
-            value={selectedModel || undefined}
-            options={modelOptions}
-            disabled={Boolean(activeRun) || gateway?.ok !== true || modelOptions.length === 0}
-            placeholder="无可用模型"
-            aria-label="选择模型"
-            onChange={handleModelChange}
-          />
+        <Dropdown
+          menu={attachmentMenu}
+          trigger={["click"]}
+          disabled={Boolean(activeRun) || !conversation || conversation.status !== "active"}
+        >
+          <Tooltip title="添加附件">
+            <Button
+              className="sender-tool-button"
+              type="text"
+              shape="circle"
+              icon={<Plus size={20} />}
+              aria-label="添加附件"
+            />
+          </Tooltip>
+        </Dropdown>
+        <div className="sender-footer-actions">
+          <div className="sender-model-select">
+            <Select
+              variant="borderless"
+              value={selectedModel || undefined}
+              options={modelOptions}
+              disabled={Boolean(activeRun) || gateway?.ok !== true || modelOptions.length === 0}
+              placeholder="无可用模型"
+              aria-label="选择模型"
+              popupMatchSelectWidth={false}
+              onChange={handleModelChange}
+            />
+          </div>
+          <div className="sender-submit-action">
+            {activeRun ? originalNode : <components.SendButton disabled={!canSubmit} aria-label="发送消息" />}
+          </div>
         </div>
       </div>
     );
@@ -873,18 +1209,28 @@ export default function App() {
       {toastContext}
       <aside className="conversation-sidebar desktop-only">
         <ConversationPanel
-          conversations={conversations}
+          workspace={conversationWorkspace}
           currentId={currentConversationId}
           activeRun={activeRun}
           gateway={gateway}
           gatewayChecking={gatewayChecking}
+          query={conversationQuery}
+          filter={conversationFilter}
           onChange={handleConversationChange}
           onCreate={handleCreateConversation}
+          onQueryChange={handleConversationQueryChange}
+          onFilterChange={handleConversationFilterChange}
+          onLoadMore={handleLoadMoreConversations}
+          onRename={handleOpenConversationRename}
+          onArchive={handleConversationArchive}
           onRefreshGateway={handleRefreshGateway}
         />
       </aside>
 
       <main className="chat-workspace">
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {buildLiveStatus(activeRun, runError, unseenMessageCount)}
+        </div>
         <header className="chat-header">
           <Tooltip title="会话">
             <Button
@@ -943,16 +1289,23 @@ export default function App() {
           ) : visibleMessages.length === 0 ? (
             <EmptyConversation onPromptClick={handlePromptClick} />
           ) : (
-            <Bubble.List
-              ref={messageListRef}
-              className="message-list"
-              items={bubbleItems}
-              autoScroll
-              onScroll={handleMessageListScroll}
-            />
+            <>
+              {messageWindow.hasMore ? (
+                <Button className="load-earlier-messages" size="small" onClick={handleLoadEarlierMessages}>
+                  加载更早消息 · {messageWindow.hiddenCount}
+                </Button>
+              ) : null}
+              <Bubble.List
+                ref={messageListRef}
+                className="message-list"
+                items={bubbleItems}
+                autoScroll
+                onScroll={handleMessageListScroll}
+              />
+            </>
           )}
           <ConversationAnchorRail
-            messages={visibleMessages}
+            messages={messageWindow.messages}
             onNavigate={handleNavigateToMessage}
           />
           {!isFollowingLatest && visibleMessages.length > 0 ? (
@@ -983,6 +1336,15 @@ export default function App() {
             />
           ) : null}
           {runError ? <Alert type="error" showIcon closable message={runError} onClose={clearRunError} /> : null}
+          {pendingRecovery ? (
+            <div className="pending-recovery" role="status">
+              <RotateCcw size={14} />
+              <span>{recoveryModeLabel(pendingRecovery.recoveryMode)}</span>
+              <Tooltip title="取消恢复关系">
+                <Button type="text" size="small" icon={<X size={14} />} aria-label="取消恢复关系" onClick={clearPendingRecovery} />
+              </Tooltip>
+            </div>
+          ) : null}
           <Sender
             value={composerValue}
             loading={Boolean(activeRun)}
@@ -993,14 +1355,8 @@ export default function App() {
             onSubmit={handleSubmit}
             onCancel={handleCancelGeneration}
             onPasteFile={handlePasteFiles}
-            prefix={
-              <Dropdown menu={attachmentMenu} trigger={["click"]} disabled={Boolean(activeRun)}>
-                <Tooltip title="添加附件">
-                  <Button type="text" shape="circle" icon={<Paperclip size={18} />} aria-label="添加附件" />
-                </Tooltip>
-              </Dropdown>
-            }
-            suffix={renderSenderSuffix}
+            prefix={false}
+            suffix={false}
             footer={renderSenderFooter}
             header={
               <Sender.Header forceRender open={senderHeaderOpen} title={senderHeaderTitle} closable={false}>
@@ -1035,13 +1391,20 @@ export default function App() {
         onClose={closeConversationDrawer}
       >
         <ConversationPanel
-          conversations={conversations}
+          workspace={conversationWorkspace}
           currentId={currentConversationId}
           activeRun={activeRun}
           gateway={gateway}
           gatewayChecking={gatewayChecking}
+          query={conversationQuery}
+          filter={conversationFilter}
           onChange={handleConversationChange}
           onCreate={handleCreateConversation}
+          onQueryChange={handleConversationQueryChange}
+          onFilterChange={handleConversationFilterChange}
+          onLoadMore={handleLoadMoreConversations}
+          onRename={handleOpenConversationRename}
+          onArchive={handleConversationArchive}
           onRefreshGateway={handleRefreshGateway}
         />
       </Drawer>
@@ -1055,6 +1418,26 @@ export default function App() {
       >
         <ContextPanel conversation={conversation} manifest={currentManifest} activeRun={activeRun} />
       </Drawer>
+
+      <Modal
+        title="重命名会话"
+        open={renameDraft.open}
+        okText="保存"
+        cancelText="取消"
+        onOk={confirmConversationRename}
+        onCancel={closeConversationRename}
+      >
+        <Input
+          autoFocus
+          maxLength={80}
+          value={renameDraft.value}
+          status={renameDraft.error ? "error" : undefined}
+          aria-label="会话标题"
+          onChange={handleConversationRenameChange}
+          onPressEnter={confirmConversationRename}
+        />
+        {renameDraft.error ? <Text className="field-error" type="danger">{renameDraft.error}</Text> : null}
+      </Modal>
 
       <Modal
         title={linkDraft.type === "image" ? "添加图片链接" : "添加文档链接"}
@@ -1081,20 +1464,29 @@ export default function App() {
 
 /** 渲染品牌、网关状态和受控会话列表。 */
 function ConversationPanel({
-  conversations,
+  workspace,
   currentId,
   activeRun,
   gateway,
   gatewayChecking,
+  query,
+  filter,
   onChange,
   onCreate,
+  onQueryChange,
+  onFilterChange,
+  onLoadMore,
+  onRename,
+  onArchive,
   onRefreshGateway,
 }) {
   const gatewayCopy = buildGatewayReachabilityCopy(gateway);
   const items = [];
-  for (const item of conversations) {
+  for (const item of workspace.conversations) {
     items.push({
       key: item.id,
+      conversation: item,
+      group: item.timeGroup,
       disabled: Boolean(activeRun && item.id !== currentId),
       label: (
         <div className="conversation-label">
@@ -1105,6 +1497,28 @@ function ConversationPanel({
         </div>
       ),
     });
+  }
+
+  /** 为每条会话建立重命名与独立归档菜单。 */
+  function buildConversationMenu(item) {
+    const conversation = item.conversation;
+    return {
+      items: [
+        { key: "rename", label: "重命名", icon: <Pencil size={15} />, disabled: Boolean(activeRun) },
+        {
+          key: "archive",
+          label: conversation.archivedAt ? "取消归档" : "归档",
+          icon: conversation.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />,
+          disabled: Boolean(activeRun),
+        },
+      ],
+      /** 将菜单命令映射到顶层事实操作，并阻止触发会话切换。 */
+      onClick({ key, domEvent }) {
+        domEvent?.stopPropagation();
+        if (key === "rename") onRename(conversation);
+        if (key === "archive") void onArchive(conversation);
+      },
+    };
   }
   return (
     <div className="conversation-panel">
@@ -1132,10 +1546,39 @@ function ConversationPanel({
           />
         </Tooltip>
       </div>
+      <div className="conversation-tools">
+        <Input
+          allowClear
+          size="small"
+          value={query}
+          prefix={<Search size={14} />}
+          placeholder="搜索会话"
+          aria-label="搜索会话"
+          data-conversation-search
+          onChange={onQueryChange}
+        />
+        <Segmented
+          block
+          size="small"
+          value={filter}
+          aria-label="会话归档筛选"
+          options={[
+            { label: "当前", value: "active" },
+            { label: "归档", value: "archived" },
+            { label: "全部", value: "all" },
+          ]}
+          onChange={onFilterChange}
+        />
+      </div>
       <Conversations
         className="conversation-list"
         items={items}
         activeKey={currentId || undefined}
+        menu={buildConversationMenu}
+        groupable={{
+          collapsible: true,
+          defaultExpandedKeys: ["今天", "昨天", "最近 7 天", "更早"],
+        }}
         onActiveChange={onChange}
         creation={{
           label: "新建会话",
@@ -1144,7 +1587,12 @@ function ConversationPanel({
           onClick: onCreate,
         }}
       />
-      <div className="sidebar-footer">{conversations.length} 个会话</div>
+      {workspace.hasMore ? (
+        <Button className="load-more-conversations" type="text" size="small" onClick={onLoadMore}>
+          加载更多
+        </Button>
+      ) : null}
+      <div className="sidebar-footer">{workspace.total} 个会话</div>
     </div>
   );
 }
@@ -1186,10 +1634,21 @@ function ReferenceQueue({ references, onRemove }) {
   return <div className="reference-queue">{nodes}</div>;
 }
 
-/** 渲染消息正文、可定位引用预览和图片事实。 */
-function MessageBody({ message, streaming = false, referenceMessages = [], onNavigateReference }) {
+/** 渲染消息正文、可定位引用预览、长回答导航和图片事实。 */
+function MessageBody({
+  message,
+  streaming = false,
+  referenceMessages = [],
+  onNavigateReference,
+  onNavigateHeading,
+  onCopyCode,
+}) {
   const imageUrls = getMessageImageUrls(message);
   const hasDisplayContent = Boolean(String(message.displayContent || "").trim());
+  const headings = message.role === "assistant"
+    ? extractMarkdownHeadings(message.displayContent, message.id)
+    : [];
+  const markdownComponents = buildMarkdownComponents(headings, onCopyCode);
   const referenceNodes = [];
   for (const referenceMessage of referenceMessages) {
     referenceNodes.push(
@@ -1198,6 +1657,23 @@ function MessageBody({ message, streaming = false, referenceMessages = [], onNav
         message={referenceMessage}
         onNavigate={onNavigateReference}
       />,
+    );
+  }
+  const headingNodes = [];
+  for (const heading of headings) {
+    /** 定位当前回答中的稳定标题锚点。 */
+    function navigateCurrentHeading() {
+      onNavigateHeading(heading.id);
+    }
+    headingNodes.push(
+      <button
+        key={heading.id}
+        className={`answer-heading-link level-${heading.level}`}
+        type="button"
+        onClick={navigateCurrentHeading}
+      >
+        {heading.title}
+      </button>,
     );
   }
   return (
@@ -1218,12 +1694,19 @@ function MessageBody({ message, streaming = false, referenceMessages = [], onNav
       {streaming ? (
         <div className="message-generation-status" role="status" aria-live="polite">
           <LoaderCircle className="message-generation-spinner" size={14} />
-          <span>{activeRunStageLabel(message.runStatus, hasDisplayContent)}</span>
+          <span>{activeRunStageLabel(message.runStatus, hasDisplayContent, message.toolTitle)}</span>
         </div>
+      ) : null}
+      {!streaming && headingNodes.length > 1 ? (
+        <nav className="answer-heading-nav" aria-label="回答目录">
+          <span>本回答</span>
+          <div>{headingNodes}</div>
+        </nav>
       ) : null}
       {hasDisplayContent || !streaming ? (
         <XMarkdown
           content={message.displayContent || "(空消息)"}
+          components={markdownComponents}
           streaming={streaming ? { hasNextChunk: true, enableAnimation: true, tail: true } : undefined}
           escapeRawHtml
           openLinksInNewTab
@@ -1232,6 +1715,90 @@ function MessageBody({ message, streaming = false, referenceMessages = [], onNav
       {message.status === "interrupted" ? <Tag className="message-status-tag">已停止</Tag> : null}
     </div>
   );
+}
+
+/** 建立 X Markdown 标签映射，保持原始正文不变并增强结果消费。 */
+function buildMarkdownComponents(headings, onCopyCode) {
+  const occurrences = new Map();
+  const components = {
+    a: SafeMarkdownLink,
+    /** 给块级代码增加显式复制操作，行内代码仍使用默认组件。 */
+    pre(props) {
+      const { children, domNode, streamStatus, ...elementProps } = props;
+      const code = readReactText(children).replace(/\n$/, "");
+      /** 复制当前代码块的纯文本。 */
+      function copyCurrentCode() {
+        void onCopyCode(code);
+      }
+      return (
+        <div className="markdown-code-block">
+          <Tooltip title="复制代码">
+            <Button
+              className="markdown-code-copy"
+              type="text"
+              size="small"
+              icon={<Copy size={14} />}
+              aria-label="复制代码"
+              onClick={copyCurrentCode}
+            />
+          </Tooltip>
+          <pre {...elementProps}>{children}</pre>
+        </div>
+      );
+    },
+  };
+  for (let level = 1; level <= 6; level += 1) {
+    const tagName = `h${level}`;
+    /** 为一个 Markdown 标题级别创建带稳定 id 的语义标题组件。 */
+    function createHeading() {
+      /** 渲染标题并按相同标题出现顺序匹配导航锚点。 */
+      function MarkdownHeading(props) {
+        const { children, domNode, streamStatus, ...elementProps } = props;
+        const title = readReactText(children).trim();
+        const key = `${level}:${title}`;
+        const occurrence = (occurrences.get(key) || 0) + 1;
+        occurrences.set(key, occurrence);
+        const matches = headings.filter(
+          // 标题导航只匹配同层级和同文本的已提取 ATX 标题。
+          (heading) => heading.level === level && heading.title === title,
+        );
+        const heading = matches[occurrence - 1];
+        return React.createElement(tagName, {
+          ...elementProps,
+          id: heading?.id,
+          tabIndex: heading ? -1 : undefined,
+        }, children);
+      }
+      return MarkdownHeading;
+    }
+    components[tagName] = createHeading();
+  }
+  return components;
+}
+
+/** 渲染协议受限的 Markdown 链接，外链强制隔离 opener。 */
+function SafeMarkdownLink(props) {
+  const { children, domNode, streamStatus, href, ...elementProps } = props;
+  if (!isSafeMarkdownHref(href)) return <span>{children}</span>;
+  const isExternal = /^https?:/i.test(String(href));
+  return (
+    <a
+      {...elementProps}
+      href={href}
+      target={isExternal ? "_blank" : undefined}
+      rel={isExternal ? "noopener noreferrer" : undefined}
+    >
+      {children}
+    </a>
+  );
+}
+
+/** 从 React 子节点递归读取纯文本，供代码复制和标题匹配使用。 */
+function readReactText(node) {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(readReactText).join("");
+  if (React.isValidElement(node)) return readReactText(node.props.children);
+  return "";
 }
 
 /** 将一条被引用消息渲染为可定位到来源的只读证据预览。 */
@@ -1253,8 +1820,18 @@ function renderMessageImage(url) {
   return <Image key={url.slice(0, 96)} src={url} alt="消息图片" width={112} height={84} />;
 }
 
-/** 渲染桌面快捷操作和移动端单一菜单；已持久化消息不提供删除或编辑。 */
-function MessageActions({ message, onQuote, onCopy }) {
+/** 渲染桌面快捷操作和移动端菜单；历史事实只允许派生新 Run，不提供删除或原位编辑。 */
+function MessageActions({
+  message,
+  canRegenerate,
+  canContinue,
+  disabled,
+  onQuote,
+  onCopy,
+  onDownload,
+  onRegenerate,
+  onContinue,
+}) {
   /** 把当前稳定消息交给页面引用队列。 */
   function quoteCurrentMessage() {
     onQuote(message);
@@ -1263,12 +1840,27 @@ function MessageActions({ message, onQuote, onCopy }) {
   function copyCurrentMessage() {
     void onCopy(message);
   }
+  /** 下载当前助手回答的原始 Markdown。 */
+  function downloadCurrentMessage() {
+    onDownload(message);
+  }
+  /** 从当前 completed Run 创建新的重新生成 Run。 */
+  function regenerateCurrentMessage() {
+    onRegenerate(message.runId);
+  }
+  /** 从当前 cancelled Run 创建新的继续生成 Run。 */
+  function continueCurrentMessage() {
+    onContinue(message.runId);
+  }
   /** 将移动端菜单命令映射到同一复制和引用动作。 */
   function handleMobileMessageAction({ key }) {
     if (key === "copy") copyCurrentMessage();
     if (key === "quote") quoteCurrentMessage();
+    if (key === "download") downloadCurrentMessage();
+    if (key === "regenerate") regenerateCurrentMessage();
+    if (key === "continue") continueCurrentMessage();
   }
-  const quoteActions = [
+  const desktopActions = [
     {
       key: "quote",
       label: "引用",
@@ -1285,11 +1877,68 @@ function MessageActions({ message, onQuote, onCopy }) {
       ),
     },
   ];
+  if (message.role === "assistant") {
+    desktopActions.push({
+      key: "download",
+      label: "下载 Markdown",
+      actionRender: (
+        <Tooltip title="下载 Markdown">
+          <Button
+            type="text"
+            size="small"
+            icon={<Download size={15} />}
+            aria-label="下载 Markdown"
+            onClick={downloadCurrentMessage}
+          />
+        </Tooltip>
+      ),
+    });
+  }
+  if (canRegenerate) {
+    desktopActions.push({
+      key: "regenerate",
+      label: "重新生成",
+      actionRender: (
+        <Tooltip title="重新生成">
+          <Button
+            type="text"
+            size="small"
+            disabled={disabled}
+            icon={<RefreshCw size={15} />}
+            aria-label="重新生成回答"
+            onClick={regenerateCurrentMessage}
+          />
+        </Tooltip>
+      ),
+    });
+  }
+  if (canContinue) {
+    desktopActions.push({
+      key: "continue",
+      label: "继续生成",
+      actionRender: (
+        <Tooltip title="继续生成">
+          <Button
+            type="text"
+            size="small"
+            disabled={disabled}
+            icon={<RotateCcw size={15} />}
+            aria-label="继续生成回答"
+            onClick={continueCurrentMessage}
+          />
+        </Tooltip>
+      ),
+    });
+  }
+  const mobileItems = [
+    { key: "copy", label: "复制", icon: <Copy size={15} /> },
+    { key: "quote", label: "引用", icon: <Quote size={15} /> },
+  ];
+  if (message.role === "assistant") mobileItems.push({ key: "download", label: "下载 Markdown", icon: <Download size={15} /> });
+  if (canRegenerate) mobileItems.push({ key: "regenerate", label: "重新生成", icon: <RefreshCw size={15} />, disabled });
+  if (canContinue) mobileItems.push({ key: "continue", label: "继续生成", icon: <RotateCcw size={15} />, disabled });
   const mobileMenu = {
-    items: [
-      { key: "copy", label: "复制", icon: <Copy size={15} /> },
-      { key: "quote", label: "引用", icon: <Quote size={15} /> },
-    ],
+    items: mobileItems,
     onClick: handleMobileMessageAction,
   };
   return (
@@ -1298,7 +1947,7 @@ function MessageActions({ message, onQuote, onCopy }) {
         <Tooltip title="复制">
           <Actions.Copy text={message.displayContent || ""} aria-label="复制消息" />
         </Tooltip>
-        <Actions items={quoteActions} />
+        <Actions items={desktopActions} />
       </div>
       <Dropdown menu={mobileMenu} trigger={["click"]}>
         <Button
@@ -1313,12 +1962,16 @@ function MessageActions({ message, onQuote, onCopy }) {
   );
 }
 
-/** 渲染持久失败状态和不改变 Runtime 契约的恢复入口。 */
-function RunFailureNotice({ message, onRestore, onOpenContext }) {
+/** 渲染持久失败状态和创建新 Run 的恢复入口。 */
+function RunFailureNotice({ message, disabled, onRetry, onEdit, onOpenContext }) {
   const failure = message.failure || buildRunFailureCopy(message);
-  /** 恢复与失败 Run 关联的稳定用户消息。 */
-  function restoreSourceInput() {
-    onRestore(message.sourceMessageId);
+  /** 直接用失败 Run 的稳定输入创建新 retry Run。 */
+  function retrySourceRun() {
+    onRetry(message.runId);
+  }
+  /** 恢复失败输入到 Sender，并把下一次提交标记为 retry。 */
+  function editSourceInput() {
+    onEdit(message.sourceMessageId, message.runId, "retry");
   }
   return (
     <div id={messageElementId(message.id)} className="run-failure-notice" role="status" tabIndex={-1}>
@@ -1329,7 +1982,8 @@ function RunFailureNotice({ message, onRestore, onOpenContext }) {
         <span className="run-failure-recovery">{failure.action} 输入已保存。</span>
       </div>
       <div className="run-failure-actions">
-        <Button size="small" icon={<RotateCcw size={14} />} onClick={restoreSourceInput}>恢复输入</Button>
+        <Button size="small" disabled={disabled} icon={<RotateCcw size={14} />} onClick={retrySourceRun}>重试</Button>
+        <Button size="small" disabled={disabled} onClick={editSourceInput}>编辑后发送</Button>
         <Button size="small" type="text" onClick={onOpenContext}>运行信息</Button>
       </div>
     </div>
@@ -1342,6 +1996,12 @@ function buildBubbleItems(messages, handlers) {
   for (const message of messages) {
     if (!message.streaming) persistedMessages.push(message);
   }
+  let lastRegeneratableMessageId = null;
+  for (const message of persistedMessages) {
+    if (message.role === "assistant" && message.status !== "interrupted" && message.runId) {
+      lastRegeneratableMessageId = message.id;
+    }
+  }
   const items = [];
   for (const message of messages) {
     if (message.kind === "run-failure") {
@@ -1353,7 +2013,9 @@ function buildBubbleItems(messages, handlers) {
         content: (
           <RunFailureNotice
             message={message}
-            onRestore={handlers.onRestoreFailedInput}
+            disabled={handlers.busy}
+            onRetry={handlers.onRetryRun}
+            onEdit={handlers.onEditRecoveryInput}
             onOpenContext={handlers.onOpenContext}
           />
         ),
@@ -1376,13 +2038,25 @@ function buildBubbleItems(messages, handlers) {
           streaming={message.streaming}
           referenceMessages={referenceMessages}
           onNavigateReference={handlers.onNavigateReference}
+          onNavigateHeading={handlers.onNavigateHeading}
+          onCopyCode={handlers.onCopyCode}
         />
       ),
       footer:
         message.streaming ||
         String(message.id).startsWith("optimistic:") ||
         String(message.id).startsWith("streaming:") ? null : (
-          <MessageActions message={message} onQuote={handlers.onQuote} onCopy={handlers.onCopy} />
+          <MessageActions
+            message={message}
+            canRegenerate={message.id === lastRegeneratableMessageId}
+            canContinue={message.role === "assistant" && message.status === "interrupted" && Boolean(message.runId)}
+            disabled={handlers.busy}
+            onQuote={handlers.onQuote}
+            onCopy={handlers.onCopy}
+            onDownload={handlers.onDownload}
+            onRegenerate={handlers.onRegenerateRun}
+            onContinue={handlers.onContinueRun}
+          />
         ),
     });
   }
@@ -1406,6 +2080,7 @@ function buildVisibleMessages(conversation, activeRun, currentConversationId) {
     references: [],
     streaming: activeRun.status !== "cancelled",
     runStatus: activeRun.status,
+    toolTitle: activeRun.toolTitle || "",
   });
   return messages;
 }
@@ -1426,8 +2101,8 @@ function resolveReferenceMessages(references, messages) {
   return resolved;
 }
 
-/** 生成只包含模型别名、当前输入、附件地址、引用 ID 和幂等标识的 Run 载荷。 */
-function buildRunPayload(value, attachments, references, model) {
+/** 生成包含当前输入、稳定引用、恢复来源和全新幂等标识的 Run 载荷。 */
+function buildRunPayload(value, attachments, references, model, recovery = {}) {
   const imageUrls = [];
   const documentUrls = [];
   for (const attachment of attachments) {
@@ -1446,6 +2121,8 @@ function buildRunPayload(value, attachments, references, model) {
     imageUrls,
     documentUrls,
     references: stableReferences,
+    ...(recovery.sourceRunId ? { sourceRunId: recovery.sourceRunId } : {}),
+    ...(recovery.recoveryMode ? { recoveryMode: recovery.recoveryMode } : {}),
   };
 }
 
@@ -1685,12 +2362,31 @@ function countItems(value) {
   return Array.isArray(value) ? value.length : 0;
 }
 
+/** 把编辑恢复模式映射为 Sender 上方的简短状态。 */
+function recoveryModeLabel(mode) {
+  const labels = {
+    retry: "正在编辑失败输入，发送后将创建新重试 Run",
+    regenerate: "正在编辑历史输入，发送后将创建新重新生成 Run",
+    continue: "正在编辑继续输入，发送后将创建新继续 Run",
+  };
+  return labels[mode] || "下一次发送将创建关联恢复 Run";
+}
+
+/** 汇总不会抢占焦点的渠道状态，供屏幕阅读器礼貌播报。 */
+function buildLiveStatus(activeRun, runError, unseenMessageCount) {
+  if (runError) return runError;
+  if (activeRun) return activeRunStageLabel(activeRun.status, Boolean(activeRun.partialText), activeRun.toolTitle);
+  if (unseenMessageCount > 0) return `${unseenMessageCount} 条新消息`;
+  return "";
+}
+
 /** 把 Runtime 状态映射为中文渠道标签。 */
 function runStatusLabel(status) {
   const labels = {
     idle: "等待运行",
     starting: "正在创建",
     running: "生成中",
+    "tool-running": "查询工具中",
     stopping: "正在停止",
     completed: "已完成",
     cancelled: "已取消",
@@ -1701,7 +2397,7 @@ function runStatusLabel(status) {
 
 /** 把 Runtime 状态映射为 Ant Design Tag 色彩。 */
 function runStatusColor(status) {
-  if (status === "running" || status === "starting" || status === "stopping") return "processing";
+  if (["running", "tool-running", "starting", "stopping"].includes(status)) return "processing";
   if (status === "completed") return "green";
   if (status === "cancelled") return "orange";
   if (status === "failed") return "red";

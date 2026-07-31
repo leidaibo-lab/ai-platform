@@ -1,4 +1,4 @@
-import { APICallError, generateText, streamText } from "ai";
+import { APICallError, Output, generateText, jsonSchema, stepCountIs, streamText } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   RetryDeadlineError,
@@ -48,6 +48,7 @@ export function createGatewayClient(
   {
     generateTextImplementation = generateText,
     streamTextImplementation = streamText,
+    stepCountIsImplementation = stepCountIs,
     createProvider = createOpenAICompatible,
     nowImplementation = Date.now,
     sleepImplementation,
@@ -81,7 +82,11 @@ export function createGatewayClient(
      * @param {string} [input.model] - 当前 Run 选择的 LiteLLM 模型别名。
      * @param {number} [input.temperature] - 可选采样温度。
      * @param {number} [input.maxCompletionTokens] - 模型输出硬上限。
-     * @param {object} [input.responseFormat] - 需要原样转发给 LiteLLM 的结构化输出约束。
+     * @param {object} [input.responseFormat] - 兼容既有调用的 LiteLLM 原始结构化输出约束。
+     * @param {{name?: string, description?: string, schema: object}} [input.outputSchema] - AI SDK `Output.object` 结构化输出约束。
+     * @param {Record<string, object>} [input.tools] - Runtime allowlist 生成的 AI SDK 只读工具集合。
+     * @param {string} [input.requiredToolName] - 确定性任务路由要求首步调用的 allowlist 工具名。
+     * @param {number} [input.maxToolSteps=4] - 单次 AI SDK 多步工具生成的模型步骤上限。
      * @param {import("../resilience/retry-executor.mjs").ResilienceContext} [input.resilienceContext] - Runtime 共享截止时间和幂等边界。
      * @param {string} [input.operation="model.generate"] - 写入逐尝试证据的操作名称。
      * @param {(delta: string) => Promise<void>|void} [input.onTextDelta] - 模型文本增量消费者；存在时启用 AI SDK 文本流。
@@ -94,6 +99,10 @@ export function createGatewayClient(
       temperature,
       maxCompletionTokens,
       responseFormat,
+      outputSchema,
+      tools,
+      requiredToolName,
+      maxToolSteps = 4,
       resilienceContext,
       operation = "model.generate",
       onTextDelta,
@@ -105,6 +114,7 @@ export function createGatewayClient(
         baseURL: `${gatewayRootUrl}/v1`,
         apiKey: key,
         fetch: fetchImplementation,
+        supportsStructuredOutputs: outputSchema !== undefined && outputSchema !== null,
         supportedUrls: getSupportedUrls,
         transformRequestBody: createRequestBodyTransformer({
           maxCompletionTokens,
@@ -113,6 +123,7 @@ export function createGatewayClient(
       });
       const requestModel = provider.chatModel(selectedModel);
       const modelMessages = toAiSdkMessages(messages);
+      const output = createStructuredOutput(outputSchema);
       const context = createResilienceContext({
         ...(resilienceContext || {}),
         deadlineAt: resilienceContext?.deadlineAt ?? nowImplementation() + timeoutMs,
@@ -130,6 +141,12 @@ export function createGatewayClient(
       async function generateAttempt({ attempt, remainingMs, markOutputStarted }) {
         const telemetryInput = createAiSdkTelemetryInput(context, attempt, operation);
         try {
+          const toolLoopInput = createToolLoopInput({
+            tools,
+            requiredToolName,
+            maxToolSteps,
+            stepCountIsImplementation,
+          });
           if (typeof onTextDelta === "function") {
             return await streamGenerateAttempt({
               requestModel,
@@ -142,6 +159,8 @@ export function createGatewayClient(
               markOutputStarted,
               streamTextImplementation,
               fallbackModel: selectedModel,
+              output,
+              toolLoopInput,
               ...telemetryInput,
             });
           }
@@ -151,12 +170,14 @@ export function createGatewayClient(
             allowSystemInMessages: true,
             ...(temperature === undefined ? {} : { temperature }),
             ...(maxCompletionTokens === undefined ? {} : { maxOutputTokens: maxCompletionTokens }),
+            ...(output ? { output } : {}),
+            ...toolLoopInput,
             maxRetries: 0,
             timeout: Math.max(1, remainingMs),
             ...(abortSignal === undefined ? {} : { abortSignal }),
             ...telemetryInput,
           });
-          return mapGenerateTextResult(result, selectedModel);
+          return mapGenerateTextResult(result, selectedModel, Boolean(output));
         } catch (error) {
           throw mapAiSdkError(error, abortSignal, nowImplementation());
         }
@@ -260,9 +281,25 @@ function createRequestBodyTransformer({ maxCompletionTokens, responseFormat }) {
   return transformRequestBody;
 }
 
+/** 将平台 JSON Schema 适配为 AI SDK v7 `Output.object`，未配置时保持普通文本生成。 */
+function createStructuredOutput(outputSchema) {
+  if (outputSchema === undefined || outputSchema === null) return null;
+  if (!isPlainObject(outputSchema) || !isPlainObject(outputSchema.schema)) {
+    throw new GatewayRequestError("outputSchema.schema must be a JSON Schema object", 400, {
+      error: "Invalid structured output schema",
+      code: "invalid_output_schema",
+    });
+  }
+  return Output.object({
+    schema: jsonSchema(outputSchema.schema),
+    ...(outputSchema.name ? { name: String(outputSchema.name) } : {}),
+    ...(outputSchema.description ? { description: String(outputSchema.description) } : {}),
+  });
+}
+
 /** 将 AI SDK `generateText` 结果映射为现有 chat completions 结果。 */
-function mapGenerateTextResult(result, fallbackModel) {
-  const response = result?.finalStep?.response || result?.response || {};
+function mapGenerateTextResult(result, fallbackModel, includeOutput = false) {
+  const response = result?.finalStep?.response || {};
   const timestamp = response.timestamp instanceof Date ? response.timestamp : new Date();
   return {
     id: response.id,
@@ -273,10 +310,11 @@ function mapGenerateTextResult(result, fallbackModel) {
       {
         index: 0,
         message: { role: "assistant", content: result?.text || "" },
-        finish_reason: mapFinishReason(result?.finishReason),
+        finish_reason: mapFinishReason(result?.finishReason ?? result?.finalStep?.finishReason),
       },
     ],
     usage: mapUsage(result?.usage),
+    ...(includeOutput ? { output: result?.output } : {}),
   };
 }
 
@@ -297,6 +335,8 @@ async function streamGenerateAttempt({
   markOutputStarted,
   streamTextImplementation,
   fallbackModel,
+  output,
+  toolLoopInput,
   telemetry,
   runtimeContext,
 }) {
@@ -306,6 +346,8 @@ async function streamGenerateAttempt({
     allowSystemInMessages: true,
     ...(temperature === undefined ? {} : { temperature }),
     ...(maxCompletionTokens === undefined ? {} : { maxOutputTokens: maxCompletionTokens }),
+    ...(output ? { output } : {}),
+    ...toolLoopInput,
     maxRetries: 0,
     timeout: Math.max(1, remainingMs),
     ...(abortSignal === undefined ? {} : { abortSignal }),
@@ -313,26 +355,83 @@ async function streamGenerateAttempt({
     telemetry,
     runtimeContext,
   });
+  return consumeTextStreamResult({
+    result,
+    onTextDelta,
+    markOutputStarted,
+    fallbackModel,
+    includeOutput: Boolean(output),
+  });
+}
+
+/** 消费 AI SDK v7 标准事件流，并忽略已由 Runtime 记录的工具分块。 */
+async function consumeTextStreamResult({ result, onTextDelta, markOutputStarted, fallbackModel, includeOutput = false }) {
   let text = "";
-  const hasFullStream = result.fullStream !== undefined && result.fullStream !== null;
-  const stream = hasFullStream ? result.fullStream : result.textStream;
+  const hasEventStream = result.stream !== undefined;
+  const stream = result.stream ?? result.textStream;
   for await (const part of stream) {
-    if (hasFullStream && part?.type === "error") throw part.error;
-    const delta = hasFullStream ? (part?.type === "text-delta" ? part.text : "") : part;
+    if (hasEventStream && part?.type === "error") throw part.error;
+    const delta = hasEventStream ? (part?.type === "text-delta" ? part.text : "") : part;
     if (!delta) continue;
     markOutputStarted();
     text += delta;
     await onTextDelta(delta);
   }
-  const [usage, finishReason, response] = await Promise.all([
+  const [usage, finalStep, output] = await Promise.all([
     result.usage,
-    result.finishReason,
-    result.response,
+    resolveStreamFinalStep(result),
+    includeOutput ? result.output : undefined,
   ]);
-  return mapGenerateTextResult({ text, usage, finishReason, response }, fallbackModel);
+  return mapGenerateTextResult({ text, usage, finalStep, output }, fallbackModel, includeOutput);
 }
 
-/** 禁用 AI SDK 默认的原始错误控制台输出；异常仍由 fullStream 交给 Runtime 安全映射。 */
+/** 读取 AI SDK v7 `finalStep`，统一获得最终 finish reason、响应和性能信息。 */
+async function resolveStreamFinalStep(result) {
+  return result.finalStep;
+}
+
+/** 判断 Runtime 是否提供至少一个工具，空对象继续走既有纯文本链路。 */
+function hasAgentTools(tools) {
+  return Boolean(tools && typeof tools === "object" && Object.keys(tools).length > 0);
+}
+
+/** 为 AI SDK Core 多步生成构造工具、停止条件和首步路由设置。 */
+function createToolLoopInput({ tools, requiredToolName, maxToolSteps, stepCountIsImplementation }) {
+  if (!hasAgentTools(tools)) return {};
+  const prepareStep = createRequiredToolStepRouter(requiredToolName, tools);
+  return {
+    tools,
+    stopWhen: stepCountIsImplementation(normalizeToolStepLimit(maxToolSteps)),
+    ...(prepareStep ? { prepareStep } : {}),
+  };
+}
+
+/** 仅在首个模型步骤强制确定性路由工具，ToolResult 回填后恢复自动选择以生成最终回答。 */
+function createRequiredToolStepRouter(requiredToolName, tools) {
+  if (!requiredToolName) return null;
+  const toolName = String(requiredToolName);
+  if (!Object.hasOwn(tools || {}, toolName)) {
+    throw new GatewayRequestError("Required tool is not registered", 400, {
+      error: "Required tool is not registered",
+      code: "required_tool_not_registered",
+    });
+  }
+  /** 根据 AI SDK stepNumber 只约束首步，避免每一步重复强制同一工具。 */
+  function routeRequiredTool({ stepNumber }) {
+    return stepNumber === 0
+      ? { activeTools: [toolName], toolChoice: { type: "tool", toolName } }
+      : { toolChoice: "auto" };
+  }
+  return routeRequiredTool;
+}
+
+/** 将工具步骤上限限制为 1 到 8，当前 Runtime 默认使用 4。 */
+function normalizeToolStepLimit(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 1 && number <= 8 ? number : 4;
+}
+
+/** 禁用 AI SDK 默认的原始错误控制台输出；异常仍由标准事件流交给 Runtime 安全映射。 */
 function suppressAiSdkStreamErrorLogging() {}
 
 /** 为一次平台重试尝试构造只包含安全业务 ID 的 AI SDK Telemetry 输入。 */

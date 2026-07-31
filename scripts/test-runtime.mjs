@@ -13,6 +13,8 @@ import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { estimateMessagesTokens } from "../src/runtime/context-budget.mjs";
 import { createMemoryManager, selectCompactionRange } from "../src/runtime/memory-manager.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
+import { createToolRegistry } from "../src/tools/tool-registry.mjs";
+import { createWeatherToolDefinition } from "../src/tools/weather-tool.mjs";
 
 const contextOptions = {
   maxContextTokens: 800,
@@ -29,9 +31,10 @@ const contextOptions = {
  * @param {object} [options] - 可选测试依赖。
  * @param {object} [options.gatewayClient] - 替换默认脚本模型的 Gateway。
  * @param {object} [options.chainTracer] - 替换默认 Null Object 的 ChainTracer。
+ * @param {object} [options.toolRegistry] - 替换默认空工具目录。
  * @returns {object} 可供单元测试或 fixture runner 使用的 Runtime 装配。
  */
-function createTestRuntime({ gatewayClient = createScriptedGateway(), chainTracer } = {}) {
+function createTestRuntime({ gatewayClient = createScriptedGateway(), chainTracer, toolRegistry } = {}) {
   const store = createConversationStore({ databasePath: ":memory:" });
   const coordinator = createConversationCoordinator();
   const contextPlanner = createContextPlanner({
@@ -49,6 +52,7 @@ function createTestRuntime({ gatewayClient = createScriptedGateway(), chainTrace
     contextPlanner,
     memoryManager,
     chainTracer,
+    toolRegistry,
   });
   return { store, gatewayClient, contextPlanner, memoryManager, runtime };
 }
@@ -62,8 +66,8 @@ function createScriptedGateway() {
       return { tokens: estimateMessagesTokens(messages), source: "scripted", model: this.model };
     },
     /** 对结构化请求生成 MemoryDelta，对普通请求根据 active 记忆回答。 */
-    async chatCompletions({ messages, responseFormat }) {
-      if (responseFormat) return buildScriptedMemoryResponse(messages, this.model);
+    async chatCompletions({ messages, outputSchema }) {
+      if (outputSchema) return buildScriptedMemoryResponse(messages, this.model);
       const memoryText = messages
         .filter(isSystemMessage)
         .map(getMessageContent)
@@ -80,6 +84,81 @@ function createScriptedGateway() {
       };
     },
   };
+}
+
+/** 创建会执行一次 get_weather AI SDK 工具并返回最终文本的脚本化 Gateway。 */
+function createToolCallingGateway() {
+  return {
+    model: "tool-test-model",
+    /** 返回 Context Planner 使用的确定性 token 数。 */
+    async countTokens({ messages }) {
+      return { tokens: estimateMessagesTokens(messages), source: "scripted", model: this.model };
+    },
+    /** 模拟 AI SDK Core 多步生成选择天气工具、获得 ToolResult 后生成最终回答。 */
+    async chatCompletions({ messages, outputSchema, tools, requiredToolName }) {
+      if (outputSchema) return buildScriptedMemoryResponse(messages, this.model);
+      assert.ok(tools?.get_weather);
+      assert.equal(requiredToolName, "get_weather");
+      const output = await tools.get_weather.execute(
+        { location: "深圳", date: "today" },
+        { toolCallId: "weather-call-1", messages, context: {} },
+      );
+      assert.equal(output.status, "success");
+      return {
+        model: this.model,
+        usage: { prompt_tokens: estimateMessagesTokens(messages), completion_tokens: 16 },
+        choices: [{ message: { content: "深圳当前 26°C，数据来源 Open-Meteo。" } }],
+      };
+    },
+  };
+}
+
+/** 创建会执行一次失败天气工具并用安全 ToolResult 生成最终说明的脚本化 Gateway。 */
+function createFailingToolGateway() {
+  return {
+    model: "tool-failure-test-model",
+    /** 返回 Context Planner 使用的确定性 token 数。 */
+    async countTokens({ messages }) {
+      return { tokens: estimateMessagesTokens(messages), source: "scripted", model: this.model };
+    },
+    /** 模拟 AI SDK Core 多步生成接收失败 ToolResult 后继续生成用户可执行说明。 */
+    async chatCompletions({ messages, outputSchema, tools, requiredToolName }) {
+      if (outputSchema) return buildScriptedMemoryResponse(messages, this.model);
+      assert.ok(tools?.get_weather);
+      assert.equal(requiredToolName, "get_weather");
+      const output = await tools.get_weather.execute(
+        { location: "未知地点", date: "today" },
+        { toolCallId: "weather-failure-call-1", messages, context: {} },
+      );
+      assert.equal(output.status, "error");
+      assert.equal(output.error.code, "weather_query_failed");
+      return {
+        model: this.model,
+        usage: { prompt_tokens: estimateMessagesTokens(messages), completion_tokens: 12 },
+        choices: [{ message: { content: "天气查询失败，请稍后重试。" } }],
+      };
+    },
+  };
+}
+
+/** 返回 Runtime 渠道工具事件类型。 */
+function readToolEventType(event) {
+  return event.type;
+}
+
+/** 判断记录项是否为 Runtime 工具执行阶段。 */
+function isToolExecutionSpan(span) {
+  return span.name === "runtime.tool.execute";
+}
+
+/** 判断 SQLite 会话事件是否属于工具执行事实。 */
+function isToolFactEvent(event) {
+  return String(event.type || "").startsWith("tool.");
+}
+
+/** 返回 SQLite 工具事实事件类型。 */
+function readFactEventType(event) {
+  return event.type;
 }
 
 /** 判断消息是否为系统消息。 */
@@ -101,6 +180,7 @@ function buildScriptedMemoryResponse(messages, model) {
   return {
     model,
     usage: { prompt_tokens: estimateMessagesTokens(messages), completion_tokens: 80 },
+    output: delta,
     choices: [{ message: { content: JSON.stringify(delta) } }],
   };
 }
@@ -247,6 +327,139 @@ test("streamed runs emit deltas and persist one final assistant message", async 
   fixture.store.close();
 });
 
+// 验证工具调用由 Runtime 持久化、交付和幂等重放，实时结果不进入 Memory。
+test("read-only weather tool is persisted, streamed, and replayed without a second connector call", async () => {
+  let connectorCalls = 0;
+  const weatherConnector = {
+    /** 返回固定天气事实并记录实际 Connector 调用次数。 */
+    async getWeather() {
+      connectorCalls += 1;
+      return {
+        schemaVersion: "weather.v1",
+        location: { name: "深圳", admin1: "广东", country: "中国", timezone: "Asia/Shanghai" },
+        forecast: { date: "2026-07-30", condition: { code: 3, label: "阴" }, temperature: { current: 26 } },
+        observedAt: "2026-07-30T20:15",
+        source: { name: "Open-Meteo", retrievedAt: "2026-07-30T20:16:00.000Z" },
+      };
+    },
+  };
+  const toolRegistry = createToolRegistry([createWeatherToolDefinition(weatherConnector)]);
+  const gatewayClient = createToolCallingGateway();
+  const fixture = createTestRuntime({ gatewayClient, toolRegistry });
+  const conversation = fixture.runtime.createConversation();
+  const toolEvents = [];
+  /** 收集 Runtime 产生的真实工具阶段。 */
+  function collectToolEvent(event) {
+    toolEvents.push(event);
+  }
+  const input = {
+    requestId: "weather-request-1",
+    clientMessageId: "weather-client-1",
+    message: "今天深圳天气",
+    imageUrls: [],
+    documentUrls: [],
+  };
+
+  const response = await fixture.runtime.runConversation(conversation.id, input, { onToolEvent: collectToolEvent });
+  const replay = await fixture.runtime.runConversation(conversation.id, input);
+  const detail = fixture.runtime.getConversation(conversation.id);
+  const factEvents = fixture.store.listEventsAfter(conversation.id);
+
+  assert.equal(connectorCalls, 1);
+  assert.equal(response.toolCalls.length, 1);
+  assert.equal(response.toolCalls[0].status, "completed");
+  assert.equal(response.toolCalls[0].source, "Open-Meteo");
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.toolCalls.length, 1);
+  assert.deepEqual(toolEvents.map(readToolEventType), ["started", "completed"]);
+  assert.deepEqual(
+    factEvents.filter(isToolFactEvent).map(readFactEventType),
+    ["tool.started", "tool.completed"],
+  );
+  assert.equal(detail.latestRun.toolCalls[0].observedAt, "2026-07-30T20:15");
+  assert.equal(detail.memory.items.length, 0);
+  fixture.store.close();
+});
+
+// 验证工具失败收口为安全 ToolResult，同时保留完成回答和脱敏工具 Span。
+test("weather tool failures remain safe, observable, and separate from model failures", async () => {
+  const tracedSpans = [];
+  const chainTracer = {
+    /** 记录阶段名和安全属性，并直接执行测试操作。 */
+    withSpan(name, attributes, operation) {
+      tracedSpans.push({ name, attributes });
+      return operation({
+        /** 测试不需要记录动态属性。 */
+        setAttribute() {},
+        /** 测试不需要记录动态属性集合。 */
+        setAttributes() {},
+        /** 测试不需要记录错误事件。 */
+        recordError() {},
+        /** withSpan 自动收口，测试 Span 无需手动结束。 */
+        end() {},
+      });
+    },
+    /** 返回队列阶段使用的最小手动 Span。 */
+    startSpan(name, attributes) {
+      tracedSpans.push({ name, attributes });
+      return {
+        /** 测试不需要记录动态属性。 */
+        setAttribute() {},
+        /** 测试不需要记录动态属性集合。 */
+        setAttributes() {},
+        /** 测试不需要记录错误事件。 */
+        recordError() {},
+        /** 测试手动 Span 不持有外部资源。 */
+        end() {},
+      };
+    },
+  };
+  const weatherConnector = {
+    /** 模拟未知 Connector 异常，原始正文不得进入持久化或 Trace。 */
+    async getWeather() {
+      throw new Error("raw upstream weather response");
+    },
+  };
+  const toolRegistry = createToolRegistry([createWeatherToolDefinition(weatherConnector)]);
+  const gatewayClient = createFailingToolGateway();
+  const fixture = createTestRuntime({ gatewayClient, toolRegistry, chainTracer });
+  const conversation = fixture.runtime.createConversation();
+  const toolEvents = [];
+  /** 收集工具失败阶段，验证渠道只接收公开错误。 */
+  function collectToolEvent(event) {
+    toolEvents.push(event);
+  }
+
+  const response = await fixture.runtime.runConversation(
+    conversation.id,
+    {
+      requestId: "weather-failure-request-1",
+      clientMessageId: "weather-failure-client-1",
+      message: "今天未知地点天气",
+      imageUrls: [],
+      documentUrls: [],
+    },
+    { onToolEvent: collectToolEvent },
+  );
+  const detail = fixture.runtime.getConversation(conversation.id);
+  const toolSpan = tracedSpans.find(isToolExecutionSpan);
+
+  assert.equal(response.content, "天气查询失败，请稍后重试。");
+  assert.equal(response.toolCalls[0].status, "failed");
+  assert.deepEqual(response.toolCalls[0].error, {
+    code: "weather_query_failed",
+    message: "天气查询未能完成，请稍后重试。",
+    retryable: false,
+  });
+  assert.deepEqual(toolEvents.map(readToolEventType), ["started", "failed"]);
+  assert.equal(detail.latestRun.status, "completed");
+  assert.equal(toolSpan.attributes["ai.platform.capability_scenario_id"], "C4");
+  assert.equal(toolSpan.attributes["gen_ai.tool.name"], "get_weather");
+  assert.equal(typeof toolSpan.attributes["ai.platform.tool_call_id"], "string");
+  assert.equal(JSON.stringify({ detail, toolEvents, toolSpan }).includes("raw upstream weather response"), false);
+  fixture.store.close();
+});
+
 // 验证成功模型调用的逐尝试证据随同一个 Run 持久化并返回渠道。
 test("completed runs persist model retry evidence", async () => {
   const fixture = createTestRuntime({ gatewayClient: createRetryTraceGateway() });
@@ -272,6 +485,58 @@ test("runtime routes the selected model through planning and generation", async 
   assert.deepEqual(observations, ["count:chat-quality", "generate:chat-quality"]);
   assert.equal(response.model, "chat-quality");
   assert.equal(detail.lastRun.model, "chat-quality");
+  fixture.store.close();
+});
+
+// 验证标题和归档是独立会话事实，取消归档不会重新打开已关闭会话。
+test("conversation workspace updates title and archive state without reopening closed sessions", async () => {
+  const fixture = createTestRuntime();
+  const conversation = fixture.runtime.createConversation();
+
+  const renamed = fixture.runtime.updateConversation(conversation.id, { title: "渠道体验验收" });
+  assert.equal(renamed.title, "渠道体验验收");
+  const archived = fixture.runtime.updateConversation(conversation.id, { archived: true });
+  assert.ok(archived.archivedAt);
+  await fixture.runtime.closeConversation(conversation.id);
+  const restored = fixture.runtime.updateConversation(conversation.id, { archived: false });
+  assert.equal(restored.archivedAt, null);
+  assert.equal(restored.status, "closed");
+  fixture.store.close();
+});
+
+// 验证重新生成创建带来源关系的新 Run，并拒绝与来源状态不匹配的恢复模式。
+test("run recovery persists lineage and validates the source terminal state", async () => {
+  const fixture = createTestRuntime();
+  const conversation = fixture.runtime.createConversation();
+  await run(fixture.runtime, conversation.id, 1, "原问题");
+  const sourceRun = fixture.runtime.getConversation(conversation.id).latestRun;
+
+  await fixture.runtime.runConversation(conversation.id, {
+    requestId: "request-regenerate",
+    clientMessageId: "client-regenerate",
+    sourceRunId: sourceRun.id,
+    recoveryMode: "regenerate",
+    message: "原问题",
+    imageUrls: [],
+    documentUrls: [],
+  });
+  const recoveredRun = fixture.runtime.getConversation(conversation.id).latestRun;
+  assert.equal(recoveredRun.sourceRunId, sourceRun.id);
+  assert.equal(recoveredRun.recoveryMode, "regenerate");
+  assert.notEqual(recoveredRun.requestId, sourceRun.requestId);
+
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      requestId: "request-invalid-retry",
+      clientMessageId: "client-invalid-retry",
+      sourceRunId: recoveredRun.id,
+      recoveryMode: "retry",
+      message: "原问题",
+      imageUrls: [],
+      documentUrls: [],
+    }),
+    isInvalidRunRecoverySource,
+  );
   fixture.store.close();
 });
 
@@ -308,6 +573,8 @@ test("conversation store migrates retry evidence column for existing databases",
     for (const column of columns) {
       if (column.name === "resilience_json") hasResilienceColumn = true;
     }
+    assert.ok(columns.some(isSourceRunColumn));
+    assert.ok(columns.some(isRecoveryModeColumn));
     migratedDatabase.close();
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -599,6 +866,21 @@ function isSupersededMysql(item) {
 /** 判断异常是否为关闭会话拒绝新 Run。 */
 function isConversationClosedError(error) {
   return error instanceof ConversationStoreError && error.code === "conversation_closed";
+}
+
+/** 判断异常是否为恢复模式与来源 Run 状态不匹配。 */
+function isInvalidRunRecoverySource(error) {
+  return error instanceof ConversationStoreError && error.code === "invalid_run_recovery_source";
+}
+
+/** 判断迁移列是否为来源 Run ID。 */
+function isSourceRunColumn(column) {
+  return column.name === "source_run_id";
+}
+
+/** 判断迁移列是否为恢复模式。 */
+function isRecoveryModeColumn(column) {
+  return column.name === "recovery_mode";
 }
 
 /** 返回持久化消息角色，供顺序断言复用。 */

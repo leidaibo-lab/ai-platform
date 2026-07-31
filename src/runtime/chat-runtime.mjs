@@ -53,12 +53,14 @@ export function createChatRuntime({
   contextPlanner,
   memoryManager,
   toolRegistry,
+  toolOptions = {},
   chainTracer = createNullChainTracer(),
   resilienceOptions = {},
 }) {
   const options = normalizeContextOptions(contextOptions);
   const registry = toolRegistry || createToolRegistry();
   const runTimeoutMs = normalizeRunTimeout(resilienceOptions.runTimeoutMs);
+  const maxToolSteps = normalizeToolStepLimit(toolOptions.maxSteps);
   const activeRuns = new Map();
 
   /**
@@ -103,6 +105,29 @@ export function createChatRuntime({
       return store.getConversation(conversationId);
     },
 
+    /** 更新会话标题或归档状态，活动 Run 期间拒绝改变工作台位置。 */
+    updateConversation(conversationId, body = {}) {
+      if (hasActiveRunForConversation(activeRuns, conversationId)) {
+        throw new RuntimeInputError({ error: "Conversation has an active Run", code: "conversation_run_active" }, 409);
+      }
+      const hasTitle = Object.prototype.hasOwnProperty.call(body, "title");
+      const hasArchived = Object.prototype.hasOwnProperty.call(body, "archived");
+      if (!hasTitle && !hasArchived) {
+        throw new RuntimeInputError({ error: "title or archived is required", code: "invalid_conversation_update" });
+      }
+      const title = hasTitle ? String(body.title || "").trim() : undefined;
+      if (hasTitle && (!title || title.length > 80 || /[\r\n\0]/.test(title))) {
+        throw new RuntimeInputError({ error: "title must contain 1 to 80 valid characters", code: "invalid_conversation_title" });
+      }
+      if (hasArchived && typeof body.archived !== "boolean") {
+        throw new RuntimeInputError({ error: "archived must be a boolean", code: "invalid_conversation_archive" });
+      }
+      return store.updateConversation(conversationId, {
+        ...(hasTitle ? { title } : {}),
+        ...(hasArchived ? { archived: body.archived } : {}),
+      });
+    },
+
     cancelConversationRun,
 
     /**
@@ -114,6 +139,7 @@ export function createChatRuntime({
      * @param {(input: object) => Promise<void>|void} [delivery.onRunStarted] - Run 创建或幂等命中通知。
      * @param {(input: object) => Promise<void>|void} [delivery.onChainTraceStarted] - 业务 Chain ID 创建通知。
      * @param {(delta: string) => Promise<void>|void} [delivery.onTextDelta] - 模型文本增量消费者。
+     * @param {(event: object) => Promise<void>|void} [delivery.onToolEvent] - 工具开始、完成或失败阶段消费者。
      * @param {AbortSignal} [delivery.abortSignal] - 可选调用方取消信号。
      * @returns {Promise<object>} 回复、会话状态、usage 和 Context Manifest。
      */
@@ -137,7 +163,6 @@ export function createChatRuntime({
         const referencedMessages = store.resolveMessageReferences(conversationId, input.references);
         const content = buildUserContent(input);
         const displayContent = buildDisplayContent(input);
-        registry.resolveToolIntent(input);
         const started = await chainTracer.withSpan(
           "storage.start_run",
           buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
@@ -151,6 +176,8 @@ export function createChatRuntime({
               displayContent,
               references: input.references,
               model: selectedModel,
+              sourceRunId: input.sourceRunId || null,
+              recoveryMode: input.recoveryMode || null,
             }),
         );
         const effectiveChainTraceId = started.run.resilience?.traceId || chainTraceId;
@@ -194,6 +221,73 @@ export function createChatRuntime({
           conversationId,
           runId,
         });
+
+        /** 将已持久化工具阶段以安全元数据通知当前渠道。 */
+        async function emitToolEvent(type, toolCall) {
+          if (typeof delivery.onToolEvent !== "function") return;
+          await delivery.onToolEvent({
+            type,
+            toolCallId: toolCall.toolCallId,
+            toolName: toolCall.toolName,
+            title: registry.get(toolCall.toolName)?.title || toolCall.toolName,
+            status: toolCall.status,
+            source: toolCall.source,
+            observedAt: toolCall.observedAt,
+            error: toolCall.error,
+          });
+        }
+
+        /** 在 Runtime 权限、事实、Trace 和取消边界内执行一个 AI SDK 工具调用。 */
+        async function executeRegisteredTool(definition, toolInput, toolExecutionOptions = {}) {
+          throwIfAborted(abortSignal);
+          const toolCallId = String(toolExecutionOptions.toolCallId || randomUUID());
+          const startedTool = store.startToolCall({
+            conversationId,
+            runId,
+            toolCallId,
+            toolName: definition.name,
+            input: toolInput,
+          });
+          if (startedTool.replayed && startedTool.status === "completed") return startedTool.output;
+          if (startedTool.replayed && startedTool.status === "failed") {
+            return { status: "error", error: startedTool.error };
+          }
+          await emitToolEvent("started", startedTool);
+          const toolSignal = combineAbortSignals(abortSignal, toolExecutionOptions.abortSignal);
+          try {
+            const data = await chainTracer.withSpan(
+              "runtime.tool.execute",
+              {
+                ...traceAttributes,
+                "ai.platform.capability_scenario_id": "C4",
+                "gen_ai.tool.name": definition.name,
+                "ai.platform.tool_call_id": toolCallId,
+              },
+              /** 调用固定 allowlist 中的 Connector，不允许模型控制外部目标。 */
+              () => definition.execute(toolInput, { abortSignal: toolSignal }),
+            );
+            const output = { status: "success", data };
+            const completedTool = store.completeToolCall({
+              runId,
+              toolCallId,
+              output,
+              source: data?.source?.name || null,
+              observedAt: data?.observedAt || data?.source?.retrievedAt || null,
+            });
+            await emitToolEvent("completed", completedTool);
+            return output;
+          } catch (error) {
+            const cancelled = isCancellationError(error, toolSignal);
+            const publicError = cancelled
+              ? { code: "tool_cancelled", message: "工具调用已取消。", retryable: false }
+              : mapPublicToolError(definition, error);
+            const failedTool = store.failToolCall({ runId, toolCallId, ...publicError });
+            await emitToolEvent("failed", failedTool);
+            if (cancelled) throw error;
+            return { status: "error", error: publicError };
+          }
+        }
+
         try {
           if (typeof delivery.onRunStarted === "function") {
             await delivery.onRunStarted({
@@ -267,12 +361,17 @@ export function createChatRuntime({
             await delivery.onTextDelta(text);
           }
 
+          const tools = registry.hasTools() ? registry.buildAiSdkTools(executeRegisteredTool) : undefined;
+          const requiredToolName = registry.resolveRequiredTool({ message: input.message });
           const data = await gatewayClient.chatCompletions({
             messages: plan.messages,
             model: selectedModel,
             maxCompletionTokens: options.reservedOutputTokens,
             resilienceContext,
             operation: "model.generate",
+            tools,
+            requiredToolName,
+            maxToolSteps,
             onTextDelta: typeof delivery.onTextDelta === "function" ? handleTextDelta : undefined,
             abortSignal,
           });
@@ -300,6 +399,7 @@ export function createChatRuntime({
             model: completed.run.model,
             context: completed.run.contextManifest,
             resilience: completed.run.resilience,
+            toolCalls: store.listToolCalls(runId),
             conversation: store.getConversation(conversationId),
             replayed: false,
           };
@@ -354,6 +454,14 @@ export function createChatRuntime({
       });
     },
   };
+}
+
+/** 判断当前 Runtime 实例是否仍拥有指定会话的活动 Run。 */
+function hasActiveRunForConversation(activeRuns, conversationId) {
+  for (const run of activeRuns.values()) {
+    if (run.conversationId === conversationId) return true;
+  }
+  return false;
 }
 
 /** 解析 Run 模型别名，并把目录校验异常转换为渠道安全错误。 */
@@ -463,6 +571,25 @@ function readLastFailedAttempt(resilience) {
   return null;
 }
 
+/** 通过工具专属映射生成安全错误，未知实现不透传原始异常正文。 */
+function mapPublicToolError(definition, error) {
+  if (typeof definition?.toPublicError === "function") {
+    const mapped = definition.toPublicError(error);
+    if (mapped?.code && mapped?.message) {
+      return {
+        code: String(mapped.code),
+        message: String(mapped.message),
+        retryable: Boolean(mapped.retryable),
+      };
+    }
+  }
+  return {
+    code: "tool_execution_failed",
+    message: "工具执行未能完成。",
+    retryable: false,
+  };
+}
+
 /** 将完成的幂等 Run 恢复为标准响应；运行中或失败 Run 返回冲突。 */
 function replayRun(result, conversation) {
   if (result.run.status !== "completed" || !result.assistantMessage) {
@@ -483,6 +610,7 @@ function replayRun(result, conversation) {
     model: result.run.model,
     context: result.run.contextManifest,
     resilience: result.run.resilience,
+    toolCalls: result.toolCalls || [],
     conversation,
     replayed: true,
   };
@@ -499,6 +627,7 @@ function buildCancelledRunResponse(result, conversation) {
     model: result.run.model,
     context: result.run.contextManifest,
     resilience: result.run.resilience,
+    toolCalls: result.toolCalls || [],
     conversation,
     replayed: false,
   };
@@ -542,6 +671,12 @@ function buildCancellationResilience(context, outputStarted) {
 function normalizeRunTimeout(value) {
   const timeoutMs = Number(value);
   return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_RUN_TIMEOUT_MS;
+}
+
+/** 将 Runtime 工具步骤上限限制为 1 到 8，默认四步避免无界调用。 */
+function normalizeToolStepLimit(value) {
+  const steps = Number(value);
+  return Number.isInteger(steps) && steps >= 1 && steps <= 8 ? steps : 4;
 }
 
 /** 生成所有 C1 业务 Span 共用的安全关联属性。 */

@@ -105,6 +105,7 @@ Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯
 - **AND** 所有尝试 SHALL 复用同一个 Run 和绝对截止时间，不得重复持久化用户消息
 - **AND** Runtime SHALL 持久化逐尝试结果、错误分类、退避和最终重试判定
 - **AND** 流式 Run SHALL 使用 AI SDK `streamText`，非流式 Run SHALL 保持既有 `generateText` 契约
+- **AND** 存在工具时 SHALL 通过同一组 Core 调用参数提供 `tools`、`stopWhen` 和按需的 `prepareStep`，不得另建绕过 GatewayClient 的工具模型入口
 
 #### Scenario: Runtime retries a transient model failure
 
@@ -133,9 +134,21 @@ Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯
 - **WHEN** Runtime 发送文本、多条系统消息、图片 URL、图片 data URL 或结构化输出约束
 - **THEN** GatewayClient SHALL 将现有消息转换为等价 AI SDK ModelMessage
 - **AND** SHALL 将图片 URL 原样转发给 LiteLLM，不得在 Runtime 提前下载
-- **AND** SHALL 保留 `max_completion_tokens` 和 `response_format` 请求语义
+- **AND** SHALL 保留 `max_completion_tokens` 和兼容调用方原始 `response_format` 的请求语义
+- **AND** Runtime 内部结构化任务 SHALL 使用 AI SDK `Output.object` 和 JSON Schema 生成、解析与校验结果
+- **AND** SHALL 使用 AI SDK v7 的 `usage` 汇总全部模型步骤、通过 `stream` 消费标准事件，并从 `finalStep.response` 读取最终响应元数据
+- **AND** SHALL NOT 依赖已弃用的 `totalUsage`、`fullStream` 或顶层 `response`
 - **AND** SHALL 将模型正文、实际模型、usage、finish reason 和 HTTP 错误映射回现有 GatewayClient 契约
 - **AND** `/utils/token_counter` 不可用时的本地估算回退 SHALL 保持不变
+
+#### Scenario: Runtime extracts a structured MemoryDelta
+
+- **GIVEN** Memory Manager 已选择需要压缩的连续消息区间
+- **WHEN** Runtime 请求模型提取 MemoryDelta
+- **THEN** GatewayClient SHALL 通过 `Output.object({ schema: jsonSchema(...) })` 请求并返回已解析的结构化结果
+- **AND** AI SDK SHALL 在结果进入 MemoryDelta reducer 前执行 JSON Schema 校验
+- **AND** provider 以 `400` 拒绝结构化输出请求时 Runtime MAY 移除 `outputSchema`，使用纯 JSON 提示执行一次兼容降级
+- **AND** 降级结果 SHALL 继续经过现有 MemoryDelta 字段、来源 ID 和状态归一化校验
 
 ### Requirement: Runtime conversation lifecycle
 
@@ -156,6 +169,23 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 - **WHEN** 浏览器请求 `POST /api/runtime/conversations/{conversationId}/close`
 - **THEN** Runtime SHALL 完成最终记忆 checkpoint 并将会话标记为 `closed`
 - **AND** 关闭后的会话 SHALL 拒绝新的 Run
+
+#### Scenario: User organizes conversation history
+
+- **GIVEN** 会话由 Runtime 持久化且当前没有活动 Run
+- **WHEN** 浏览器通过 `PATCH /api/runtime/conversations/{conversationId}` 提交非空 `title` 或布尔值 `archived`
+- **THEN** Runtime SHALL 原子更新会话标题或独立的归档时间并增加会话版本
+- **AND** 归档 SHALL NOT 删除 Conversation、Message、Run、Memory 或事件事实
+- **AND** 取消归档 SHALL NOT 把 `closed` 会话重新改为 `active`
+- **AND** 搜索、时间分组和归档筛选 MAY 由渠道基于服务端会话摘要完成，不得成为第二份会话事实
+
+#### Scenario: Browser preserves a channel-local draft across refresh
+
+- **GIVEN** 用户在当前浏览器标签页中有尚未发送的正文、链接附件、消息引用或模型选择
+- **WHEN** 页面刷新或在会话之间切换
+- **THEN** 渠道 MAY 在 session 范围恢复草稿
+- **AND** 渠道草稿 SHALL NOT 作为 Conversation、Message 或 Run 事实提交给其他客户端
+- **AND** 本地图片 data URL SHALL NOT 写入 session 持久化草稿
 
 ### Requirement: Conversation run endpoint
 
@@ -203,11 +233,50 @@ Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/
 
 - **GIVEN** 浏览器通过 `/runs/stream` 提交带幂等标识的当前输入
 - **WHEN** Runtime 创建或命中 Run 并调用流式模型生成
-- **THEN** Demo Server SHALL 以 SSE 依次发送 `run-started`、零到多个 `text-delta`，以及一个 `completed`、`cancelled` 或 `error` 终止事件
+- **THEN** Demo Server SHALL 以 SSE 先发送 `run-started`，再发送零到多个工具阶段事件或 `text-delta`，以及一个 `completed`、`cancelled` 或 `error` 终止事件
 - **AND** `text-delta` SHALL 只在内存和网络层传递，不得逐 Token 写入 SQLite
 - **AND** 成功完成后 Runtime SHALL 在同一事务中只持久化一条完整助手消息和 Run 最终状态
 - **AND** 浏览器断线 SHALL NOT 创建回答 checkpoint 或 Token 级续传状态
 - **AND** 渠道 SHALL 能通过会话详情中的 `latestRun` 查询最终状态
+
+### Requirement: V1 read-only tool loop
+
+Agent Runtime SHALL 适配 AI SDK Core `generateText` / `streamText` 的 `tools`、`stopWhen` 和 `prepareStep` 执行有界只读工具循环，并继续拥有 Conversation、Run、权限、工具事实、幂等、交付和审计；LiteLLM SHALL 只负责模型访问、路由和转发，不得执行或保存业务工具结果。
+
+#### Scenario: Model requests current weather
+
+- **GIVEN** `get_weather` 已在服务端 Tool Registry 中启用
+- **WHEN** 当前输入包含明确地点且属于今天或明天的天气查询
+- **THEN** Runtime SHALL 通过服务端 Tool Registry 把 AI SDK Core 多步生成的首步固定路由到 `get_weather`，ToolResult 回填后的后续步骤恢复自动选择
+- **AND** Runtime SHALL 在同一 Run 总截止时间内执行固定目标的 Open-Meteo Connector
+- **AND** Runtime SHALL 持久化 `toolCallId`、工具名、脱敏输入、状态、结构化结果或安全错误、来源和数据时间
+- **AND** Runtime SHALL 将结构化 ToolResult 回填给同一有界生成循环，由模型生成最终回答
+- **AND** 实时天气结果 SHALL NOT 自动写入长期结构化记忆
+- **AND** 最终回答 SHALL 能说明地点、数据时间和来源，不得把模型已有知识伪装成实时查询结果
+
+#### Scenario: Browser observes a tool stage
+
+- **GIVEN** 流式 Run 已通过 `run-started` 返回稳定 `runId`
+- **WHEN** Runtime 开始、完成或失败一个工具调用
+- **THEN** 当前 POST SSE SHALL 分别发送 `tool-started`、`tool-completed` 或 `tool-failed`
+- **AND** 事件 SHALL 只包含工具调用 ID、工具名、公开标题、状态、来源和数据时间等安全元数据
+- **AND** 渠道 SHALL 根据真实服务端事件展示工具阶段，不得自行猜测或伪造工具执行
+
+#### Scenario: Tool execution fails safely
+
+- **GIVEN** 天气地点不存在、工具输入无效、Connector 超时或上游不可用
+- **WHEN** 工具无法返回成功结果
+- **THEN** Runtime SHALL 将工具调用收口为 `failed` 并保存稳定错误码、公开说明和可重试性
+- **AND** Runtime SHALL 将安全失败结果回填给模型以生成可执行说明，不得暴露原始响应正文、调用栈或任意外部 URL
+- **AND** 一个工具失败 SHALL NOT 自动改写为模型服务失败
+
+#### Scenario: Tool loop is bounded and replayable
+
+- **GIVEN** 同一 Run 可能产生多步模型与工具交互
+- **WHEN** Runtime 执行工具循环
+- **THEN** 循环 SHALL 共享 Run 截止时间并最多执行四个模型步骤
+- **AND** 只允许 Tool Registry 中启用的只读工具，不得让模型提交任意 URL 或动态代码
+- **AND** 相同 `requestId` 的已完成 Run 重放 SHALL 返回已持久化工具事实和回答，不得再次调用 Connector
 
 #### Scenario: User explicitly cancels a running generation
 
@@ -240,6 +309,16 @@ Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/
 - **GIVEN** 相同 `requestId` 的 Run 已完成
 - **WHEN** 渠道重复提交请求
 - **THEN** Runtime SHALL 返回已完成结果且不得重复写入消息或重复调用模型
+
+#### Scenario: User retries, regenerates, or continues as a new Run
+
+- **GIVEN** 当前会话存在一个已持久化的来源 Run
+- **WHEN** 浏览器创建新的 Run，并同时提交新的 `requestId`、`clientMessageId`、`sourceRunId` 和 `recoveryMode`
+- **THEN** `recoveryMode` SHALL 只允许 `retry`、`regenerate` 或 `continue`
+- **AND** Runtime SHALL 校验来源 Run 属于当前会话，且 `retry` 对应 failed、`regenerate` 对应 completed、`continue` 对应 cancelled
+- **AND** 新 Run SHALL 继续经过普通输入校验、Context Planner、GatewayClient、持久化和流式交付主链
+- **AND** Runtime SHALL 在新 Run 中持久化来源关系，不得修改、删除或覆盖来源 Run 及其消息
+- **AND** 恢复动作 SHALL NOT 复用来源 Run 的幂等标识
 
 #### Scenario: Two clients submit to one conversation concurrently
 

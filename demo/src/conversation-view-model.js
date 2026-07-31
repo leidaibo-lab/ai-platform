@@ -29,6 +29,141 @@
  */
 
 const DOCUMENT_PREFIX = "参考文档链接：";
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * @typedef {object} ConversationWorkspaceResult
+ * @property {object[]} conversations - 按服务端更新时间排序后的当前窗口。
+ * @property {number} total - 搜索和筛选后的会话总数。
+ * @property {boolean} hasMore - 是否还有未进入窗口的会话。
+ */
+
+/**
+ * 搜索、筛选并按时间分组会话摘要，结果只用于渠道列表展示。
+ *
+ * @param {object[]} conversations - Runtime 返回的会话摘要。
+ * @param {{query?: string, filter?: "active"|"archived"|"all", limit?: number, now?: Date|string|number}} [options] - 渠道列表条件。
+ * @returns {ConversationWorkspaceResult} 当前列表窗口和总量。
+ */
+export function buildConversationWorkspace(conversations, options = {}) {
+  const query = String(options.query || "").trim().toLocaleLowerCase();
+  const filter = options.filter || "active";
+  const limit = Math.max(1, Number(options.limit) || 40);
+  const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const filtered = [];
+  for (const conversation of conversations || []) {
+    const isArchived = Boolean(conversation?.archivedAt);
+    if (filter === "active" && isArchived) continue;
+    if (filter === "archived" && !isArchived) continue;
+    if (query && !String(conversation?.title || "").toLocaleLowerCase().includes(query)) continue;
+    filtered.push({
+      ...conversation,
+      timeGroup: conversationTimeGroup(conversation?.updatedAt, now),
+    });
+  }
+  filtered.sort(compareConversationUpdatedAt);
+  return {
+    conversations: filtered.slice(0, limit),
+    total: filtered.length,
+    hasMore: filtered.length > limit,
+  };
+}
+
+/**
+ * 只保留消息末尾窗口，允许用户显式逐批加载更早内容。
+ *
+ * @param {object[]} messages - 当前会话可见消息。
+ * @param {number} limit - 当前窗口上限。
+ * @returns {{messages: object[], hiddenCount: number, hasMore: boolean}} 消息窗口。
+ */
+export function buildMessageWindow(messages, limit = 80) {
+  const source = Array.isArray(messages) ? messages : [];
+  const normalizedLimit = Math.max(1, Number(limit) || 80);
+  const hiddenCount = Math.max(0, source.length - normalizedLimit);
+  return {
+    messages: source.slice(hiddenCount),
+    hiddenCount,
+    hasMore: hiddenCount > 0,
+  };
+}
+
+/**
+ * 将内存草稿转换为 sessionStorage 安全 JSON，明确剔除本地图片 data URL。
+ *
+ * @param {Map<string, ConversationDraft>} drafts - 当前页面会话草稿集合。
+ * @returns {string} 可写入 sessionStorage 的版本化 JSON。
+ */
+export function serializeConversationDrafts(drafts) {
+  const entries = [];
+  for (const [conversationId, draft] of drafts instanceof Map ? drafts : []) {
+    const normalized = normalizeConversationDraft(draft);
+    entries.push([
+      conversationId,
+      {
+        ...normalized,
+        attachments: normalized.attachments.filter(isSessionSafeAttachment),
+      },
+    ]);
+  }
+  return JSON.stringify({ version: 1, entries });
+}
+
+/**
+ * 从 sessionStorage JSON 恢复会话草稿；坏载荷或未知版本返回空集合。
+ *
+ * @param {string|null|undefined} value - sessionStorage 原始字符串。
+ * @returns {Map<string, ConversationDraft>} 已完成边界过滤的草稿集合。
+ */
+export function deserializeConversationDrafts(value) {
+  try {
+    const parsed = JSON.parse(String(value || ""));
+    if (parsed?.version !== 1 || !Array.isArray(parsed.entries)) return new Map();
+    const drafts = new Map();
+    for (const entry of parsed.entries) {
+      if (!Array.isArray(entry) || entry.length !== 2 || !entry[0]) continue;
+      const normalized = normalizeConversationDraft(entry[1]);
+      normalized.attachments = normalized.attachments.filter(isSessionSafeAttachment);
+      drafts.set(String(entry[0]), normalized);
+    }
+    return drafts;
+  } catch {
+    return new Map();
+  }
+}
+
+/** 从 Markdown 正文提取一到六级 ATX 标题，供长回答导航使用。 */
+export function extractMarkdownHeadings(content, messageId = "message") {
+  const headings = [];
+  const occurrences = new Map();
+  for (const line of String(content || "").split(/\r?\n/)) {
+    const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!match) continue;
+    const title = match[2].replace(/[*_`[\]]/g, "").trim();
+    if (!title) continue;
+    const slug = markdownHeadingSlug(title);
+    const occurrence = (occurrences.get(slug) || 0) + 1;
+    occurrences.set(slug, occurrence);
+    headings.push({
+      level: match[1].length,
+      title,
+      id: `answer-heading-${String(messageId)}-${slug}-${occurrence}`,
+    });
+  }
+  return headings;
+}
+
+/** 仅允许 Markdown 链接使用页面内锚点、相对地址及 http(s)/mailto 协议。 */
+export function isSafeMarkdownHref(value) {
+  const href = String(value || "").trim();
+  if (!href) return false;
+  if (href.startsWith("#") || href.startsWith("/") || href.startsWith("./") || href.startsWith("../")) return true;
+  try {
+    const url = new URL(href);
+    return ["http:", "https:", "mailto:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * 按 conversationId 保存渠道草稿，空草稿会删除对应项且不修改原 Map。
@@ -89,9 +224,10 @@ export function scrollMessageListToLatest(messageList, behavior = "smooth") {
 }
 
 /** 把现有活动 Run 事实映射为回答附近的渠道状态，不推断服务端未提供的阶段。 */
-export function activeRunStageLabel(status, hasContent = false) {
+export function activeRunStageLabel(status, hasContent = false, toolTitle = "") {
   if (status === "stopping") return "正在停止生成";
   if (status === "starting") return "正在连接模型";
+  if (status === "tool-running") return `正在查询${toolTitle || "外部数据"}`;
   return hasContent ? "正在生成回答" : "正在等待模型响应";
 }
 
@@ -332,6 +468,42 @@ function normalizeConversationDraft(draft) {
     references: Array.isArray(draft?.references) ? [...draft.references] : [],
     model: String(draft?.model || ""),
   };
+}
+
+/** 按更新时间倒序排列会话，缺失或无效时间稳定落到末尾。 */
+function compareConversationUpdatedAt(left, right) {
+  const leftTime = Date.parse(left?.updatedAt || "") || 0;
+  const rightTime = Date.parse(right?.updatedAt || "") || 0;
+  return rightTime - leftTime;
+}
+
+/** 把服务端更新时间映射为渠道会话列表的固定时间分组。 */
+function conversationTimeGroup(updatedAt, now) {
+  const updated = new Date(updatedAt || 0);
+  if (Number.isNaN(updated.getTime())) return "更早";
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const updatedStart = new Date(updated.getFullYear(), updated.getMonth(), updated.getDate()).getTime();
+  const elapsedDays = Math.floor((todayStart - updatedStart) / DAY_IN_MS);
+  if (elapsedDays <= 0) return "今天";
+  if (elapsedDays === 1) return "昨天";
+  if (elapsedDays < 7) return "最近 7 天";
+  return "更早";
+}
+
+/** 判断附件是否可进入 sessionStorage；本地图片正文只保留在当前页面内存。 */
+function isSessionSafeAttachment(attachment) {
+  const url = String(attachment?.url || "");
+  return Boolean(url) && !url.toLowerCase().startsWith("data:");
+}
+
+/** 将 Markdown 标题压缩为可用于 DOM id 的稳定 ASCII 片段。 */
+function markdownHeadingSlug(value) {
+  const slug = String(value || "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || "section";
 }
 
 /** 从 resilience 中读取最后一个失败尝试，避免成功重试覆盖最终分类。 */
