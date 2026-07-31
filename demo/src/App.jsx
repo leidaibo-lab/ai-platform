@@ -1705,6 +1705,7 @@ function MessageBody({
       ) : null}
       {hasDisplayContent || !streaming ? (
         <XMarkdown
+          className="message-markdown x-markdown-light"
           content={message.displayContent || "(空消息)"}
           components={markdownComponents}
           streaming={streaming ? { hasNextChunk: true, enableAnimation: true, tail: true } : undefined}
@@ -1726,22 +1727,27 @@ function buildMarkdownComponents(headings, onCopyCode) {
     pre(props) {
       const { children, domNode, streamStatus, ...elementProps } = props;
       const code = readReactText(children).replace(/\n$/, "");
+      const language = readMarkdownCodeLanguage(children);
+      const languageLabel = language === "text" ? "文本" : language || "代码";
       /** 复制当前代码块的纯文本。 */
       function copyCurrentCode() {
         void onCopyCode(code);
       }
       return (
-        <div className="markdown-code-block">
-          <Tooltip title="复制代码">
-            <Button
-              className="markdown-code-copy"
-              type="text"
-              size="small"
-              icon={<Copy size={14} />}
-              aria-label="复制代码"
-              onClick={copyCurrentCode}
-            />
-          </Tooltip>
+        <div className={`markdown-code-block${language === "text" ? " is-plain-text" : ""}`}>
+          <div className="markdown-code-header">
+            <span>{languageLabel}</span>
+            <Tooltip title="复制代码">
+              <Button
+                className="markdown-code-copy"
+                type="text"
+                size="small"
+                icon={<Copy size={14} />}
+                aria-label="复制代码"
+                onClick={copyCurrentCode}
+              />
+            </Tooltip>
+          </div>
           <pre {...elementProps}>{children}</pre>
         </div>
       );
@@ -1799,6 +1805,20 @@ function readReactText(node) {
   if (Array.isArray(node)) return node.map(readReactText).join("");
   if (React.isValidElement(node)) return readReactText(node.props.children);
   return "";
+}
+
+/** 从代码节点的 language-* class 读取围栏语言，未知语言回退为空字符串。 */
+function readMarkdownCodeLanguage(node) {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const language = readMarkdownCodeLanguage(child);
+      if (language) return language;
+    }
+    return "";
+  }
+  if (!React.isValidElement(node)) return "";
+  const match = /(?:^|\s)language-([^\s]+)/.exec(String(node.props.className || ""));
+  return match?.[1] || readMarkdownCodeLanguage(node.props.children);
 }
 
 /** 将一条被引用消息渲染为可定位到来源的只读证据预览。 */

@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { XProvider } from "@ant-design/x";
+import "@ant-design/x-markdown/themes/light.css";
 import xZhCN from "@ant-design/x/locale/zh_CN";
 import antdZhCN from "antd/locale/zh_CN";
 import App from "./App.jsx";
