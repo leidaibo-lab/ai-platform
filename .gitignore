@@ -1,4 +1,5 @@
 .env
+.env.gateway-governance.local
 *.log
 .DS_Store
 __pycache__/

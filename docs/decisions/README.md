@@ -23,6 +23,8 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-08-02 | [Runtime 使用 LiteLLM Virtual Key 的模型映射边界](./2026-08-02-runtime-virtual-key-mapping.md) | 接受 | 运维预配受限 virtual key，Runtime 只消费最小权限 key；模型目录、计数、生成和 spend 使用同一身份 |
+| 2026-08-01 | [LiteLLM 网关治理专项 PoC](./2026-08-01-litellm-governance-poc.md) | 接受 | 固定 LiteLLM `1.89.1` + 独立 PostgreSQL 已验证 virtual key、预算硬拒绝、真实 spend 与 team 累计；Runtime 不重复实现网关预算和限流 |
 | 2026-07-31 | [C2 图片理解与生成能力边界](./2026-07-31-c2-image-understanding-and-generation-boundary.md) | 接受 | C1 保持会话入口，C2 统一承载图片理解与生成并复用 `image_asset`，但使用独立操作契约；具体图片模型、存储与审核方案继续通过 PoC 选型 |
 | 2026-07-31 | [ToolResult 持久化总结恢复](./2026-07-31-tool-result-summary-recovery.md) | 接受 | 工具后模型瞬时失败且尚未交付正文时，从 SQLite ToolResult 构造 AI SDK 结构化消息做无工具恢复；不重复 Connector，也不建设工作流引擎 |
 | 2026-07-31 | [AI SDK Core v7 调用边界对齐](./2026-07-31-ai-sdk-core-v7-alignment.md) | 接受 | 工具型对话复用 `ToolLoopAgent` 并按 Run 动态配置；普通调用和动态结构化输出保留 Core 函数路径，同时停止依赖 v7 弃用结果字段 |

@@ -13,7 +13,8 @@
     "demo:check": "npm run demo:build && npm run demo:budget",
     "demo:server": "node scripts/demo-server.mjs",
     "demo:ui": "vite --config demo/vite.config.mjs",
-    "test": "node --test scripts/test-runtime.mjs scripts/test-gateway-client.mjs scripts/test-image-generation.mjs scripts/test-weather-tool.mjs scripts/test-retry-executor.mjs scripts/test-streaming-http.mjs scripts/test-demo-adapter.mjs scripts/test-chain-trace.mjs scripts/test-architecture-boundaries.mjs",
+    "test": "node --test scripts/test-config.mjs scripts/test-runtime.mjs scripts/test-gateway-client.mjs scripts/test-image-generation.mjs scripts/test-weather-tool.mjs scripts/test-retry-executor.mjs scripts/test-streaming-http.mjs scripts/test-demo-adapter.mjs scripts/test-chain-trace.mjs scripts/test-architecture-boundaries.mjs",
+    "test:config": "node --test scripts/test-config.mjs",
     "test:architecture": "node --test scripts/test-architecture-boundaries.mjs",
     "test:gateway": "node --test scripts/test-gateway-client.mjs",
     "test:images": "node --test scripts/test-image-generation.mjs",
@@ -23,6 +24,8 @@
     "test:streaming": "node --test scripts/test-streaming-http.mjs",
     "test:demo": "node --test scripts/test-demo-adapter.mjs",
     "test:telemetry": "node --test scripts/test-chain-trace.mjs",
+    "poc:gateway-provision": "node scripts/provision-gateway-runtime-key.mjs",
+    "poc:gateway-runtime": "node scripts/test-runtime-governance.mjs",
     "poc:chain-trace-backends": "node scripts/run-chain-trace-backend-poc.mjs"
   },
   "dependencies": {

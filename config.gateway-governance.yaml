@@ -1,0 +1,20 @@
+model_list:
+  - model_name: governance-smoke
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_base: os.environ/UPSTREAM_API_BASE
+      api_key: os.environ/UPSTREAM_API_KEY1
+  - model_name: gpt-image-2
+    litellm_params:
+      model: openai/gpt-image-2
+      api_base: os.environ/UPSTREAM_API_BASE
+      api_key: os.environ/UPSTREAM_API_KEY2
+      num_retries: 0
+
+general_settings:
+  master_key: os.environ/LITELLM_GOVERNANCE_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 120
