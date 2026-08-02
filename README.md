@@ -195,6 +195,27 @@ npm run demo:check
 
 Runtime 的唯一模型生成实现使用 AI SDK Core 和 `@ai-sdk/openai-compatible`，调用同一个 LiteLLM 地址、模型别名和访问 key。工具型主对话复用 GatewayClient 内的 `ToolLoopAgent`，通过 `callOptionsSchema` / `prepareCall` 按 Run 动态注入模型、工具和执行设置，并在每次调用传入取消、超时及 Runtime/Tool Context；无工具普通调用、MemoryDelta 等动态结构化输出和原始 `responseFormat` 兼容调用继续使用 `generateText` / `streamText`。它不会使用 `@ai-sdk/vercel` 直连 v0，也不会绕过模型网关；LiteLLM 专属的模型状态和 token counter 由独立管理客户端访问。
 
+配置 `LITELLM_RUNTIME_KEY` 后，GatewayClient 优先使用该受限 virtual key 请求模型目录、token counter 和模型生成；`LITELLM_MASTER_KEY` 只保留给 LiteLLM 管理操作及旧本地环境兼容回退。浏览器通过 `/api/gateway/status` 看到的是同一 Runtime key 实际可见的平台模型别名，不会获得 virtual key、team ID 或上游模型配置。
+
+### LiteLLM 治理 PoC
+
+隔离治理入口使用 `docker-compose.gateway-governance.yml`，固定 LiteLLM `1.89.1`，并使用独立 PostgreSQL 保存 team、virtual key、预算和 spend。`config.gateway-governance.yaml` 提供 PoC 专属映射 `governance-smoke -> openai/gpt-5.4-mini`，不改变项目默认模型产品决策。
+
+使用 `.env.gateway-governance.example` 中的本地变量启动治理网关后，先通过管理凭据幂等发布固定 Runtime team/key：
+
+```bash
+node scripts/provision-gateway-runtime-key.mjs
+```
+
+普通 Runtime 使用 `LITELLM_BASE_URL=http://127.0.0.1:4100`、`LITELLM_MODEL=governance-smoke` 和 `LITELLM_RUNTIME_KEY`。启动 Demo Server 后，可默认执行无费用的客户端模型目录检查；显式打开真实 Run smoke 时才调用上游模型：
+
+```bash
+node scripts/test-runtime-governance.mjs
+LITELLM_GOVERNANCE_ENABLE_REAL_RUNTIME_SMOKE=true node scripts/test-runtime-governance.mjs
+```
+
+当前切片只验证一个本地应用身份。动态多租户 key 映射、正式 secret manager、轮换、撤销、Redis 多实例限流和 provider 账单对账仍未完成。
+
 会话输入区的模型选择器读取 `GET /api/gateway/status` 返回的 `models`，这些值是当前 `LITELLM_MASTER_KEY` 在 LiteLLM `/v1/models` 中可见的稳定别名，不是真实上游模型配置。当前 `config.yaml` 分别配置 `gpt-5.6` 和 `gpt-image-2`；对话模式显示对话别名，生图模式固定显示服务端 `LITELLM_IMAGE_MODEL` 对应的图片别名。需要更多选项时，先在 LiteLLM `model_list` 中增加对应别名和上游映射。
 
 Demo 输入区支持：

@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${LITELLM_GOVERNANCE_POSTGRES_USER:-litellm}
+      POSTGRES_PASSWORD: ${LITELLM_GOVERNANCE_POSTGRES_PASSWORD:?set LITELLM_GOVERNANCE_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${LITELLM_GOVERNANCE_POSTGRES_DB:-litellm}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - litellm_governance_postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  litellm-governance:
+    image: ghcr.io/berriai/litellm@sha256:89ccaccfda9083f7693777597ca27f8ffca12045e4fa9277155fb7c5f06e68b2
+    command: ["--config", "/app/config.yaml", "--port", "4100"]
+    environment:
+      DATABASE_URL: postgresql://${LITELLM_GOVERNANCE_POSTGRES_USER:-litellm}:${LITELLM_GOVERNANCE_POSTGRES_PASSWORD:?set LITELLM_GOVERNANCE_POSTGRES_PASSWORD}@postgres:5432/${LITELLM_GOVERNANCE_POSTGRES_DB:-litellm}
+      LITELLM_GOVERNANCE_MASTER_KEY: ${LITELLM_GOVERNANCE_MASTER_KEY:?set LITELLM_GOVERNANCE_MASTER_KEY}
+      UPSTREAM_API_BASE: ${UPSTREAM_API_BASE:-}
+      UPSTREAM_API_KEY1: ${UPSTREAM_API_KEY1:-}
+      UPSTREAM_API_KEY2: ${UPSTREAM_API_KEY2:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4100:4100"
+    volumes:
+      - ./config.gateway-governance.yaml:/app/config.yaml:ro
+
+volumes:
+  litellm_governance_postgres:

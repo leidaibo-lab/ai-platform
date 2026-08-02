@@ -20,7 +20,7 @@ export async function loadDemoConfig(rootDir) {
       baseUrl: trimTrailingSlash(env.LITELLM_BASE_URL || "http://localhost:4000"),
       model: env.LITELLM_MODEL || "chat-default",
       imageModel: env.LITELLM_IMAGE_MODEL || "image-default",
-      apiKey: env.LITELLM_MASTER_KEY || "sk-local-admin-key",
+      apiKey: resolveGatewayApiKey(env),
       timeoutMs: runTimeoutMs,
       maxAttempts: readPositiveInteger(env.DEMO_MODEL_MAX_ATTEMPTS, 3),
       retryBaseDelayMs: readNonNegativeNumber(env.DEMO_MODEL_RETRY_BASE_DELAY_MS, 500),
@@ -69,6 +69,16 @@ export async function loadDemoConfig(rootDir) {
         "你是 AI 应用基础平台 Demo 助手。请优先结合 active 结构化记忆、相关历史片段、最近对话和当前用户消息回答；用户最新纠正优先。涉及当前或明日天气时必须调用 get_weather，不得凭模型记忆声称实时结果；回答需说明地点、数据时间和来源。",
     },
   };
+}
+
+/**
+ * 为普通 Runtime 选择最小权限的 LiteLLM 凭据。
+ *
+ * @param {Record<string, string|undefined>} env - 服务端环境变量。
+ * @returns {string} Runtime 使用的 virtual key，旧本地环境可回退 master key。
+ */
+export function resolveGatewayApiKey(env) {
+  return env.LITELLM_RUNTIME_KEY || env.LITELLM_MASTER_KEY || "sk-local-admin-key";
 }
 
 /**
