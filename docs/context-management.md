@@ -118,4 +118,4 @@ hard watermark            90%
 
 真实模型上线前还应使用固定模型版本重复运行同一 fixture，增加准确率、token、费用和延迟的 A/B 报告。
 
-进程故障与结果验收使用独立的 `scenarios/runtime/` 版本化资产和通用 Runner。`npm run eval:runtime-scenarios:deterministic` 使用固定行为模型验证 SQLite、恢复和判分链路；项目级真实评测命令固定使用 `gpt-5.6`，独立调用或其他 AI 项目装配时仍通过 `--model` 显式固定自己的模型别名。setup 使用固定模型构造稳定点，evaluation 才通过现有 Gateway 主链调用目标别名。两阶段请求、完成、失败、token 和耗时分开记录，真实失败不回退固定模型。真实样本不足 30 时只报告观察结果，不把脚本模型或单样本通过率写成真实准确率。
+进程故障与结果验收使用独立的 `scenarios/runtime/` 版本化资产和通用 Runner。`npm run eval:runtime-scenarios:deterministic` 使用固定行为模型验证 SQLite、恢复和判分链路；真实模式不提供默认模型别名，调用方必须通过 `--model` 显式固定自己的模型别名。setup 使用固定模型构造稳定点，evaluation 才通过现有 Gateway 主链调用目标别名。两阶段请求、完成、失败、token 和耗时分开记录，真实失败不回退固定模型。真实样本不足 30 时只报告观察结果，不把脚本模型或单样本通过率写成真实准确率。

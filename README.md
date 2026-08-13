@@ -348,13 +348,11 @@ npm run test:scenarios
 npm run eval:runtime-scenarios:deterministic
 ```
 
-使用同一版本化场景资产评测真实模型最终回答；项目级命令固定使用 `gpt-5.6`，避免重复评测时模型漂移：
+使用同一版本化场景资产评测真实模型最终回答。真实模式不提供默认模型别名，调用方必须为每次评测显式固定模型别名：
 
 ```bash
-npm run eval:runtime-scenarios:real
+npm run eval:runtime-scenarios:real -- --model <fixed-model-alias>
 ```
-
-独立调用 Runner 或接入其他 AI 项目时，仍必须通过 `--model <fixed-model-alias>` 显式指定该项目的固定模型别名。
 
 双模式的 setup 都使用固定行为模型构造 ToolResult 已提交的稳定故障点。`deterministic` 的 evaluation 只证明 Runtime、SQLite、恢复和判分链路；`real-model` 的 evaluation 才经过现有 `GatewayClient -> AI SDK -> LiteLLM -> 上游模型`。真实调用失败直接失败，不回退固定模型。报告分别写入 `.data/evaluations/runtime-scenarios-deterministic.json` 和 `.data/evaluations/runtime-scenarios-real-model.json`；协议与扩展方式见 [`scenarios/runtime/README.md`](./scenarios/runtime/README.md)。
 

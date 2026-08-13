@@ -37,10 +37,10 @@ evaluation
 ```bash
 npm run test:scenarios
 npm run eval:runtime-scenarios:deterministic
-npm run eval:runtime-scenarios:real
+npm run eval:runtime-scenarios:real -- --model <fixed-model-alias>
 ```
 
-项目级真实评测命令固定使用 `gpt-5.6`，避免重复评测时模型漂移。直接调用 CLI 或接入其他 AI 项目时，调用方必须显式固定自己的模型别名：
+真实模式不提供默认模型别名。无论使用 npm 入口、直接调用 CLI 或接入其他 AI 项目，调用方都必须显式固定自己的模型别名，避免重复评测时模型漂移：
 
 ```bash
 node scripts/run-runtime-scenarios.mjs \

@@ -11,7 +11,7 @@ const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 test("deterministic runtime scenario suite passes accepted and rejected recovery cases", testDeterministicScenarioSuite);
 test("deterministic runtime scenarios can persist an explicit evaluation alias", testExplicitDeterministicAlias);
 test("real-model runtime scenarios require an explicit model alias", testRealModelRequiresAlias);
-test("real-model npm entry fixes the project evaluation model alias", testRealModelNpmEntryFixesAlias);
+test("real-model npm entry leaves the model alias to the caller", testRealModelNpmEntryRequiresAlias);
 test("real-model failures do not report a requested alias as the actual model", testFailedRealModelEvidence);
 test("real-model successful responses keep nullable model metadata", testSuccessfulRealModelWithoutMetadata);
 
@@ -72,12 +72,12 @@ async function testRealModelRequiresAlias() {
   );
 }
 
-/** 验证项目级 npm 入口固定已选模型别名，避免重复评测时模型漂移。 */
-async function testRealModelNpmEntryFixesAlias() {
+/** 验证 npm 入口不内置模型别名，由调用方为每次真实评测显式固定。 */
+async function testRealModelNpmEntryRequiresAlias() {
   const packageJson = JSON.parse(await readFile(resolve(rootDir, "package.json"), "utf8"));
   assert.equal(
     packageJson.scripts["eval:runtime-scenarios:real"],
-    "node scripts/run-runtime-scenarios.mjs --mode real-model --model gpt-5.6",
+    "node scripts/run-runtime-scenarios.mjs --mode real-model",
   );
 }
 

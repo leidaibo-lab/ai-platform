@@ -117,10 +117,10 @@ evaluation
 npm run test:acceptance
 npm run test:scenarios
 npm run eval:runtime-scenarios:deterministic
-npm run eval:runtime-scenarios:real
+npm run eval:runtime-scenarios:real -- --model <fixed-model-alias>
 ```
 
-项目级真实评测固定使用 `gpt-5.6`；直接调用 Runner 或由其他 AI 项目装配时，仍通过 `--model <fixed-model-alias>` 显式固定该项目的模型别名。
+真实模式不提供默认模型别名；无论使用 npm 入口、直接调用 Runner 或由其他 AI 项目装配，调用方都必须通过 `--model <fixed-model-alias>` 显式固定该项目的模型别名。
 
 两个模式复用同一份场景输入、ToolResult 和独立验收。真实模式只把 evaluation 计入质量、token 和延迟；setup 单独记录。报告区分模型请求数、完成响应数和失败数，实际模型只从完成响应读取。上游超时、鉴权、限流、网关错误或验收失败都直接失败，不允许回退固定模型。
 
