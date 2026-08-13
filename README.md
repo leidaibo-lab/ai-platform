@@ -13,7 +13,7 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 5. 模型网关：LiteLLM、模型别名、provider key、virtual key、路由、fallback、预算和限流。
 6. 治理与可观测：身份上下文、审计、调用追踪、评测、反馈和安全策略。
 
-严格意义上的 AI Gateway 只指第 5 个区域。项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。当前代码落地的是开发 Demo、Agent Runtime 及其 GatewayClient、LiteLLM 模型网关，以及首个有界只读天气工具闭环；未来正式平台作为新的控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关。
+严格意义上的 AI Gateway 只指第 5 个区域。项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。当前代码落地的是开发 Demo、Agent Runtime 及其 GatewayClient、LiteLLM 模型网关、首个有界只读天气工具闭环，以及版本化执行策略、Operation journal 和 SQLite RunLease/fencing 执行治理基础；未来正式平台作为新的控制面和渠道调用方接入，不替换 Runtime、连接器或模型网关。
 
 ## 适用场景
 
@@ -37,9 +37,26 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 
 浏览器 Demo 不直接调用 LiteLLM 或上游中转站；它只请求本地 Demo Server，由 Agent Runtime 通过统一 GatewayClient 访问模型网关。
 
+模型执行和同步输出共用同一个 Run，但职责分开：
+
+```text
+Agent Runtime
+  -> RunEventSink（易失、有序、不可变的生命周期事件）
+       -> Demo Server SSE Adapter -> POST .../runs/stream
+  -> SQLite 事务事实 -> conversation_events
+       -> 游标 SSE -> 多端状态同步
+
+Runtime 返回 / 抛错 -> Demo Server 渠道终态交付
+                     -> completed / cancelled / error
+```
+
+`RunEventSink` 只负责进程内实时观察，订阅者失败不会把模型、工具或已提交 Run 改写为失败；它按顺序等待当前本地订阅者，因此不能直接承载远程消费、积压、重放或保证送达。POST SSE 的事件名和公开载荷属于 Demo Server Adapter，SQLite `conversation_events` 才是可恢复的会话事实历史。
+
+执行治理采用三块可替换边界：`ExecutionPolicy` 只做版本化前置决策和后置观察，不访问 Store 或 Connector；`ConversationStore` 独占 Operation、ToolCall 和 RunLease 事实；Runtime 负责按策略取得 lease、调用下游并携带 fencing token 提交。未知操作默认拒绝，未显式允许的 `write`、`external` 或 `unknown` 操作默认要求确认；当前 `image.generate` 是显式允许的本地写入开发切片，不因此获得通用副作用恢复。
+
 `scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
-当前交付以 C1 对话问答为基线，并以 Open-Meteo 跑通首个只读天气工具。天气切片已从“保存 ToolResult”推进到“服务重启后从 completed ToolResult 恢复最终总结”，并通过持久化 `AcceptanceResult` 独立检查地点、数据时间、来源和结果事实；该能力只覆盖一个已证明的只读稳定点，不等于通用持久工作流或多实例恢复。项目同时增加 C2 文生图的首个开发切片：显式图片操作、独立图片模型别名、生成结果校验、本地图片资产、幂等重放、取消和 JSON/SSE 交付已经通过 fake 回归，并用 `gpt-image-2` 跑通一次真实模型 happy-path smoke。该单样本不代表内容审核、精确尺寸、成本、取消/超时/错误或生产可用性已经验收。具体等级与边界见[运行可靠性与结果验收](./docs/runtime-reliability-and-acceptance.md)和[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
+当前交付以 C1 对话问答为基线，并以 Open-Meteo 跑通首个只读天气工具。天气切片已从“保存 ToolResult”推进到“服务重启后从 completed ToolResult 恢复最终总结”，恢复实例会先被未过期 lease 阻断，过期后以递增 fencing token 接管，并通过持久化 `AcceptanceResult` 独立检查地点、数据时间、来源和结果事实；该能力只覆盖一个已证明的只读稳定点，不等于通用持久工作流或生产级多实例协调。项目同时增加 C2 文生图的首个开发切片：显式图片操作、独立图片模型别名、生成结果校验、本地图片资产、幂等重放、取消和 JSON/SSE 交付已经通过 fake 回归，并用 `gpt-image-2` 跑通一次真实模型 happy-path smoke。该单样本不代表内容审核、精确尺寸、成本、取消/超时/错误或生产可用性已经验收。具体等级与边界见[运行可靠性与结果验收](./docs/runtime-reliability-and-acceptance.md)和[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
 
 ## 本地启动
 
@@ -227,7 +244,7 @@ Demo 输入区支持：
 - 消息引用：可以引用当前会话中的用户或助手消息；渠道只提交稳定 `messageId`，Runtime 从 SQLite 事实源解析正文。
 - 模型选择：Sender 内选择当前 Run 使用的 LiteLLM 模型别名；未选择时回退服务端 `LITELLM_MODEL`，token counter 与模型生成使用同一别名。
 - 多会话工作台：Runtime 使用 SQLite 持久化会话和完整原始消息；渠道支持标题搜索、今天/昨天/最近 7 天/更早分组、当前/归档/全部筛选、重命名与独立归档。归档不删除事实，取消归档也不会重新打开 `closed` 会话。
-- 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK 标准事件流的文本增量；普通调用使用 `streamText`，工具型对话使用 `ToolLoopAgent.stream()`。天气候选在系统验收前只暂存在 Runtime，验收通过后才放行；其他普通回答继续实时透传，最终都只落一条完整助手消息。
+- 流式 Markdown：Runtime 使用 `streamText` 或 `ToolLoopAgent.stream()` 生成文本增量，经 `RunEventSink -> Demo Server SSE Adapter` 映射为 POST SSE；Runtime 不依赖 SSE 协议。天气候选在系统验收前只暂存在 Runtime，验收通过并提交终态后才发布；其他普通回答继续实时透传，最终都只落一条完整助手消息。
 - 停止生成：生成期间调用 Runtime 取消端点，中止模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
 - 图片产物：`image.generate` 固定单张和平台尺寸白名单，SDK 自动重试关闭；模型结果通过真实 MIME、字节和尺寸校验后写入 `DEMO_IMAGE_ASSET_DIR`，SQLite 只保存 `image_asset` 元数据与 Message/Run 引用，页面通过受控会话端点展示和下载。
 - 发送门禁：本地会话先独立加载，模型网关状态在后台刷新；网关未确认可达时仍可浏览和整理会话、编辑草稿和附件，但禁止提交无效 Run。该探测只验证 LiteLLM `/v1/models`，不代表上游模型生成一定可用。
@@ -402,7 +419,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 - `DEMO_TOOL_MAX_STEPS` 默认 `4`，限制一次 Run 内 `ToolLoopAgent`（或动态结构化特殊路径）的模型步骤；`DEMO_WEATHER_TOOL_ENABLED` 默认启用首个只读天气工具。
 - `DEMO_WEATHER_TIMEOUT_MS` 默认 `8000` 毫秒；天气 Connector 只访问代码内固定的 Open-Meteo Geocoding 与 Forecast HTTPS 端点，不接受渠道或模型传入 URL。
 - 当前输入包含明确地点且查询今天或明天天气时，服务端 Registry 会通过 AI SDK `prepareStep` 把首步确定性路由到 `get_weather`，后续步骤恢复 `auto`；缺少地点或超出日期范围时仍由模型澄清，不把任意文本转换为外部请求。
-- 工具结果落库后若后续模型步骤失败且尚未向渠道交付正文，Runtime 会从 SQLite ToolResult 构造 AI SDK 结构化工具消息并发起无工具总结恢复，不会再次执行 Connector。Demo Server 重启时也会恢复满足资格的原 Run，但只覆盖 completed 只读 ToolResult 后的最终总结；运行中工具、图片、写操作、超时 Run 和多实例接管仍不支持。
+- 工具结果落库后若后续模型步骤失败且尚未向渠道交付正文，Runtime 会从 SQLite ToolResult 构造 AI SDK 结构化工具消息并发起无工具总结恢复，不会再次执行 Connector。Demo Server 重启时也会恢复满足资格的原 Run，但只覆盖 completed 只读 ToolResult 后的最终总结；未过期 lease 会阻止提前接管，过期后可用更大的 fencing token 接管。运行中工具、图片、写操作和超时 Run 仍不恢复；共享生产数据库部署、跨实例取消路由和生产级协调演练尚未完成。
 - `OTEL_ENABLED` 控制 C1 ChainTrace，默认 `false`；禁用时不初始化 SDK、Exporter 或 AI SDK Telemetry。
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 是启用 TODO 时使用的 Phoenix OTLP HTTP 地址；代码固定使用 protobuf，也兼容以 `OTEL_EXPORTER_OTLP_ENDPOINT` 提供基础地址。
 - `OTEL_EXPORTER_OTLP_TRACES_HEADERS` 和 `OTEL_EXPORTER_OTLP_HEADERS` 使用 OTel `key=value` 列表；Trace 专用 header 优先，凭据只保存在服务端内存。
@@ -418,6 +435,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | AI 协作规则、文档路由、提交规范 | `AGENTS.md` |
 | Agent Skill 索引、目录规范、治理规则 | `.agents/skills/README.md` |
 | 调用链路、模块分层、配置边界、演进路线 | `docs/ai-structure.md` |
+| 架构图模块、关联、边界、路径摘要和 SVG/PNG 风格 | `docs/architecture-diagram-style.md` |
 | 共同底座边界、重试与恢复策略、七条场景链路、当前 C1 焦点、质量指标和建设顺序 | `docs/scenario-interaction-chains.md` |
 | Phoenix ChainTrace TODO 的触发条件与阶段决策 | `docs/decisions/2026-07-30-c1-chaintrace-runtime-validation-deferral.md` |
 | Phoenix ChainTrace 启用、认证、健康检查、备份与升级边界 | `docs/c1-chaintrace-operations.md` |
@@ -438,7 +456,7 @@ Skill 相关内容统一放在 `.agents/skills/`，并遵守 `https://gitlab.sea
 
 当前保持单仓和轻量部署，先稳定区域接口，再按跨项目复用、独立安全边界、独立扩缩容或团队所有权逐个拆成服务：
 
-1. V1：已适配 AI SDK Core `generateText` / `streamText` 的有界多步工具能力，以 Open-Meteo 跑通只读工具闭环、进程重启后受限 ToolResult 总结恢复和 A3 领域验收；真实模型天气质量、多实例协调、更多业务 Connector、人工确认和写操作仍未完成。
+1. V1：已适配 AI SDK Core `generateText` / `streamText` 的有界多步工具能力，以 Open-Meteo 跑通只读工具闭环、进程重启后受限 ToolResult 总结恢复和 A3 领域验收，并落地 SQLite RunLease/fencing 协调基础；真实模型天气质量、生产多实例部署与跨实例取消、更多业务 Connector、人工确认和写操作恢复仍未完成。
 2. V2：把 LiteLLM 模型网关补成团队共享服务，增加 virtual key、多模型路由、fallback、预算、限流和调用统计。
 3. V3：按资源和权限边界拆出连接器服务与知识服务。
 4. V4：建设平台控制面和多渠道 Adapter，复用已经稳定的 Runtime、连接器和模型网关。

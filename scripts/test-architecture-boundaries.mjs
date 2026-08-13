@@ -37,6 +37,10 @@ const GLOBAL_ARCHITECTURE_ASSETS = Object.freeze([
     path: "docs/scenario-interaction-chains.md",
     requiredLabels: ["Agent Runtime", "GatewayClient", "AI SDK", "LiteLLM", "上游"],
   },
+  {
+    path: "docs/assets/ai-platform-current-runtime-v1.svg",
+    requiredLabels: ["Agent Runtime", "GatewayClient", "AI SDK", "LiteLLM Proxy", "上游"],
+  },
   { path: "docs/assets/ai-platform-architecture.svg" },
   { path: "docs/assets/ai-platform-roadmap.svg" },
   { path: "docs/assets/ai-platform-current-v05.svg" },
@@ -93,11 +97,12 @@ async function testScenarioChainsKeepCurrentFocus() {
   assert.match(content, /重试是共同底座的横切稳定性能力/);
   assert.match(content, /服务端工具 allowlist/);
   assert.match(content, /Runtime 只在明确地点的今明日天气命中确定性路由时向模型开放 `get_weather`/);
-  assert.match(content, /A3 天气候选先提交验收终态再释放正文，释放失败不反向改写 Run/);
+  assert.match(content, /A3 天气候选先提交验收终态再发布正文，订阅或渠道失败不反向改写 Run/);
+  assert.match(content, /SQLite `conversation_events` 只记录已提交事实，两类事件不能互相充当事实源/);
   assert.match(content, /Open-Meteo 查询共享 Run 截止时间和取消信号/);
   assert.match(content, /不等于任何失败都从浏览器输入开始完整重跑/);
   assert.match(content, /默认 `maxAttempts: 3`，即首次调用加两次重试/);
-  assert.match(content, /`POST \.\.\.\/runs\/stream` 通过 SSE 交付 AI SDK 文本增量/);
+  assert.match(content, /Runtime 通过进程内 `RunEventSink` 发布易失生命周期事件，Demo Server Adapter 映射为 `POST \.\.\.\/runs\/stream` SSE/);
   assert.match(content, /开始输出后不静默重生成/);
   assert.match(content, /C1 不逐 Token 写 SQLite，也不保存回答 checkpoint/);
   assert.match(content, /当前建设焦点：C1 功能可用与确定性回归/);
@@ -115,3 +120,56 @@ async function testScenarioChainsKeepCurrentFocus() {
 }
 
 test("scenario chains keep C1 focus and defer runtime trace acceptance", testScenarioChainsKeepCurrentFocus);
+
+/** 验证 Runtime 只发布内部生命周期事件，SSE 协议映射留在渠道 Adapter。 */
+async function testRuntimeEventPortKeepsChannelBoundary() {
+  const runtime = await readProjectText("src/runtime/chat-runtime.mjs");
+  const eventSink = await readProjectText("src/runtime/run-event-sink.mjs");
+  const adapter = await readProjectText("scripts/demo-server.mjs");
+
+  assert.match(runtime, /eventSink\.publish/);
+  assert.doesNotMatch(runtime, /writeSseEvent|text\/event-stream|onRunStarted|onToolEvent|onArtifactCreated/);
+  assert.match(eventSink, /订阅失败不得向 Runtime 反向传播/);
+  assert.match(adapter, /createSseRunEventSubscriber/);
+  assert.match(adapter, /writeSseEvent\(res, "text-delta"/);
+}
+
+test("Runtime event port keeps SSE inside the channel adapter", testRuntimeEventPortKeepsChannelBoundary);
+
+/** 验证当前架构图与核心说明保持执行治理角色分离和未完成能力门禁。 */
+async function testExecutionGovernanceArchitectureBoundary() {
+  const currentDiagram = await readProjectText("docs/assets/ai-platform-current-runtime-v1.svg");
+  const architecture = await readProjectText("docs/ai-structure.md");
+  const reliability = await readProjectText("docs/runtime-reliability-and-acceptance.md");
+  const readme = await readProjectText("README.md");
+
+  for (const [path, content] of [
+    ["docs/assets/ai-platform-current-runtime-v1.svg", currentDiagram],
+    ["docs/ai-structure.md", architecture],
+    ["docs/runtime-reliability-and-acceptance.md", reliability],
+    ["README.md", readme],
+  ]) {
+    assert.match(content, /ExecutionPolicy/, `${path} 缺少 ExecutionPolicy 当前能力`);
+    assert.match(content, /Operation [Jj]ournal/, `${path} 缺少 Operation Journal 当前能力`);
+    assert.match(content, /RunLease/, `${path} 缺少 RunLease 当前能力`);
+    assert.match(content, /fencing/, `${path} 缺少 fencing 当前能力`);
+  }
+
+  assert.match(currentDiagram, /只决策与观察；不读写事实/);
+  assert.match(currentDiagram, /Store 独占事实/);
+  assert.match(currentDiagram, /Connector 只执行 Runtime 已授权的归一化请求/);
+  assert.match(currentDiagram, /后续安全门禁（TODO，不在当前执行主链）/);
+  assert.match(currentDiagram, /Sandbox　\|　生产多实例部署与跨实例取消/);
+  assert.match(currentDiagram, /写操作确认 \/ 外部幂等 \/ readback \/ unknown 人工处理 \/ compensation/);
+  assert.doesNotMatch(currentDiagram, /多实例协调：未实现|无 Operation journal|Tool Registry \/ Policy Gate/);
+
+  assert.match(architecture, /生产级多实例部署.*当前 lease\/fencing 只完成 SQLite 协调基础与确定性接管验证/);
+  assert.match(architecture, /Sandbox.*当前没有写 Connector/);
+  assert.match(reliability, /不单独提升场景等级的 R4 协调基础/);
+  assert.match(reliability, /还没有共享生产数据库部署、跨实例取消路由/);
+  assert.match(reliability, /Sandbox 与副作用恢复仍是两条独立建设线/);
+  assert.match(readme, /不等于通用持久工作流或生产级多实例协调/);
+  assert.match(readme, /生产级协调演练尚未完成/);
+}
+
+test("execution governance architecture keeps cohesion and gated boundaries", testExecutionGovernanceArchitectureBoundary);

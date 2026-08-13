@@ -10,6 +10,7 @@ export function evaluateScenario({ observation }) {
     check("checkpoint-running", observation.checkpoint?.status === "running"),
     check("tool-result-committed", observation.checkpoint?.toolCalls?.[0]?.status === "completed"),
     check("assistant-not-committed-before-crash", observation.checkpoint?.assistantMessagePresent === false),
+    check("active-lease-blocks-early-takeover", observation.leaseContention?.reasonCode === "lease_held"),
     check("original-run-recovered", observation.recovery?.recovered === 1 && latestRun?.id === observation.checkpoint?.runId),
     check("connector-not-replayed", observation.connectorExecutionsAfterRestart === 0),
     check("run-completed", latestRun?.status === "completed"),

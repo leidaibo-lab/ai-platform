@@ -38,9 +38,6 @@ export function validateRunInput(input) {
   if (input.model.length > 160 || /[\r\n\0]/.test(input.model)) {
     return { error: "model must be a valid model alias", code: "invalid_model" };
   }
-  if (![DEFAULT_RUN_OPERATION, IMAGE_GENERATION_OPERATION].includes(input.operation)) {
-    return { error: "Unsupported Run operation", code: "unsupported_run_operation" };
-  }
   const recoveryModes = new Set(["retry", "regenerate", "continue"]);
   if (Boolean(input.sourceRunId) !== Boolean(input.recoveryMode)) {
     return { error: "sourceRunId and recoveryMode must be provided together", code: "invalid_run_recovery" };

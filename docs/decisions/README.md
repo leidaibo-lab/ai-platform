@@ -23,6 +23,7 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-08-13 | [Runtime 生命周期事件端口与渠道交付解耦](./2026-08-13-runtime-event-port-and-delivery.md) | 接受 | 以项目自有 `RunEventSink` 发布易失生命周期事件，Demo Server Adapter 映射 SSE；订阅失败不反向污染执行事实，SQLite 事件继续作为可恢复历史 |
 | 2026-08-13 | [首期可恢复执行与独立结果验收](./2026-08-13-durable-run-recovery-and-acceptance.md) | 接受 | 复用 SQLite Run + ToolCall 恢复 completed 只读 ToolResult 后的最终总结，并以持久化 AcceptanceResult 阻断缺少事实证据的天气回答；复杂生命周期再重评成熟引擎 |
 | 2026-08-02 | [Runtime 使用 LiteLLM Virtual Key 的模型映射边界](./2026-08-02-runtime-virtual-key-mapping.md) | 接受 | 运维预配受限 virtual key，Runtime 只消费最小权限 key；模型目录、计数、生成和 spend 使用同一身份 |
 | 2026-08-01 | [LiteLLM 网关治理专项 PoC](./2026-08-01-litellm-governance-poc.md) | 接受 | 固定 LiteLLM `1.89.1` + 独立 PostgreSQL 已验证 virtual key、预算硬拒绝、真实 spend 与 team 累计；Runtime 不重复实现网关预算和限流 |

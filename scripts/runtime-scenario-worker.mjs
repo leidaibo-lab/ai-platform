@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRuntimeScenarioAssembly } from "../src/evaluation/runtime-scenario-runner.mjs";
 import { loadRuntimeScenario } from "../src/evaluation/runtime-scenario-contract.mjs";
+import { createRunEventSink } from "../src/runtime/run-event-sink.mjs";
 
 const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -31,13 +32,13 @@ async function main() {
 
   /** 在 Runtime 已提交目标 ToolResult 后制造真实进程退出窗口。 */
   function exitAfterCommittedToolResult(event) {
-    if (event.type !== "completed" || event.toolName !== scenario.definition.fault.toolName) return;
+    if (event.type !== "tool.completed" || event.toolName !== scenario.definition.fault.toolName) return;
     process.exit(scenario.definition.fault.exitCode);
   }
 
   try {
     await assembly.runtime.runConversation(conversation.id, runInput, {
-      onToolEvent: exitAfterCommittedToolResult,
+      eventSink: createRunEventSink({ subscribers: [exitAfterCommittedToolResult] }),
     });
     throw new Error("fault checkpoint was not reached");
   } finally {

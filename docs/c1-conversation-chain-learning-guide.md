@@ -247,7 +247,7 @@ Runtime 把 Planner 选择出的上下文交给 GatewayClient，再经过 AI SDK
 
 ### 第八步：按结果等级交付文本
 
-流式回答通常经历以下事件：
+Runtime 不直接写 SSE，也不接收页面专属回调。它只向进程内 `RunEventSink` 发布 `run.*`、`text.delta`、`tool.*` 和 `artifact.created` 生命周期事件；Demo Server Adapter 再把需要面向渠道公开的事件映射为既有 SSE。流式回答在浏览器侧通常经历：
 
 ```text
 run-started
@@ -257,7 +257,7 @@ run-started
   -> completed / cancelled / error
 ```
 
-`text-delta` 只在内存和网络层流动，系统不会每收到一个 Token 就写一次 SQLite。原因是逐 Token 落库会造成大量小事务，也会制造难以处理的半成品消息。
+内部 `text.delta` 经 `RunEventSink` 映射为渠道 `text-delta`，只在进程内存和网络层流动，系统不会每收到一个 Token 就写一次 SQLite。原因是逐 Token 落库会造成大量小事务，也会制造难以处理的半成品消息。
 
 普通 A0 对话继续实时透传。需要 A3 验收的天气候选则先暂存在 Runtime，只有候选包含与持久化 ToolResult 匹配的地点、数据时间、来源和至少一个结果事实，才能生成 accepted AcceptanceResult。验收拒绝时，候选既不进入渠道，也不成为助手消息。
 
@@ -420,11 +420,17 @@ Token 越少不一定越好。删掉关键纠正会损害准确度；Token 越�
 
 所以 `outputStarted` 是不可逆边界：输出开始前，可以把失败的一次尝试替换为新尝试；输出开始后，只能明确终止或失败，不能假装仍是同一次连续生成。
 
-## 流式交付、事实同步和 JSON Run 是三件事
+## Runtime 事件、流式交付、事实同步和 JSON Run 是四件事
+
+### Runtime 生命周期事件端口
+
+`RunEventSink` 是 Runtime 自有的进程内观察端口。Runtime 发布不含渠道协议的不可变事件，Demo Server 的 SSE Adapter、根 Trace 身份关联和测试故障注入按需订阅。单个订阅者异常会被隔离，不能反向改变模型、工具或 Run 事实。
+
+当前 Sink 为保持严格顺序会等待本地订阅者完成，所以“失败隔离”不等于“无限异步”。慢订阅者仍会增加 Run 延迟；远程 I/O、积压、重放和保证送达必须在出现明确需求后使用有界队列或成熟 Broker，不能直接塞入这个端口。
 
 ### POST SSE 模型文本流
 
-它服务于当前这一次回答，让用户尽快看到文本增量。它是低延迟交付通道，不是长期事实源。
+Demo Server Adapter 把 Runtime 生命周期事件映射成 `run-started`、`text-delta`、工具和资产事件，并在 Runtime 返回或抛错后以 `completed`、`cancelled` 或 `error` 收口。它服务于当前这一次回答，让用户尽快看到文本增量，是低延迟交付通道，不是 Runtime 内部协议，也不是长期事实源。
 
 ### 会话事实事件流
 
@@ -434,7 +440,7 @@ Token 越少不一定越好。删掉关键纠正会损害准确度；Token 越�
 
 它适合服务端调用、自动化测试、批处理式等待和幂等结果查询。JSON 与 POST SSE 不是两条不同业务链，它们共用同一个 Runtime、Run 和 Store，只是交付方式不同。
 
-这三者不能混为一体。文本增量不等于已持久化事实，事实事件也不等于外部实时事件处理场景。
+这四者不能混为一体。Runtime 生命周期事件是易失观察，POST SSE 是渠道协议，SQLite 事件是已提交事实，JSON Run 是同步等待结果；文本增量不等于已持久化事实，事实事件也不等于外部实时事件处理场景。
 
 ## 取消、断连和失败的区别
 
@@ -699,6 +705,6 @@ Trace 和评测提供证据
 
 更准确的描述是：
 
-> 渠道把带稳定身份的当前输入提交给 Agent Runtime。Runtime 以持久化消息为事实源，在同一会话内串行创建幂等 Run，通过 Context Planner 从显式引用、active 结构化记忆、相关 Episode 和最近消息中构造预算内上下文，再经 GatewayClient、AI SDK 和 LiteLLM 调用上游模型。需要实时事实时，Runtime 先用确定性路由决定是否开放受管工具，模型只在受限集合内提出 Tool Call；Runtime 执行固定 Connector 并持久化 ToolResult。工具后的模型瞬时失败或进程重启可以从 completed ToolResult 的窄稳定点恢复总结，不会重复 Connector。普通模型文本实时流式交付；天气候选则先由系统独立验收并提交终态，再释放暂存正文。整个过程受共享截止时间、首输出前重试、工具执行边界、显式取消、错误分类、AcceptanceResult 和数据一致性规则约束，并通过 ChainTrace、Context Manifest、确定性场景回归和真实模型质量评测提供可验证证据。
+> 渠道把带稳定身份的当前输入提交给 Agent Runtime。Runtime 以持久化消息为事实源，在同一会话内串行创建幂等 Run，通过 Context Planner 从显式引用、active 结构化记忆、相关 Episode 和最近消息中构造预算内上下文，再经 GatewayClient、AI SDK 和 LiteLLM 调用上游模型。需要实时事实时，Runtime 先用确定性路由决定是否开放受管工具，模型只在受限集合内提出 Tool Call；Runtime 执行固定 Connector 并持久化 ToolResult。工具后的模型瞬时失败或进程重启可以从 completed ToolResult 的窄稳定点恢复总结，不会重复 Connector。Runtime 只通过进程内 `RunEventSink` 发布易失生命周期事件，由渠道 Adapter 映射实时输出；SQLite 事实事件独立承担多端同步和恢复。天气候选先由系统独立验收并提交终态，再发布暂存正文。整个过程受共享截止时间、首输出前重试、工具执行边界、显式取消、错误分类、AcceptanceResult 和数据一致性规则约束，并通过 ChainTrace、Context Manifest、确定性场景回归和真实模型质量评测提供可验证证据。
 
 当这段描述不再只是需要背诵的文字，而是每个设计选择都能回答“为什么”，就真正理解了 C1 链路。

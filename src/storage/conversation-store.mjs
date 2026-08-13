@@ -32,9 +32,10 @@ export class ConversationStoreError extends Error {
  * @param {string} options.databasePath - SQLite 文件路径或 `:memory:`。
  * @returns {object} Conversation Store API。
  */
-export function createConversationStore({ databasePath }) {
+export function createConversationStore({ databasePath, clock = createCurrentDate }) {
   if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
+  const readCurrentDate = normalizeClock(clock);
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA busy_timeout = 5000");
   migrate(database);
@@ -174,6 +175,16 @@ export function createConversationStore({ databasePath }) {
         if (conversation.status !== "active") {
           throw new ConversationStoreError("Conversation is closed", 409, "conversation_closed");
         }
+        const activeRun = database
+          .prepare("SELECT id FROM runs WHERE conversation_id = ? AND status = 'running' LIMIT 1")
+          .get(conversationId);
+        if (activeRun) {
+          throw new ConversationStoreError(
+            "Conversation already has an active Run",
+            409,
+            "conversation_run_active",
+          );
+        }
         const duplicateMessage = database
           .prepare("SELECT id FROM messages WHERE conversation_id = ? AND client_message_id = ?")
           .get(conversationId, clientMessageId);
@@ -240,41 +251,143 @@ export function createConversationStore({ databasePath }) {
       });
     },
 
-    /** 幂等登记一次模型生成的工具调用，并与当前 running Run 绑定。 */
-    startToolCall({ conversationId, runId, toolCallId, toolName, input }) {
+    /** 幂等登记一次模型生成的工具调用，并在同一事务创建关联 Operation。 */
+    startToolCall({
+      conversationId,
+      runId,
+      toolCallId,
+      toolName,
+      input,
+      operationKey = `tool:${toolCallId}`,
+      idempotencyKey = `${runId}:tool:${toolCallId}`,
+      effect = "read",
+      riskLevel = "low",
+      policyDecision,
+      lease = null,
+    }) {
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
         if (run.conversation_id !== conversationId || run.status !== "running") {
           throw new ConversationStoreError("Run is not active", 409, "run_not_active");
         }
+        assertRunLease(database, runId, lease, readCurrentDate());
         const existing = database
           .prepare("SELECT * FROM tool_calls WHERE run_id = ? AND tool_call_id = ?")
           .get(runId, toolCallId);
-        if (existing) return { ...mapToolCallRow(existing), replayed: true };
+        if (existing) {
+          assertToolCallReplay(database, existing, {
+            conversationId,
+            runId,
+            toolCallId,
+            toolName,
+            input,
+            operationKey,
+            idempotencyKey,
+            effect,
+            riskLevel,
+            policyDecision,
+          });
+          return {
+            ...mapToolCallRow(existing),
+            operation: existing.operation_id ? mapOperationRow(getOperationOrThrow(database, existing.operation_id)) : null,
+            replayed: true,
+          };
+        }
         const id = randomUUID();
-        const now = new Date().toISOString();
+        const now = readCurrentDate().toISOString();
+        const operationResult = insertOperation(database, {
+          conversationId,
+          runId,
+          operationKey,
+          idempotencyKey,
+          kind: "tool",
+          toolName,
+          effect,
+          riskLevel,
+          policyDecision,
+          status: "running",
+          input,
+          attempt: 1,
+          now,
+        });
+        if (operationResult.replayed) {
+          throw new ConversationStoreError(
+            "Operation exists without its ToolCall projection",
+            409,
+            "operation_projection_conflict",
+          );
+        }
         database
           .prepare(
             `INSERT INTO tool_calls (
-              id, conversation_id, run_id, tool_call_id, tool_name, status,
+              id, conversation_id, run_id, operation_id, tool_call_id, tool_name, status,
               input_json, started_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
           )
-          .run(id, conversationId, runId, toolCallId, toolName, JSON.stringify(input), now, now);
-        insertEvent(database, conversationId, "tool.started", { runId, toolCallId, toolName });
-        return { ...mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(id)), replayed: false };
+          .run(
+            id,
+            conversationId,
+            runId,
+            operationResult.operation.id,
+            toolCallId,
+            toolName,
+            JSON.stringify(input),
+            now,
+            now,
+          );
+        insertEvent(database, conversationId, "operation.started", {
+          runId,
+          operationId: operationResult.operation.id,
+          operationKey,
+          kind: "tool",
+          effect,
+        });
+        insertEvent(database, conversationId, "tool.started", {
+          runId,
+          operationId: operationResult.operation.id,
+          toolCallId,
+          toolName,
+        });
+        return {
+          ...mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(id)),
+          operation: operationResult.operation,
+          replayed: false,
+        };
       });
     },
 
     /** 将结构化 ToolResult、来源和数据时间原子保存为 completed 工具事实。 */
-    completeToolCall({ runId, toolCallId, output, source = null, observedAt = null }) {
+    completeToolCall({
+      runId,
+      toolCallId,
+      output,
+      source = null,
+      observedAt = null,
+      externalRequestId = null,
+      readback = null,
+      lease = null,
+    }) {
       return withTransaction(database, () => {
         const row = getToolCallOrThrow(database, runId, toolCallId);
-        if (row.status === "completed") return mapToolCallRow(row);
+        assertRunLease(database, runId, lease, readCurrentDate());
+        if (row.status === "completed") {
+          return {
+            ...mapToolCallRow(row),
+            operation: row.operation_id ? mapOperationRow(getOperationOrThrow(database, row.operation_id)) : null,
+          };
+        }
         if (row.status !== "running") {
           throw new ConversationStoreError("Tool call is not active", 409, "tool_call_not_active");
         }
-        const now = new Date().toISOString();
+        const now = readCurrentDate().toISOString();
+        const operation = row.operation_id
+          ? completeOperationRow(database, getOperationOrThrow(database, row.operation_id), {
+              result: output,
+              readback,
+              externalRequestId,
+              now,
+            })
+          : null;
         database
           .prepare(
             `UPDATE tool_calls
@@ -285,21 +398,50 @@ export function createConversationStore({ databasePath }) {
           .run(JSON.stringify(output), source, observedAt, now, row.id);
         insertEvent(database, row.conversation_id, "tool.completed", {
           runId,
+          operationId: row.operation_id || null,
           toolCallId,
           toolName: row.tool_name,
           source,
           observedAt,
         });
-        return mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(row.id));
+        return {
+          ...mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(row.id)),
+          operation,
+        };
       });
     },
 
     /** 以安全错误码和公开说明收口工具失败，不保存外部原始响应。 */
-    failToolCall({ runId, toolCallId, code, message, retryable = false }) {
+    failToolCall({
+      runId,
+      toolCallId,
+      code,
+      message,
+      retryable = false,
+      externalRequestId = null,
+      lease = null,
+    }) {
       return withTransaction(database, () => {
         const row = getToolCallOrThrow(database, runId, toolCallId);
-        if (row.status !== "running") return mapToolCallRow(row);
-        const now = new Date().toISOString();
+        assertRunLease(database, runId, lease, readCurrentDate());
+        if (row.status !== "running") {
+          return {
+            ...mapToolCallRow(row),
+            operation: row.operation_id ? mapOperationRow(getOperationOrThrow(database, row.operation_id)) : null,
+          };
+        }
+        const now = readCurrentDate().toISOString();
+        const operationStatus = code === "tool_cancelled" ? "cancelled" : "failed";
+        const operation = row.operation_id
+          ? failOperationRow(database, getOperationOrThrow(database, row.operation_id), {
+              status: operationStatus,
+              code,
+              message,
+              retryable,
+              externalRequestId,
+              now,
+            })
+          : null;
         database
           .prepare(
             `UPDATE tool_calls
@@ -309,18 +451,316 @@ export function createConversationStore({ databasePath }) {
           .run(String(code || "tool_execution_failed"), String(message || "工具执行失败。"), retryable ? 1 : 0, now, row.id);
         insertEvent(database, row.conversation_id, "tool.failed", {
           runId,
+          operationId: row.operation_id || null,
           toolCallId,
           toolName: row.tool_name,
           code: String(code || "tool_execution_failed"),
           retryable: Boolean(retryable),
         });
-        return mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(row.id));
+        return {
+          ...mapToolCallRow(database.prepare("SELECT * FROM tool_calls WHERE id = ?").get(row.id)),
+          operation,
+        };
       });
     },
 
     /** 按开始顺序返回一个 Run 的全部工具事实，供重放、API 和验收使用。 */
     listToolCalls(runId) {
       return listToolCallsForRun(database, runId);
+    },
+
+    /** 按创建顺序返回一个 Run 的 Operation 执行事实。 */
+    listOperations(runId) {
+      getRunOrThrow(database, runId);
+      return listOperationsForRun(database, runId);
+    },
+
+    /** 返回单个 Operation；不存在时抛出稳定 404。 */
+    getOperation(operationId) {
+      return mapOperationRow(getOperationOrThrow(database, operationId));
+    },
+
+    /** 按策略决定幂等规划一个通用 Operation，不执行任何外部动作。 */
+    planOperation(input) {
+      return withTransaction(database, () => {
+        const run = getRunOrThrow(database, input.runId);
+        if (run.conversation_id !== input.conversationId || run.status !== "running") {
+          throw new ConversationStoreError("Run is not active", 409, "run_not_active");
+        }
+        assertRunLease(database, run.id, input.lease, readCurrentDate());
+        const policyDecision = normalizePolicyDecision(input.policyDecision);
+        if (!["allow", "confirmation_required"].includes(policyDecision.decision)) {
+          throw new ConversationStoreError(
+            "Policy decision cannot create an executable Operation",
+            409,
+            "operation_policy_not_executable",
+          );
+        }
+        const now = readCurrentDate().toISOString();
+        const result = insertOperation(database, {
+          ...input,
+          policyDecision,
+          status: policyDecision.decision === "allow" ? "planned" : "confirmation_required",
+          attempt: 0,
+          now,
+        });
+        if (!result.replayed) {
+          insertEvent(database, input.conversationId, `operation.${result.operation.status}`, {
+            runId: input.runId,
+            operationId: result.operation.id,
+            operationKey: result.operation.operationKey,
+            kind: result.operation.kind,
+            effect: result.operation.effect,
+          });
+        }
+        return result;
+      });
+    },
+
+    /** 将 planned Operation 进入 running 并增加一次执行尝试。 */
+    startOperation({ operationId, externalRequestId = null, lease = null }) {
+      return withTransaction(database, () => {
+        const row = getOperationOrThrow(database, operationId);
+        assertRunLease(database, row.run_id, lease, readCurrentDate());
+        if (row.status === "running") return { operation: mapOperationRow(row), replayed: true };
+        if (row.status !== "planned") {
+          throw new ConversationStoreError("Operation cannot be started", 409, "operation_not_startable");
+        }
+        const now = readCurrentDate().toISOString();
+        database
+          .prepare(
+            `UPDATE operations
+             SET status = 'running', attempt = attempt + 1, external_request_id = COALESCE(?, external_request_id),
+                 started_at = COALESCE(started_at, ?), updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(nullableString(externalRequestId), now, now, operationId);
+        insertEvent(database, row.conversation_id, "operation.started", {
+          runId: row.run_id,
+          operationId,
+          operationKey: row.operation_key,
+          kind: row.kind,
+          effect: row.effect,
+        });
+        return {
+          operation: mapOperationRow(database.prepare("SELECT * FROM operations WHERE id = ?").get(operationId)),
+          replayed: false,
+        };
+      });
+    },
+
+    /** 以结果和可选业务回读完成 Operation；unknown 只能凭 readback 收敛。 */
+    completeOperation({ operationId, result, readback = null, externalRequestId = null, lease = null }) {
+      return withTransaction(database, () => {
+        const row = getOperationOrThrow(database, operationId);
+        assertRunLease(database, row.run_id, lease, readCurrentDate());
+        if (row.status === "completed") return { operation: mapOperationRow(row), replayed: true };
+        const operation = completeOperationRow(database, row, {
+          result,
+          readback,
+          externalRequestId,
+          now: readCurrentDate().toISOString(),
+        });
+        return { operation, replayed: false };
+      });
+    },
+
+    /** 以安全错误事实收口 Operation；unknown 只能凭 readback 证明失败。 */
+    failOperation({
+      operationId,
+      code,
+      message,
+      retryable = false,
+      readback = null,
+      externalRequestId = null,
+      lease = null,
+    }) {
+      return withTransaction(database, () => {
+        const row = getOperationOrThrow(database, operationId);
+        assertRunLease(database, row.run_id, lease, readCurrentDate());
+        if (row.status === "failed") return { operation: mapOperationRow(row), replayed: true };
+        const operation = failOperationRow(database, row, {
+          status: "failed",
+          code,
+          message,
+          retryable,
+          readback,
+          externalRequestId,
+          now: readCurrentDate().toISOString(),
+        });
+        return { operation, replayed: false };
+      });
+    },
+
+    /** 将无法证明外部结果的 running Operation 标记为 unknown，后续不得自动重放。 */
+    markOperationUnknown({ operationId, code = "operation_result_unknown", externalRequestId = null, lease = null }) {
+      return withTransaction(database, () => {
+        const row = getOperationOrThrow(database, operationId);
+        assertRunLease(database, row.run_id, lease, readCurrentDate());
+        if (row.status === "unknown") return { operation: mapOperationRow(row), replayed: true };
+        if (row.status !== "running") {
+          throw new ConversationStoreError("Operation result cannot become unknown", 409, "operation_not_active");
+        }
+        const now = readCurrentDate().toISOString();
+        database
+          .prepare(
+            `UPDATE operations
+             SET status = 'unknown', external_request_id = COALESCE(?, external_request_id),
+                 error_code = ?, error_message = '外部操作结果未知。', retryable = 0,
+                 completed_at = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(nullableString(externalRequestId), String(code || "operation_result_unknown"), now, now, operationId);
+        insertEvent(database, row.conversation_id, "operation.unknown", {
+          runId: row.run_id,
+          operationId,
+          code: String(code || "operation_result_unknown"),
+        });
+        return {
+          operation: mapOperationRow(database.prepare("SELECT * FROM operations WHERE id = ?").get(operationId)),
+          replayed: false,
+        };
+      });
+    },
+
+    /** 只取消尚未执行或等待确认的 Operation，运行中副作用不得伪装为未发生。 */
+    cancelOperation({ operationId, code = "operation_cancelled", lease = null }) {
+      return withTransaction(database, () => {
+        const row = getOperationOrThrow(database, operationId);
+        assertRunLease(database, row.run_id, lease, readCurrentDate());
+        if (row.status === "cancelled") return { operation: mapOperationRow(row), replayed: true };
+        if (!["planned", "confirmation_required"].includes(row.status)) {
+          throw new ConversationStoreError("Operation cannot be cancelled safely", 409, "operation_not_cancellable");
+        }
+        const operation = failOperationRow(database, row, {
+          status: "cancelled",
+          code,
+          message: "操作已取消。",
+          retryable: false,
+          now: readCurrentDate().toISOString(),
+        });
+        return { operation, replayed: false };
+      });
+    },
+
+    /** 原子取得 RunLease；未过期竞争返回 lease_held，过期接管递增 fencing token。 */
+    acquireRunLease({ runId, conversationId, ownerId, ttlMs }) {
+      return withTransaction(database, () => {
+        const run = getRunOrThrow(database, runId);
+        if (run.conversation_id !== conversationId || run.status !== "running") {
+          throw new ConversationStoreError("Run is not active", 409, "run_not_active");
+        }
+        const normalizedOwnerId = requireStableIdentifier(ownerId, "ownerId");
+        const normalizedTtlMs = normalizeLeaseTtl(ttlMs);
+        const nowDate = readCurrentDate();
+        const now = nowDate.toISOString();
+        const existing = database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(runId);
+        if (existing && isLeaseActive(existing, nowDate) && existing.owner_id !== normalizedOwnerId) {
+          return { acquired: false, reasonCode: "lease_held", lease: mapRunLeaseRow(existing) };
+        }
+
+        if (existing && isLeaseActive(existing, nowDate) && existing.owner_id === normalizedOwnerId) {
+          const leaseExpiresAt = new Date(nowDate.getTime() + normalizedTtlMs).toISOString();
+          database
+            .prepare("UPDATE run_leases SET lease_expires_at = ?, updated_at = ? WHERE run_id = ?")
+            .run(leaseExpiresAt, now, runId);
+          return {
+            acquired: true,
+            replayed: true,
+            lease: mapRunLeaseRow(database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(runId)),
+          };
+        }
+
+        const fencingToken = existing ? Number(existing.fencing_token) + 1 : 1;
+        const acquiredAt = now;
+        const leaseExpiresAt = new Date(nowDate.getTime() + normalizedTtlMs).toISOString();
+        database
+          .prepare(
+            `INSERT INTO run_leases (
+              run_id, conversation_id, owner_id, fencing_token, lease_expires_at,
+              acquired_at, released_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+             ON CONFLICT(run_id) DO UPDATE SET
+               owner_id = excluded.owner_id,
+               fencing_token = excluded.fencing_token,
+               lease_expires_at = excluded.lease_expires_at,
+               acquired_at = excluded.acquired_at,
+               released_at = NULL,
+               updated_at = excluded.updated_at`,
+          )
+          .run(runId, conversationId, normalizedOwnerId, fencingToken, leaseExpiresAt, acquiredAt, now);
+        insertEvent(database, conversationId, existing ? "run.lease_taken_over" : "run.lease_acquired", {
+          runId,
+          ownerId: normalizedOwnerId,
+          fencingToken,
+          leaseExpiresAt,
+        });
+        return {
+          acquired: true,
+          replayed: false,
+          lease: mapRunLeaseRow(database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(runId)),
+        };
+      });
+    },
+
+    /** 使用匹配 owner/token 续租；旧 token、已释放或过期租约均被拒绝。 */
+    renewRunLease({ runId, ownerId, fencingToken, ttlMs }) {
+      return withTransaction(database, () => {
+        const nowDate = readCurrentDate();
+        const row = assertRunLease(
+          database,
+          runId,
+          { ownerId, fencingToken },
+          nowDate,
+          { requireActive: true },
+        );
+        const leaseExpiresAt = new Date(nowDate.getTime() + normalizeLeaseTtl(ttlMs)).toISOString();
+        database
+          .prepare("UPDATE run_leases SET lease_expires_at = ?, updated_at = ? WHERE run_id = ?")
+          .run(leaseExpiresAt, nowDate.toISOString(), runId);
+        insertEvent(database, row.conversation_id, "run.lease_renewed", {
+          runId,
+          ownerId: row.owner_id,
+          fencingToken: Number(row.fencing_token),
+          leaseExpiresAt,
+        });
+        return mapRunLeaseRow(database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(runId));
+      });
+    },
+
+    /** 释放当前 owner/token 但保留 fencing token 历史，防止 ABA 和旧 owner 回写。 */
+    releaseRunLease({ runId, ownerId, fencingToken }) {
+      return withTransaction(database, () => {
+        const nowDate = readCurrentDate();
+        const row = assertRunLease(
+          database,
+          runId,
+          { ownerId, fencingToken },
+          nowDate,
+          { requireActive: false },
+        );
+        if (row.released_at) return { released: true, lease: mapRunLeaseRow(row) };
+        const now = nowDate.toISOString();
+        database
+          .prepare("UPDATE run_leases SET released_at = ?, lease_expires_at = ?, updated_at = ? WHERE run_id = ?")
+          .run(now, now, now, runId);
+        insertEvent(database, row.conversation_id, "run.lease_released", {
+          runId,
+          ownerId: row.owner_id,
+          fencingToken: Number(row.fencing_token),
+        });
+        return {
+          released: true,
+          lease: mapRunLeaseRow(database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(runId)),
+        };
+      });
+    },
+
+    /** 返回 Run 当前保存的 lease 事实；从未取得时返回 null。 */
+    getRunLease(runId) {
+      getRunOrThrow(database, runId);
+      const row = database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(runId);
+      return row ? mapRunLeaseRow(row) : null;
     },
 
     /** 返回全部遗留 running Run 及其消息、工具和验收事实，供启动恢复分类。 */
@@ -335,20 +775,23 @@ export function createConversationStore({ databasePath }) {
     },
 
     /** 在同一事务中写入助手消息、usage、Context Manifest、韧性证据并完成 Run。 */
-    completeRun({ runId, content, displayContent, usage, contextManifest, model, resilience, acceptance = null }) {
+    completeRun({ runId, content, displayContent, usage, contextManifest, model, resilience, acceptance = null, lease = null }) {
       // 助手消息和完成状态必须在同一事务提交。
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
-        if (run.status === "completed") return buildRunResult(database, run, true);
+        if (run.status === "completed") {
+          assertTerminalReplayLease(database, runId, lease, readCurrentDate());
+          return buildRunResult(database, run, true);
+        }
         if (run.status !== "running") {
           throw new ConversationStoreError("Run is not active", 409, "run_not_active");
         }
-
+        assertRunLease(database, runId, lease, readCurrentDate());
         const conversation = getConversationOrThrow(database, run.conversation_id);
         if (acceptance) persistAcceptanceResult(database, run, acceptance, "accepted");
         const messageId = randomUUID();
         const seq = Number(conversation.next_seq) + 1;
-        const now = new Date().toISOString();
+        const now = readCurrentDate().toISOString();
         database
           .prepare(
             `INSERT INTO messages (
@@ -376,6 +819,7 @@ export function createConversationStore({ databasePath }) {
         database
           .prepare("UPDATE conversations SET next_seq = ?, version = version + 1, updated_at = ? WHERE id = ?")
           .run(seq, now, run.conversation_id);
+        releaseRunLeaseAfterTerminal(database, run, lease, now);
         insertEvent(database, run.conversation_id, "run.completed", { runId, messageId, seq, role: "assistant" });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
@@ -387,21 +831,24 @@ export function createConversationStore({ databasePath }) {
      * @param {object} input - 图片 Run 完成事实。
      * @returns {object} 已完成 Run、消息和图片产物。
      */
-    completeImageRun({ runId, assets, displayContent, usage, model, resilience }) {
+    completeImageRun({ runId, assets, displayContent, usage, model, resilience, lease = null }) {
       if (!Array.isArray(assets) || assets.length === 0) {
         throw new ConversationStoreError("Image Run requires at least one asset", 400, "image_asset_required");
       }
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
-        if (run.status === "completed") return buildRunResult(database, run, true);
+        if (run.status === "completed") {
+          assertTerminalReplayLease(database, runId, lease, readCurrentDate());
+          return buildRunResult(database, run, true);
+        }
         if (run.status !== "running" || run.operation !== "image.generate") {
           throw new ConversationStoreError("Run is not an active image generation", 409, "run_not_active");
         }
-
+        assertRunLease(database, runId, lease, readCurrentDate());
         const conversation = getConversationOrThrow(database, run.conversation_id);
         const messageId = randomUUID();
         const seq = Number(conversation.next_seq) + 1;
-        const now = new Date().toISOString();
+        const now = readCurrentDate().toISOString();
         const content = String(displayContent || `已生成 ${assets.length} 张图片`);
         database
           .prepare(
@@ -456,6 +903,7 @@ export function createConversationStore({ databasePath }) {
         database
           .prepare("UPDATE conversations SET next_seq = ?, version = version + 1, updated_at = ? WHERE id = ?")
           .run(seq, now, run.conversation_id);
+        releaseRunLeaseAfterTerminal(database, run, lease, now);
         insertEvent(database, run.conversation_id, "run.completed", { runId, messageId, seq, role: "assistant" });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
@@ -474,12 +922,16 @@ export function createConversationStore({ databasePath }) {
     },
 
     /** 将模型调用失败记录到 Run，同时保留已经落库的用户消息。 */
-    failRun(runId, error) {
+    failRun(runId, error, lease = null) {
       // 失败状态和事件必须在同一事务提交。
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
-        if (run.status !== "running") return buildRunResult(database, run, false);
-        const now = new Date().toISOString();
+        if (run.status !== "running") {
+          assertTerminalReplayLease(database, runId, lease, readCurrentDate());
+          return buildRunResult(database, run, false);
+        }
+        assertRunLease(database, runId, lease, readCurrentDate());
+        const now = readCurrentDate().toISOString();
         database
           .prepare("UPDATE runs SET status = 'failed', error = ?, error_code = ?, resilience_json = ?, updated_at = ? WHERE id = ?")
           .run(
@@ -489,18 +941,23 @@ export function createConversationStore({ databasePath }) {
             now,
             runId,
           );
+        releaseRunLeaseAfterTerminal(database, run, lease, now);
         insertEvent(database, run.conversation_id, "run.failed", { runId, code: readErrorCode(error) });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
     },
 
     /** 将 rejected AcceptanceResult 与 Run 失败状态原子提交，不保存模型候选正文。 */
-    rejectRun({ runId, acceptance, error, resilience = null }) {
+    rejectRun({ runId, acceptance, error, resilience = null, lease = null }) {
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
-        if (run.status !== "running") return buildRunResult(database, run, false);
+        if (run.status !== "running") {
+          assertTerminalReplayLease(database, runId, lease, readCurrentDate());
+          return buildRunResult(database, run, false);
+        }
+        assertRunLease(database, runId, lease, readCurrentDate());
         persistAcceptanceResult(database, run, acceptance, "rejected");
-        const now = new Date().toISOString();
+        const now = readCurrentDate().toISOString();
         database
           .prepare(
             `UPDATE runs
@@ -514,6 +971,7 @@ export function createConversationStore({ databasePath }) {
             now,
             runId,
           );
+        releaseRunLeaseAfterTerminal(database, run, lease, now);
         insertEvent(database, run.conversation_id, "acceptance.rejected", {
           runId,
           policy: acceptance.policy,
@@ -534,17 +992,21 @@ export function createConversationStore({ databasePath }) {
      * @param {object} input - 取消目标和已交付的部分结果。
      * @returns {object} 当前终止状态；重复取消或完成竞态不会改写既有事实。
      */
-    cancelRun({ conversationId, runId, partialContent = "", contextManifest, model, resilience }) {
+    cancelRun({ conversationId, runId, partialContent = "", contextManifest, model, resilience, lease = null }) {
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
         if (run.conversation_id !== conversationId) {
           throw new ConversationStoreError("Run not found", 404, "run_not_found");
         }
-        if (run.status !== "running") return buildRunResult(database, run, true);
+        if (run.status !== "running") {
+          assertTerminalReplayLease(database, runId, lease, readCurrentDate());
+          return buildRunResult(database, run, true);
+        }
+        assertRunLease(database, runId, lease, readCurrentDate());
 
         const text = String(partialContent || "");
         const conversation = getConversationOrThrow(database, conversationId);
-        const now = new Date().toISOString();
+        const now = readCurrentDate().toISOString();
         let messageId = null;
         let seq = null;
         if (text.length > 0) {
@@ -585,6 +1047,7 @@ export function createConversationStore({ databasePath }) {
             now,
             runId,
           );
+        releaseRunLeaseAfterTerminal(database, run, lease, now);
         insertEvent(database, conversationId, "run.cancelled", {
           runId,
           messageId,
@@ -902,6 +1365,7 @@ function migrate(database) {
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      operation_id TEXT REFERENCES operations(id) ON DELETE SET NULL,
       tool_call_id TEXT NOT NULL,
       tool_name TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
@@ -917,6 +1381,49 @@ function migrate(database) {
       UNIQUE(run_id, tool_call_id)
     );
       CREATE INDEX IF NOT EXISTS tool_calls_run_idx ON tool_calls(run_id, started_at);
+      CREATE TABLE IF NOT EXISTS operations (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      operation_key TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('run', 'tool', 'operation')),
+      tool_name TEXT,
+      effect TEXT NOT NULL CHECK(effect IN ('read', 'write', 'external', 'unknown')),
+      risk_level TEXT NOT NULL CHECK(risk_level IN ('low', 'medium', 'high', 'critical')),
+      policy TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      policy_decision TEXT NOT NULL CHECK(policy_decision IN ('allow', 'deny', 'confirmation_required', 'defer')),
+      policy_reason_codes_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('planned', 'running', 'completed', 'failed', 'unknown', 'confirmation_required', 'cancelled')),
+      input_json TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 0,
+      external_request_id TEXT,
+      result_json TEXT,
+      readback_json TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      retryable INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(conversation_id, idempotency_key),
+      UNIQUE(run_id, operation_key)
+    );
+      CREATE INDEX IF NOT EXISTS operations_run_idx ON operations(run_id, created_at);
+      CREATE INDEX IF NOT EXISTS operations_status_idx ON operations(status, updated_at);
+      CREATE TABLE IF NOT EXISTS run_leases (
+      run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      fencing_token INTEGER NOT NULL CHECK(fencing_token > 0),
+      lease_expires_at TEXT NOT NULL,
+      acquired_at TEXT NOT NULL,
+      released_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+      CREATE INDEX IF NOT EXISTS run_leases_expiry_idx ON run_leases(lease_expires_at);
       CREATE TABLE IF NOT EXISTS acceptance_results (
       run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -963,6 +1470,7 @@ function migrate(database) {
     ensureColumn(database, "runs", "error_code", "TEXT");
     ensureColumn(database, "runs", "deadline_at", "TEXT");
     ensureColumn(database, "runs", "chain_trace_id", "TEXT");
+    ensureColumn(database, "tool_calls", "operation_id", "TEXT REFERENCES operations(id) ON DELETE SET NULL");
     database.exec("CREATE INDEX IF NOT EXISTS conversations_archive_idx ON conversations(archived_at, updated_at DESC)");
   } finally {
     database.exec("PRAGMA foreign_keys = ON");
@@ -1099,6 +1607,328 @@ function getToolCallOrThrow(database, runId, toolCallId) {
   return row;
 }
 
+/** 查询 Operation，不存在时抛出稳定的 404 业务错误。 */
+function getOperationOrThrow(database, operationId) {
+  const row = database.prepare("SELECT * FROM operations WHERE id = ?").get(operationId);
+  if (!row) throw new ConversationStoreError("Operation not found", 404, "operation_not_found");
+  return row;
+}
+
+/** 校验重复 ToolCall 的协议投影和关联 Operation 与原始幂等事实完全一致。 */
+function assertToolCallReplay(database, row, input) {
+  const policyDecision = normalizePolicyDecision(input.policyDecision);
+  const operation = row.operation_id ? getOperationOrThrow(database, row.operation_id) : null;
+  const serializedInput = JSON.stringify(input.input ?? {});
+  const matchesToolCall =
+    row.conversation_id === input.conversationId &&
+    row.run_id === input.runId &&
+    row.tool_call_id === input.toolCallId &&
+    row.tool_name === input.toolName &&
+    row.input_json === serializedInput;
+  const matchesOperation =
+    operation &&
+    operation.operation_key === input.operationKey &&
+    operation.idempotency_key === input.idempotencyKey &&
+    operation.effect === input.effect &&
+    operation.risk_level === input.riskLevel &&
+    operation.policy === policyDecision.policy &&
+    operation.policy_version === policyDecision.policyVersion &&
+    operation.policy_decision === policyDecision.decision &&
+    operation.input_json === serializedInput;
+  if (!matchesToolCall || !matchesOperation) {
+    throw new ConversationStoreError(
+      "ToolCall idempotency key conflicts with existing fact",
+      409,
+      "tool_call_idempotency_conflict",
+    );
+  }
+}
+
+/**
+ * 幂等插入 Operation；相同幂等键必须保持 Run、操作键、策略版本和输入一致。
+ *
+ * @param {DatabaseSync} database - 当前 SQLite 连接。
+ * @param {object} input - 已校验的 Operation 创建事实。
+ * @returns {{operation: object, replayed: boolean}} 新建或重放结果。
+ */
+function insertOperation(database, input) {
+  const conversationId = requireStableIdentifier(input.conversationId, "conversationId");
+  const runId = requireStableIdentifier(input.runId, "runId");
+  const operationKey = requireStableIdentifier(input.operationKey, "operationKey");
+  const idempotencyKey = requireStableIdentifier(input.idempotencyKey, "idempotencyKey");
+  const kind = normalizeEnum(input.kind, ["run", "tool", "operation"], "operation kind");
+  const effect = normalizeEnum(input.effect, ["read", "write", "external", "unknown"], "operation effect");
+  const riskLevel = normalizeEnum(
+    input.riskLevel,
+    ["low", "medium", "high", "critical"],
+    "operation riskLevel",
+  );
+  const policyDecision = normalizePolicyDecision(input.policyDecision);
+  const status = normalizeEnum(
+    input.status,
+    ["planned", "running", "confirmation_required"],
+    "operation initial status",
+  );
+  const serializedInput = JSON.stringify(input.input ?? {});
+  const existing = database
+    .prepare("SELECT * FROM operations WHERE conversation_id = ? AND idempotency_key = ?")
+    .get(conversationId, idempotencyKey);
+  if (existing) {
+    if (
+      existing.run_id !== runId ||
+      existing.operation_key !== operationKey ||
+      existing.kind !== kind ||
+      nullableString(existing.tool_name) !== nullableString(input.toolName) ||
+      existing.effect !== effect ||
+      existing.risk_level !== riskLevel ||
+      existing.policy !== policyDecision.policy ||
+      existing.policy_version !== policyDecision.policyVersion ||
+      existing.policy_decision !== policyDecision.decision ||
+      existing.input_json !== serializedInput
+    ) {
+      throw new ConversationStoreError(
+        "Operation idempotency key conflicts with existing fact",
+        409,
+        "operation_idempotency_conflict",
+      );
+    }
+    return { operation: mapOperationRow(existing), replayed: true };
+  }
+
+  const id = randomUUID();
+  const now = input.now || new Date().toISOString();
+  const startedAt = status === "running" ? now : null;
+  database
+    .prepare(
+      `INSERT INTO operations (
+        id, conversation_id, run_id, operation_key, idempotency_key, kind, tool_name,
+        effect, risk_level, policy, policy_version, policy_decision, policy_reason_codes_json,
+        status, input_json, attempt, started_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      conversationId,
+      runId,
+      operationKey,
+      idempotencyKey,
+      kind,
+      nullableString(input.toolName),
+      effect,
+      riskLevel,
+      policyDecision.policy,
+      policyDecision.policyVersion,
+      policyDecision.decision,
+      JSON.stringify(policyDecision.reasonCodes),
+      status,
+      serializedInput,
+      Number.isInteger(input.attempt) && input.attempt >= 0 ? input.attempt : 0,
+      startedAt,
+      now,
+      now,
+    );
+  return {
+    operation: mapOperationRow(database.prepare("SELECT * FROM operations WHERE id = ?").get(id)),
+    replayed: false,
+  };
+}
+
+/** 将 running 或有回读证据的 unknown Operation 幂等收口为 completed。 */
+function completeOperationRow(database, row, { result, readback, externalRequestId, now }) {
+  if (row.status === "completed") return mapOperationRow(row);
+  if (row.status === "unknown" && readback == null) {
+    throw new ConversationStoreError(
+      "Unknown Operation requires readback before completion",
+      409,
+      "operation_readback_required",
+    );
+  }
+  if (!["running", "unknown"].includes(row.status)) {
+    throw new ConversationStoreError("Operation is not active", 409, "operation_not_active");
+  }
+  database
+    .prepare(
+      `UPDATE operations
+       SET status = 'completed', external_request_id = COALESCE(?, external_request_id),
+           result_json = ?, readback_json = ?, error_code = NULL, error_message = NULL,
+           retryable = 0, completed_at = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      nullableString(externalRequestId),
+      jsonOrNull(result),
+      jsonOrNull(readback),
+      now,
+      now,
+      row.id,
+    );
+  insertEvent(database, row.conversation_id, "operation.completed", {
+    runId: row.run_id,
+    operationId: row.id,
+    operationKey: row.operation_key,
+  });
+  return mapOperationRow(database.prepare("SELECT * FROM operations WHERE id = ?").get(row.id));
+}
+
+/** 将 active 或有回读证据的 unknown Operation 收口为 failed/cancelled。 */
+function failOperationRow(
+  database,
+  row,
+  { status, code, message, retryable = false, readback = null, externalRequestId = null, now },
+) {
+  if (row.status === status) return mapOperationRow(row);
+  if (row.status === "unknown" && readback == null) {
+    throw new ConversationStoreError(
+      "Unknown Operation requires readback before failure",
+      409,
+      "operation_readback_required",
+    );
+  }
+  const allowedSources = status === "cancelled"
+    ? ["planned", "confirmation_required", "running"]
+    : ["running", "unknown"];
+  if (!allowedSources.includes(row.status)) {
+    throw new ConversationStoreError("Operation is not active", 409, "operation_not_active");
+  }
+  database
+    .prepare(
+      `UPDATE operations
+       SET status = ?, external_request_id = COALESCE(?, external_request_id),
+           readback_json = ?, error_code = ?, error_message = ?, retryable = ?,
+           completed_at = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(
+      status,
+      nullableString(externalRequestId),
+      jsonOrNull(readback),
+      String(code || "operation_failed"),
+      String(message || "操作执行失败。"),
+      retryable ? 1 : 0,
+      now,
+      now,
+      row.id,
+    );
+  insertEvent(database, row.conversation_id, `operation.${status}`, {
+    runId: row.run_id,
+    operationId: row.id,
+    code: String(code || "operation_failed"),
+    retryable: Boolean(retryable),
+  });
+  return mapOperationRow(database.prepare("SELECT * FROM operations WHERE id = ?").get(row.id));
+}
+
+/** 校验策略决定具备版本、结论和稳定原因码。 */
+function normalizePolicyDecision(value) {
+  const decision = normalizeEnum(
+    value?.decision,
+    ["allow", "deny", "confirmation_required", "defer"],
+    "policy decision",
+  );
+  const reasonCodes = [];
+  for (const item of Array.isArray(value?.reasonCodes) ? value.reasonCodes : []) {
+    const code = String(item || "").trim();
+    if (code && !reasonCodes.includes(code)) reasonCodes.push(code);
+  }
+  if (reasonCodes.length === 0) {
+    throw new ConversationStoreError("Policy reason codes are required", 500, "invalid_policy_decision");
+  }
+  return Object.freeze({
+    decision,
+    policy: requireStableIdentifier(value?.policy, "policy"),
+    policyVersion: requireStableIdentifier(value?.policyVersion, "policyVersion"),
+    reasonCodes: Object.freeze(reasonCodes),
+  });
+}
+
+/** 校验 RunLease；没有 lease 事实时兼容旧 Store 调用，存在事实时强制 owner/token/expiry。 */
+function assertRunLease(database, runId, credentials, nowDate, { requireActive = true } = {}) {
+  const row = database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(runId);
+  if (!row) return null;
+  const ownerId = nullableString(credentials?.ownerId);
+  const fencingToken = Number(credentials?.fencingToken);
+  if (!ownerId || !Number.isInteger(fencingToken) || fencingToken !== Number(row.fencing_token)) {
+    throw new ConversationStoreError("Run lease fencing token is stale", 409, "stale_fencing_token");
+  }
+  if (ownerId !== row.owner_id) {
+    throw new ConversationStoreError("Run lease owner is stale", 409, "stale_lease_owner");
+  }
+  if (requireActive && !isLeaseActive(row, nowDate)) {
+    throw new ConversationStoreError("Run lease has expired", 409, "run_lease_expired");
+  }
+  return row;
+}
+
+/** 终态幂等读取允许省略凭证；一旦携带凭证，仍校验 owner/token 防止旧实例伪装重放。 */
+function assertTerminalReplayLease(database, runId, credentials, nowDate) {
+  if (credentials == null) return null;
+  return assertRunLease(database, runId, credentials, nowDate, { requireActive: false });
+}
+
+/** 在 Run 终态事务内释放匹配 lease，避免终态已提交但 owner 仍被误认为活跃。 */
+function releaseRunLeaseAfterTerminal(database, run, credentials, now) {
+  const row = database.prepare("SELECT * FROM run_leases WHERE run_id = ?").get(run.id);
+  if (!row || row.released_at) return;
+  database
+    .prepare("UPDATE run_leases SET released_at = ?, lease_expires_at = ?, updated_at = ? WHERE run_id = ?")
+    .run(now, now, now, run.id);
+  insertEvent(database, run.conversation_id, "run.lease_released", {
+    runId: run.id,
+    ownerId: row.owner_id,
+    fencingToken: Number(row.fencing_token),
+    reasonCode: "run_terminal",
+  });
+}
+
+/** 判断 lease 尚未释放且过期时间严格晚于当前 Store 时钟。 */
+function isLeaseActive(row, nowDate) {
+  return !row.released_at && Date.parse(row.lease_expires_at) > nowDate.getTime();
+}
+
+/** 将 lease TTL 限制为 1ms 到 24h 的正整数。 */
+function normalizeLeaseTtl(value) {
+  const ttlMs = Number(value);
+  if (!Number.isInteger(ttlMs) || ttlMs < 1 || ttlMs > 86400000) {
+    throw new ConversationStoreError("Run lease ttl is invalid", 400, "invalid_run_lease_ttl");
+  }
+  return ttlMs;
+}
+
+/** 校验时钟函数并确保每次返回有效 Date。 */
+function normalizeClock(clock) {
+  if (typeof clock !== "function") throw new TypeError("clock must be a function");
+  return function readCurrentDate() {
+    const value = clock();
+    if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+      throw new TypeError("clock must return a valid Date");
+    }
+    return value;
+  };
+}
+
+/** 返回当前系统时间，作为生产 Store 默认时钟。 */
+function createCurrentDate() {
+  return new Date();
+}
+
+/** 校验并返回 SQLite CHECK 对应的字符串枚举值。 */
+function normalizeEnum(value, allowed, fieldName) {
+  const normalized = String(value || "");
+  if (!allowed.includes(normalized)) {
+    throw new ConversationStoreError(`${fieldName} is invalid`, 400, "invalid_operation_fact");
+  }
+  return normalized;
+}
+
+/** 校验数据库事实标识不为空且不包含控制字符。 */
+function requireStableIdentifier(value, fieldName) {
+  const identifier = String(value || "").trim();
+  if (!identifier || identifier.length > 240 || /[\r\n\0]/.test(identifier)) {
+    throw new ConversationStoreError(`${fieldName} is invalid`, 400, "invalid_operation_fact");
+  }
+  return identifier;
+}
+
 /** 校验恢复来源属于当前会话且终止状态与恢复模式匹配。 */
 function validateRecoverySource(database, conversationId, sourceRunId, recoveryMode) {
   if (!sourceRunId && !recoveryMode) return;
@@ -1122,6 +1952,7 @@ function buildRunResult(database, run, replayed) {
     userMessage,
     assistantMessage,
     toolCalls: listToolCallsForRun(database, run.id),
+    operations: listOperationsForRun(database, run.id),
     artifacts: listImageAssetsForRun(database, run.id),
     acceptance: getAcceptanceForRun(database, run.id),
     replayed,
@@ -1133,6 +1964,7 @@ function mapRunWithToolCalls(database, row) {
   return {
     ...mapRunRow(row),
     toolCalls: listToolCallsForRun(database, row.id),
+    operations: listOperationsForRun(database, row.id),
     artifacts: listImageAssetsForRun(database, row.id),
     acceptance: getAcceptanceForRun(database, row.id),
   };
@@ -1150,6 +1982,14 @@ function listToolCallsForRun(database, runId) {
     .prepare("SELECT * FROM tool_calls WHERE run_id = ? ORDER BY started_at ASC, rowid ASC")
     .all(runId)
     .map(mapToolCallRow);
+}
+
+/** 查询并映射一个 Run 的全部 Operation 执行事实。 */
+function listOperationsForRun(database, runId) {
+  return database
+    .prepare("SELECT * FROM operations WHERE run_id = ? ORDER BY created_at ASC, rowid ASC")
+    .all(runId)
+    .map(mapOperationRow);
 }
 
 /** 查询一个 Run 已完成的全部图片资产引用。 */
@@ -1367,6 +2207,7 @@ function mapToolCallRow(row) {
     id: row.id,
     conversationId: row.conversation_id,
     runId: row.run_id,
+    operationId: row.operation_id || null,
     toolCallId: row.tool_call_id,
     toolName: row.tool_name,
     status: row.status,
@@ -1382,6 +2223,56 @@ function mapToolCallRow(row) {
         }
       : null,
     startedAt: row.started_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 将 operations 行映射为不包含外部原始响应正文的执行事实。 */
+function mapOperationRow(row) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    runId: row.run_id,
+    operationKey: row.operation_key,
+    idempotencyKey: row.idempotency_key,
+    kind: row.kind,
+    toolName: row.tool_name || null,
+    effect: row.effect,
+    riskLevel: row.risk_level,
+    policy: row.policy,
+    policyVersion: row.policy_version,
+    policyDecision: row.policy_decision,
+    policyReasonCodes: parseJson(row.policy_reason_codes_json, []),
+    status: row.status,
+    input: parseJson(row.input_json, {}),
+    attempt: Number(row.attempt),
+    externalRequestId: row.external_request_id || null,
+    result: parseJson(row.result_json),
+    readback: parseJson(row.readback_json),
+    error: row.error_code
+      ? {
+          code: row.error_code,
+          message: row.error_message || "操作执行失败。",
+          retryable: Boolean(row.retryable),
+        }
+      : null,
+    startedAt: row.started_at || null,
+    completedAt: row.completed_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 将 run_leases 行映射为 Runtime 协调端口使用的稳定租约事实。 */
+function mapRunLeaseRow(row) {
+  return {
+    runId: row.run_id,
+    conversationId: row.conversation_id,
+    ownerId: row.owner_id,
+    fencingToken: Number(row.fencing_token),
+    leaseExpiresAt: row.lease_expires_at,
+    acquiredAt: row.acquired_at,
+    releasedAt: row.released_at || null,
     updatedAt: row.updated_at,
   };
 }
