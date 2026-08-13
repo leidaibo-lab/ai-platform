@@ -39,7 +39,7 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
 
 `scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
-当前交付以 C1 对话问答为基线，并以 Open-Meteo 跑通首个只读天气工具，同时增加 C2 文生图的首个开发切片：显式图片操作、独立图片模型别名、生成结果校验、本地图片资产、幂等重放、取消和 JSON/SSE 交付已经通过 fake 回归，并用 `gpt-image-2` 跑通一次真实模型 happy-path smoke。该单样本只证明当前 LiteLLM、AI SDK 与上游组合可生成并落存图片，不代表内容审核、精确尺寸、成本、取消/超时/错误或生产可用性已经验收；正式对象存储和图片理解资产输入也尚未完成。ChainTrace 的代码、稳定契约、Phoenix 选型和部署入口已经保留但默认关闭；具体边界见[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
+当前交付以 C1 对话问答为基线，并以 Open-Meteo 跑通首个只读天气工具。天气切片已从“保存 ToolResult”推进到“服务重启后从 completed ToolResult 恢复最终总结”，并通过持久化 `AcceptanceResult` 独立检查地点、数据时间、来源和结果事实；该能力只覆盖一个已证明的只读稳定点，不等于通用持久工作流或多实例恢复。项目同时增加 C2 文生图的首个开发切片：显式图片操作、独立图片模型别名、生成结果校验、本地图片资产、幂等重放、取消和 JSON/SSE 交付已经通过 fake 回归，并用 `gpt-image-2` 跑通一次真实模型 happy-path smoke。该单样本不代表内容审核、精确尺寸、成本、取消/超时/错误或生产可用性已经验收。具体等级与边界见[运行可靠性与结果验收](./docs/runtime-reliability-and-acceptance.md)和[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
 
 ## 本地启动
 
@@ -227,11 +227,13 @@ Demo 输入区支持：
 - 消息引用：可以引用当前会话中的用户或助手消息；渠道只提交稳定 `messageId`，Runtime 从 SQLite 事实源解析正文。
 - 模型选择：Sender 内选择当前 Run 使用的 LiteLLM 模型别名；未选择时回退服务端 `LITELLM_MODEL`，token counter 与模型生成使用同一别名。
 - 多会话工作台：Runtime 使用 SQLite 持久化会话和完整原始消息；渠道支持标题搜索、今天/昨天/最近 7 天/更早分组、当前/归档/全部筛选、重命名与独立归档。归档不删除事实，取消归档也不会重新打开 `closed` 会话。
-- 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK 标准事件流的文本增量；普通调用使用 `streamText`，工具型对话使用 `ToolLoopAgent.stream()`，由 X Markdown 渲染并在完整回答结束后一次性落库。
+- 流式 Markdown：浏览器通过 POST SSE 接收 AI SDK 标准事件流的文本增量；普通调用使用 `streamText`，工具型对话使用 `ToolLoopAgent.stream()`。天气候选在系统验收前只暂存在 Runtime，验收通过后才放行；其他普通回答继续实时透传，最终都只落一条完整助手消息。
 - 停止生成：生成期间调用 Runtime 取消端点，中止模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
 - 图片产物：`image.generate` 固定单张和平台尺寸白名单，SDK 自动重试关闭；模型结果通过真实 MIME、字节和尺寸校验后写入 `DEMO_IMAGE_ASSET_DIR`，SQLite 只保存 `image_asset` 元数据与 Message/Run 引用，页面通过受控会话端点展示和下载。
 - 发送门禁：本地会话先独立加载，模型网关状态在后台刷新；网关未确认可达时仍可浏览和整理会话、编辑草稿和附件，但禁止提交无效 Run。该探测只验证 LiteLLM `/v1/models`，不代表上游模型生成一定可用。
 - 失败反馈与恢复：最近一次失败 Run 会在对应用户消息后说明鉴权、限流、超时、模型不可用或上游服务异常，并给出处理建议；页面不展示 provider 原始错误正文。失败可直接重试或编辑后发送，最后一条正常助手回答可重新生成，中断回答可继续生成；每次动作都使用新的幂等标识，并以 `sourceRunId + recoveryMode` 记录来源而不修改历史。
+- 启动恢复：Demo Server 监听端口前扫描 SQLite 中遗留的 `running` Run。只有 completed 只读 ToolResult、完整恢复元数据、无助手消息且原截止时间未耗尽时继续最终总结；其他遗留 Run 使用稳定原因码明确失败，不猜测或重放图片、写操作和未知状态。
+- 结果验收：天气模型输出先是候选。Runtime 根据 SQLite ToolResult 独立检查地点、数据时间、来源和至少一个结果事实；accepted 结果与助手消息、Run 完成同事务提交，rejected 结果不保存候选正文。普通对话当前返回 `acceptance=null`，不宣称已经系统验收。
 - 多端同步：同一会话通过独立的 SSE 事件游标刷新已持久化事实；客户端不再保存或提交历史事实源。
 - 消息操作：已持久化消息不提供删除或原位编辑；桌面在消息悬停或操作聚焦时显示快捷操作，移动端收敛为单一操作菜单。助手 Markdown 支持整段复制、代码块复制、回答标题导航、安全外链、移动端表格横向滚动和下载 `.md`。
 - 会话导航：桌面会话区左侧将用户发起的消息聚合为居中的等长锚点；悬停时刻度横向展开并预览摘要，点击后按稳定 `messageId` 定位并高亮原消息，助手回复不生成锚点。
@@ -277,7 +279,7 @@ Demo Server API 按层级暴露：
 | `GET /api/gateway/status` | 检查 LiteLLM `/v1/models` 可达性，并返回 gateway base url、默认对话别名、服务端图片别名和当前 key 可见的 `models` |
 | `GET /api/runtime/conversations` | 列出持久化会话 |
 | `POST /api/runtime/conversations` | 创建会话 |
-| `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆和版本状态 |
+| `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆、版本状态，以及 `latestRun` 可空的 `acceptance` 事实 |
 | `PATCH /api/runtime/conversations/{id}` | 更新 1-80 字符标题或独立归档状态，不改变会话生命周期 |
 | `POST /api/runtime/conversations/{id}/runs` | 按显式 `operation` 发送当前输入并执行幂等 Run；图片结果通过 `artifacts` 返回 |
 | `POST /api/runtime/conversations/{id}/runs/stream` | 通过 SSE 接收 `run-started`、文本 `text-delta` 或图片 `artifact-created`，再以 `completed`、`cancelled` 或 `error` 收口 |
@@ -333,6 +335,29 @@ Run 请求包含模型别名、当前输入和幂等标识；恢复动作额外�
 npm test
 ```
 
+只验证结果验收策略和两个真实 Node 进程组成的 ToolResult 后崩溃/重启场景：
+
+```bash
+npm run test:acceptance
+npm run test:scenarios
+```
+
+输出每个确定性场景的逐项验收、模型调用阶段和 SQLite 证据：
+
+```bash
+npm run eval:runtime-scenarios:deterministic
+```
+
+使用同一版本化场景资产评测真实模型最终回答；项目级命令固定使用 `gpt-5.6`，避免重复评测时模型漂移：
+
+```bash
+npm run eval:runtime-scenarios:real
+```
+
+独立调用 Runner 或接入其他 AI 项目时，仍必须通过 `--model <fixed-model-alias>` 显式指定该项目的固定模型别名。
+
+双模式的 setup 都使用固定行为模型构造 ToolResult 已提交的稳定故障点。`deterministic` 的 evaluation 只证明 Runtime、SQLite、恢复和判分链路；`real-model` 的 evaluation 才经过现有 `GatewayClient -> AI SDK -> LiteLLM -> 上游模型`。真实调用失败直接失败，不回退固定模型。报告分别写入 `.data/evaluations/runtime-scenarios-deterministic.json` 和 `.data/evaluations/runtime-scenarios-real-model.json`；协议与扩展方式见 [`scenarios/runtime/README.md`](./scenarios/runtime/README.md)。
+
 只检查全局架构边界：
 
 ```bash
@@ -379,7 +404,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 - `DEMO_TOOL_MAX_STEPS` 默认 `4`，限制一次 Run 内 `ToolLoopAgent`（或动态结构化特殊路径）的模型步骤；`DEMO_WEATHER_TOOL_ENABLED` 默认启用首个只读天气工具。
 - `DEMO_WEATHER_TIMEOUT_MS` 默认 `8000` 毫秒；天气 Connector 只访问代码内固定的 Open-Meteo Geocoding 与 Forecast HTTPS 端点，不接受渠道或模型传入 URL。
 - 当前输入包含明确地点且查询今天或明天天气时，服务端 Registry 会通过 AI SDK `prepareStep` 把首步确定性路由到 `get_weather`，后续步骤恢复 `auto`；缺少地点或超出日期范围时仍由模型澄清，不把任意文本转换为外部请求。
-- 工具结果落库后若后续模型步骤因瞬时错误失败，且尚未交付正文，Runtime 会从 SQLite ToolResult 构造 AI SDK 结构化工具消息并发起无工具总结恢复；恢复仍共享原 Run 时限和取消信号，不会再次执行 Connector，也不提供跨进程任务恢复。
+- 工具结果落库后若后续模型步骤失败且尚未向渠道交付正文，Runtime 会从 SQLite ToolResult 构造 AI SDK 结构化工具消息并发起无工具总结恢复，不会再次执行 Connector。Demo Server 重启时也会恢复满足资格的原 Run，但只覆盖 completed 只读 ToolResult 后的最终总结；运行中工具、图片、写操作、超时 Run 和多实例接管仍不支持。
 - `OTEL_ENABLED` 控制 C1 ChainTrace，默认 `false`；禁用时不初始化 SDK、Exporter 或 AI SDK Telemetry。
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 是启用 TODO 时使用的 Phoenix OTLP HTTP 地址；代码固定使用 protobuf，也兼容以 `OTEL_EXPORTER_OTLP_ENDPOINT` 提供基础地址。
 - `OTEL_EXPORTER_OTLP_TRACES_HEADERS` 和 `OTEL_EXPORTER_OTLP_HEADERS` 使用 OTel `key=value` 列表；Trace 专用 header 优先，凭据只保存在服务端内存。
@@ -400,6 +425,8 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | Phoenix ChainTrace 启用、认证、健康检查、备份与升级边界 | `docs/c1-chaintrace-operations.md` |
 | V1 只读工具循环、天气 Connector 和 LiteLLM digest 决策 | `docs/decisions/2026-07-30-v1-read-only-tool-loop-and-weather.md` |
 | ToolResult 持久化总结恢复决策 | `docs/decisions/2026-07-31-tool-result-summary-recovery.md` |
+| 首期可恢复执行、AcceptanceResult 和成熟引擎重评边界 | `docs/decisions/2026-08-13-durable-run-recovery-and-acceptance.md` |
+| R0-R4 执行可靠性、A0-A4 结果可信度和场景扩展模板 | `docs/runtime-reliability-and-acceptance.md` |
 | AI SDK Core v7 当前采用、延后与不采用的 API 边界 | `docs/ai-sdk-core-alignment.md` |
 | C2 图片理解与生成的场景归属、模型调用和资产边界 | `docs/decisions/2026-07-31-c2-image-understanding-and-generation-boundary.md` |
 | 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
@@ -413,7 +440,7 @@ Skill 相关内容统一放在 `.agents/skills/`，并遵守 `https://gitlab.sea
 
 当前保持单仓和轻量部署，先稳定区域接口，再按跨项目复用、独立安全边界、独立扩缩容或团队所有权逐个拆成服务：
 
-1. V1：已适配 AI SDK Core `generateText` / `streamText` 的有界多步工具能力，以 Open-Meteo 天气查询跑通无副作用只读工具闭环，并支持从持久化 ToolResult 无工具恢复最终总结；真实模型 smoke test、更多业务 Connector、人工确认、写操作和跨进程恢复仍未完成。
+1. V1：已适配 AI SDK Core `generateText` / `streamText` 的有界多步工具能力，以 Open-Meteo 跑通只读工具闭环、进程重启后受限 ToolResult 总结恢复和 A3 领域验收；真实模型天气质量、多实例协调、更多业务 Connector、人工确认和写操作仍未完成。
 2. V2：把 LiteLLM 模型网关补成团队共享服务，增加 virtual key、多模型路由、fallback、预算、限流和调用统计。
 3. V3：按资源和权限边界拆出连接器服务与知识服务。
 4. V4：建设平台控制面和多渠道 Adapter，复用已经稳定的 Runtime、连接器和模型网关。

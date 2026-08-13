@@ -117,6 +117,7 @@ C1 已经形成可运行的功能基线，但“系统能够运行”不等于�
 - `ToolLoopAgent` 的 `prepareCall`、`prepareStep`、`runtimeContext` 和 `toolsContext` 分别解决什么动态装配问题？
 - 为什么纯文本工具对话适合复用 Agent，而 MemoryDelta 等动态 `Output.object` 任务仍走 `generateText` / `streamText`？
 - 为什么首步确定性天气路由不能只依赖 Prompt 或模型自觉？后续步骤为什么必须恢复 `auto`？
+- 为什么 `auto` 只能发生在 Runtime 已开放的受限 ToolSet 内，未命中路由时不能把全部受管工具交给模型？
 - 与自研循环、LangGraph、Mastra 和 OpenAI Agents SDK 相比，当前只有一个有界只读工具时为什么选择 AI SDK？
 - 出现复杂分支、人工暂停、多 Agent handoff 或持久 checkpoint 时，哪些证据会使 ToolLoopAgent 不再足够？
 
@@ -141,7 +142,9 @@ C1 已经形成可运行的功能基线，但“系统能够运行”不等于�
 - 为什么恢复调用不能携带 ToolSet、`toolsContext` 或强制工具路由？
 - 为什么只有 completed ToolResult、原错误以 `retry-boundary-crossed` 停止且尚未交付正文时才能自动恢复？
 - 恢复成功后为什么仍然只允许一条助手消息？恢复再次失败时为什么要保留原失败和恢复失败两段 resilience？
-- 当前恢复为什么只适用于单 Run，不等于跨进程工作流恢复？什么条件会触发 LangGraph 或 Temporal 评估？
+- 为什么天气候选在缺少必需 ToolResult 时必须被拒绝，不能让模型用正文声明工具已经执行？
+- 当前虽然能在进程重启后恢复一个原 Run，为什么仍只是受限 R3，不等于多实例持久工作流？什么条件会触发 LangGraph 或 Temporal 评估？
+- AcceptanceResult、助手消息和 `run.completed` 已提交后渠道回调失败，为什么只能记为 Delivery 失败，不能反向改写 Run？
 
 ## 为什么模型重试由 Runtime 统一管理？
 
@@ -254,6 +257,7 @@ C1 已经形成可运行的功能基线，但“系统能够运行”不等于�
 6. Phoenix 不可用时，为什么 Run 仍然必须正常完成或失败？
 7. 100 轮确定性回归通过后，为什么仍不能宣布真实模型准确率达标？
 8. 新增一个写工具时，为什么不能直接复用天气工具的自动执行策略？
+9. 天气候选缺少 ToolResult，或终态提交后 SSE 连接关闭时，Run、AcceptanceResult、Message 和 Delivery 分别应是什么状态？
 
 ## 最终是否能够给出这样的结论？
 

@@ -628,7 +628,7 @@ function createPostToolRecoveryScenario({ recoveryFails = false } = {}) {
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content: "深圳当前 26°C，来源 Open-Meteo。" },
+            message: { role: "assistant", content: "深圳当前 26°C，数据时间 2026-07-31T10:00，来源 Open-Meteo。" },
             finish_reason: "stop",
           },
         ],
@@ -727,7 +727,7 @@ async function testRuntimeRecoversSummaryFromPersistedToolResult() {
   assert.equal(detail.latestRun.toolCalls[0].status, "completed");
   assert.equal(detail.latestRun.toolCalls[0].source, "Open-Meteo");
   assert.equal(detail.messages.length, 2);
-  assert.equal(response.content, "深圳当前 26°C，来源 Open-Meteo。");
+  assert.equal(response.content, "深圳当前 26°C，数据时间 2026-07-31T10:00，来源 Open-Meteo。");
   assert.equal(detail.latestRun.resilience.recovered, true);
   assert.equal(detail.latestRun.resilience.retryBoundaryCrossed, true);
   assert.equal(detail.latestRun.resilience.attempts[0].stopReason, "retry-boundary-crossed");

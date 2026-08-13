@@ -99,6 +99,7 @@ Runtime 拥有：
 - 幂等、并发和取消语义。
 - Context Planner 和 Memory Manager。
 - 模型调用的业务边界。
+- 工具开放、ToolResult、结果验收和恢复资格。
 - 最终回答、usage、Context Manifest 和错误状态。
 
 Runtime 不应该把上述职责交给浏览器或模型网关，否则多个渠道会形成不同的会话真相，模型网关也会逐渐承载它不应理解的业务状态。
@@ -228,7 +229,7 @@ Planner 的价值不是“把信息拼起来”，而是在预算不足时做可
 
 高低水位的目的不是删除历史。原始消息仍然保留，压缩只是产生更适合后续装箱的结构化视图。
 
-### 第七步：调用模型
+### 第七步：路由能力并调用模型
 
 Runtime 把 Planner 选择出的上下文交给 GatewayClient，再经过 AI SDK 和 LiteLLM 到达上游模型。
 
@@ -240,9 +241,11 @@ Runtime 把 Planner 选择出的上下文交给 GatewayClient，再经过 AI SDK
 - 最终要返回实际模型、usage 和 finish reason。
 - 模型错误要转换成平台能够理解的稳定分类。
 
+当输入明确命中今明日天气时，Runtime 才向当前 Run 开放 `get_weather` 并强制首步调用；未命中确定性路由时，工具集合保持关闭。模型可以在 Runtime 授予的受限集合内提出 Tool Call，但不能自行获得 Connector 权限，也不能用一句“已经查询”代替持久化 ToolResult。
+
 模型返回的内容在这一刻仍然只是生成结果，还没有自动成为会话最终事实。
 
-### 第八步：通过 POST SSE 增量交付文本
+### 第八步：按结果等级交付文本
 
 流式回答通常经历以下事件：
 
@@ -256,11 +259,11 @@ run-started
 
 `text-delta` 只在内存和网络层流动，系统不会每收到一个 Token 就写一次 SQLite。原因是逐 Token 落库会造成大量小事务，也会制造难以处理的半成品消息。
 
-正常完成时，Runtime 把完整助手回答、Run 最终状态、usage 和 Context Manifest 在收口阶段持久化。最终只有一条完整助手消息，而不是几十或几百条 Token 片段。
+普通 A0 对话继续实时透传。需要 A3 验收的天气候选则先暂存在 Runtime，只有候选包含与持久化 ToolResult 匹配的地点、数据时间、来源和至少一个结果事实，才能生成 accepted AcceptanceResult。验收拒绝时，候选既不进入渠道，也不成为助手消息。
 
 ### 第九步：最终事实收口
 
-只有当模型生成、结果整理和存储提交都完成后，Run 才进入 `completed`。
+只有当模型生成、适用的结果验收和存储提交都完成后，Run 才进入 `completed`。天气 accepted 结果会把 AcceptanceResult、完整助手消息和 Run 终态在同一事务提交；最终只有一条完整助手消息，而不是几十或几百条 Token 片段。
 
 这里必须区分两个概念：
 
@@ -268,6 +271,8 @@ run-started
 - 服务端完成事务提交，表示“最终事实已经形成”。
 
 页面可以为了体验即时展示增量，但最终仍要以服务端 Conversation、Message 和 Run 为准。
+
+对 A3 天气回答，暂存正文是在终态事务之后才释放给当前渠道。若连接此时关闭，失败属于 Delivery，而不是 Run 执行失败；系统不得追加 `run.failed` 或再次调用 Connector，渠道可以用原 `requestId` 或 `latestRun` 取回已经完成的结果。
 
 ### 第十步：异步更新结构化记忆
 
@@ -572,6 +577,7 @@ Trace 默认不记录 Prompt、回答、图片地址、文档地址、原始错�
 - Reducer 是否正确维护 `active/superseded`。
 - Planner 是否选择了预期候选。
 - checkpoint 和水位是否正确推进。
+- 工具开放、故障稳定点、恢复和 AcceptanceResult 是否符合契约。
 - 幂等、并发和错误分支是否符合契约。
 
 它的优势是稳定、快速、便宜，失败时容易定位。但是它不能证明真实模型理解了问题。
@@ -602,6 +608,7 @@ Trace 默认不记录 Prompt、回答、图片地址、文档地址、原始错�
 - 图片资产治理和完整视觉评测。
 - 批量分片、断点恢复和异步产物管理。
 - 多 Runtime 实例下的分布式会话串行。
+- 通用持久工作流、运行中工具 checkpoint 和保证送达的 Delivery Outbox。
 
 这些分别属于后续场景或下一阶段底座能力。不要因为共同底座已经存在，就把其他场景误认为已经完成。
 
@@ -676,6 +683,14 @@ Trace 和评测提供证据
 
 正确判断：准确度可能暂时通过，但 Token 合理性、延迟和长期可扩展性不合格，仍不能认为 C1 已完成。
 
+### 场景九：天气候选声称已经查询，但没有 ToolResult
+
+正确判断：模型声明不是执行证据。命中确定性天气路由却没有持久化必需 ToolResult 时，Runtime 必须拒绝候选，不保存助手消息，也不向渠道放行正文。
+
+### 场景十：天气已经验收完成，但释放正文时连接关闭
+
+正确判断：AcceptanceResult、助手消息和 `run.completed` 已经形成终态事实，不能再改写成执行失败。当前 Delivery 失败应被观测，渠道随后按原 `requestId` 幂等读取或查询 `latestRun`。
+
 ## 最终应该形成的系统认识
 
 理解 C1 之后，不应把它描述成：
@@ -684,6 +699,6 @@ Trace 和评测提供证据
 
 更准确的描述是：
 
-> 渠道把带稳定身份的当前输入提交给 Agent Runtime。Runtime 以持久化消息为事实源，在同一会话内串行创建幂等 Run，通过 Context Planner 从显式引用、active 结构化记忆、相关 Episode 和最近消息中构造预算内上下文，再经 GatewayClient、AI SDK 和 LiteLLM 调用上游模型。需要实时事实时，模型通过有界 ToolLoopAgent 提出工具调用，Runtime 校验只读 allowlist、执行固定 Connector 并持久化 ToolResult；工具后的模型瞬时失败可以在未输出时从 SQLite 事实做无工具总结恢复，不会重复 Connector。模型文本通过 POST SSE 增量交付，但最终只持久化一条完整或明确中断的助手消息。整个过程受共享截止时间、首输出前重试、工具执行边界、显式取消、错误分类和数据一致性规则约束，并通过 ChainTrace、Context Manifest、确定性回归和真实模型四维基线提供可验证证据。
+> 渠道把带稳定身份的当前输入提交给 Agent Runtime。Runtime 以持久化消息为事实源，在同一会话内串行创建幂等 Run，通过 Context Planner 从显式引用、active 结构化记忆、相关 Episode 和最近消息中构造预算内上下文，再经 GatewayClient、AI SDK 和 LiteLLM 调用上游模型。需要实时事实时，Runtime 先用确定性路由决定是否开放受管工具，模型只在受限集合内提出 Tool Call；Runtime 执行固定 Connector 并持久化 ToolResult。工具后的模型瞬时失败或进程重启可以从 completed ToolResult 的窄稳定点恢复总结，不会重复 Connector。普通模型文本实时流式交付；天气候选则先由系统独立验收并提交终态，再释放暂存正文。整个过程受共享截止时间、首输出前重试、工具执行边界、显式取消、错误分类、AcceptanceResult 和数据一致性规则约束，并通过 ChainTrace、Context Manifest、确定性场景回归和真实模型质量评测提供可验证证据。
 
 当这段描述不再只是需要背诵的文字，而是每个设计选择都能回答“为什么”，就真正理解了 C1 链路。

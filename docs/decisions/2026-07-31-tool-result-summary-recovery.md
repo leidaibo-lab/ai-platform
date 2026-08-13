@@ -89,3 +89,9 @@ Runtime 捕获原模型异常后，从 Store 重新查询当前 Run 的 complete
 - 剩余边界：真实模型天气 smoke test、跨进程恢复、写工具审批与补偿仍未完成。
 - 文档与契约：同步 OpenSpec、`docs/ai-sdk-core-alignment.md`、场景链路和 README。
 - 重评条件：同一 Run 出现复杂多工具分支；需要跨实例或服务重启恢复；进入写工具、人工确认或可靠补偿场景；AI SDK 工具消息协议发生不兼容升级。
+
+## 后续演进（2026-08-13）
+
+后续决策 `2026-08-13-durable-run-recovery-and-acceptance.md` 复用了本记录证明过的 completed ToolResult 稳定点，并把范围从“同一进程内无工具总结恢复”扩展到“进程重启后恢复原 Run”。启动扫描仍只接受原截止时间内、全部工具均为 completed 已注册只读调用、无助手消息的窄条件，不恢复运行中工具、图片、写副作用或模型隐藏状态。
+
+同时，天气模型正文不再直接等于完成：Runtime 先根据持久化 ToolResult 生成 `AcceptanceResult`，accepted 后才原子提交助手消息和 `run.completed`，rejected 则不保存候选正文。受管工具也只在 Runtime 确定性路由命中后开放；未命中路由的普通回答保持工具集合关闭和 `acceptance=null`。因此本记录的技术选择仍成立，但“跨进程恢复未实现”属于当时状态，不再代表当前天气切片；当前准确定位为受限 R3/A3，而非通用持久工作流。

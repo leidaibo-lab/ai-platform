@@ -7,6 +7,7 @@
 - [AI 应用基础平台架构说明](./ai-structure.md)：六个架构区域、控制面/数据面、当前代码映射、可插拔契约、数据所有权、独立服务拆分蓝图，以及 V0-V4 实施对比。
 - [AI SDK Core v7 对齐说明](./ai-sdk-core-alignment.md)：说明当前采用的 Core 原语、GatewayClient 适配边界、v7 结果语义和按场景延后的能力。
 - [场景化输入到大模型交互链路](./scenario-interaction-chains.md)：明确共同底座、只读工具切片、分阶段重试与恢复边界，按对话、图片、文档、业务数据、实时事件、操作执行和批量分析拆分端到端链路，并固化当前 C1 焦点及四维验收框架。
+- [运行可靠性与结果验收](./runtime-reliability-and-acceptance.md)：用 R0-R4 与 A0-A4 分开表达可执行、可记录、可重放、可恢复、多实例协调，以及模型声明、结构校验、事实绑定、系统验收和人工确认；记录当前天气恢复点与 Scenario Runner 扩展方式。
 - [C1 对话链路深入理解指南](./c1-conversation-chain-learning-guide.md)：不依赖源码阅读，通过贯穿案例解释 C1 的参与者、状态、上下文、记忆、幂等、重试、流式交付、取消、观测和评测。
 - [C1 链路深挖问题清单](./c1-conversation-chain-deep-dive-questions.md)：以问题驱动方式追问每项能力的业务动机、约束、候选、采用/适配/自研边界、验证证据和重评条件。
 - [C1 ChainTrace 运维说明](./c1-chaintrace-operations.md)：保留为触发 TODO 后的 Phoenix + PostgreSQL 启用手册，说明认证、Runtime OTLP 配置、健康检查、备份和升级回滚边界；当前日常启动不执行。

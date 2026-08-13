@@ -59,7 +59,7 @@ export function createToolRegistry(definitions = []) {
     },
 
     /**
-     * 按注册顺序匹配需要确定性执行的工具；未命中时继续由模型自动选择。
+     * 按注册顺序匹配需要确定性执行的工具；未命中时由 Runtime 保持当前工具集合关闭。
      *
      * @param {{message: string}} input - 当前 Run 的原始用户输入。
      * @returns {string|null} 首步必须调用的工具名。

@@ -15,7 +15,7 @@ AI SDK 是 Agent Runtime 下游的模型与工具执行基础库，不是平台�
   -> 上游 OpenAI-compatible API
 ```
 
-平台继续拥有 Conversation、Run、Memory、Context Manifest、ToolResult、幂等、权限和交付；AI SDK 负责模型消息、结构化输出、工具消息编排和 SDK 遥测；LiteLLM 负责模型访问、路由和网关治理。
+平台继续拥有 Conversation、Run、Memory、Context Manifest、ToolResult、AcceptanceResult、恢复资格、幂等、权限和交付；AI SDK 负责模型消息、结构化输出、工具消息编排和 SDK 遥测；LiteLLM 负责模型访问、路由和网关治理。
 
 ## 采用原则
 
@@ -36,7 +36,7 @@ AI SDK 是 Agent Runtime 下游的模型与工具执行基础库，不是平台�
 | `Output.object` + Zod Standard Schema | 已采用 | MemoryDelta 同时生成 provider JSON Schema 并在 Runtime 本地解析校验；provider 不兼容时仅对 `400` 保留纯 JSON 提示降级 |
 | `tool` + Zod Standard Schema | 已采用 | Tool Registry 把服务端只读 allowlist 适配为带本地输入校验的静态 AI SDK ToolSet，执行仍由 Runtime 包装 |
 | `stopWhen` + `stepCountIs` | 已采用 | Agent 通过 `prepareCall` 按 Run 设置最多四个模型步骤；动态 `Output` 特殊路径直接向 Core 函数传入相同停止条件 |
-| `prepareStep` | 已采用 | Agent 读取 `runtimeContext`，只在天气任务首步强制 `get_weather`，ToolResult 回填后恢复 `auto` |
+| `prepareStep` | 已采用 | Runtime 先确定性命中天气任务并只开放 `get_weather`，Agent 首步强制调用；ToolResult 回填后对该受限集合恢复 `auto` |
 | `runtimeContext` + `toolsContext` | 已采用 | 前者携带安全业务 ID 和首步路由信息；后者按工具名携带经 `contextSchema` 校验的 Runtime 执行包装器，不进入模型 Prompt |
 | 每次调用 `abortSignal` + `timeout` | 已采用 | Agent 与 Core 路径都复用当前 Run 的取消信号和剩余绝对截止时间，不另建超时或重试预算 |
 | `onToolExecutionStart` | 已采用 | Connector 执行前越过整段生成尝试的自动重试边界，避免后续模型故障重复执行工具 |
@@ -76,7 +76,7 @@ GatewayClient 不把所有模型调用强制改成同一种抽象，而是按任
 
 锁定版本还有一个流错误兼容点：`AgentStreamParameters` 没有公开 `onError`，但 `ToolLoopAgent.stream()` 实现会把该选项透传给底层 `streamText`。GatewayClient 集中注入空错误处理器，避免 SDK 默认向 stderr 打印 provider 原始响应；公开错误仍由现有映射返回。真实 HTTP 测试会在升级后验证该透传行为，失效时必须重新评估适配方式。
 
-Runtime 的平台自动重试单位是一次完整生成尝试。在尚未交付文本且尚未开始工具执行时，可按统一预算重试模型瞬时故障；`onToolExecutionStart` 触发后记录 `retryBoundaryCrossed=true`，后续模型步骤失败时保留已持久化 ToolResult，并以 `retry-boundary-crossed` 停止整段循环重放。若此时尚未交付正文且 SQLite 至少存在一个 completed ToolResult，Runtime 会重新读取事实，使用 AI SDK 结构化 `tool-call` / `tool-result` ModelMessage 发起不携带 ToolSet 的总结恢复；成功和失败分别保存两段 resilience，具体边界见 [`ToolResult 持久化总结恢复`](./decisions/2026-07-31-tool-result-summary-recovery.md)。
+Runtime 的平台自动重试单位是一次完整生成尝试。在尚未交付文本且尚未开始工具执行时，可按统一预算重试模型瞬时故障；`onToolExecutionStart` 触发后记录 `retryBoundaryCrossed=true`，后续模型步骤失败时保留已持久化 ToolResult，并以 `retry-boundary-crossed` 停止整段循环重放。若此时尚未向渠道交付正文且 SQLite 至少存在一个 completed ToolResult，Runtime 会重新读取事实，使用 AI SDK 结构化 `tool-call` / `tool-result` ModelMessage 发起不携带 ToolSet 的总结恢复。受管天气正文在验收前暂存，因此模型内部已经产生候选增量也不等于 `outputStarted` 的渠道交付。服务重启后，Runtime 还可在原绝对截止时间内从同一稳定点恢复原 Run；该能力不恢复模型隐藏状态，也不重放 Connector。具体边界见 [`ToolResult 持久化总结恢复`](./decisions/2026-07-31-tool-result-summary-recovery.md)和[`首期可恢复执行与独立结果验收`](./decisions/2026-08-13-durable-run-recovery-and-acceptance.md)。
 
 ## 结构化输出边界
 
@@ -107,7 +107,7 @@ MemoryDelta 仍由 Runtime 定义数据语义、字段归属、来源约束和 r
 | 图片生成 | `generateImage` | C2 首个开发切片已采用 | 已经 GatewayClient、LiteLLM、单次尝试和本地 ImageAssetStore 跑通 fake 回归与一次 `gpt-image-2` 真实 happy-path；内容审核、成本、真实异常矩阵和尺寸归一化完成前不得宣称生产可用 |
 | 语音与转写 | speech/transcription APIs | 不属于当前切片 | 渠道需要音频输入输出，且文件、隐私和时延边界已定义 |
 | Realtime | Realtime 能力 | 不属于当前切片 | C5 需要低延迟双向音频或事件会话，不复用当前 POST SSE 硬承载 |
-| 测试工具 | Mock model/provider | 视复杂度采用 | 现有依赖注入和 fake LiteLLM 无法覆盖 provider 行为时 |
+| 测试工具 | 固定行为模型 + Model Port Adapter | 已采用 | Runtime 进程故障、恢复和验收走版本化 Scenario Runner；脚本结果只算执行回归，不算真实模型准确率 |
 | DevTools | AI SDK DevTools | 仅本地诊断候选 | 不写入生产主链，不替代 ChainTrace、Run 事实或正式评测 |
 
 ## 明确不对齐的做法
@@ -127,7 +127,7 @@ npm test
 openspec validate --specs --strict
 ```
 
-Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 schema 正反例校验、可复用 `ToolLoopAgent` 的动态 call options、真实两步工具调用、结构化工具请求回退 Core、首步强制路由、v7 结果字段、流错误和平台重试边界，以及工具开始后禁止整段重放、从 SQLite ToolResult 进行无工具恢复和恢复失败保留双段证据的 Runtime 集成回归。Runtime 测试额外覆盖恢复阶段继续通过原文本回调交付且只落一条助手消息；工具测试覆盖天气输入、默认值和 `contextSchema` 正反例校验。图片生成已用 `gpt-image-2` 完成一次真实 happy-path：请求 `1024x1024` 实际返回 `1254x1254` PNG，usage 只有生成张数而无 token/cost，因此 GatewayClient 保留请求尺寸白名单，资产层以实际返回尺寸为权威值。真实上游对话、天气、图片取消/超时/错误、内容安全与成本仍需分别执行并记录，不能由 fake LiteLLM 或单个成功样本替代。
+Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 schema 正反例校验、可复用 `ToolLoopAgent` 的动态 call options、真实两步工具调用、结构化工具请求回退 Core、首步强制路由、v7 结果字段、流错误和平台重试边界，以及工具开始后禁止整段重放、从 SQLite ToolResult 进行无工具恢复和恢复失败保留双段证据的 Runtime 集成回归。Runtime 测试额外覆盖受管工具只在确定性命中时开放、验收前正文暂存、缺少 ToolResult 拒绝、恢复交付和单一助手消息；进程级场景覆盖 ToolResult 后退出、重启恢复、Connector 不重放、accepted/rejected AcceptanceResult。固定行为模型只证明 Runtime、SQLite 和判分链路；真实模式必须显式固定模型别名并记录实际模型、Prompt/fixture 版本、token 和延迟，样本不足 30 只作观察。图片生成已用 `gpt-image-2` 完成一次真实 happy-path，但真实天气质量、图片取消/超时/错误、内容安全与成本仍需分别执行并记录。
 
 ## 官方资料
 

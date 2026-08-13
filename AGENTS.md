@@ -17,7 +17,7 @@
 
 当前项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。模型网关仍是平台内部区域，不得用 `ai-platform` 代替模型网关领域名称。
 
-当前代码以 V0.6 会话与上下文基线为主体，并落地 V1 首个只读工具切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、AI SDK Core 有界多步工具调用与 `Output.object` 结构化输出、Open-Meteo 天气 Connector、ToolResult 事实、默认关闭的 C1 ChainTrace OpenTelemetry 旁路与已选定的 Phoenix 后端，以及 OpenSpec/docs/回归评测的最小治理。正式实例、真实 Runtime Trace、真实模型天气 smoke test 和完整 C4 业务数据能力当前仍是触发式 TODO 或未完成边界，不得写成已完成运行态能力。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
+当前代码以 V0.6 会话与上下文基线为主体，并落地 V1 首个只读工具切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、AI SDK Core 有界多步工具调用与 `Output.object` 结构化输出、Open-Meteo 天气 Connector、ToolResult 事实、completed 只读 ToolResult 后的受限进程重启恢复、天气 AcceptanceResult、默认关闭的 C1 ChainTrace OpenTelemetry 旁路与已选定的 Phoenix 后端，以及 OpenSpec/docs/回归评测的最小治理。普通 C1 当前为 R2/A0，天气确定性路由切片为受限 R3/A3，C2 图片生成开发切片为 R2/A2；正式实例、真实 Runtime Trace、真实模型天气质量、多实例协调和完整 C4 业务数据能力当前仍是触发式 TODO 或未完成边界，不得写成已完成运行态能力。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
@@ -49,6 +49,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `docs/README.md`：项目文档索引。
 - `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。
 - `docs/ai-sdk-core-alignment.md`：AI SDK Core v7 当前采用、兼容、延后和不采用的 API 边界。
+- `docs/runtime-reliability-and-acceptance.md`：R0-R4 执行可靠性、A0-A4 结果可信度、当前场景定位和扩展模板。
 - `docs/scenario-interaction-chains.md`：定义共同底座与场景能力边界，按输入场景拆分业务链路；当前聚焦 C1 功能可用和确定性回归，ChainTrace 运行态验收按触发条件恢复。
 - `docs/solution-selection-governance.md`：方案发现、成熟能力复用、`采用 / 适配 / 自研` 决策门禁、完成定义和存量能力审计规则。
 - `docs/decisions/`：保存可追溯的方案决策记录；新记录从 `docs/decisions/TEMPLATE.md` 创建，保留采用理由、未采用理由和重评条件。
@@ -106,8 +107,9 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、JSON Run、POST SSE 模型文本流、会话事件流、静态页面和错误返回。
 - `demo/index.html`：浏览器多会话交互页面。浏览器只提交当前输入和幂等标识，通过 POST SSE 增量渲染模型文本，不保存会话事实源，也不直接接触上游真实 key。
 - `src/config/env.mjs`：Demo Server、runtime 和 gateway client 的配置加载入口。
-- `src/storage/conversation-store.mjs`：SQLite 会话事实源，负责会话、消息、Run、MemoryDelta、版本和事件日志。
-- `src/runtime/chat-runtime.mjs`：Session/Run 应用服务，负责先落消息、上下文规划、模型调用、文本增量透传、最终结果落库、幂等重放和关闭会话。
+- `src/storage/conversation-store.mjs`：SQLite 会话事实源，负责会话、消息、Run、ToolResult、AcceptanceResult、MemoryDelta、版本和事件日志。
+- `src/runtime/chat-runtime.mjs`：Session/Run 应用服务，负责先落消息、上下文规划、确定性工具开放、模型调用、受限重启恢复、结果验收、文本交付、最终结果落库、幂等重放和关闭会话。
+- `src/runtime/result-acceptance.mjs`：独立结果验收 Registry；当前天气策略根据持久化 ToolResult 检查地点、数据时间、来源和结果事实。
 - `src/runtime/context-planner.mjs`：按优先级和 token 预算选择 active 记忆、相关 Episode 与最近消息，并输出 Context Manifest。
 - `src/runtime/memory-manager.mjs`：结构化记忆提取、高低水位压缩、MemoryDelta 校验和 memoryVersion 乐观锁。
 - `src/runtime/conversation-coordinator.mjs`：按 conversationId 串行同一进程内的 Run。
@@ -124,3 +126,4 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `.agents/skills/company-public/skill-governance/scripts/validate-skills.mjs`：Skill 目录与 frontmatter 校验脚本。
 - `.agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eval.mjs`：100 轮上下文记忆确定性评测入口。
 - `.agents/skills/docs/context-memory-evaluation/assets/fixtures/`：上下文记忆评测的对话事件、标准答案和指标数据。
+- `src/evaluation/`、`scenarios/runtime/`：固定行为模型、进程故障注入、真实模型模式和独立场景验收的共用 Runner 与版本化资产。

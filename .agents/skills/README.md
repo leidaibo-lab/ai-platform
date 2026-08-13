@@ -30,7 +30,7 @@
 
 | Skill | 入口 | 适用场景 |
 | --- | --- | --- |
-| docs-context-memory-evaluation | `docs/context-memory-evaluation/SKILL.md` | 上下文记忆 fixture 设计、确定性或真实模型评测、指标对比和回归沉淀 |
+| docs-context-memory-evaluation | `docs/context-memory-evaluation/SKILL.md` | 上下文记忆 fixture 设计、`outputSchema` 确定性链路、真实模型评测、指标对比和回归沉淀 |
 
 ## 更新要求
 

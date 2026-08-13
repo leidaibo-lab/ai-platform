@@ -23,6 +23,7 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-08-13 | [首期可恢复执行与独立结果验收](./2026-08-13-durable-run-recovery-and-acceptance.md) | 接受 | 复用 SQLite Run + ToolCall 恢复 completed 只读 ToolResult 后的最终总结，并以持久化 AcceptanceResult 阻断缺少事实证据的天气回答；复杂生命周期再重评成熟引擎 |
 | 2026-08-02 | [Runtime 使用 LiteLLM Virtual Key 的模型映射边界](./2026-08-02-runtime-virtual-key-mapping.md) | 接受 | 运维预配受限 virtual key，Runtime 只消费最小权限 key；模型目录、计数、生成和 spend 使用同一身份 |
 | 2026-08-01 | [LiteLLM 网关治理专项 PoC](./2026-08-01-litellm-governance-poc.md) | 接受 | 固定 LiteLLM `1.89.1` + 独立 PostgreSQL 已验证 virtual key、预算硬拒绝、真实 spend 与 team 累计；Runtime 不重复实现网关预算和限流 |
 | 2026-07-31 | [C2 图片理解与生成能力边界](./2026-07-31-c2-image-understanding-and-generation-boundary.md) | 接受 | C1 保持会话入口，C2 统一承载图片理解与生成并复用 `image_asset`，但使用独立操作契约；具体图片模型、存储与审核方案继续通过 PoC 选型 |

@@ -160,6 +160,8 @@ export function createConversationStore({ databasePath }) {
       sourceRunId = null,
       recoveryMode = null,
       operation = "conversation.chat",
+      deadlineAt = null,
+      chainTraceId = null,
     }) {
       // Run、用户消息、序号和事件必须在同一事务创建。
       return withTransaction(database, () => {
@@ -189,10 +191,22 @@ export function createConversationStore({ databasePath }) {
           .prepare(
             `INSERT INTO runs (
               id, conversation_id, request_id, source_run_id, recovery_mode,
-              operation, status, model, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+              operation, status, model, deadline_at, chain_trace_id, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
           )
-          .run(runId, conversationId, requestId, sourceRunId, recoveryMode, operation, model, now, now);
+          .run(
+            runId,
+            conversationId,
+            requestId,
+            sourceRunId,
+            recoveryMode,
+            operation,
+            model,
+            normalizeIsoTimestamp(deadlineAt),
+            nullableString(chainTraceId),
+            now,
+            now,
+          );
         database
           .prepare(
             `INSERT INTO messages (
@@ -309,8 +323,19 @@ export function createConversationStore({ databasePath }) {
       return listToolCallsForRun(database, runId);
     },
 
+    /** 返回全部遗留 running Run 及其消息、工具和验收事实，供启动恢复分类。 */
+    listRunningRuns() {
+      return database
+        .prepare("SELECT * FROM runs WHERE status = 'running' ORDER BY created_at ASC, rowid ASC")
+        .all()
+        .map(
+          /** 将每个遗留 Run 组合成恢复器可直接判定的完整事实。 */
+          (run) => buildRunResult(database, run, false),
+        );
+    },
+
     /** 在同一事务中写入助手消息、usage、Context Manifest、韧性证据并完成 Run。 */
-    completeRun({ runId, content, displayContent, usage, contextManifest, model, resilience }) {
+    completeRun({ runId, content, displayContent, usage, contextManifest, model, resilience, acceptance = null }) {
       // 助手消息和完成状态必须在同一事务提交。
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
@@ -320,6 +345,7 @@ export function createConversationStore({ databasePath }) {
         }
 
         const conversation = getConversationOrThrow(database, run.conversation_id);
+        if (acceptance) persistAcceptanceResult(database, run, acceptance, "accepted");
         const messageId = randomUUID();
         const seq = Number(conversation.next_seq) + 1;
         const now = new Date().toISOString();
@@ -455,9 +481,49 @@ export function createConversationStore({ databasePath }) {
         if (run.status !== "running") return buildRunResult(database, run, false);
         const now = new Date().toISOString();
         database
-          .prepare("UPDATE runs SET status = 'failed', error = ?, resilience_json = ?, updated_at = ? WHERE id = ?")
-          .run(String(error?.message || error || "Run failed"), jsonOrNull(error?.resilience), now, runId);
-        insertEvent(database, run.conversation_id, "run.failed", { runId });
+          .prepare("UPDATE runs SET status = 'failed', error = ?, error_code = ?, resilience_json = ?, updated_at = ? WHERE id = ?")
+          .run(
+            String(error?.message || error || "Run failed"),
+            readErrorCode(error),
+            jsonOrNull(error?.resilience),
+            now,
+            runId,
+          );
+        insertEvent(database, run.conversation_id, "run.failed", { runId, code: readErrorCode(error) });
+        return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
+      });
+    },
+
+    /** 将 rejected AcceptanceResult 与 Run 失败状态原子提交，不保存模型候选正文。 */
+    rejectRun({ runId, acceptance, error, resilience = null }) {
+      return withTransaction(database, () => {
+        const run = getRunOrThrow(database, runId);
+        if (run.status !== "running") return buildRunResult(database, run, false);
+        persistAcceptanceResult(database, run, acceptance, "rejected");
+        const now = new Date().toISOString();
+        database
+          .prepare(
+            `UPDATE runs
+             SET status = 'failed', error = ?, error_code = ?, resilience_json = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            String(error?.message || error || "Run result was rejected"),
+            readErrorCode(error) || "result_acceptance_rejected",
+            jsonOrNull(resilience || error?.resilience),
+            now,
+            runId,
+          );
+        insertEvent(database, run.conversation_id, "acceptance.rejected", {
+          runId,
+          policy: acceptance.policy,
+          policyVersion: acceptance.policyVersion,
+          reasonCodes: acceptance.reasonCodes,
+        });
+        insertEvent(database, run.conversation_id, "run.failed", {
+          runId,
+          code: readErrorCode(error) || "result_acceptance_rejected",
+        });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
     },
@@ -761,6 +827,9 @@ function migrate(database) {
       context_manifest_json TEXT,
       resilience_json TEXT,
       error TEXT,
+      error_code TEXT,
+      deadline_at TEXT,
+      chain_trace_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(conversation_id, request_id)
@@ -848,6 +917,16 @@ function migrate(database) {
       UNIQUE(run_id, tool_call_id)
     );
       CREATE INDEX IF NOT EXISTS tool_calls_run_idx ON tool_calls(run_id, started_at);
+      CREATE TABLE IF NOT EXISTS acceptance_results (
+      run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      policy TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('accepted', 'rejected')),
+      reason_codes_json TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL
+    );
       CREATE TABLE IF NOT EXISTS image_assets (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -881,6 +960,9 @@ function migrate(database) {
     ensureColumn(database, "runs", "source_run_id", "TEXT REFERENCES runs(id) ON DELETE SET NULL");
     ensureColumn(database, "runs", "recovery_mode", "TEXT");
     ensureColumn(database, "runs", "operation", "TEXT NOT NULL DEFAULT 'conversation.chat'");
+    ensureColumn(database, "runs", "error_code", "TEXT");
+    ensureColumn(database, "runs", "deadline_at", "TEXT");
+    ensureColumn(database, "runs", "chain_trace_id", "TEXT");
     database.exec("CREATE INDEX IF NOT EXISTS conversations_archive_idx ON conversations(archived_at, updated_at DESC)");
   } finally {
     database.exec("PRAGMA foreign_keys = ON");
@@ -1041,6 +1123,7 @@ function buildRunResult(database, run, replayed) {
     assistantMessage,
     toolCalls: listToolCallsForRun(database, run.id),
     artifacts: listImageAssetsForRun(database, run.id),
+    acceptance: getAcceptanceForRun(database, run.id),
     replayed,
   };
 }
@@ -1051,7 +1134,14 @@ function mapRunWithToolCalls(database, row) {
     ...mapRunRow(row),
     toolCalls: listToolCallsForRun(database, row.id),
     artifacts: listImageAssetsForRun(database, row.id),
+    acceptance: getAcceptanceForRun(database, row.id),
   };
+}
+
+/** 返回指定 Run 的系统验收事实；普通未配置策略的 Run 返回 null。 */
+function getAcceptanceForRun(database, runId) {
+  const row = database.prepare("SELECT * FROM acceptance_results WHERE run_id = ?").get(runId);
+  return row ? mapAcceptanceResultRow(row) : null;
 }
 
 /** 查询并映射一个 Run 的全部工具调用。 */
@@ -1102,6 +1192,68 @@ function buildConversationTitle(value) {
 /** 将可空对象序列化为数据库 JSON 文本。 */
 function jsonOrNull(value) {
   return value == null ? null : JSON.stringify(value);
+}
+
+/** 将可选时间规范为 ISO 8601；无效值不进入可恢复执行事实。 */
+function normalizeIsoTimestamp(value) {
+  if (value == null || value === "") return null;
+  const timestamp = typeof value === "number" ? value : Date.parse(String(value));
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+/** 将可选标识去空后保存为字符串或 null。 */
+function nullableString(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+/** 从 Runtime 公开错误或普通错误读取稳定分类代码。 */
+function readErrorCode(error) {
+  return nullableString(error?.payload?.code || error?.code);
+}
+
+/** 校验并持久化一个与 Run 一对一的终态 AcceptanceResult。 */
+function persistAcceptanceResult(database, run, acceptance, expectedStatus) {
+  if (!acceptance || acceptance.status !== expectedStatus) {
+    throw new ConversationStoreError("Acceptance result status is invalid", 500, "invalid_acceptance_result");
+  }
+  if (!acceptance.policy || !acceptance.policyVersion || !Array.isArray(acceptance.reasonCodes)) {
+    throw new ConversationStoreError("Acceptance result is incomplete", 500, "invalid_acceptance_result");
+  }
+  const existing = database.prepare("SELECT * FROM acceptance_results WHERE run_id = ?").get(run.id);
+  if (existing) {
+    if (existing.status !== expectedStatus || existing.policy_version !== acceptance.policyVersion) {
+      throw new ConversationStoreError("Acceptance result conflicts with existing fact", 409, "acceptance_result_conflict");
+    }
+    return mapAcceptanceResultRow(existing);
+  }
+  const evaluatedAt = normalizeIsoTimestamp(acceptance.evaluatedAt) || new Date().toISOString();
+  database
+    .prepare(
+      `INSERT INTO acceptance_results (
+        run_id, conversation_id, policy, policy_version, status,
+        reason_codes_json, evidence_json, evaluated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      run.id,
+      run.conversation_id,
+      String(acceptance.policy),
+      String(acceptance.policyVersion),
+      expectedStatus,
+      JSON.stringify(acceptance.reasonCodes),
+      JSON.stringify(acceptance.evidence || {}),
+      evaluatedAt,
+    );
+  if (expectedStatus === "accepted") {
+    insertEvent(database, run.conversation_id, "acceptance.accepted", {
+      runId: run.id,
+      policy: acceptance.policy,
+      policyVersion: acceptance.policyVersion,
+      reasonCodes: acceptance.reasonCodes,
+    });
+  }
+  return mapAcceptanceResultRow(database.prepare("SELECT * FROM acceptance_results WHERE run_id = ?").get(run.id));
 }
 
 /** 安全解析数据库 JSON 字段，异常时返回回退值。 */
@@ -1168,8 +1320,23 @@ function mapRunRow(row) {
     contextManifest: parseJson(row.context_manifest_json),
     resilience: parseJson(row.resilience_json),
     error: row.error,
+    errorCode: row.error_code || null,
+    deadlineAt: row.deadline_at || null,
+    chainTraceId: row.chain_trace_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+/** 将 acceptance_results 行映射为不包含模型候选正文的公开验收事实。 */
+function mapAcceptanceResultRow(row) {
+  return {
+    policy: row.policy,
+    policyVersion: row.policy_version,
+    status: row.status,
+    reasonCodes: parseJson(row.reason_codes_json, []),
+    evidence: parseJson(row.evidence_json, {}),
+    evaluatedAt: row.evaluated_at,
   };
 }
 

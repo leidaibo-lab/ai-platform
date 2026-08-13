@@ -91,8 +91,9 @@ async function testScenarioChainsKeepCurrentFocus() {
 
   assert.match(content, /共同底座是七条场景链路的必要条件，但不是充分条件/);
   assert.match(content, /重试是共同底座的横切稳定性能力/);
-  assert.match(content, /服务端工具 allowlist 和有界只读工具循环/);
-  assert.match(content, /C1 渠道可按模型决策调用服务端 `get_weather`/);
+  assert.match(content, /服务端工具 allowlist/);
+  assert.match(content, /Runtime 只在明确地点的今明日天气命中确定性路由时向模型开放 `get_weather`/);
+  assert.match(content, /A3 天气候选先提交验收终态再释放正文，释放失败不反向改写 Run/);
   assert.match(content, /Open-Meteo 查询共享 Run 截止时间和取消信号/);
   assert.match(content, /不等于任何失败都从浏览器输入开始完整重跑/);
   assert.match(content, /默认 `maxAttempts: 3`，即首次调用加两次重试/);
@@ -105,6 +106,7 @@ async function testScenarioChainsKeepCurrentFocus() {
   assert.match(content, /这不代表 C2-C7 已经可用/);
   assert.match(content, /正式实例上的真实 Runtime JSON\/SSE Trace 尚未验收/);
   assert.doesNotMatch(content, /V0\.6 已跑通 Demo 和正式 ChainTrace/);
+  assert.doesNotMatch(content, /C1 渠道可按模型决策调用服务端 `get_weather`/);
   assert.doesNotMatch(content, /未来只读 Connector/);
   assert.doesNotMatch(content, /未实现真实工具循环和人工确认/);
   for (const label of SCENARIO_CHAIN_LABELS) {

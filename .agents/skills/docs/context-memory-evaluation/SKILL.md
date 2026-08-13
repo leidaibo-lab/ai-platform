@@ -4,7 +4,7 @@ description: "上下文记忆评测场景的创建、执行和回归治理。用
 metadata:
   pattern: "pipeline"
   author: "ai-platform"
-  version: "1.1.0"
+  version: "1.1.1"
 ---
 
 # 上下文记忆评测
@@ -42,7 +42,7 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
   --fixture .agents/skills/docs/context-memory-evaluation/assets/fixtures/message-queue-correction-100.json
 ```
 
-runner 只读取 fixture、驱动 Runtime 和执行通用指标，不得包含具体业务场景。fixture 负责声明轮次事件、MemoryDelta、隐藏探针和指标。该评测使用内存 SQLite 和 fixture Gateway，只验证 Runtime、Reducer、Planner、checkpoint 和判分链路。
+runner 只读取 fixture、驱动 Runtime 和执行通用指标，不得包含具体业务场景。fixture 负责声明轮次事件、MemoryDelta、隐藏探针和指标。fixture Gateway 按当前 `outputSchema -> output` 契约模拟结构化提取；该评测使用内存 SQLite，只验证 Runtime、Reducer、Planner、checkpoint 和判分链路。
 
 ## 真实模型评测
 

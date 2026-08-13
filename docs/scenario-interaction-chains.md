@@ -37,17 +37,17 @@
   -> 上下文装箱 / Token 预算
   -> GatewayClient / AI SDK / LiteLLM / 上游模型
        -> [按需] Runtime 工具 allowlist / 只读 Connector / ToolResult 回填
-  -> 结果校验 / 错误分类 / 状态交付
+  -> 结果校验 / 独立 AcceptanceResult / 错误分类 / 状态交付
   -> 准确度 / 实时性 / 稳定性 / Token 观测
 ```
 
 | 能力类型 | 共同底座负责 | 场景链路仍需补齐 |
 | --- | --- | --- |
 | 输入 | 统一身份、基础校验、`requestId`、`conversationId` | 媒体、文档、业务数据、事件和批量输入的专属治理 |
-| 执行 | Agent Runtime、Run 状态、幂等、模型调用边界、服务端工具 allowlist 和有界只读工具循环 | 各领域 Connector、检索、写操作确认、事件消费和异步任务 |
+| 执行 | Agent Runtime、Run 状态、幂等、模型调用边界、服务端工具 allowlist，以及 completed 只读 ToolResult 后的受限恢复点 | 各领域 Connector、检索、写操作确认、事件消费、异步任务和多实例协调 |
 | 上下文 | Context Planner、结构化记忆、Token 预算，以及当前 Run 内 ToolResult 回填 | 跨 Run 引用证据、业务结果投影、事件富化结果和分片结果的装箱策略 |
-| 输出 | 统一错误、结果状态、工具阶段事实和基础交付 | 逐图错误、文档引用、业务口径、执行回读和批量覆盖率 |
-| 质量 | 统一 trace 字段和四维指标框架 | 每个场景独立的 fixture、基线、阈值和失败判定 |
+| 输出 | 统一错误、结果状态、工具阶段事实、可空 `AcceptanceResult` 和基础交付 | 逐图错误、文档引用、业务口径、执行回读和批量覆盖率 |
+| 质量 | 统一 trace 字段、R0-R4 执行可靠性、A0-A4 结果可信度和四维指标框架 | 每个场景独立的 fixture、验收策略、基线、阈值和失败判定 |
 
 因此，“输入被拼入 Prompt 且模型返回内容”不能作为一个场景完成的定义。只有场景专属节点和四维验收证据同时具备，才可以声明该场景达到基础可用。
 
@@ -101,8 +101,9 @@
 | Token Counter | `[当前]` LiteLLM 计数失败后使用本地估算 | 属于可降级优化，不持续重试并阻断主回答 |
 | Memory Manager | `[当前]` `memoryVersion` 冲突后重读并重算，最多尝试三次 | 只重算尚未压缩的连续区间，不回滚原始消息或主 Run |
 | 模型生成 | `[当前]` AI SDK `maxRetries: 0`，平台统一重试执行器拥有唯一尝试预算并将证据写入 Run | 默认 `maxAttempts: 3`，即首次调用加两次重试；只处理瞬时网络错误、408、429、500、502、503、504，并遵守 `Retry-After` |
-| 流式交付 | `[当前]` `POST .../runs/stream` 通过 SSE 交付 AI SDK 文本增量；独立事件流按 SQLite 游标同步已落库事实 | 首个有效文本增量前可重试模型；开始输出后不静默重生成。浏览器断线后查询 Run 最终状态，不要求 Token 级断点续传 |
-| 当前只读 Connector | `[当前]` Open-Meteo 查询共享 Run 截止时间和取消信号；失败保存安全 ToolResult 并回填模型 | 不自动重试 Connector；工具后模型瞬时失败且尚未输出时，从 SQLite ToolResult 发起无工具总结恢复；幂等重放和恢复均不再次访问外部服务 |
+| 流式交付 | `[当前]` `POST .../runs/stream` 通过 SSE 交付 AI SDK 文本增量；独立事件流按 SQLite 游标同步已落库事实 | 普通回答首个有效增量前可重试模型，开始输出后不静默重生成；A3 天气候选先提交验收终态再释放正文，释放失败不反向改写 Run。浏览器断线后查询最终状态，不要求 Token 级断点续传 |
+| 当前只读 Connector | `[当前]` Open-Meteo 查询共享 Run 截止时间和取消信号；失败保存安全 ToolResult 并回填模型 | 不自动重试 Connector；工具后模型失败且尚未向渠道交付正文时，从 SQLite ToolResult 发起无工具总结恢复；幂等重放和恢复均不再次访问外部服务 |
+| 进程重启恢复 | `[当前]` Demo Server 启动前扫描遗留 `running` Run | 只恢复原截止时间内、无助手消息且全部工具均为 completed 已注册只读调用的最终总结；其他状态明确失败，不重放 Connector、图片或未知副作用 |
 | 未来写操作 | `[目标]` 尚未实现 | 必须具备业务幂等键、结果回读和不确定状态处理；未知结果不得自动重放 |
 
 ### C1 当前模型重试策略
@@ -113,10 +114,10 @@ maxRetries: 2
 totalDeadline: 120s
 backoff: exponential + jitter
 retryBoundary: before-first-valid-output
-durability: one Run + one final assistant message
+durability: ordinary C1 R2; weather checkpoint restricted R3
 ```
 
-总时间预算覆盖接入、排队、上下文规划、所有模型尝试、持久化和结果交付，不能把 120 秒分别分配给每次模型尝试。Runtime、AI SDK 和 LiteLLM 只能有一层拥有主要尝试预算，防止多层重试次数相乘。模型文本增量只在内存和网络层传递，最终回答完成后一次性事务落库；C1 不逐 Token 写 SQLite，也不保存回答 checkpoint，断线时恢复 Run 最终状态而不是续传缺失 Token。
+总时间预算覆盖接入、排队、上下文规划、所有模型尝试和最终事实提交，不能把 120 秒分别分配给每次模型尝试。Runtime、AI SDK 和 LiteLLM 只能有一层拥有主要尝试预算，防止多层重试次数相乘。模型文本增量只在内存和网络层传递，最终回答完成后一次性事务落库；终态后的渠道 Delivery 独立记录失败，不反向消耗新的执行预算或改写 Run。C1 不逐 Token 写 SQLite，也不保存回答 checkpoint，断线时恢复 Run 最终状态而不是续传缺失 Token。
 
 ## 场景清单
 
@@ -125,7 +126,7 @@ durability: one Run + one final assistant message
 | C1 对话问答 | Web 文本；未来 IM、IDE、API 文本 | 连续、可纠正的自然语言回答 | V0.6 Demo 已跑通；ChainTrace 技术接入默认关闭，真实 Runtime 验收为 TODO | 保持功能回归；按触发条件恢复运行态验收 |
 | C2 图片理解与生成 | 理解：图片 URL、图片 data URL；生成：显式提示词 | 理解：图片分析、问答或结构化结果；生成：受控图片资产 | 理解输入已透传但缺少媒体治理；生成开发切片已具备单模型调用、落存、重放、取消和交付，并通过一次真实 happy-path | 补真实取消/超时/错误、内容审核与成本证据，再建设受控理解输入和多轮资产引用 |
 | C3 文档知识问答 | 文档链接、文件、知识库 | 带引用和时效说明的回答 | 当前只把 URL 当文本，不读取文档 | 跑通单一文档源的解析、检索、引用 |
-| C4 业务数据查询 | 业务 API、数据库、MCP、搜索 | 基于实时业务事实的可验证回答 | 已通过 C1 渠道跑通 Open-Meteo 只读天气的确定性工具闭环；企业业务数据仍未实现 | 补真实模型天气验收、追问复用证据和更多业务 Connector 的选型 |
+| C4 业务数据查询 | 业务 API、数据库、MCP、搜索 | 基于实时业务事实的可验证回答 | 已通过 C1 渠道跑通 Open-Meteo 确定性只读工具、受限重启恢复和天气 A3 验收；企业业务数据仍未实现 | 补真实模型天气质量、追问复用证据和更多业务 Connector 的选型 |
 | C5 实时事件处理 | Webhook、IM 事件、消息队列、告警 | 分类、摘要、建议或及时通知 | 未实现；当前 SSE 仅用于模型文本交付和会话事实同步 | 跑通单一事件源的去重、富化和通知 |
 | C6 操作执行 | 用户指令、审批动作、Agent 计划 | 可确认、可审计、可验证的业务操作 | 已有只读工具循环，但写操作、人工确认和结果回读未实现 | 先补权限、预览、业务幂等和人工确认，再增加一项低风险写操作 |
 | C7 批量分析 | 多文件、表格、历史记录、离线任务 | 完整报告、清单或结构化结果集 | 未实现 | 建立可分片、可恢复、可控预算的异步任务 |
@@ -140,12 +141,13 @@ durability: one Run + one final assistant message
 
 | 范围 | 当前已有基础 | C1 仍需补齐 |
 | --- | --- | --- |
-| 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行；标题与独立归档事实；恢复 Run 来源关系 | 把跨进程并发与更多异常恢复结果纳入链路证据 |
+| 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行；标题与独立归档事实；completed 只读 ToolResult 后可在服务重启时恢复原 Run | 多实例 lease/fencing、运行中工具、图片、写副作用与更多稳定点仍未覆盖 |
 | 上下文与记忆 | 结构化记忆、Context Planner、Context Manifest、token 高低水位 | 用真实模型验证纠正、实体隔离、任务状态和来源追溯 |
-| 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通；Run 可选择网关可见模型别名并保存实际模型与 usage | 固定评测模型、Prompt、fixture 和参数，建立可重复比较的四维基线 |
-| 只读工具 | C1 渠道可按模型决策调用服务端 `get_weather`；Runtime 校验 allowlist、持久化 ToolResult，通过 SSE 交付真实工具阶段，并可在工具后模型瞬时失败时无工具恢复总结 | 补真实模型天气验收和追问证据；该切片只证明天气工具闭环和单 Run 恢复，不代表完整 C4 业务数据或跨进程恢复能力 |
-| 结果交付 | JSON Run、POST SSE 模型文本流、助手消息最终单次落库和 SSE 多端同步；渠道支持安全 Markdown、长列表窗口、键盘与移动端基线 | 当前以功能回归和 gzip 预算为主；正式阶段耗时基线按 TODO 触发条件恢复 |
-| 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace；渠道可创建 `retry / regenerate / continue` 新 Run | 当前保持自动化回归；真实模型超时、网关错误和更复杂断连样本延期 |
+| 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通；Runtime 场景已固定 fixture、Prompt、生成参数和模型别名，并分开记录请求别名与成功响应的实际模型 | 当前 `gpt-5.6` 天气恢复单样本因上游连接超时为 `0/1 observation-only`；仍需成功样本和至少 30 个真实案例建立质量基线 |
+| 只读工具 | Runtime 只在明确地点的今明日天气命中确定性路由时向模型开放 `get_weather`；ToolResult 持久化后可在同进程故障或服务重启时无工具恢复总结 | 补真实模型天气质量和追问证据；该切片只达到受限 R3，不代表完整 C4、通用工作流或多实例接管 |
+| 结果验收 | 天气候选在交付前暂存，由 `weather-answer.v1` 根据 ToolResult 独立检查地点、数据时间、来源和结果事实；结论持久化为 AcceptanceResult | 普通 C1 仍为 A0 且 `acceptance=null`；天气规则不证明整段自然语言全部正确 |
+| 结果交付 | JSON Run、POST SSE 模型文本流、助手消息最终单次落库和 SSE 多端同步；A3 终态后的回调失败不改写执行状态，可幂等取回结果 | 尚无持久化 DeliveryAttempt/Outbox 和保证送达；当前以功能回归和 gzip 预算为主 |
+| 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace；双模式场景已覆盖进程退出恢复，并如实记录真实模型 120 秒上游连接超时 | 仍需更多网关错误、断连和成功恢复样本；单次失败不构成稳定性基线 |
 | 可观测 | 已有后端中立 `ChainTracer`、OTLP/HTTP protobuf、Phoenix 选型、部署入口、PoC 业务 ID 查询和敏感正文脱敏 | TODO：正式实例真实 JSON/SSE Run、三业务 ID 查询、隐私复核、故障隔离和四维基线 |
 
 ### C1 完整运行态验收定义（TODO）
