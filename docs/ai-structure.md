@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | 渠道与体验层 | Demo、Web、IM、IDE、API 等入口适配；输入输出格式转换 | Agent 编排、工具执行、模型供应商密钥 | `demo/index.html`、`scripts/demo-server.mjs` 的静态页面和 HTTP 接入部分 |
 | 平台控制面 | 租户、用户、应用、Agent 定义、版本发布、配置和运营入口 | 执行单次 Agent 任务、直接调用上游模型 | 尚未实现；未来的大平台属于此区域，不只是更大的 Demo |
-| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位、GatewayClient、有界只读工具循环、ToolResult 事实和单 Run 无工具总结恢复 |
+| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、结果组装、结果验收、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位、GatewayClient、有界只读工具循环、ToolResult 事实、受限重启恢复和天气 AcceptanceResult |
 | 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有只读 Tool Registry 和 Open-Meteo 天气 Connector；MCP、企业业务连接器和知识能力尚未实现 |
 | 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default` 和上游 key 收口 |
 | 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 已有默认关闭的 C1 ChainTracer + OTel 旁路、Phoenix + PostgreSQL 选型与部署入口、回归评测和治理契约；真实 Runtime Trace、审计与反馈仍未完成 |
@@ -142,6 +142,7 @@ Agent Runtime
 - Ports and Adapters：Demo、Web、IM 和 IDE 是入站 Adapter；模型网关客户端和连接器客户端是出站 Adapter；Agent Runtime 只依赖稳定端口，不依赖具体渠道、LiteLLM 或业务 API 实现。
 - Control Plane / Data Plane：平台控制面发布版本化配置，数据面按不可变版本执行，避免管理操作和高频任务执行相互耦合。
 - Registry：连接器区域通过 Tool Registry 管理工具描述和实现映射，Runtime 只按工具契约选择和调用，不维护业务连接器分支。
+- Strategy Registry：结果验收策略按工具事实注册，Runtime 只执行统一候选门禁，不把天气等领域规则写进主流程分支。
 - Event-driven Observation：治理与可观测通过统一事件旁路采集 trace、audit 和 evaluation 数据，不侵入各区域核心执行逻辑。
 - Compatibility Adapter：拆服务期间保留现有 Demo API 作为兼容 Adapter，逐步把内部调用切到新服务契约，避免页面和后端一次性迁移。
 
@@ -299,7 +300,7 @@ flowchart LR
 | --- | --- | --- |
 | `demo/src/`、`demo/index.html` | 渠道与体验层 | 保留为开发 Demo；正式平台作为另一个调用方并存 |
 | `scripts/demo-server.mjs` | 渠道 HTTP Adapter 与本地装配入口 | 渠道路由留在 adapter；Runtime 通过稳定 API 或模块接口调用 |
-| `src/runtime/chat-runtime.mjs`、`conversation-coordinator.mjs` | Agent Runtime | 稳定 Session/Run 契约后可独立为 `agent-runtime` |
+| `src/runtime/chat-runtime.mjs`、`conversation-coordinator.mjs`、`result-acceptance.mjs` | Agent Runtime | 稳定 Session/Run、恢复和验收契约后可独立为 `agent-runtime` |
 | `src/runtime/context-planner.mjs`、`memory-manager.mjs` | Agent Runtime | 上下文策略和结构化记忆保持 Runtime 所有 |
 | `src/storage/conversation-store.mjs` | Agent Runtime 数据面 | 本地 SQLite 可迁移到独立 Runtime 数据库 |
 | `src/tools/`、`src/connectors/` | 连接器与知识层 | 当前承载只读 Registry 和天气 Adapter；出现跨项目复用或独立凭据边界后可拆为 `connector-service` |
@@ -313,7 +314,7 @@ flowchart LR
 | --- | --- | --- |
 | `GET /api/gateway/status` | Demo Server | 渠道层的聚合状态接口；底层调用模型网关健康检查 |
 | `GET/POST /api/runtime/conversations` | Demo Server | Agent Runtime 的 Session API |
-| `GET /api/runtime/conversations/{id}` | Demo Server | 会话、消息、结构化记忆和版本查询 |
+| `GET /api/runtime/conversations/{id}` | Demo Server | 会话、消息、结构化记忆、版本和 `latestRun.acceptance` 查询 |
 | `PATCH /api/runtime/conversations/{id}` | Demo Server | 标题与独立归档状态更新，不改变会话生命周期 |
 | `POST /api/runtime/conversations/{id}/runs` | Demo Server | 幂等 Run API |
 | `POST /api/runtime/conversations/{id}/runs/stream` | Demo Server | POST SSE 模型文本增量和真实工具阶段；完成后返回同一 Run 的持久化最终结果 |
@@ -365,7 +366,7 @@ scripts/test-chat.sh
 | 模型别名、fallback、预算和限流策略 | 模型网关 | 平台控制面可以管理策略引用，但不直接持有 provider key |
 | Agent 提示词、工具集合、上下文策略 | 平台控制面 | 发布为不可变 `AgentDefinition`，Runtime 按版本读取 |
 | 业务 API 和 MCP 凭据引用 | 连接器与知识层 | Runtime 只传工具调用身份，不读取真实凭据 |
-| 会话、原始消息、结构化记忆、任务和确认状态 | Agent Runtime | 不写入模型网关或渠道本地存储作为事实源 |
+| 会话、原始消息、结构化记忆、ToolResult、AcceptanceResult、任务和确认状态 | Agent Runtime | 不写入模型网关或渠道本地存储作为事实源 |
 
 ## 当前能力边界
 
@@ -375,11 +376,12 @@ scripts/test-chat.sh
 - 服务端上游密钥收口和单模型别名路由。
 - 浏览器 Demo 与分层 API。
 - 文本、图片 URL、图片 data URL 和文档链接输入。
-- SQLite 持久化多会话、幂等 Run、POST SSE 模型文本流和独立的 SSE 多标签页事实同步。
+- SQLite 持久化多会话、幂等 Run、绝对截止时间、ToolResult、AcceptanceResult、POST SSE 模型文本流和独立的 SSE 多标签页事实同步。
 - 结构化 MemoryDelta、来源追溯、memoryVersion 乐观锁和最终 checkpoint。
 - Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
 - AI SDK Core v7 的 `ToolLoopAgent`、`generateText` / `streamText`、`Output.object` 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端；AI SDK 内建重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
-- 纯文本工具型对话复用 GatewayClient 生命周期内的 `ToolLoopAgent`，通过 `callOptionsSchema`、`prepareCall`、`prepareStep`、`runtimeContext` 和 `toolsContext` 提供最多四步的模型工具编排；普通调用和动态结构化输出保留 Core 函数路径。Runtime 负责只读 allowlist、ToolResult 持久化、幂等、SSE 阶段和脱敏 `runtime.tool.execute` Span；工具后模型瞬时失败且尚未输出时，从 SQLite ToolResult 构造结构化工具消息做无 ToolSet 总结恢复。Open-Meteo Connector 只负责固定端点天气读取。
+- 纯文本工具型对话复用 GatewayClient 生命周期内的 `ToolLoopAgent`，通过 `callOptionsSchema`、`prepareCall`、`prepareStep`、`runtimeContext` 和 `toolsContext` 提供最多四步的模型工具编排；Runtime 只在服务端确定性路由命中时开放对应受管工具。工具后模型失败且正文尚未交付时，可从 SQLite ToolResult 做无 ToolSet 总结恢复；Demo Server 重启后也能从 completed 已注册只读 ToolResult 继续原 Run。天气候选经独立策略验收后才交付和完成。Open-Meteo Connector 只负责固定端点天气读取。
+- 版本化 Runtime Scenario Runner、固定行为模型、进程退出故障注入和独立场景验收；确定性链路与真实模型观察分开报告。
 - 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
 - Agent Runtime 及其 GatewayClient、只读 Tool Registry、天气 Connector 和模型网关的模块边界。
 - OpenSpec、文档、回归评测和自动化架构边界检查的最小治理。
@@ -391,7 +393,7 @@ scripts/test-chat.sh
 - 私有文档解析、知识索引、RAG、引用和知识权限。
 - 多用户 virtual key、预算、RPM/TPM 限流、调用统计和多上游 fallback。
 - 多用户身份映射、跨主机数据库、统一 trace、审计和在线评测反馈闭环。
-- 跨进程或服务重启后的运行中任务恢复、通用 checkpoint、持久工作流和写副作用补偿。
+- 通用跨进程任务恢复、多实例接管、运行中工具 checkpoint、持久工作流和写副作用补偿；当前只覆盖 completed 只读 ToolResult 后最终总结的受限 R3。
 
 ## 演进路线
 
@@ -404,7 +406,7 @@ scripts/test-chat.sh
 | V0 | 本地模型代理 + Demo | 渠道与体验、模型网关 | 模型代理链路和 Demo 可用 |
 | V0.5 | 分层 Demo Runtime | Agent Runtime 模块边界、模型网关客户端 | 分层 API 稳定 |
 | V0.6 基线 | 持久化上下文 Runtime | 会话数据面、结构化记忆、Context Planner、并发和评测 | 上下文契约稳定；已选择第一个真实工具场景 |
-| V1 当前建设 | 单应用工具型 Agent | Agent Runtime、连接器与知识 | 天气只读闭环已进入代码和确定性回归；待真实模型验收、失败兜底基线和后续人工确认 |
+| V1 当前建设 | 单应用工具型 Agent | Agent Runtime、连接器与知识、结果治理 | 天气只读闭环已达到受限 R3/A3 并进入进程故障回归；待真实模型质量、多实例协调和后续人工确认 |
 | V2 | 团队级受控模型入口 | 模型网关、治理与可观测 | 多调用方身份可区分；预算、限流、路由和 fallback 可追踪 |
 | V3 | 企业知识增强服务 | 连接器与知识、Agent Runtime | 文档解析、检索、权限和引用链路稳定 |
 | V4 | AI 应用基础平台 | 平台控制面、渠道与体验、全链路治理 | 多项目复用 Runtime、连接器和模型网关；配置发布和运营闭环稳定 |

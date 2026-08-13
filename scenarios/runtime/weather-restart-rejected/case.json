@@ -1,0 +1,88 @@
+{
+  "$schema": "../schema.json",
+  "schemaVersion": "runtime-scenario.v1",
+  "id": "weather-restart-rejected",
+  "version": "1.0.0",
+  "title": "天气 ToolResult 重启恢复候选被拒绝",
+  "description": "在天气 ToolResult 持久化后退出进程，固定模型恢复时返回缺少来源的候选，验证系统拒绝且不交付正文。",
+  "tags": ["runtime", "restart-recovery", "weather", "acceptance-rejection"],
+  "supportedModes": ["deterministic"],
+  "prompt": {
+    "version": "weather-recovery-eval.v1",
+    "system": "你是 AI 应用基础平台天气场景评测助手。必须使用服务端提供的天气工具事实回答，并明确包含地点、数据时间、来源和至少一个带单位的天气结果；不得声称再次调用工具。"
+  },
+  "evaluation": {
+    "temperature": 1,
+    "maxCompletionTokens": 2000
+  },
+  "runtime": {
+    "runTimeoutMs": 120000,
+    "maxToolSteps": 4
+  },
+  "run": {
+    "title": "天气重启拒绝验收",
+    "input": {
+      "operation": "conversation.chat",
+      "requestId": "weather-restart-rejected-request-v1",
+      "clientMessageId": "weather-restart-rejected-message-v1",
+      "message": "今天深圳天气怎么样？",
+      "imageUrls": [],
+      "documentUrls": [],
+      "references": []
+    }
+  },
+  "fault": {
+    "type": "process-exit-after-tool-result",
+    "toolName": "get_weather",
+    "exitCode": 87
+  },
+  "deterministicModel": {
+    "alias": "scenario-weather-v1",
+    "actualModel": "deterministic-weather-rejected-v1"
+  },
+  "tools": [
+    {
+      "name": "get_weather",
+      "title": "实时天气",
+      "description": "查询指定地点今天或明天的实时天气与预报。",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location", "date"],
+        "properties": {
+          "location": { "type": "string" },
+          "date": { "type": "string", "enum": ["today", "tomorrow"] }
+        }
+      },
+      "requiredOnStart": true,
+      "result": {
+        "schemaVersion": "weather.v1",
+        "query": { "location": "深圳", "date": "today" },
+        "location": {
+          "name": "深圳",
+          "admin1": "广东",
+          "country": "中国",
+          "countryCode": "CN",
+          "latitude": 22.5455,
+          "longitude": 114.0683,
+          "timezone": "Asia/Shanghai"
+        },
+        "forecast": {
+          "date": "2026-08-13",
+          "condition": { "code": 2, "label": "局部多云" },
+          "temperature": { "current": 31, "apparent": 35, "min": 27, "max": 33 },
+          "precipitation": { "current": 0, "sum": 0.4, "probabilityMax": 20 },
+          "humidity": 68,
+          "windSpeedCurrent": 11,
+          "windSpeedMax": 18
+        },
+        "observedAt": "2026-08-13T10:00:00+08:00",
+        "source": {
+          "name": "Open-Meteo",
+          "retrievedAt": "2026-08-13T02:01:00.000Z"
+        }
+      }
+    }
+  ]
+}

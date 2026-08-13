@@ -94,3 +94,9 @@ v7 结果统一使用 `usage`、`stream` 和 `finalStep.response`，不再依赖
 - 剩余边界：真实模型天气 smoke test、跨进程任务恢复、C3 Embedding/Rerank、MCP 与 C6 tool approval 未接入。
 - 文档与契约：同步 `docs/ai-sdk-core-alignment.md`、README、架构/场景文档、既有天气决策和稳定 OpenSpec。
 - 重评条件：AI SDK 大版本升级；控制面开始发布可复用 AgentDefinition；LiteLLM provider 不再兼容严格结构化输出；进入 C3、C6 或多 Connector 建设。
+
+## 后续演进（2026-08-13）
+
+后续 `2026-08-13-durable-run-recovery-and-acceptance.md` 没有改变 AI SDK 与平台的所有权边界：AI SDK 继续负责受限 ToolSet 内的工具消息编排和模型生成，Runtime 继续拥有工具是否向当前 Run 开放、ToolResult、恢复资格、AcceptanceResult 和最终交付。当前只有确定性天气路由命中时才传入 `get_weather`；未命中时不再把全部受管工具以 `auto` 暴露给模型。
+
+工具后的结构化无工具总结现在既用于同进程故障，也用于服务重启后的原 Run 恢复，但只覆盖 completed 只读 ToolResult 后的窄稳定点。天气候选还必须通过 A3 领域验收才能完成；终态提交后的渠道投递失败不能反向改写 Run。当前仍没有完整 Agent transcript、运行中工具 checkpoint、多实例 lease/fencing、写操作补偿或通用 Durable Harness。

@@ -4,6 +4,7 @@ import { createResilienceContext } from "../resilience/retry-executor.mjs";
 import { ImageAssetStoreError } from "../storage/image-asset-store.mjs";
 import { normalizeContextOptions } from "./context-budget.mjs";
 import { ImageGenerationPolicyError, inspectGeneratedImage } from "./image-generation-policy.mjs";
+import { createResultAcceptanceRegistry } from "./result-acceptance.mjs";
 import {
   IMAGE_GENERATION_OPERATION,
   buildDisplayContent,
@@ -64,6 +65,7 @@ export function createChatRuntime({
   memoryManager,
   imageAssetStore,
   toolRegistry,
+  resultAcceptanceRegistry = createResultAcceptanceRegistry(),
   toolOptions = {},
   chainTracer = createNullChainTracer(),
   resilienceOptions = {},
@@ -74,6 +76,175 @@ export function createChatRuntime({
   const runTimeoutMs = normalizeRunTimeout(resilienceOptions.runTimeoutMs);
   const maxToolSteps = normalizeToolStepLimit(toolOptions.maxSteps);
   const activeRuns = new Map();
+
+  /**
+   * 扫描并收口上一个进程遗留的 running Run，只从 completed 只读 ToolResult 继续最终总结。
+   *
+   * @returns {Promise<object>} 扫描数量和每个 Run 的恢复或失败结果。
+   */
+  async function recoverInterruptedRuns() {
+    const candidates = store.listRunningRuns();
+    const outcomes = [];
+    for (const candidate of candidates) {
+      if (activeRuns.has(candidate.run.id)) {
+        outcomes.push({ runId: candidate.run.id, status: "skipped", reasonCode: "run_owned_by_current_process" });
+        continue;
+      }
+      const outcome = await coordinator.runExclusive(
+        candidate.run.conversationId,
+        /** 在会话串行边界内重新确认并恢复单个遗留 Run。 */
+        () => recoverInterruptedRun(candidate),
+      );
+      outcomes.push(outcome);
+    }
+    return {
+      scanned: candidates.length,
+      recovered: outcomes.filter(isRecoveredOutcome).length,
+      failed: outcomes.filter(isFailedRecoveryOutcome).length,
+      skipped: outcomes.filter(isSkippedRecoveryOutcome).length,
+      outcomes,
+    };
+  }
+
+  /** 从原 Run 身份、用户消息和 ToolResult 恢复一个无工具最终总结阶段。 */
+  async function recoverInterruptedRun(candidate) {
+    const eligibility = classifyRestartRecovery(candidate, registry, resultAcceptanceRegistry);
+    if (!eligibility.eligible) {
+      const error = createRestartRecoveryError(candidate.run, eligibility);
+      store.failRun(candidate.run.id, error);
+      return { runId: candidate.run.id, status: "failed", reasonCode: eligibility.reasonCode };
+    }
+
+    const run = candidate.run;
+    const deadlineAt = Date.parse(run.deadlineAt);
+    const resilienceContext = createResilienceContext({
+      traceId: run.chainTraceId,
+      requestId: run.requestId,
+      conversationId: run.conversationId,
+      runId: run.id,
+      deadlineAt,
+      stage: "run.restart-recovery",
+      lastCommittedStage: "tool-result-committed",
+      idempotencyKey: run.requestId,
+      outputStarted: false,
+      retryBoundaryCrossed: false,
+    });
+    const controller = new AbortController();
+    const activeRun = {
+      conversationId: run.conversationId,
+      controller,
+      partialText: "",
+      contextManifest: null,
+      model: run.model,
+      operation: run.operation,
+      resilienceContext,
+    };
+    activeRuns.set(run.id, activeRun);
+
+    try {
+      const referencedMessages = store.resolveMessageReferences(
+        run.conversationId,
+        candidate.userMessage.references || [],
+      );
+      let plan = await contextPlanner.plan({
+        conversationId: run.conversationId,
+        currentMessageId: candidate.userMessage.id,
+        currentContent: candidate.userMessage.content,
+        currentDisplayContent: candidate.userMessage.displayContent,
+        referencedMessages,
+        resilienceContext,
+        model: run.model,
+      });
+      if (plan.manifest.hardLimitReached) {
+        await memoryManager.compactIfNeeded(run.conversationId, {
+          force: true,
+          excludeSeq: candidate.userMessage.seq,
+          resilienceContext,
+        });
+        plan = await contextPlanner.plan({
+          conversationId: run.conversationId,
+          currentMessageId: candidate.userMessage.id,
+          currentContent: candidate.userMessage.content,
+          currentDisplayContent: candidate.userMessage.displayContent,
+          referencedMessages,
+          resilienceContext,
+          model: run.model,
+        });
+      }
+      activeRun.contextManifest = plan.manifest;
+      const recovered = await gatewayClient.chatCompletions({
+        messages: buildToolResultRecoveryMessages(plan.messages, candidate.toolCalls),
+        model: run.model,
+        maxCompletionTokens: options.reservedOutputTokens,
+        resilienceContext,
+        operation: "model.tool_result_summary",
+        abortSignal: controller.signal,
+      });
+      const candidateContent = recovered?.choices?.[0]?.message?.content || "";
+      const acceptance = resultAcceptanceRegistry.evaluate({
+        candidateContent,
+        toolCalls: candidate.toolCalls,
+      });
+      const runRecovered = acceptance?.status === "accepted";
+      const recoveryResilience = buildRestartRecoveryResilience({
+        recoveryResilience: recovered?.resilience,
+        runRecovered,
+        executionStatus: "completed",
+      });
+      if (!acceptance || acceptance.status !== "accepted") {
+        const error = createAcceptanceRejectionError(acceptance, run.model);
+        store.rejectRun({
+          runId: run.id,
+          acceptance: acceptance || createMissingAcceptanceResult(candidate.toolCalls),
+          error,
+          resilience: recoveryResilience,
+        });
+        return {
+          runId: run.id,
+          status: "failed",
+          reasonCode: "result_acceptance_rejected",
+          acceptance: acceptance || null,
+          model: recovered?.model || run.model,
+          usage: recovered?.usage || null,
+        };
+      }
+
+      const completed = store.completeRun({
+        runId: run.id,
+        content: candidateContent,
+        displayContent: candidateContent || "(空响应)",
+        usage: recovered?.usage || null,
+        contextManifest: plan.manifest,
+        model: recovered?.model || run.model,
+        resilience: recoveryResilience,
+        acceptance,
+      });
+      if (plan.manifest.highWatermarkReached) memoryManager.schedule(run.conversationId);
+      return {
+        runId: run.id,
+        status: "recovered",
+        reasonCode: "tool_result_summary_recovered",
+        acceptance: completed.acceptance,
+        model: completed.run.model,
+        usage: completed.run.usage,
+      };
+    } catch (error) {
+      const publicError = toRuntimeExecutionError(error, run.model);
+      publicError.resilience = buildRestartRecoveryResilience({
+        recoveryResilience: error?.resilience || publicError.resilience,
+        runRecovered: false,
+        executionStatus: "failed",
+      });
+      store.failRun(run.id, publicError);
+      return {
+        runId: run.id,
+        status: "failed",
+        reasonCode: publicError.payload?.code || "run_recovery_failed",
+      };
+    } finally {
+      if (activeRuns.get(run.id) === activeRun) activeRuns.delete(run.id);
+    }
+  }
 
   /**
    * 主动终止当前 Runtime 实例中的模型调用，并原子收口 Run 与可选部分消息。
@@ -106,6 +277,8 @@ export function createChatRuntime({
   }
 
   return {
+    recoverInterruptedRuns,
+
     /** 创建由 Runtime 持久化的新会话。 */
     createConversation(body = {}) {
       return store.createConversation({ title: String(body.title || "新会话").trim() || "新会话" });
@@ -196,9 +369,11 @@ export function createChatRuntime({
               sourceRunId: input.sourceRunId || null,
               recoveryMode: input.recoveryMode || null,
               operation: input.operation,
+              deadlineAt,
+              chainTraceId,
             }),
         );
-        const effectiveChainTraceId = started.run.resilience?.traceId || chainTraceId;
+        const effectiveChainTraceId = started.run.chainTraceId || started.run.resilience?.traceId || chainTraceId;
         if (started.replayed) {
           if (typeof delivery.onRunStarted === "function") {
             await delivery.onRunStarted({
@@ -240,6 +415,12 @@ export function createChatRuntime({
           conversationId,
           runId,
         });
+        const requiredToolName = registry.resolveRequiredTool({ message: input.message });
+        const runTools = requiredToolName && aiSdkTools
+          ? { [requiredToolName]: aiSdkTools[requiredToolName] }
+          : undefined;
+        const acceptanceRequired = resultAcceptanceRegistry.requiresTool(requiredToolName);
+        const pendingTextDeltas = [];
 
         /** 将已持久化工具阶段以安全元数据通知当前渠道。 */
         async function emitToolEvent(type, toolCall) {
@@ -469,12 +650,18 @@ export function createChatRuntime({
             if (abortSignal.aborted) return;
             const text = String(delta || "");
             if (text.length === 0) return;
+            if (acceptanceRequired) {
+              pendingTextDeltas.push(text);
+              return;
+            }
             activeRun.partialText += text;
             await delivery.onTextDelta(text);
           }
 
-          const toolsContext = aiSdkTools ? registry.buildAiSdkToolsContext(executeRegisteredTool) : undefined;
-          const requiredToolName = registry.resolveRequiredTool({ message: input.message });
+          const allToolsContext = runTools ? registry.buildAiSdkToolsContext(executeRegisteredTool) : undefined;
+          const toolsContext = runTools
+            ? { [requiredToolName]: allToolsContext[requiredToolName] }
+            : undefined;
           let data;
           try {
             data = await gatewayClient.chatCompletions({
@@ -483,7 +670,7 @@ export function createChatRuntime({
               maxCompletionTokens: options.reservedOutputTokens,
               resilienceContext,
               operation: "model.generate",
-              tools: aiSdkTools,
+              tools: runTools,
               toolsContext,
               requiredToolName,
               maxToolSteps,
@@ -493,6 +680,7 @@ export function createChatRuntime({
           } catch (error) {
             const completedToolCalls = store.listToolCalls(runId).filter(isCompletedToolCall);
             if (!shouldRecoverToolResultSummary(error, completedToolCalls, activeRun.partialText)) throw error;
+            pendingTextDeltas.length = 0;
             const originalResilience = error.resilience;
             data = await chainTracer.withSpan(
               "runtime.tool_result_summary.recover",
@@ -527,6 +715,24 @@ export function createChatRuntime({
             );
           }
           const assistantContent = data?.choices?.[0]?.message?.content || "";
+          const toolCalls = store.listToolCalls(runId);
+          const acceptance = resultAcceptanceRegistry.evaluate({
+            candidateContent: assistantContent,
+            toolCalls,
+          });
+          const effectiveAcceptance = acceptanceRequired && !acceptance
+            ? createMissingAcceptanceResult(toolCalls)
+            : acceptance;
+          if (effectiveAcceptance && effectiveAcceptance.status !== "accepted") {
+            const rejectionError = createAcceptanceRejectionError(effectiveAcceptance, selectedModel);
+            store.rejectRun({
+              runId,
+              acceptance: effectiveAcceptance,
+              error: rejectionError,
+              resilience: data?.resilience || null,
+            });
+            throw rejectionError;
+          }
           const completed = await chainTracer.withSpan(
             "storage.complete_run",
             traceAttributes,
@@ -540,8 +746,18 @@ export function createChatRuntime({
                 contextManifest: plan.manifest,
                 model: data?.model || selectedModel,
                 resilience: data?.resilience || null,
+                acceptance: effectiveAcceptance,
               }),
           );
+          if (effectiveAcceptance?.status === "accepted") {
+            await releaseAcceptedCandidate({
+              chainTracer,
+              traceAttributes,
+              onTextDelta: delivery.onTextDelta,
+              pendingTextDeltas,
+              candidateContent: assistantContent,
+            });
+          }
           if (plan.manifest.highWatermarkReached) memoryManager.schedule(conversationId);
 
           return {
@@ -550,7 +766,8 @@ export function createChatRuntime({
             model: completed.run.model,
             context: completed.run.contextManifest,
             resilience: completed.run.resilience,
-            toolCalls: store.listToolCalls(runId),
+            toolCalls,
+            acceptance: completed.acceptance,
             conversation: store.getConversation(conversationId),
             replayed: false,
           };
@@ -765,7 +982,7 @@ function isCompletedToolCall(toolCall) {
 /** 只允许未交付正文的工具后瞬时失败进入自动总结恢复。 */
 function shouldRecoverToolResultSummary(error, completedToolCalls, partialText) {
   if (!Array.isArray(completedToolCalls) || completedToolCalls.length === 0) return false;
-  if (String(partialText || "").length > 0 || error?.resilience?.outputStarted) return false;
+  if (String(partialText || "").length > 0) return false;
   if (error?.resilience?.retryBoundaryCrossed !== true) return false;
   return readLastFailedAttemptFromTrace(error.resilience)?.stopReason === "retry-boundary-crossed";
 }
@@ -822,6 +1039,176 @@ function attachToolResultRecoveryFailure(error, originalResilience) {
   return failure;
 }
 
+/** 区分恢复阶段是否执行完毕，以及整个 Run 是否最终被系统接受。 */
+function buildRestartRecoveryResilience({ recoveryResilience, runRecovered, executionStatus }) {
+  return {
+    recovered: Boolean(runRecovered),
+    recovery: {
+      reason: "process-restart-after-tool-result",
+      status: executionStatus === "completed" ? "completed" : "failed",
+      execution: recoveryResilience || null,
+    },
+  };
+}
+
+/**
+ * 根据持久化 Run 与 ToolCall 事实判断是否允许进程重启恢复。
+ *
+ * @param {object} candidate - Store 返回的完整 running Run 事实。
+ * @param {object} registry - 服务端工具 allowlist。
+ * @param {object} acceptanceRegistry - 结果验收策略注册表。
+ * @returns {{eligible: boolean, reasonCode: string}} 恢复资格和稳定原因码。
+ */
+function classifyRestartRecovery(candidate, registry, acceptanceRegistry) {
+  const run = candidate?.run;
+  if (!run || run.status !== "running") return ineligibleRecovery("run_not_running");
+  if (run.operation !== "conversation.chat") return ineligibleRecovery("run_operation_not_recoverable");
+  if (!candidate.userMessage || candidate.assistantMessage) return ineligibleRecovery("run_message_state_not_recoverable");
+  if (!run.deadlineAt || !Number.isFinite(Date.parse(run.deadlineAt))) {
+    return ineligibleRecovery("run_recovery_metadata_missing");
+  }
+  if (Date.parse(run.deadlineAt) <= Date.now()) return ineligibleRecovery("run_recovery_deadline_exceeded");
+  if (!run.chainTraceId || !run.model) return ineligibleRecovery("run_recovery_metadata_missing");
+  if (!Array.isArray(candidate.toolCalls) || candidate.toolCalls.length === 0) {
+    return ineligibleRecovery("run_stable_checkpoint_missing");
+  }
+  for (const toolCall of candidate.toolCalls) {
+    if (toolCall.status !== "completed" || toolCall.output == null) {
+      return ineligibleRecovery("tool_result_not_completed");
+    }
+    const definition = registry.get(toolCall.toolName);
+    if (!definition || definition.effect !== "read") return ineligibleRecovery("tool_not_safely_recoverable");
+    if (!acceptanceRegistry.requiresTool(toolCall.toolName)) {
+      return ineligibleRecovery("tool_acceptance_policy_missing");
+    }
+  }
+  return { eligible: true, reasonCode: "tool_result_checkpoint_available" };
+}
+
+/** 创建统一的不可恢复分类结果。 */
+function ineligibleRecovery(reasonCode) {
+  return { eligible: false, reasonCode };
+}
+
+/** 把遗留 Run 的不可恢复分类映射为持久化公开错误。 */
+function createRestartRecoveryError(run, eligibility) {
+  const deadlineExceeded = eligibility.reasonCode === "run_recovery_deadline_exceeded";
+  const error = new RuntimeExecutionError(
+    {
+      error: deadlineExceeded ? "运行恢复时限已耗尽" : "运行无法从当前状态恢复",
+      detail: deadlineExceeded
+        ? "服务重启时原 Run 的绝对截止时间已经耗尽。"
+        : "服务重启后没有找到可证明安全的只读稳定提交点。",
+      action: "请使用新的幂等标识重新发起请求。",
+      code: deadlineExceeded ? "run_recovery_deadline_exceeded" : "run_recovery_unavailable",
+      recoveryReasonCode: eligibility.reasonCode,
+      retryable: true,
+      model: run?.model || null,
+    },
+    deadlineExceeded ? 504 : 409,
+  );
+  error.resilience = {
+    recovered: false,
+    recovery: {
+      reason: "process-restart",
+      status: "failed",
+      stopReason: eligibility.reasonCode,
+      execution: null,
+    },
+  };
+  return error;
+}
+
+/** 将 rejected AcceptanceResult 映射为不携带模型候选正文的 Runtime 错误。 */
+function createAcceptanceRejectionError(acceptance, model) {
+  return new RuntimeExecutionError(
+    {
+      error: "模型结果未通过系统验收",
+      detail: "候选回答缺少与已持久化工具事实匹配的关键证据。",
+      action: "请稍后重试；持续失败时检查模型提示和结果验收规则。",
+      code: "result_acceptance_rejected",
+      acceptanceReasonCodes: acceptance?.reasonCodes || ["acceptance_result_missing"],
+      retryable: true,
+      model: String(model || "所选模型"),
+    },
+    502,
+  );
+}
+
+/** 为理论上缺失的验收器构造可持久化拒绝事实，避免把未验收结果写成完成。 */
+function createMissingAcceptanceResult(toolCalls) {
+  return {
+    policy: "runtime-result",
+    policyVersion: "runtime-result.v1",
+    status: "rejected",
+    reasonCodes: ["acceptance_result_missing"],
+    evidence: {
+      toolCallIds: toolCalls.map(readToolCallId).filter(Boolean),
+      toolNames: [...new Set(toolCalls.map(readToolName).filter(Boolean))],
+    },
+    evaluatedAt: new Date().toISOString(),
+  };
+}
+
+/** 验收通过后按原顺序放行暂存增量；没有增量时由 completed 事件承载最终正文。 */
+async function deliverAcceptedCandidate(onTextDelta, pendingDeltas, candidateContent) {
+  if (typeof onTextDelta !== "function") return;
+  if (pendingDeltas.length === 0 && !candidateContent) return;
+  for (const delta of pendingDeltas) await onTextDelta(delta);
+}
+
+/**
+ * 在 Run 完成事实提交后释放已验收正文；渠道回调失败只记录投递阶段，不反向改写执行终态。
+ *
+ * @param {object} input - 已验收正文和当前追踪依赖。
+ * @returns {Promise<void>}
+ */
+async function releaseAcceptedCandidate({
+  chainTracer,
+  traceAttributes,
+  onTextDelta,
+  pendingTextDeltas,
+  candidateContent,
+}) {
+  const span = chainTracer.startSpan("runtime.accepted_candidate.release", {
+    ...traceAttributes,
+    "ai.platform.run.status": "completed",
+  });
+  try {
+    await deliverAcceptedCandidate(onTextDelta, pendingTextDeltas, candidateContent);
+    span.setAttribute("ai.platform.delivery.status", "completed");
+  } catch (error) {
+    span.recordError(error, { "ai.platform.delivery.status": "failed" });
+  } finally {
+    span.end();
+  }
+}
+
+/** 返回恢复报告中的 Run ID。 */
+function readToolCallId(toolCall) {
+  return String(toolCall?.toolCallId || "");
+}
+
+/** 返回恢复报告中的稳定工具名。 */
+function readToolName(toolCall) {
+  return String(toolCall?.toolName || "");
+}
+
+/** 判断启动恢复结果已经完成原 Run。 */
+function isRecoveredOutcome(outcome) {
+  return outcome.status === "recovered";
+}
+
+/** 判断启动恢复结果已明确收口失败。 */
+function isFailedRecoveryOutcome(outcome) {
+  return outcome.status === "failed";
+}
+
+/** 判断启动恢复候选仍由当前进程拥有而被跳过。 */
+function isSkippedRecoveryOutcome(outcome) {
+  return outcome.status === "skipped";
+}
+
 /** 通过工具专属映射生成安全错误，未知实现不透传原始异常正文。 */
 function mapPublicToolError(definition, error) {
   if (typeof definition?.toPublicError === "function") {
@@ -864,6 +1251,7 @@ function replayRun(result, conversation) {
     context: result.run.contextManifest,
     resilience: result.run.resilience,
     toolCalls: result.toolCalls || [],
+    acceptance: result.acceptance || null,
     conversation,
     replayed: true,
   };
@@ -883,6 +1271,7 @@ function buildCancelledRunResponse(result, conversation) {
     context: result.run.contextManifest,
     resilience: result.run.resilience,
     toolCalls: result.toolCalls || [],
+    acceptance: result.acceptance || null,
     conversation,
     replayed: false,
   };

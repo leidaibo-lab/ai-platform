@@ -55,6 +55,7 @@ const chatRuntime = createChatRuntime({
   chainTracer,
   resilienceOptions: config.resilience,
 });
+const startupRecoveryReport = await chatRuntime.recoverInterruptedRuns();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -319,12 +320,18 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
         });
         const finalDelivery = result.cancelled ? delivery.onCancelled : delivery.onCompleted;
         if (typeof finalDelivery === "function") {
-          await chainTracer.withSpan(
-            `channel.${transport}.delivery`,
-            buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: finalStatus, scenarioId, operation }),
-            /** 把最终完成或取消载荷交给当前渠道，Span 本身不记录载荷正文。 */
-            () => finalDelivery(result),
-          );
+          try {
+            await chainTracer.withSpan(
+              `channel.${transport}.delivery`,
+              buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: finalStatus, scenarioId, operation }),
+              /** 把最终完成或取消载荷交给当前渠道，Span 本身不记录载荷正文。 */
+              () => finalDelivery(result),
+            );
+            rootSpan.setAttribute("ai.platform.delivery.status", "completed");
+          } catch {
+            // 子 Span 已记录脱敏异常；终态后的投递失败不得反向改写 Run 执行状态。
+            rootSpan.setAttribute("ai.platform.delivery.status", "failed");
+          }
         }
         return result;
       } catch (error) {
@@ -545,6 +552,7 @@ function reportShutdownError(error) {
   process.exitCode = 1;
 }
 
+reportStartupRecovery(startupRecoveryReport);
 server.listen(config.port, reportReady);
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
@@ -556,4 +564,17 @@ function reportReady() {
   console.log(`Model alias: ${gatewayClient.model}`);
   console.log(`Conversation database: ${config.storage.databasePath}`);
   console.log(`ChainTrace OTel: ${telemetryRuntime.enabled ? "enabled" : "disabled"}`);
+}
+
+/** 输出不含消息正文和 ToolResult 数据的启动恢复摘要。 */
+function reportStartupRecovery(report) {
+  if (!report || report.scanned === 0) return;
+  console.log(
+    `Runtime startup recovery: scanned=${report.scanned} recovered=${report.recovered} failed=${report.failed} skipped=${report.skipped}`,
+  );
+  for (const outcome of report.outcomes || []) {
+    console.log(
+      `Runtime startup recovery outcome: runId=${outcome.runId} status=${outcome.status} reason=${outcome.reasonCode}`,
+    );
+  }
 }

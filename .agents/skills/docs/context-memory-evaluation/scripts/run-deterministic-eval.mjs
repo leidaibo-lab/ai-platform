@@ -55,8 +55,8 @@ function createFixtureGateway(fixture) {
       return { tokens: estimateMessagesTokens(messages), source: "fixture", model: this.model };
     },
     /** 对提取请求应用 fixture delta，对隐藏探针返回 fixture 标准答案。 */
-    async chatCompletions({ messages, responseFormat }) {
-      if (responseFormat) return buildFixtureMemoryResponse(messages, fixture, this.model);
+    async chatCompletions({ messages, outputSchema }) {
+      if (outputSchema) return buildFixtureMemoryResponse(messages, fixture, this.model);
       const question = String(messages.at(-1)?.content || "");
       const memoryText = messages.filter(isSystemMessage).map(getMessageContent).join("\n");
       const hasExpectedMemory = memoryText.includes(buildMemoryMarker(fixture.probe.memory));
@@ -96,6 +96,7 @@ function buildFixtureMemoryResponse(messages, fixture, model) {
   return {
     model,
     usage: { prompt_tokens: estimateMessagesTokens(messages), completion_tokens: 80 },
+    output: delta,
     choices: [{ message: { content: JSON.stringify(delta) } }],
   };
 }
