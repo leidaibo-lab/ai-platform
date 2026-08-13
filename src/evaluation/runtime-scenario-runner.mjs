@@ -28,6 +28,8 @@ const DEFAULT_CONTEXT_OPTIONS = Object.freeze({
   lowWatermarkRatio: 0.45,
   hardWatermarkRatio: 0.9,
 });
+const SCENARIO_RUN_LEASE_TTL_MS = 5000;
+const SCENARIO_RUN_LEASE_RENEW_INTERVAL_MS = 1000;
 
 /**
  * @typedef {object} RuntimeScenarioAssembly
@@ -77,7 +79,8 @@ export async function createRuntimeScenarioAssembly({
     scenario.definition.evaluation,
   );
   const toolFixture = createScenarioToolFixture(scenario.definition.tools, { denyToolExecution });
-  const store = createConversationStore({ databasePath });
+  const storeClock = createAdjustableScenarioClock();
+  const store = createConversationStore({ databasePath, clock: storeClock.now });
   const coordinator = createConversationCoordinator();
   const contextPlanner = createContextPlanner({
     store,
@@ -100,7 +103,11 @@ export async function createRuntimeScenarioAssembly({
     memoryManager,
     toolRegistry: toolFixture.registry,
     toolOptions: { maxSteps: scenario.definition.runtime.maxToolSteps },
-    resilienceOptions: { runTimeoutMs: scenario.definition.runtime.runTimeoutMs },
+    resilienceOptions: {
+      runTimeoutMs: scenario.definition.runtime.runTimeoutMs,
+      runLeaseTtlMs: SCENARIO_RUN_LEASE_TTL_MS,
+      runLeaseRenewIntervalMs: SCENARIO_RUN_LEASE_RENEW_INTERVAL_MS,
+    },
   });
 
   return {
@@ -109,6 +116,10 @@ export async function createRuntimeScenarioAssembly({
     gatewayClient: evaluationGatewayClient,
     modelAlias: gateway.modelAlias,
     getToolExecutionCount: toolFixture.getExecutionCount,
+    /** 把 Store 时钟推进到指定持久化时间之后，用于确定性验证租约过期接管。 */
+    advanceStoreClockPast(timestamp) {
+      return storeClock.advancePast(timestamp);
+    },
     /** 关闭当前场景的 SQLite 连接。 */
     close() {
       store.close();
@@ -233,7 +244,12 @@ async function runRuntimeScenario({ rootDir, scenario, mode, modelAlias, keepArt
     const checkpoints = assembly.store.listRunningRuns();
     const checkpoint = checkpoints.length === 1 ? checkpoints[0] : null;
     const recoveryStarted = performance.now();
-    const recovery = await assembly.runtime.recoverInterruptedRuns();
+    const initialRecovery = await assembly.runtime.recoverInterruptedRuns();
+    const leaseContention = readLeaseContention(initialRecovery);
+    if (leaseContention) advancePastPersistedLeaseExpiry(assembly, leaseContention.runId);
+    const recovery = leaseContention
+      ? await assembly.runtime.recoverInterruptedRuns()
+      : initialRecovery;
     const recoveryDurationMs = performance.now() - recoveryStarted;
     const conversationId = checkpoint?.run?.conversationId || assembly.store.listConversations()[0]?.id;
     const conversation = conversationId ? assembly.runtime.getConversation(conversationId) : null;
@@ -246,6 +262,7 @@ async function runRuntimeScenario({ rootDir, scenario, mode, modelAlias, keepArt
         durationMs: roundMilliseconds(crash.durationMs),
       },
       checkpoint: checkpoint ? toCheckpointEvidence(checkpoint) : null,
+      leaseContention,
       recovery,
       recoveryDurationMs: roundMilliseconds(recoveryDurationMs),
       connectorExecutionsAfterRestart: assembly.getToolExecutionCount(),
@@ -280,6 +297,42 @@ async function runRuntimeScenario({ rootDir, scenario, mode, modelAlias, keepArt
     if (assembly) assembly.close();
     if (!keepArtifacts) await rm(artifactDirectory, { recursive: true, force: true });
   }
+}
+
+/** 返回首次恢复中被未过期租约阻断的稳定证据；没有竞争时返回 null。 */
+function readLeaseContention(recovery) {
+  const outcome = recovery?.outcomes?.find(
+    /** 只识别 Store/Runtime 约定的稳定租约竞争原因。 */
+    (item) => item?.status === "skipped" && item?.reasonCode === "lease_held",
+  );
+  return outcome
+    ? Object.freeze({ runId: outcome.runId, reasonCode: outcome.reasonCode })
+    : null;
+}
+
+/** 根据 SQLite 中的真实过期时间推进场景时钟，随后仍由正常 acquire/fencing 路径接管。 */
+function advancePastPersistedLeaseExpiry(assembly, runId) {
+  const lease = assembly.store.getRunLease(runId);
+  if (!lease?.leaseExpiresAt) throw new Error("lease contention is missing persisted expiry evidence");
+  assembly.advanceStoreClockPast(lease.leaseExpiresAt);
+}
+
+/** 创建可单调推进的场景 Store 时钟，默认仍跟随系统时间。 */
+function createAdjustableScenarioClock() {
+  let minimumNowMs = Date.now();
+  return Object.freeze({
+    /** 返回不早于已推进下限的当前时间。 */
+    now() {
+      return new Date(Math.max(Date.now(), minimumNowMs));
+    },
+    /** 将最小时间推进到目标时间之后 1ms，禁止倒退。 */
+    advancePast(timestamp) {
+      const parsed = Date.parse(String(timestamp || ""));
+      if (!Number.isFinite(parsed)) throw new TypeError("scenario clock timestamp is invalid");
+      minimumNowMs = Math.max(minimumNowMs, parsed + 1);
+      return new Date(minimumNowMs);
+    },
+  });
 }
 
 /** 启动真实子进程，并在 ToolResult 已提交时制造不可被 finally 收口的退出窗口。 */
@@ -666,6 +719,7 @@ function buildScenarioResult({
           toolCallCount: latestRun.toolCalls.length,
         }
       : null,
+    leaseContention: observation.leaseContention || null,
     recovery: observation.recovery,
     connectorExecutionsAfterRestart: observation.connectorExecutionsAfterRestart,
     acceptance,

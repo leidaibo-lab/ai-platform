@@ -9,6 +9,7 @@ export function evaluateScenario({ observation }) {
   const checks = [
     check("checkpoint-running", observation.checkpoint?.status === "running"),
     check("tool-result-committed", observation.checkpoint?.toolCalls?.[0]?.status === "completed"),
+    check("active-lease-blocks-early-takeover", observation.leaseContention?.reasonCode === "lease_held"),
     check("recovery-rejected", observation.recovery?.failed === 1),
     check("connector-not-replayed", observation.connectorExecutionsAfterRestart === 0),
     check("run-failed", latestRun?.status === "failed"),

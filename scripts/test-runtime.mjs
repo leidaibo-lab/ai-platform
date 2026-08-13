@@ -12,6 +12,7 @@ import { createConversationCoordinator } from "../src/runtime/conversation-coord
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { estimateMessagesTokens } from "../src/runtime/context-budget.mjs";
 import { createMemoryManager, selectCompactionRange } from "../src/runtime/memory-manager.mjs";
+import { createRunEventSink } from "../src/runtime/run-event-sink.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
 import { createToolRegistry } from "../src/tools/tool-registry.mjs";
 import { createWeatherToolDefinition } from "../src/tools/weather-tool.mjs";
@@ -291,9 +292,26 @@ function isStructuredToolResultMessage(message) {
   return message.role === "tool" && message.content?.[0]?.type === "tool-result";
 }
 
-/** 返回 Runtime 渠道工具事件类型。 */
+/** 返回 Runtime 工具生命周期事件的短类型。 */
 function readToolEventType(event) {
-  return event.type;
+  return event.type.slice("tool.".length);
+}
+
+/** 创建仅收集指定事件的 Runtime Sink，并按需启用文本流。 */
+function createCollectingExecution(collector, { types, streamText = false, onSubscriberError } = {}) {
+  const allowedTypes = types ? new Set(types) : null;
+  return {
+    eventSink: createRunEventSink({
+      subscribers: [
+        /** 按事件类型过滤后保存不可变 Runtime 事件快照。 */
+        function collectEvent(event) {
+          if (!allowedTypes || allowedTypes.has(event.type)) collector(event);
+        },
+      ],
+      ...(onSubscriberError ? { onSubscriberError } : {}),
+    }),
+    streamText,
+  };
 }
 
 /** 判断记录项是否为 Runtime 工具执行阶段。 */
@@ -309,6 +327,11 @@ function isToolFactEvent(event) {
 /** 判断 SQLite 会话事件是否为 Run 完成或失败终态。 */
 function isRunTerminalEvent(event) {
   return ["run.completed", "run.failed"].includes(String(event.type || ""));
+}
+
+/** 判断易失 Runtime 事件是否声明 Run 已创建或幂等命中。 */
+function isRunStartedEvent(event) {
+  return event.type === "run.started";
 }
 
 /** 返回 SQLite 工具事实事件类型。 */
@@ -451,12 +474,9 @@ test("streamed runs emit deltas and persist one final assistant message", async 
   const runEvents = [];
   const deltas = [];
   /** 收集 Runtime 创建的稳定 Run 身份。 */
-  function collectRunStarted(event) {
+  function collectRuntimeEvent(event) {
     runEvents.push(event);
-  }
-  /** 收集 Runtime 透传的模型文本增量。 */
-  function collectTextDelta(delta) {
-    deltas.push(delta);
+    if (event.type === "text.delta") deltas.push(event.delta);
   }
 
   const response = await fixture.runtime.runConversation(
@@ -468,17 +488,69 @@ test("streamed runs emit deltas and persist one final assistant message", async 
       imageUrls: [],
       documentUrls: [],
     },
-    { onRunStarted: collectRunStarted, onTextDelta: collectTextDelta },
+    createCollectingExecution(collectRuntimeEvent, { types: ["run.started", "text.delta"], streamText: true }),
   );
   const detail = fixture.runtime.getConversation(conversation.id);
 
   assert.deepEqual(deltas, ["逐段", "回复"]);
-  assert.equal(runEvents.length, 1);
-  assert.equal(runEvents[0].run.id, detail.latestRun.id);
+  const startedEvent = runEvents.find(isRunStartedEvent);
+  assert.equal(runEvents.filter(isRunStartedEvent).length, 1);
+  assert.equal(startedEvent.runId, detail.latestRun.id);
   assert.equal(response.content, "逐段回复");
   assert.deepEqual(detail.messages.map(getMessageRole), ["user", "assistant"]);
   assert.equal(detail.messages[1].displayContent, "逐段回复");
   assert.equal(detail.latestRun.resilience.outputStarted, true);
+  fixture.store.close();
+});
+
+// 验证 Runtime 事件是有序不可变快照，失败订阅者不会改变执行和持久化终态。
+test("run event subscribers are isolated from Runtime execution facts", async () => {
+  const fixture = createTestRuntime({ gatewayClient: createStreamingGateway() });
+  const conversation = fixture.runtime.createConversation();
+  const observedTypes = [];
+  const subscriberErrors = [];
+  const eventSink = createRunEventSink({
+    subscribers: [
+      /** 尝试污染快照并在文本事件抛错，验证 Sink 同时提供不可变性和失败隔离。 */
+      function failingObserver(event) {
+        assert.throws(() => {
+          event.type = "mutated";
+        }, TypeError);
+        if (event.type === "text.delta") throw new Error("scripted subscriber failure");
+      },
+      /** 记录第二个订阅者实际看到的稳定事件顺序。 */
+      function collectObservedType(event) {
+        observedTypes.push(event.type);
+      },
+    ],
+    /** 保存脱离主链的订阅错误分类供测试断言。 */
+    onSubscriberError(error, context) {
+      subscriberErrors.push({ name: error.name, eventType: context.event.type });
+    },
+  });
+
+  const response = await fixture.runtime.runConversation(
+    conversation.id,
+    {
+      requestId: "isolated-events-request",
+      clientMessageId: "isolated-events-message",
+      message: "验证事件隔离",
+    },
+    { eventSink, streamText: true },
+  );
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.deepEqual(observedTypes, [
+    "chain-trace.started",
+    "run.started",
+    "text.delta",
+    "text.delta",
+    "run.completed",
+  ]);
+  assert.deepEqual(subscriberErrors.map((error) => error.eventType), ["text.delta", "text.delta"]);
+  assert.equal(response.content, "逐段回复");
+  assert.equal(detail.latestRun.status, "completed");
+  assert.equal(detail.messages.at(-1).displayContent, "逐段回复");
   fixture.store.close();
 });
 
@@ -515,7 +587,11 @@ test("read-only weather tool is persisted, streamed, and replayed without a seco
     documentUrls: [],
   };
 
-  const response = await fixture.runtime.runConversation(conversation.id, input, { onToolEvent: collectToolEvent });
+  const response = await fixture.runtime.runConversation(
+    conversation.id,
+    input,
+    createCollectingExecution(collectToolEvent, { types: ["tool.started", "tool.completed", "tool.failed"] }),
+  );
   const replay = await fixture.runtime.runConversation(conversation.id, input);
   const detail = fixture.runtime.getConversation(conversation.id);
   const factEvents = fixture.store.listEventsAfter(conversation.id);
@@ -591,7 +667,7 @@ test("weather route rejects a candidate when the required ToolResult is missing"
         imageUrls: [],
         documentUrls: [],
       },
-      { onTextDelta: collectDelta },
+      createCollectingExecution((event) => collectDelta(event.delta), { types: ["text.delta"], streamText: true }),
     ),
     isAcceptanceRejection,
   );
@@ -639,9 +715,11 @@ test("accepted weather Run remains completed when post-commit text delivery fail
     throw new Error("scripted channel delivery failure");
   }
 
-  const response = await fixture.runtime.runConversation(conversation.id, input, {
-    onTextDelta: failAcceptedDelivery,
-  });
+  const response = await fixture.runtime.runConversation(
+    conversation.id,
+    input,
+    createCollectingExecution(failAcceptedDelivery, { types: ["text.delta"], streamText: true }),
+  );
   const replay = await fixture.runtime.runConversation(conversation.id, input);
   const detail = fixture.runtime.getConversation(conversation.id);
   const runEvents = fixture.store.listEventsAfter(conversation.id).filter(isRunTerminalEvent);
@@ -679,7 +757,7 @@ test("ToolResult summary recovery keeps streaming delivery and one final assista
   const fixture = createTestRuntime({ gatewayClient: scenario.gatewayClient, toolRegistry });
   const conversation = fixture.runtime.createConversation();
   const deltas = [];
-  /** 收集恢复阶段通过原 Runtime delivery 回调交付的文本增量。 */
+  /** 收集恢复阶段通过 Runtime Event Port 发布的文本增量。 */
   function collectRecoveryDelta(delta) {
     deltas.push(delta);
   }
@@ -693,7 +771,7 @@ test("ToolResult summary recovery keeps streaming delivery and one final assista
       imageUrls: [],
       documentUrls: [],
     },
-    { onTextDelta: collectRecoveryDelta },
+    createCollectingExecution((event) => collectRecoveryDelta(event.delta), { types: ["text.delta"], streamText: true }),
   );
   const detail = fixture.runtime.getConversation(conversation.id);
 
@@ -745,7 +823,7 @@ test("ToolResult summary recovery replaces withheld weather output with an accep
       imageUrls: [],
       documentUrls: [],
     },
-    { onTextDelta: collectOriginalDelta },
+    createCollectingExecution((event) => collectOriginalDelta(event.delta), { types: ["text.delta"], streamText: true }),
   );
   const detail = fixture.runtime.getConversation(conversation.id);
 
@@ -851,7 +929,7 @@ test("weather tool failures remain safe, observable, and separate from model fai
       imageUrls: [],
       documentUrls: [],
     },
-    { onToolEvent: collectToolEvent },
+    createCollectingExecution(collectToolEvent, { types: ["tool.started", "tool.completed", "tool.failed"] }),
   );
   const detail = fixture.runtime.getConversation(conversation.id);
   const toolSpan = tracedSpans.find(isToolExecutionSpan);
@@ -1123,12 +1201,13 @@ test("cancelling before the first delta persists no assistant message", async ()
   const runPromise = fixture.runtime.runConversation(
     conversation.id,
     { requestId: "cancel-empty-request", clientMessageId: "cancel-empty-client", message: "立即停止" },
-    {
+    createCollectingExecution(
       /** 保存可供取消端点使用的 Run ID。 */
-      onRunStarted(event) {
-        runId = event.run.id;
+      (event) => {
+        runId = event.runId;
       },
-    },
+      { types: ["run.started"] },
+    ),
   );
   await controlled.waitUntilGenerating;
   const firstCancellation = fixture.runtime.cancelConversationRun(conversation.id, runId);
@@ -1154,14 +1233,13 @@ test("cancelling after a delta persists one explicitly referenceable interrupted
   const runPromise = fixture.runtime.runConversation(
     conversation.id,
     { requestId: "cancel-partial-request", clientMessageId: "cancel-partial-client", message: "生成后停止" },
-    {
-      /** 保存可供取消端点使用的 Run ID。 */
-      onRunStarted(event) {
-        runId = event.run.id;
+    createCollectingExecution(
+      /** 保存 Run ID，并消费文本增量以模拟 SSE 渠道。 */
+      (event) => {
+        if (event.type === "run.started") runId = event.runId;
       },
-      /** 消费测试增量，模拟 SSE 渠道已经交付正文。 */
-      onTextDelta() {},
-    },
+      { types: ["run.started", "text.delta"], streamText: true },
+    ),
   );
   await controlled.waitUntilDelta;
   fixture.runtime.cancelConversationRun(conversation.id, runId);

@@ -4,7 +4,14 @@ import { createResilienceContext } from "../resilience/retry-executor.mjs";
 import { ImageAssetStoreError } from "../storage/image-asset-store.mjs";
 import { normalizeContextOptions } from "./context-budget.mjs";
 import { ImageGenerationPolicyError, inspectGeneratedImage } from "./image-generation-policy.mjs";
+import {
+  ExecutionPolicyError,
+  assertExecutionAllowed,
+  createExecutionPolicy,
+} from "./execution-policy.mjs";
 import { createResultAcceptanceRegistry } from "./result-acceptance.mjs";
+import { createNullRunEventSink } from "./run-event-sink.mjs";
+import { RunLeaseError, createRunLeaseCoordinator } from "./run-lease-coordinator.mjs";
 import {
   IMAGE_GENERATION_OPERATION,
   buildDisplayContent,
@@ -65,6 +72,8 @@ export function createChatRuntime({
   memoryManager,
   imageAssetStore,
   toolRegistry,
+  executionPolicy,
+  runLeaseCoordinator,
   resultAcceptanceRegistry = createResultAcceptanceRegistry(),
   toolOptions = {},
   chainTracer = createNullChainTracer(),
@@ -72,10 +81,31 @@ export function createChatRuntime({
 }) {
   const options = normalizeContextOptions(contextOptions);
   const registry = toolRegistry || createToolRegistry();
+  const policy = executionPolicy || createExecutionPolicy({
+    allowedReadTools: registry.list().map(readToolDefinitionName),
+  });
+  const leaseCoordinator = runLeaseCoordinator || createRunLeaseCoordinator({
+    store,
+    ttlMs: resilienceOptions.runLeaseTtlMs,
+    renewIntervalMs: resilienceOptions.runLeaseRenewIntervalMs,
+  });
   const aiSdkTools = registry.hasTools() ? registry.buildAiSdkTools() : undefined;
   const runTimeoutMs = normalizeRunTimeout(resilienceOptions.runTimeoutMs);
   const maxToolSteps = normalizeToolStepLimit(toolOptions.maxSteps);
   const activeRuns = new Map();
+
+  /** 隔离可替换 Policy Port 的后置观察异常，禁止其改写已提交执行事实。 */
+  async function observeExecutionAfter(input) {
+    try {
+      return await policy.observeAfter(input);
+    } catch {
+      return Object.freeze({
+        attempted: 1,
+        completed: 0,
+        failedHooks: Object.freeze([{ hook: "execution-policy", code: "execution_hook_failed" }]),
+      });
+    }
+  }
 
   /**
    * 扫描并收口上一个进程遗留的 running Run，只从 completed 只读 ToolResult 继续最终总结。
@@ -90,10 +120,22 @@ export function createChatRuntime({
         outcomes.push({ runId: candidate.run.id, status: "skipped", reasonCode: "run_owned_by_current_process" });
         continue;
       }
+      const leaseResult = leaseCoordinator.acquire({
+        runId: candidate.run.id,
+        conversationId: candidate.run.conversationId,
+      });
+      if (!leaseResult.acquired) {
+        outcomes.push({
+          runId: candidate.run.id,
+          status: "skipped",
+          reasonCode: leaseResult.reasonCode || "lease_held",
+        });
+        continue;
+      }
       const outcome = await coordinator.runExclusive(
         candidate.run.conversationId,
         /** 在会话串行边界内重新确认并恢复单个遗留 Run。 */
-        () => recoverInterruptedRun(candidate),
+        () => recoverInterruptedRun(candidate, leaseResult.handle),
       );
       outcomes.push(outcome);
     }
@@ -107,11 +149,12 @@ export function createChatRuntime({
   }
 
   /** 从原 Run 身份、用户消息和 ToolResult 恢复一个无工具最终总结阶段。 */
-  async function recoverInterruptedRun(candidate) {
+  async function recoverInterruptedRun(candidate, leaseHandle) {
     const eligibility = classifyRestartRecovery(candidate, registry, resultAcceptanceRegistry);
     if (!eligibility.eligible) {
       const error = createRestartRecoveryError(candidate.run, eligibility);
-      store.failRun(candidate.run.id, error);
+      store.failRun(candidate.run.id, error, leaseHandle.credentials);
+      leaseHandle.stop();
       return { runId: candidate.run.id, status: "failed", reasonCode: eligibility.reasonCode };
     }
 
@@ -198,7 +241,9 @@ export function createChatRuntime({
           acceptance: acceptance || createMissingAcceptanceResult(candidate.toolCalls),
           error,
           resilience: recoveryResilience,
+          lease: leaseHandle.credentials,
         });
+        leaseHandle.stop();
         return {
           runId: run.id,
           status: "failed",
@@ -218,7 +263,9 @@ export function createChatRuntime({
         model: recovered?.model || run.model,
         resilience: recoveryResilience,
         acceptance,
+        lease: leaseHandle.credentials,
       });
+      leaseHandle.stop();
       if (plan.manifest.highWatermarkReached) memoryManager.schedule(run.conversationId);
       return {
         runId: run.id,
@@ -235,13 +282,14 @@ export function createChatRuntime({
         runRecovered: false,
         executionStatus: "failed",
       });
-      store.failRun(run.id, publicError);
+      if (!isRunLeaseLoss(error)) store.failRun(run.id, publicError, leaseHandle.credentials);
       return {
         runId: run.id,
         status: "failed",
         reasonCode: publicError.payload?.code || "run_recovery_failed",
       };
     } finally {
+      leaseHandle.stop();
       if (activeRuns.get(run.id) === activeRun) activeRuns.delete(run.id);
     }
   }
@@ -272,6 +320,7 @@ export function createChatRuntime({
             ownedActive.operation === IMAGE_GENERATION_OPERATION ? "model.image.generate" : "model.generate",
           )
         : null,
+      lease: ownedActive?.leaseHandle?.credentials || null,
     });
     return { ...cancelled, conversation: store.getConversation(conversationId) };
   }
@@ -324,25 +373,43 @@ export function createChatRuntime({
      *
      * @param {string} conversationId - 目标会话 ID。
      * @param {unknown} body - 当前 Run 请求体。
-     * @param {object} [delivery] - 可选运行状态和模型文本增量消费者。
-     * @param {(input: object) => Promise<void>|void} [delivery.onRunStarted] - Run 创建或幂等命中通知。
-     * @param {(input: object) => Promise<void>|void} [delivery.onChainTraceStarted] - 业务 Chain ID 创建通知。
-     * @param {(delta: string) => Promise<void>|void} [delivery.onTextDelta] - 模型文本增量消费者。
-     * @param {(event: object) => Promise<void>|void} [delivery.onToolEvent] - 工具开始、完成或失败阶段消费者。
-     * @param {(artifact: object) => Promise<void>|void} [delivery.onArtifactCreated] - 图片资产完成消费者。
-     * @param {AbortSignal} [delivery.abortSignal] - 可选调用方取消信号。
+     * @param {object} [execution] - 当前调用的输出模式和事件端口，不包含渠道协议细节。
+     * @param {import("./run-event-sink.mjs").RunEventSink} [execution.eventSink] - 接收有序 Runtime 生命周期事件。
+     * @param {boolean} [execution.streamText=false] - 是否消费模型文本流并发布易失 `text.delta` 事件。
+     * @param {AbortSignal} [execution.abortSignal] - 可选调用方取消信号。
      * @returns {Promise<object>} 回复、会话状态、usage 和 Context Manifest。
      */
-    async runConversation(conversationId, body, delivery = {}) {
+    async runConversation(conversationId, body, execution = {}) {
       const input = normalizeRunInput(body);
       const validationError = validateRunInput(input);
       if (validationError) throw new RuntimeInputError(validationError);
+      const runExecution = normalizeRunExecution(execution);
+      const runPolicyContext = createRunPolicyContext({ conversationId, input });
+      const runPolicyDecision = await policy.evaluateBefore(runPolicyContext);
+      try {
+        assertExecutionAllowed(runPolicyDecision);
+      } catch (error) {
+        throw toRuntimePolicyError(error);
+      }
       const selectedModel = await resolveRunModel(gatewayClient, input.model, input.operation);
       const chainTraceId = randomUUID();
+      let currentChainTraceId = chainTraceId;
       const deadlineAt = Date.now() + runTimeoutMs;
-      if (typeof delivery.onChainTraceStarted === "function") {
-        await delivery.onChainTraceStarted({ chainTraceId });
+      let currentRunId = null;
+
+      /** 发布不依赖渠道协议的 Runtime 生命周期事件；Sink 负责隔离具体订阅者异常。 */
+      async function publishRunEvent(type, payload = {}) {
+        return runExecution.eventSink.publish({
+          ...payload,
+          type,
+          conversationId,
+          requestId: input.requestId,
+          chainTraceId: currentChainTraceId,
+          runId: currentRunId,
+        });
       }
+
+      await publishRunEvent("chain-trace.started");
       const queueSpan = chainTracer.startSpan("runtime.queue", {
         ...buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
       });
@@ -374,15 +441,18 @@ export function createChatRuntime({
             }),
         );
         const effectiveChainTraceId = started.run.chainTraceId || started.run.resilience?.traceId || chainTraceId;
+        currentChainTraceId = effectiveChainTraceId;
+        currentRunId = started.run.id;
         if (started.replayed) {
-          if (typeof delivery.onRunStarted === "function") {
-            await delivery.onRunStarted({
-              run: started.run,
-              replayed: true,
-              chainTraceId: effectiveChainTraceId,
-            });
-          }
-          return replayRun(started, store.getConversation(conversationId));
+          await publishRunEvent("run.started", { status: started.run.status, replayed: true });
+          const replayed = replayRun(started, store.getConversation(conversationId));
+          await publishRunEvent("run.completed", {
+            replayed: true,
+            operation: replayed.operation,
+            model: replayed.model,
+            acceptanceStatus: replayed.acceptance?.status || null,
+          });
+          return replayed;
         }
 
         const runId = started.run.id;
@@ -398,7 +468,10 @@ export function createChatRuntime({
           outputStarted: false,
         });
         const controller = new AbortController();
-        const abortSignal = combineAbortSignals(controller.signal, delivery.abortSignal);
+        const leaseResult = leaseCoordinator.acquire({ runId, conversationId, abortController: controller });
+        if (!leaseResult.acquired) throw createRunLeaseContentionError(leaseResult);
+        const leaseHandle = leaseResult.handle;
+        const abortSignal = combineAbortSignals(controller.signal, runExecution.abortSignal);
         const activeRun = {
           conversationId,
           controller,
@@ -407,6 +480,7 @@ export function createChatRuntime({
           model: selectedModel,
           operation: input.operation,
           resilienceContext,
+          leaseHandle,
         };
         activeRuns.set(runId, activeRun);
         const traceAttributes = buildTraceAttributes({
@@ -421,12 +495,22 @@ export function createChatRuntime({
           : undefined;
         const acceptanceRequired = resultAcceptanceRegistry.requiresTool(requiredToolName);
         const pendingTextDeltas = [];
+        let runTerminalObserved = false;
 
-        /** 将已持久化工具阶段以安全元数据通知当前渠道。 */
+        /** 对当前 Run 的单个已提交终态执行一次后置观察；重复收口不会重复触发 Hook。 */
+        async function observeRunTerminal(outcome) {
+          if (runTerminalObserved) return null;
+          runTerminalObserved = true;
+          return observeExecutionAfter({
+            context: { ...runPolicyContext, runId },
+            policyDecision: runPolicyDecision,
+            outcome,
+          });
+        }
+
+        /** 将已持久化工具阶段发布为不含输入和完整结果的安全事件。 */
         async function emitToolEvent(type, toolCall) {
-          if (typeof delivery.onToolEvent !== "function") return;
-          await delivery.onToolEvent({
-            type,
+          await publishRunEvent(`tool.${type}`, {
             toolCallId: toolCall.toolCallId,
             toolName: toolCall.toolName,
             title: registry.get(toolCall.toolName)?.title || toolCall.toolName,
@@ -441,12 +525,31 @@ export function createChatRuntime({
         async function executeRegisteredTool(definition, toolInput, toolExecutionOptions = {}) {
           throwIfAborted(abortSignal);
           const toolCallId = String(toolExecutionOptions.toolCallId || randomUUID());
+          const toolPolicyContext = createToolPolicyContext({
+            conversationId,
+            runId,
+            requestId: input.requestId,
+            definition,
+          });
+          const toolPolicyDecision = await policy.evaluateBefore(toolPolicyContext);
+          try {
+            assertExecutionAllowed(toolPolicyDecision);
+          } catch (error) {
+            throw toRuntimePolicyError(error);
+          }
+          leaseHandle.assertOwned();
           const startedTool = store.startToolCall({
             conversationId,
             runId,
             toolCallId,
             toolName: definition.name,
             input: toolInput,
+            operationKey: `tool:${toolCallId}`,
+            idempotencyKey: `${runId}:tool:${toolCallId}`,
+            effect: definition.effect,
+            riskLevel: definition.riskLevel || "low",
+            policyDecision: toolPolicyDecision,
+            lease: leaseHandle.credentials,
           });
           if (startedTool.replayed && startedTool.status === "completed") return startedTool.output;
           if (startedTool.replayed && startedTool.status === "failed") {
@@ -467,35 +570,54 @@ export function createChatRuntime({
               () => definition.execute(toolInput, { abortSignal: toolSignal }),
             );
             const output = { status: "success", data };
+            leaseHandle.assertOwned();
             const completedTool = store.completeToolCall({
               runId,
               toolCallId,
               output,
               source: data?.source?.name || null,
               observedAt: data?.observedAt || data?.source?.retrievedAt || null,
+              lease: leaseHandle.credentials,
             });
             await emitToolEvent("completed", completedTool);
+            await observeExecutionAfter({
+              context: toolPolicyContext,
+              policyDecision: toolPolicyDecision,
+              outcome: { status: "completed", operationId: completedTool.operationId },
+            });
             return output;
           } catch (error) {
+            if (leaseHandle.lostError || isRunLeaseLoss(error)) {
+              throw leaseHandle.lostError || error;
+            }
             const cancelled = isCancellationError(error, toolSignal);
             const publicError = cancelled
               ? { code: "tool_cancelled", message: "工具调用已取消。", retryable: false }
               : mapPublicToolError(definition, error);
-            const failedTool = store.failToolCall({ runId, toolCallId, ...publicError });
+            if (isRunLeaseLoss(error)) throw error;
+            const failedTool = store.failToolCall({
+              runId,
+              toolCallId,
+              ...publicError,
+              lease: leaseHandle.credentials,
+            });
             await emitToolEvent("failed", failedTool);
+            await observeExecutionAfter({
+              context: toolPolicyContext,
+              policyDecision: toolPolicyDecision,
+              outcome: {
+                status: cancelled ? "cancelled" : "failed",
+                errorCode: publicError.code,
+                operationId: failedTool.operationId,
+              },
+            });
             if (cancelled) throw error;
             return { status: "error", error: publicError };
           }
         }
 
         try {
-          if (typeof delivery.onRunStarted === "function") {
-            await delivery.onRunStarted({
-              run: started.run,
-              replayed: false,
-              chainTraceId: effectiveChainTraceId,
-            });
-          }
+          await publishRunEvent("run.started", { status: started.run.status, replayed: false });
           throwIfAborted(abortSignal);
           if (input.operation === IMAGE_GENERATION_OPERATION) {
             if (!imageAssetStore || typeof gatewayClient?.generateImages !== "function") {
@@ -557,20 +679,26 @@ export function createChatRuntime({
                   "ai.platform.image.count": storedAssets.length,
                 },
                 /** 原子登记图片元数据、消息引用和 Run 完成状态。 */
-                () => store.completeImageRun({
-                  runId,
-                  assets: storedAssets,
-                  displayContent: `已生成 ${storedAssets.length} 张图片`,
-                  usage: generated.usage || null,
-                  model: generated.model || selectedModel,
-                  resilience: generated.resilience || null,
-                }),
+                () => {
+                  leaseHandle.assertOwned();
+                  return store.completeImageRun({
+                    runId,
+                    assets: storedAssets,
+                    displayContent: `已生成 ${storedAssets.length} 张图片`,
+                    usage: generated.usage || null,
+                    model: generated.model || selectedModel,
+                    resilience: generated.resilience || null,
+                    lease: leaseHandle.credentials,
+                  });
+                },
               );
+              leaseHandle.stop();
               assetsCommitted = true;
+              await observeRunTerminal({ status: "completed" });
               for (const artifact of completed.artifacts || []) {
-                if (typeof delivery.onArtifactCreated === "function") await delivery.onArtifactCreated(artifact);
+                await publishRunEvent("artifact.created", { artifact });
               }
-              return {
+              const result = {
                 operation: input.operation,
                 content: completed.assistantMessage.displayContent,
                 artifacts: completed.artifacts || [],
@@ -582,6 +710,13 @@ export function createChatRuntime({
                 conversation: store.getConversation(conversationId),
                 replayed: false,
               };
+              await publishRunEvent("run.completed", {
+                replayed: false,
+                operation: result.operation,
+                model: result.model,
+                acceptanceStatus: null,
+              });
+              return result;
             } catch (error) {
               if (!assetsCommitted) await cleanupImageAssets(imageAssetStore, storedAssets);
               if (error && typeof error === "object" && !error.resilience && generated.resilience) {
@@ -645,7 +780,7 @@ export function createChatRuntime({
           activeRun.contextManifest = plan.manifest;
           throwIfAborted(abortSignal);
 
-          /** 累积服务端已交付正文，并继续把文本增量透传给当前渠道。 */
+          /** 累积服务端已生成正文，并把允许交付的增量发布为易失 Runtime 事件。 */
           async function handleTextDelta(delta) {
             if (abortSignal.aborted) return;
             const text = String(delta || "");
@@ -655,7 +790,7 @@ export function createChatRuntime({
               return;
             }
             activeRun.partialText += text;
-            await delivery.onTextDelta(text);
+            await publishRunEvent("text.delta", { delta: text });
           }
 
           const allToolsContext = runTools ? registry.buildAiSdkToolsContext(executeRegisteredTool) : undefined;
@@ -674,7 +809,7 @@ export function createChatRuntime({
               toolsContext,
               requiredToolName,
               maxToolSteps,
-              onTextDelta: typeof delivery.onTextDelta === "function" ? handleTextDelta : undefined,
+              onTextDelta: runExecution.streamText ? handleTextDelta : undefined,
               abortSignal,
             });
           } catch (error) {
@@ -697,7 +832,7 @@ export function createChatRuntime({
                     maxCompletionTokens: options.reservedOutputTokens,
                     resilienceContext,
                     operation: "model.tool_result_summary",
-                    onTextDelta: typeof delivery.onTextDelta === "function" ? handleTextDelta : undefined,
+                    onTextDelta: runExecution.streamText ? handleTextDelta : undefined,
                     abortSignal,
                   });
                   return {
@@ -730,6 +865,12 @@ export function createChatRuntime({
               acceptance: effectiveAcceptance,
               error: rejectionError,
               resilience: data?.resilience || null,
+              lease: leaseHandle.credentials,
+            });
+            leaseHandle.stop();
+            await observeRunTerminal({
+              status: "failed",
+              errorCode: rejectionError.payload?.code || "result_acceptance_rejected",
             });
             throw rejectionError;
           }
@@ -738,29 +879,35 @@ export function createChatRuntime({
             traceAttributes,
             /** 原子持久化助手消息、usage、Context Manifest 和 Run 完成状态。 */
             () =>
-              store.completeRun({
-                runId,
-                content: assistantContent,
-                displayContent: assistantContent || "(空响应)",
-                usage: data?.usage || null,
-                contextManifest: plan.manifest,
-                model: data?.model || selectedModel,
-                resilience: data?.resilience || null,
-                acceptance: effectiveAcceptance,
-              }),
+              {
+                leaseHandle.assertOwned();
+                return store.completeRun({
+                  runId,
+                  content: assistantContent,
+                  displayContent: assistantContent || "(空响应)",
+                  usage: data?.usage || null,
+                  contextManifest: plan.manifest,
+                  model: data?.model || selectedModel,
+                  resilience: data?.resilience || null,
+                  acceptance: effectiveAcceptance,
+                  lease: leaseHandle.credentials,
+                });
+              },
           );
+          leaseHandle.stop();
+          await observeRunTerminal({ status: "completed" });
           if (effectiveAcceptance?.status === "accepted") {
             await releaseAcceptedCandidate({
               chainTracer,
               traceAttributes,
-              onTextDelta: delivery.onTextDelta,
+              publishRunEvent,
               pendingTextDeltas,
               candidateContent: assistantContent,
             });
           }
           if (plan.manifest.highWatermarkReached) memoryManager.schedule(conversationId);
 
-          return {
+          const result = {
             content: completed.assistantMessage.displayContent,
             usage: completed.run.usage,
             model: completed.run.model,
@@ -771,7 +918,22 @@ export function createChatRuntime({
             conversation: store.getConversation(conversationId),
             replayed: false,
           };
+          await publishRunEvent("run.completed", {
+            replayed: false,
+            operation: input.operation,
+            model: result.model,
+            acceptanceStatus: result.acceptance?.status || null,
+          });
+          return result;
         } catch (error) {
+          const leaseLoss = leaseHandle.lostError || (isRunLeaseLoss(error) ? error : null);
+          if (leaseLoss) {
+            await publishRunEvent("run.error", {
+              errorCode: leaseLoss.code || "run_lease_lost",
+              status: 409,
+            });
+            throw toRuntimeLeaseError(leaseLoss);
+          }
           if (isCancellationError(error, abortSignal)) {
             const cancelled = await chainTracer.withSpan(
               "storage.cancel_run",
@@ -791,19 +953,37 @@ export function createChatRuntime({
                       activeRun.partialText.length > 0,
                       input.operation === IMAGE_GENERATION_OPERATION ? "model.image.generate" : "model.generate",
                     ),
+                  lease: leaseHandle.credentials,
                 }),
             );
-            return buildCancelledRunResponse(cancelled, store.getConversation(conversationId));
+            leaseHandle.stop();
+            await observeRunTerminal({ status: "cancelled" });
+            const result = buildCancelledRunResponse(cancelled, store.getConversation(conversationId));
+            await publishRunEvent("run.cancelled", {
+              operation: result.operation,
+              partialOutput: Boolean(result.content),
+            });
+            return result;
           }
           const publicError = toRuntimeExecutionError(error, selectedModel);
           await chainTracer.withSpan(
             "storage.fail_run",
             traceAttributes,
             /** 持久化失败状态，但不把原始错误响应写入 Trace 属性。 */
-            () => store.failRun(runId, publicError),
+            () => store.failRun(runId, publicError, leaseHandle.credentials),
           );
+          leaseHandle.stop();
+          await observeRunTerminal({
+            status: "failed",
+            errorCode: publicError.payload?.code || "runtime_execution_failed",
+          });
+          await publishRunEvent("run.error", {
+            errorCode: publicError.payload?.code || "runtime_execution_failed",
+            status: publicError.status,
+          });
           throw publicError;
         } finally {
+          activeRun.leaseHandle?.stop();
           if (activeRuns.get(runId) === activeRun) activeRuns.delete(runId);
         }
       });
@@ -826,6 +1006,117 @@ export function createChatRuntime({
       });
     },
   };
+}
+
+/** 将可选执行配置收敛为 Runtime 自有事件端口和流消费开关。 */
+function normalizeRunExecution(execution) {
+  const input = execution && typeof execution === "object" ? execution : {};
+  const eventSink = input.eventSink || createNullRunEventSink();
+  if (typeof eventSink.publish !== "function") throw new TypeError("run eventSink.publish must be a function");
+  if (input.abortSignal !== undefined && !(input.abortSignal instanceof AbortSignal)) {
+    throw new TypeError("run abortSignal must be an AbortSignal");
+  }
+  return Object.freeze({
+    eventSink,
+    streamText: Boolean(input.streamText),
+    abortSignal: input.abortSignal,
+  });
+}
+
+/** 返回 Tool Registry 公开定义中的稳定工具名。 */
+function readToolDefinitionName(definition) {
+  return definition.name;
+}
+
+/** 构造不含正文或附件的 Run 前置策略上下文。 */
+function createRunPolicyContext({ conversationId, input }) {
+  return {
+    kind: "run",
+    operation: input.operation,
+    effect: input.operation === IMAGE_GENERATION_OPERATION ? "write" : "read",
+    riskLevel: input.operation === IMAGE_GENERATION_OPERATION ? "medium" : "low",
+    known: ["conversation.chat", IMAGE_GENERATION_OPERATION].includes(input.operation),
+    conversationId,
+    requestId: input.requestId,
+  };
+}
+
+/** 构造不含工具输入的 Tool 前置策略上下文。 */
+function createToolPolicyContext({ conversationId, runId, requestId, definition }) {
+  return {
+    kind: "tool",
+    operation: "tool.execute",
+    toolName: definition.name,
+    effect: definition.effect || "unknown",
+    riskLevel: definition.riskLevel || (definition.effect === "read" ? "low" : "high"),
+    known: true,
+    conversationId,
+    runId,
+    requestId,
+  };
+}
+
+/** 将 Policy 的稳定非 allow 结论映射为不暴露规则内部结构的 Runtime 错误。 */
+function toRuntimePolicyError(error) {
+  if (!(error instanceof ExecutionPolicyError)) throw error;
+  const decision = error.policyDecision?.decision || "deny";
+  const requiresConfirmation = decision === "confirmation_required";
+  return new RuntimeExecutionError(
+    {
+      error: requiresConfirmation ? "操作需要确认" : "操作未通过执行策略",
+      detail: requiresConfirmation
+        ? "当前操作可能产生外部副作用，尚未获得明确确认。"
+        : "当前版本的执行策略没有允许该操作。",
+      action: requiresConfirmation ? "请完成确认后再发起操作。" : "请检查操作类型或平台策略配置。",
+      code: error.code || "execution_denied",
+      policy: error.policyDecision?.policy || null,
+      policyVersion: error.policyDecision?.policyVersion || null,
+      reasonCodes: error.policyDecision?.reasonCodes || ["operation_unknown"],
+      retryable: decision === "defer",
+    },
+    requiresConfirmation ? 409 : 403,
+    error,
+  );
+}
+
+/** 为新 Run 取得 lease 失败构造可重试且不泄露 owner 的公开错误。 */
+function createRunLeaseContentionError(result) {
+  return new RuntimeExecutionError(
+    {
+      error: "运行正在由其他实例处理",
+      detail: "当前 Run 的执行租约尚未释放。",
+      action: "请使用原 requestId 查询或稍后重试。",
+      code: result.reasonCode || "lease_held",
+      retryable: true,
+    },
+    409,
+  );
+}
+
+/** 判断异常是否表示当前 Runtime 已失去 owner 或 fencing token。 */
+function isRunLeaseLoss(error) {
+  return error instanceof RunLeaseError || [
+    "run_lease_lost",
+    "run_lease_expired",
+    "stale_fencing_token",
+    "stale_lease_owner",
+    "lease_released",
+  ].includes(String(error?.code || ""));
+}
+
+/** 将租约丢失映射为不改写旧 Run 的公开冲突错误。 */
+function toRuntimeLeaseError(error) {
+  return new RuntimeExecutionError(
+    {
+      error: "当前实例已失去运行所有权",
+      detail: "RunLease 已过期、被接管或 fencing token 已失效。",
+      action: "请使用原 requestId 查询由新实例提交的最终状态。",
+      code: String(error?.code || "run_lease_lost"),
+      retryable: true,
+    },
+    409,
+    error,
+  );
 }
 
 /** 判断当前 Runtime 实例是否仍拥有指定会话的活动 Run。 */
@@ -1150,15 +1441,21 @@ function createMissingAcceptanceResult(toolCalls) {
   };
 }
 
-/** 验收通过后按原顺序放行暂存增量；没有增量时由 completed 事件承载最终正文。 */
-async function deliverAcceptedCandidate(onTextDelta, pendingDeltas, candidateContent) {
-  if (typeof onTextDelta !== "function") return;
-  if (pendingDeltas.length === 0 && !candidateContent) return;
-  for (const delta of pendingDeltas) await onTextDelta(delta);
+/** 验收通过后按原顺序发布暂存增量；没有增量时由最终结果承载正文。 */
+async function publishAcceptedCandidate(publishRunEvent, pendingDeltas, candidateContent) {
+  const report = { subscriberCount: 0, deliveredCount: 0, failedCount: 0 };
+  if (typeof publishRunEvent !== "function" || (pendingDeltas.length === 0 && !candidateContent)) return report;
+  for (const delta of pendingDeltas) {
+    const published = await publishRunEvent("text.delta", { delta });
+    report.subscriberCount = Math.max(report.subscriberCount, published.subscriberCount);
+    report.deliveredCount += published.deliveredCount;
+    report.failedCount += published.failedCount;
+  }
+  return report;
 }
 
 /**
- * 在 Run 完成事实提交后释放已验收正文；渠道回调失败只记录投递阶段，不反向改写执行终态。
+ * 在 Run 完成事实提交后释放已验收正文；订阅失败只记录观察阶段，不反向改写执行终态。
  *
  * @param {object} input - 已验收正文和当前追踪依赖。
  * @returns {Promise<void>}
@@ -1166,7 +1463,7 @@ async function deliverAcceptedCandidate(onTextDelta, pendingDeltas, candidateCon
 async function releaseAcceptedCandidate({
   chainTracer,
   traceAttributes,
-  onTextDelta,
+  publishRunEvent,
   pendingTextDeltas,
   candidateContent,
 }) {
@@ -1175,10 +1472,10 @@ async function releaseAcceptedCandidate({
     "ai.platform.run.status": "completed",
   });
   try {
-    await deliverAcceptedCandidate(onTextDelta, pendingTextDeltas, candidateContent);
-    span.setAttribute("ai.platform.delivery.status", "completed");
+    const report = await publishAcceptedCandidate(publishRunEvent, pendingTextDeltas, candidateContent);
+    span.setAttribute("ai.platform.event.publish.status", report.failedCount > 0 ? "failed" : "completed");
   } catch (error) {
-    span.recordError(error, { "ai.platform.delivery.status": "failed" });
+    span.recordError(error, { "ai.platform.event.publish.status": "failed" });
   } finally {
     span.end();
   }

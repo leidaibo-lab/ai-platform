@@ -17,7 +17,7 @@
 
 当前项目、仓库和目录统一使用 `ai-platform`；拆出的模型网关服务使用 `model-gateway`。模型网关仍是平台内部区域，不得用 `ai-platform` 代替模型网关领域名称。
 
-当前代码以 V0.6 会话与上下文基线为主体，并落地 V1 首个只读工具切片：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、AI SDK Core 有界多步工具调用与 `Output.object` 结构化输出、Open-Meteo 天气 Connector、ToolResult 事实、completed 只读 ToolResult 后的受限进程重启恢复、天气 AcceptanceResult、默认关闭的 C1 ChainTrace OpenTelemetry 旁路与已选定的 Phoenix 后端，以及 OpenSpec/docs/回归评测的最小治理。普通 C1 当前为 R2/A0，天气确定性路由切片为受限 R3/A3，C2 图片生成开发切片为 R2/A2；正式实例、真实 Runtime Trace、真实模型天气质量、多实例协调和完整 C4 业务数据能力当前仍是触发式 TODO 或未完成边界，不得写成已完成运行态能力。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
+当前代码以 V0.6 会话与上下文基线为主体，并落地 V1 首个只读工具切片与执行治理基础层：浏览器多会话 Demo、SQLite 会话事实源、幂等 Run、结构化记忆、Context Planner、token 高低水位、LiteLLM 调用封装、AI SDK Core 有界多步工具调用与 `Output.object` 结构化输出、Open-Meteo 天气 Connector、ToolResult 事实、completed 只读 ToolResult 后的受限进程重启恢复、天气 AcceptanceResult、版本化 `ExecutionPolicy` 与前后置 Hook、独立 Operation journal、SQLite `RunLease`/fencing、进程内 `RunEventSink` 生命周期事件端口、默认关闭的 C1 ChainTrace OpenTelemetry 旁路与已选定的 Phoenix 后端，以及 OpenSpec/docs/回归评测的最小治理。普通 C1 当前为 R2/A0，天气确定性路由切片为受限 R3/A3，C2 图片生成开发切片为 R2/A2；Operation/Lease 只构成 R4 的协调基础，不代表场景已达到 R4。正式实例、真实 Runtime Trace、真实模型天气质量、生产多实例部署、跨实例取消、Sandbox、有副作用操作恢复和完整 C4 业务数据能力当前仍是触发式 TODO 或未完成边界，不得写成已完成运行态能力。未来大平台属于平台控制面和渠道调用方，不得把页面、会话、工具循环、RAG 或业务流程继续塞进模型网关。
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
@@ -43,6 +43,8 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 
 模型连通性测试链仅用于本地 smoke test、CI 和排障，不属于全局能力规划、业务入口、普通客户端接入方式或服务拆分依赖。新增或更新全局架构图、能力清单、服务蓝图和演进路线时不得把该测试链画入业务主链。
 
+同步输出遵守三层边界：Agent Runtime 只向进程内 `RunEventSink` 发布易失生命周期事件；Demo Server 渠道 Adapter 把事件映射为既有 POST SSE，并在 Runtime 返回后交付完整终态；SQLite `conversation_events` 只保存事务内已提交事实，供独立游标事件流同步和恢复。`RunEventSink` 不是 Broker、Outbox、Trace 或事实源，不得直接挂接无界或远程慢订阅者。
+
 ## 文档路由
 
 - `README.md`：面向使用者的启动、Runtime 配置和模型连通性测试说明。
@@ -54,6 +56,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `docs/solution-selection-governance.md`：方案发现、成熟能力复用、`采用 / 适配 / 自研` 决策门禁、完成定义和存量能力审计规则。
 - `docs/decisions/`：保存可追溯的方案决策记录；新记录从 `docs/decisions/TEMPLATE.md` 创建，保留采用理由、未采用理由和重评条件。
 - `docs/coding-standards.md`：函数注释、数据结构、设计模式和设计原则等编码规范。
+- `docs/architecture-diagram-style.md`：当前项目架构图的模块、关联、边界、路径摘要和视觉规范；新增或更新架构图时先按这里执行。
 - `.agents/skills/README.md`：Agent Skill 索引和目录治理规则。
 - `.agents/skills/docs/context-memory-evaluation/SKILL.md`：上下文记忆评测场景、指标、脚本和回归治理流程。
 - `openspec/project.md`：项目级区域边界、依赖规则和技术约定。
@@ -80,6 +83,13 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - 代码遵守单一职责、高内聚低耦合、依赖倒置，以及 KISS、DRY、YAGNI；外部 I/O、输入校验和核心逻辑保持清晰边界。
 - 交付前按 `docs/coding-standards.md` 检查本次变更涉及的全部函数，并在变更说明中给出数据结构、设计模式和设计原则的具体依据。
 
+## 架构图规则
+
+- 当前项目后续架构图统一遵守 `docs/architecture-diagram-style.md`，默认采用白底工程图、具名模块框、带动作标签的箭头、清晰职责边界和底部路径摘要。
+- 当前、受限切片和 TODO 必须显式区分；六个架构区域是能力归属，不得画成顺序步骤，也不得把模型连通性测试链画入业务主链。
+- 一张图只回答一个主要问题。模块过多时拆分单会话生命周期、Context Planner/Memory Manager 和多会话/多端同步等专题图，不以缩小字号换取全部塞入。
+- 架构资产统一保存可编辑 SVG 和同名 PNG，放在 `docs/assets/`；新增或替换后同步所属文档与 `docs/README.md` 入口。
+
 ## Skill 规则
 
 - 所有 Skill 只放在 `.agents/skills/`。
@@ -104,11 +114,14 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `docker-compose.chaintrace.yml`：触发 ChainTrace TODO 后使用的后端入口，固定 Phoenix 19.10.0 digest、PostgreSQL 17、Auth、30 天保留并禁用匿名 telemetry；当前日常启动不要求运行。
 - `scripts/test-chat.sh`：仅用于验证 LiteLLM 到上游模型连通性的最小 smoke test，不属于平台业务入口。
 - `scripts/test-architecture-boundaries.mjs`：全局架构图与治理契约的边界回归检查，防止模型诊断链重新进入平台能力规划。
-- `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、JSON Run、POST SSE 模型文本流、会话事件流、静态页面和错误返回。
+- `scripts/demo-server.mjs`：当前集成式渠道 HTTP Adapter 和本地装配入口，负责会话资源、JSON Run、把 Runtime 生命周期事件映射为 POST SSE、会话事实事件流、终态交付、静态页面和错误返回。
 - `demo/index.html`：浏览器多会话交互页面。浏览器只提交当前输入和幂等标识，通过 POST SSE 增量渲染模型文本，不保存会话事实源，也不直接接触上游真实 key。
 - `src/config/env.mjs`：Demo Server、runtime 和 gateway client 的配置加载入口。
-- `src/storage/conversation-store.mjs`：SQLite 会话事实源，负责会话、消息、Run、ToolResult、AcceptanceResult、MemoryDelta、版本和事件日志。
-- `src/runtime/chat-runtime.mjs`：Session/Run 应用服务，负责先落消息、上下文规划、确定性工具开放、模型调用、受限重启恢复、结果验收、文本交付、最终结果落库、幂等重放和关闭会话。
+- `src/storage/conversation-store.mjs`：SQLite 会话事实源，负责会话、消息、Run、ToolCall/Operation 同事务投影、RunLease/fencing、ToolResult、AcceptanceResult、MemoryDelta、版本和事件日志。
+- `src/runtime/chat-runtime.mjs`：Session/Run 应用服务，负责先落消息、前置策略、租约取得与续租、上下文规划、确定性工具开放、模型调用、受限重启接管、结果验收、最终结果落库、后置观察、生命周期事件发布、幂等重放和关闭会话；不认识 SSE 或 UI 回调。
+- `src/runtime/execution-policy.mjs`：版本化执行策略 Port；未知操作默认拒绝，已知副作用默认要求确认，前置 Hook 只能收紧，后置 Hook 失败不得改写终态。
+- `src/runtime/run-lease-coordinator.mjs`：Runtime 的 RunLease 协调 Port，负责 owner、续租、失效中断和 fencing 凭证；租约事实与最终校验仍由 Store 拥有。
+- `src/runtime/run-event-sink.mjs`：进程内 Runtime 生命周期事件 Port，负责不可变快照、注册顺序和订阅失败隔离；事件易失且同步等待本地订阅者，不替代 SQLite 事实事件、ChainTrace 或持久化 Delivery。
 - `src/runtime/result-acceptance.mjs`：独立结果验收 Registry；当前天气策略根据持久化 ToolResult 检查地点、数据时间、来源和结果事实。
 - `src/runtime/context-planner.mjs`：按优先级和 token 预算选择 active 记忆、相关 Episode 与最近消息，并输出 Context Manifest。
 - `src/runtime/memory-manager.mjs`：结构化记忆提取、高低水位压缩、MemoryDelta 校验和 memoryVersion 乐观锁。
@@ -127,3 +140,4 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `.agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eval.mjs`：100 轮上下文记忆确定性评测入口。
 - `.agents/skills/docs/context-memory-evaluation/assets/fixtures/`：上下文记忆评测的对话事件、标准答案和指标数据。
 - `src/evaluation/`、`scenarios/runtime/`：固定行为模型、进程故障注入、真实模型模式和独立场景验收的共用 Runner 与版本化资产。
+- `scripts/test-execution-governance.mjs`：Policy/Hook、Operation journal、双 SQLite owner 竞争、过期接管和旧 fencing token 拒绝的确定性回归入口。

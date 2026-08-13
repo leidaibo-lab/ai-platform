@@ -1,0 +1,389 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1720" viewBox="0 0 2400 1720" role="img" aria-labelledby="diagram-title diagram-desc">
+  <title id="diagram-title">AI 应用基础平台当前运行架构</title>
+  <desc id="diagram-desc">展示当前项目的渠道入口、Agent Runtime、模型输入与生成链、ExecutionPolicy 与 Hooks、Operation Journal、RunLease 与 fencing、SQLite 事实源、受管 Connector、实时事件、ChainTrace，以及尚未完成的 Sandbox、生产多实例和写操作恢复门禁。</desc>
+  <defs>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#1f57c8"/>
+    </marker>
+    <marker id="arrow-teal" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#137b72"/>
+    </marker>
+    <marker id="arrow-violet" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7055b7"/>
+    </marker>
+
+    <symbol id="icon-user" viewBox="0 0 48 48">
+      <circle cx="24" cy="14" r="8" fill="currentColor"/>
+      <path d="M9 42c0-9 6-15 15-15s15 6 15 15" fill="currentColor"/>
+    </symbol>
+    <symbol id="icon-monitor" viewBox="0 0 48 48">
+      <rect x="5" y="7" width="38" height="28" rx="3" fill="none" stroke="currentColor" stroke-width="3"/>
+      <path d="M16 42h16M24 35v7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-runtime" viewBox="0 0 48 48">
+      <circle cx="24" cy="24" r="8" fill="none" stroke="currentColor" stroke-width="3"/>
+      <path d="M24 4v7M24 37v7M4 24h7M37 24h7M10 10l5 5M33 33l5 5M38 10l-5 5M15 33l-5 5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-db" viewBox="0 0 48 48">
+      <ellipse cx="24" cy="10" rx="16" ry="6" fill="none" stroke="currentColor" stroke-width="3"/>
+      <path d="M8 10v13c0 3 7 6 16 6s16-3 16-6V10M8 23v13c0 3 7 6 16 6s16-3 16-6V23" fill="none" stroke="currentColor" stroke-width="3"/>
+    </symbol>
+    <symbol id="icon-doc" viewBox="0 0 48 48">
+      <path d="M11 5h18l9 9v29H11Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M29 5v10h9M17 24h15M17 31h15M17 38h10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-code" viewBox="0 0 48 48">
+      <path d="m18 12-12 12 12 12M30 12l12 12-12 12M27 7l-7 34" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-gateway" viewBox="0 0 48 48">
+      <path d="M7 13h29M29 6l7 7-7 7M41 35H12M19 28l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-loop" viewBox="0 0 48 48">
+      <path d="M39 18A16 16 0 0 0 12 10l-4 5M9 7l-1 8 8-1M9 30a16 16 0 0 0 27 8l4-5M39 41l1-8-8 1" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-tool" viewBox="0 0 48 48">
+      <path d="M29 8a11 11 0 0 0-13 14L5 33a4 4 0 0 0 0 6l4 4a4 4 0 0 0 6 0l11-11A11 11 0 0 0 40 19l-8 6-8-8 5-9Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-cloud" viewBox="0 0 48 48">
+      <path d="M14 39h23a8 8 0 0 0 1-16 14 14 0 0 0-27-2A9 9 0 0 0 14 39Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-event" viewBox="0 0 48 48">
+      <path d="M12 34h24l-4-6V19a8 8 0 0 0-16 0v9l-4 6ZM20 39a5 5 0 0 0 8 0" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-trace" viewBox="0 0 48 48">
+      <circle cx="21" cy="21" r="13" fill="none" stroke="currentColor" stroke-width="3"/>
+      <path d="m31 31 11 11M15 22l4-5 5 7 5-9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-shield" viewBox="0 0 48 48">
+      <path d="M24 4 40 10v12c0 10-6 18-16 22C14 40 8 32 8 22V10Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+      <path d="m17 24 5 5 10-11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-image" viewBox="0 0 48 48">
+      <rect x="6" y="7" width="36" height="34" rx="3" fill="none" stroke="currentColor" stroke-width="3"/>
+      <circle cx="17" cy="18" r="4" fill="none" stroke="currentColor" stroke-width="3"/>
+      <path d="m9 36 10-10 7 7 5-5 8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif; letter-spacing: 0; }
+      .title { font-size: 48px; font-weight: 700; fill: #174daf; }
+      .subtitle { font-size: 23px; font-weight: 500; fill: #29364a; }
+      .section-title { font-size: 27px; font-weight: 700; fill: #174daf; }
+      .section-subtitle { font-size: 19px; font-weight: 500; fill: #4d5d73; }
+      .node-title { font-size: 24px; font-weight: 700; fill: #174daf; }
+      .node-title-dark { font-size: 23px; font-weight: 700; fill: #233248; }
+      .body { font-size: 19px; font-weight: 500; fill: #2f3e53; }
+      .small { font-size: 17px; font-weight: 500; fill: #53647a; }
+      .micro { font-size: 15px; font-weight: 600; fill: #627289; }
+      .path-title { font-size: 24px; font-weight: 700; fill: #174daf; }
+      .path-label { font-size: 16px; font-weight: 600; fill: #33445a; }
+      .status-current { font-size: 16px; font-weight: 700; fill: #137b72; }
+      .status-limited { font-size: 16px; font-weight: 700; fill: #a35b12; }
+      .status-todo { font-size: 16px; font-weight: 700; fill: #7055b7; }
+      .box { fill: #ffffff; stroke: #1f57c8; stroke-width: 2.4; }
+      .box-blue { fill: #f5f8ff; stroke: #1f57c8; stroke-width: 2.4; }
+      .box-teal { fill: #f2fbf9; stroke: #137b72; stroke-width: 2.4; }
+      .box-amber { fill: #fff9ef; stroke: #b66a16; stroke-width: 2.4; }
+      .box-violet { fill: #f8f5ff; stroke: #7055b7; stroke-width: 2.4; }
+      .boundary { fill: none; stroke: #6086df; stroke-width: 2.4; stroke-dasharray: 10 9; }
+      .boundary-violet { fill: none; stroke: #8a72c8; stroke-width: 2.4; stroke-dasharray: 10 9; }
+      .line { fill: none; stroke: #1f57c8; stroke-width: 3; marker-end: url(#arrow-blue); }
+      .line-return { fill: none; stroke: #1f57c8; stroke-width: 2.6; marker-end: url(#arrow-blue); }
+      .line-teal { fill: none; stroke: #137b72; stroke-width: 3; marker-end: url(#arrow-teal); }
+      .line-observe { fill: none; stroke: #7055b7; stroke-width: 2.6; stroke-dasharray: 9 8; marker-end: url(#arrow-violet); }
+      .line-dashed { fill: none; stroke: #1f57c8; stroke-width: 2.4; stroke-dasharray: 9 8; marker-end: url(#arrow-blue); }
+      .icon-blue { color: #1f57c8; }
+      .icon-teal { color: #137b72; }
+      .icon-amber { color: #b66a16; }
+      .icon-violet { color: #7055b7; }
+    </style>
+  </defs>
+
+  <rect width="2400" height="1720" fill="#ffffff"/>
+
+  <!-- Header -->
+  <text x="38" y="68" class="title">AI Platform Runtime Architecture</text>
+  <path d="M38 84H782" stroke="#1f57c8" stroke-width="4" stroke-linecap="round"/>
+  <text x="38" y="118" class="subtitle">当前项目：Runtime 执行治理、事实所有权与同步输出边界</text>
+  <text x="1940" y="54" class="status-current">■ 当前落地</text>
+  <text x="2085" y="54" class="status-limited">■ 受限切片</text>
+  <text x="2245" y="54" class="status-todo">■ TODO</text>
+
+  <!-- User and channel entry -->
+  <rect x="850" y="20" width="700" height="126" rx="8" class="box"/>
+  <use href="#icon-user" x="892" y="52" width="58" height="58" class="icon-blue"/>
+  <text x="975" y="66" class="node-title">Channel / User　用户与渠道</text>
+  <text x="975" y="98" class="body">浏览器 Demo / JSON API / POST SSE</text>
+  <text x="975" y="124" class="small">提交当前输入、幂等标识与显式操作</text>
+
+  <path d="M1200 146V178" class="line"/>
+
+  <rect x="770" y="180" width="860" height="150" rx="8" class="box-blue"/>
+  <use href="#icon-monitor" x="812" y="226" width="60" height="60" class="icon-blue"/>
+  <text x="898" y="222" class="node-title">Demo Server / Channel HTTP Adapter</text>
+  <text x="898" y="257" class="body">会话资源、JSON Run、POST SSE、取消、资产读取</text>
+  <text x="898" y="290" class="small">把 Runtime 生命周期事件映射为渠道协议；终态由 Adapter 交付</text>
+
+  <!-- Left model-input and generation pipeline -->
+  <rect x="28" y="190" width="570" height="900" rx="8" class="boundary"/>
+  <text x="56" y="230" class="section-title">模型输入与生成链</text>
+  <text x="56" y="258" class="section-subtitle">构建本轮可见信息，并统一访问模型</text>
+
+  <rect x="64" y="286" width="498" height="106" rx="8" class="box-blue"/>
+  <use href="#icon-db" x="88" y="311" width="54" height="54" class="icon-blue"/>
+  <text x="164" y="324" class="node-title">Conversation Snapshot</text>
+  <text x="164" y="354" class="small">消息 / active 记忆 / Episode / 引用</text>
+  <text x="164" y="379" class="micro">从 SQLite 事实源读取，不信任渠道重复正文</text>
+
+  <path d="M313 392V418" class="line"/>
+  <rect x="64" y="420" width="498" height="106" rx="8" class="box-blue"/>
+  <use href="#icon-doc" x="88" y="445" width="54" height="54" class="icon-blue"/>
+  <text x="164" y="458" class="node-title">Context Planner</text>
+  <text x="164" y="488" class="small">优先级 / Token 预算 / 高低水位</text>
+  <text x="164" y="513" class="micro">系统拥有的信息 ≠ 模型本轮看到的信息</text>
+
+  <path d="M313 526V552" class="line"/>
+  <rect x="64" y="554" width="498" height="106" rx="8" class="box-blue"/>
+  <use href="#icon-code" x="88" y="579" width="54" height="54" class="icon-blue"/>
+  <text x="164" y="592" class="node-title">Context Manifest / Model Input</text>
+  <text x="164" y="622" class="small">本轮装箱结果 / 可观测 Token 分段</text>
+  <text x="164" y="647" class="micro">稳定平台消息转换为模型可用格式</text>
+
+  <path d="M313 660V686" class="line"/>
+  <rect x="64" y="688" width="498" height="106" rx="8" class="box-blue"/>
+  <use href="#icon-gateway" x="88" y="713" width="54" height="54" class="icon-blue"/>
+  <text x="164" y="726" class="node-title">GatewayClient</text>
+  <text x="164" y="756" class="small">统一重试 / 模型别名 / 调用分流</text>
+  <text x="164" y="781" class="micro">Runtime 唯一模型生成客户端</text>
+
+  <path d="M313 794V820" class="line"/>
+  <rect x="64" y="822" width="498" height="106" rx="8" class="box-blue"/>
+  <use href="#icon-loop" x="88" y="847" width="54" height="54" class="icon-blue"/>
+  <text x="164" y="860" class="node-title">AI SDK Core / ToolLoopAgent</text>
+  <text x="164" y="890" class="small">generate / stream / tools / Output.object</text>
+  <text x="164" y="915" class="micro">有界多步调用；SDK 自动重试关闭</text>
+
+  <path d="M313 928V954" class="line"/>
+  <rect x="64" y="956" width="498" height="106" rx="8" class="box-violet"/>
+  <use href="#icon-cloud" x="88" y="981" width="54" height="54" class="icon-violet"/>
+  <text x="164" y="994" class="node-title">LiteLLM Proxy → 上游 API</text>
+  <text x="164" y="1024" class="small">模型网关：key / alias / route / budget</text>
+  <text x="164" y="1049" class="micro">独立进程；不拥有 Session、工具或业务流程</text>
+
+  <!-- Agent Runtime -->
+  <path d="M1200 330V366" class="line"/>
+  <rect x="640" y="368" width="1035" height="944" rx="8" class="box"/>
+  <use href="#icon-runtime" x="680" y="404" width="62" height="62" class="icon-blue"/>
+  <text x="770" y="418" class="section-title">Agent Runtime / ChatRuntime</text>
+  <text x="770" y="451" class="body">Session / Run 应用服务：创建或重放 Run，协调执行、验收、恢复与生命周期</text>
+
+  <rect x="706" y="486" width="904" height="418" rx="8" class="box-blue"/>
+  <use href="#icon-loop" x="736" y="505" width="52" height="52" class="icon-blue"/>
+  <text x="808" y="538" class="node-title">Runtime Execution Cycle　运行循环</text>
+
+  <rect x="758" y="576" width="330" height="112" rx="8" class="box"/>
+  <text x="786" y="610" class="node-title-dark">1. 规划本轮上下文</text>
+  <text x="786" y="642" class="small">读取事实、装箱、预算检查</text>
+  <text x="786" y="670" class="micro">必要时先压缩再重新规划</text>
+
+  <rect x="1228" y="576" width="330" height="112" rx="8" class="box"/>
+  <text x="1256" y="610" class="node-title-dark">2. 处理模型输出</text>
+  <text x="1256" y="642" class="small">text / tool calls / image result</text>
+  <text x="1256" y="670" class="micro">无法提前写死下一步决策</text>
+
+  <rect x="1228" y="742" width="330" height="112" rx="8" class="box-amber"/>
+  <text x="1256" y="776" class="node-title-dark">3. 执行受管能力</text>
+  <text x="1256" y="808" class="small">Tool Registry / Connector / Image</text>
+  <text x="1256" y="836" class="micro">参数校验、allowlist、取消与截止时间</text>
+
+  <rect x="758" y="742" width="330" height="112" rx="8" class="box-teal"/>
+  <text x="786" y="776" class="node-title-dark">4. 验收、提交、继续</text>
+  <text x="786" y="808" class="small">Acceptance / SQLite / next step</text>
+  <text x="786" y="836" class="micro">模型完成 ≠ 系统接受完成</text>
+
+  <path d="M1088 632H1218" class="line"/>
+  <path d="M1393 688V732" class="line"/>
+  <path d="M1228 798H1098" class="line"/>
+  <path d="M923 742V699C923 692 930 688 946 688H979V698" class="line"/>
+
+  <rect x="688" y="930" width="286" height="110" rx="8" class="box-violet"/>
+  <text x="716" y="965" class="node-title-dark">ExecutionPolicy / Hooks</text>
+  <text x="716" y="997" class="small">版本化决策 / 默认拒绝</text>
+  <text x="716" y="1024" class="micro">只决策与观察；不读写事实</text>
+
+  <rect x="1010" y="930" width="286" height="110" rx="8" class="box-teal"/>
+  <text x="1038" y="965" class="node-title-dark">RunLeaseCoordinator</text>
+  <text x="1038" y="997" class="small">owner / renew / expiry</text>
+  <text x="1038" y="1024" class="micro">传递 fencing 凭证；Store 校验</text>
+
+  <rect x="1332" y="930" width="286" height="110" rx="8" class="box-blue"/>
+  <text x="1360" y="965" class="node-title-dark">ResilienceContext</text>
+  <text x="1360" y="997" class="small">共享截止时间 / 重试证据</text>
+  <text x="1360" y="1024" class="micro">首输出与工具副作用边界</text>
+
+  <rect x="688" y="1070" width="286" height="110" rx="8" class="box-blue"/>
+  <text x="716" y="1105" class="node-title-dark">ConversationCoordinator</text>
+  <text x="716" y="1137" class="small">同进程、同会话串行 Run</text>
+  <text x="716" y="1164" class="micro">与跨实例 lease 职责分离</text>
+
+  <rect x="1010" y="1070" width="286" height="110" rx="8" class="box-blue"/>
+  <text x="1038" y="1105" class="node-title-dark">Memory Manager</text>
+  <text x="1038" y="1137" class="small">MemoryDelta / Episode / CAS</text>
+  <text x="1038" y="1164" class="micro">压缩已提交消息，不拥有 Run</text>
+
+  <rect x="1332" y="1070" width="286" height="110" rx="8" class="box-teal"/>
+  <text x="1360" y="1105" class="node-title-dark">Result Acceptance</text>
+  <text x="1360" y="1137" class="micro">Policy / evidence / reason code</text>
+  <text x="1360" y="1164" class="micro">独立验收；Runtime 原子提交终态</text>
+
+  <rect x="688" y="1202" width="930" height="88" rx="8" class="boundary-violet"/>
+  <text x="716" y="1233" class="node-title-dark">后续安全门禁（TODO，不在当前执行主链）</text>
+  <text x="716" y="1261" class="small">Sandbox　|　生产多实例部署与跨实例取消</text>
+  <text x="716" y="1284" class="micro">写操作确认 / 外部幂等 / readback / unknown 人工处理 / compensation</text>
+
+  <!-- Cross links between runtime and model pipeline -->
+  <path d="M758 624H605V474H572" class="line-return"/>
+  <text x="612" y="455" class="micro">规划请求</text>
+  <path d="M572 741H624V618H748" class="line"/>
+  <text x="604" y="720" class="micro">Model Input</text>
+  <path d="M572 874H628V656H748" class="line"/>
+  <text x="610" y="853" class="micro">模型结果</text>
+
+  <!-- Persistence boundary -->
+  <rect x="1768" y="188" width="602" height="404" rx="8" class="box-teal"/>
+  <use href="#icon-db" x="1810" y="226" width="64" height="64" class="icon-teal"/>
+  <text x="1900" y="242" class="section-title">SQLite Session Facts</text>
+  <text x="1900" y="276" class="section-subtitle">会话事实源 / 可恢复历史</text>
+
+  <rect x="1810" y="312" width="518" height="112" rx="8" fill="#ffffff" stroke="#137b72" stroke-width="2"/>
+  <text x="1840" y="350" class="node-title-dark">Conversation / Message / Run</text>
+  <text x="1840" y="384" class="small">Message / AcceptanceResult / Memory / Asset / usage</text>
+  <text x="1840" y="412" class="micro">会话、候选验收与上下文的唯一事实源</text>
+
+  <rect x="1810" y="446" width="518" height="116" rx="8" fill="#ffffff" stroke="#137b72" stroke-width="2"/>
+  <text x="1840" y="482" class="node-title-dark">Operation Journal / ToolCall Projection</text>
+  <text x="1840" y="516" class="small">RunLease：owner / expiry / fencing token</text>
+  <text x="1840" y="546" class="micro">同事务投影与关键写校验；Store 独占事实</text>
+
+  <path d="M1675 466H1758" class="line-teal"/>
+  <text x="1716" y="448" text-anchor="middle" class="micro">提交事实</text>
+  <path d="M1768 566H1665" class="line-teal"/>
+  <text x="1716" y="548" text-anchor="middle" class="micro">加载 / 接管</text>
+
+  <!-- Governed tools and environment -->
+  <rect x="1768" y="622" width="602" height="370" rx="8" class="box-amber"/>
+  <use href="#icon-tool" x="1810" y="650" width="62" height="62" class="icon-amber"/>
+  <text x="1900" y="668" class="section-title">受管能力与环境</text>
+  <text x="1900" y="702" class="section-subtitle">Connector 只执行 Runtime 已授权的归一化请求</text>
+
+  <rect x="1810" y="734" width="518" height="88" rx="8" fill="#ffffff" stroke="#b66a16" stroke-width="2"/>
+  <text x="1840" y="768" class="node-title-dark">Tool Registry</text>
+  <text x="1840" y="801" class="small">server-side schema / allowlist / deterministic route</text>
+
+  <rect x="1810" y="850" width="246" height="108" rx="8" fill="#ffffff" stroke="#b66a16" stroke-width="2"/>
+  <text x="1834" y="885" class="node-title-dark">Open-Meteo</text>
+  <text x="1834" y="917" class="small">只读天气 Connector</text>
+  <text x="1834" y="944" class="micro">固定 HTTPS 端点</text>
+
+  <rect x="2082" y="850" width="246" height="108" rx="8" fill="#ffffff" stroke="#b66a16" stroke-width="2"/>
+  <use href="#icon-image" x="2102" y="878" width="48" height="48" class="icon-amber"/>
+  <text x="2162" y="885" class="node-title-dark">Image Generate</text>
+  <text x="2162" y="917" class="small">Asset Store Adapter</text>
+  <text x="2162" y="944" class="micro">显式允许的 C2 写切片</text>
+
+  <path d="M1558 798H1758" class="line"/>
+  <text x="1658" y="777" text-anchor="middle" class="micro">受权执行</text>
+  <path d="M1768 838H1648V848H1558" class="line-return"/>
+  <text x="1660" y="872" text-anchor="middle" class="micro">结果回填</text>
+  <path d="M2068 822V842" class="line"/>
+
+  <!-- Real-time events and observability -->
+  <rect x="1768" y="1032" width="602" height="280" rx="8" class="boundary-violet"/>
+  <text x="1800" y="1070" class="section-title">实时输出与可观测（独立旁路）</text>
+
+  <rect x="1800" y="1094" width="258" height="92" rx="8" class="box-violet"/>
+  <use href="#icon-event" x="1820" y="1114" width="50" height="50" class="icon-violet"/>
+  <text x="1884" y="1128" class="node-title-dark">RunEventSink</text>
+  <text x="1884" y="1158" class="small">易失 / 有序 / 失败隔离</text>
+
+  <rect x="2080" y="1094" width="258" height="92" rx="8" class="box-violet"/>
+  <use href="#icon-trace" x="2100" y="1114" width="50" height="50" class="icon-violet"/>
+  <text x="2164" y="1128" class="node-title-dark">ChainTracer</text>
+  <text x="2164" y="1158" class="small">Span / ID / 脱敏错误</text>
+
+  <rect x="1800" y="1210" width="258" height="72" rx="8" fill="#ffffff" stroke="#7055b7" stroke-width="2"/>
+  <text x="1828" y="1242" class="node-title-dark">Demo SSE Adapter</text>
+  <text x="1828" y="1268" class="micro">text-delta / tool-* / terminal</text>
+
+  <rect x="2080" y="1210" width="258" height="72" rx="8" fill="#ffffff" stroke="#7055b7" stroke-width="2"/>
+  <text x="2108" y="1242" class="node-title-dark">OTel → Phoenix</text>
+  <text x="2108" y="1268" class="micro">后端已选；正式 Runtime 验收 TODO</text>
+
+  <path d="M1929 1186V1200" class="line-observe"/>
+  <path d="M2209 1186V1200" class="line-observe"/>
+  <path d="M1650 1038V1060H1758" class="line-observe"/>
+  <text x="1650" y="1114" text-anchor="middle" class="micro">事件旁路</text>
+
+  <!-- Bottom path summaries -->
+  <rect x="24" y="1350" width="928" height="300" rx="8" class="box"/>
+  <text x="54" y="1390" class="path-title">主执行路径（Main Execution Path）</text>
+  <use href="#icon-user" x="66" y="1432" width="48" height="48" class="icon-blue"/>
+  <text x="90" y="1500" text-anchor="middle" class="path-label">Channel</text>
+  <path d="M128 1456H198" class="line"/>
+  <use href="#icon-monitor" x="214" y="1432" width="48" height="48" class="icon-blue"/>
+  <text x="238" y="1500" text-anchor="middle" class="path-label">Adapter</text>
+  <path d="M276 1456H346" class="line"/>
+  <use href="#icon-runtime" x="362" y="1432" width="48" height="48" class="icon-blue"/>
+  <text x="386" y="1500" text-anchor="middle" class="path-label">Runtime</text>
+  <path d="M424 1456H494" class="line"/>
+  <use href="#icon-loop" x="510" y="1432" width="48" height="48" class="icon-blue"/>
+  <text x="534" y="1500" text-anchor="middle" class="path-label">AI SDK</text>
+  <path d="M572 1456H642" class="line"/>
+  <use href="#icon-tool" x="658" y="1432" width="48" height="48" class="icon-amber"/>
+  <text x="682" y="1500" text-anchor="middle" class="path-label">Tools</text>
+  <path d="M720 1456H790" class="line"/>
+  <use href="#icon-shield" x="806" y="1432" width="48" height="48" class="icon-teal"/>
+  <text x="830" y="1500" text-anchor="middle" class="path-label">Acceptance</text>
+  <path d="M830 1520V1560H386V1520" class="line-return"/>
+  <text x="608" y="1588" text-anchor="middle" class="small">工具结果回填循环；验收通过后提交最终事实</text>
+  <text x="54" y="1622" class="micro">普通 C1：R2/A0　|　天气确定性切片：受限 R3/A3　|　图片生成开发切片：R2/A2</text>
+
+  <rect x="976" y="1350" width="666" height="300" rx="8" class="box-teal"/>
+  <text x="1006" y="1390" class="path-title">持久化与恢复路径（Persistence Path）</text>
+  <use href="#icon-runtime" x="1036" y="1440" width="48" height="48" class="icon-blue"/>
+  <text x="1060" y="1510" text-anchor="middle" class="path-label">Runtime</text>
+  <path d="M1100 1464H1208" class="line-teal"/>
+  <use href="#icon-db" x="1224" y="1440" width="48" height="48" class="icon-teal"/>
+  <text x="1248" y="1510" text-anchor="middle" class="path-label">SQLite Facts</text>
+  <path d="M1288 1464H1396" class="line-teal"/>
+  <use href="#icon-shield" x="1412" y="1440" width="48" height="48" class="icon-amber"/>
+  <text x="1436" y="1510" text-anchor="middle" class="path-label">Checkpoint</text>
+  <path d="M1436 1528V1560H1060V1528" class="line-teal"/>
+  <text x="1248" y="1590" text-anchor="middle" class="small">幂等重放 / completed 只读 ToolResult 后窄恢复</text>
+  <text x="1006" y="1618" class="micro">Operation Journal + RunLease/fencing 已落地</text>
+  <text x="1006" y="1641" class="micro">生产多实例 / 未知副作用恢复仍需门禁</text>
+
+  <rect x="1666" y="1350" width="710" height="300" rx="8" class="box-violet"/>
+  <text x="1696" y="1390" class="path-title">实时输出 / 可观测路径（Side Channels）</text>
+  <use href="#icon-runtime" x="1714" y="1430" width="46" height="46" class="icon-blue"/>
+  <text x="1737" y="1495" text-anchor="middle" class="path-label">Runtime</text>
+  <path d="M1774 1453H1844" class="line-observe"/>
+  <use href="#icon-event" x="1860" y="1430" width="46" height="46" class="icon-violet"/>
+  <text x="1883" y="1495" text-anchor="middle" class="path-label">RunEventSink</text>
+  <path d="M1922 1453H1992" class="line-observe"/>
+  <use href="#icon-monitor" x="2008" y="1430" width="46" height="46" class="icon-violet"/>
+  <text x="2031" y="1495" text-anchor="middle" class="path-label">SSE Adapter</text>
+
+  <use href="#icon-runtime" x="1714" y="1540" width="46" height="46" class="icon-blue"/>
+  <text x="1737" y="1605" text-anchor="middle" class="path-label">Runtime</text>
+  <path d="M1774 1563H1844" class="line-observe"/>
+  <use href="#icon-trace" x="1860" y="1540" width="46" height="46" class="icon-violet"/>
+  <text x="1883" y="1605" text-anchor="middle" class="path-label">ChainTracer</text>
+  <path d="M1922 1563H1992" class="line-observe"/>
+  <use href="#icon-cloud" x="2008" y="1540" width="46" height="46" class="icon-violet"/>
+  <text x="2031" y="1605" text-anchor="middle" class="path-label">OTel / Phoenix</text>
+  <text x="2094" y="1459" class="micro">易失事件 ≠ SQLite 事实</text>
+  <text x="2094" y="1569" class="micro">Trace ≠ 业务事实源</text>
+  <text x="1696" y="1630" class="micro">订阅 / exporter 失败不得反向污染 Run；慢订阅者仍增加当前延迟</text>
+
+  <text x="28" y="1692" class="small">图示边界：当前单仓、本地 Demo Runtime 与 LiteLLM 主链。ExecutionPolicy/Hook、Operation Journal、SQLite RunLease/fencing 为已落地基础；Sandbox、生产多实例和完整写操作恢复仍是 TODO 门禁。</text>
+</svg>

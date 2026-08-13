@@ -11,6 +11,7 @@ import { RuntimeExecutionError, RuntimeInputError, createChatRuntime } from "../
 import { createConversationCoordinator } from "../src/runtime/conversation-coordinator.mjs";
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { createMemoryManager } from "../src/runtime/memory-manager.mjs";
+import { createRunEventSink } from "../src/runtime/run-event-sink.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
 import { createLocalImageAssetStore } from "../src/storage/image-asset-store.mjs";
 import { createToolRegistry } from "../src/tools/tool-registry.mjs";
@@ -220,37 +221,12 @@ async function streamConversationRun(req, res, conversationId) {
   });
   res.write(": connected\n\n");
 
-  /** 将已创建或幂等命中的 Run 身份发送给渠道。 */
-  function sendRunStarted({ run, replayed }) {
-    writeSseEvent(res, "run-started", {
-      runId: run.id,
-      requestId: run.requestId,
-      status: run.status,
-      replayed,
-    });
-  }
-
-  /** 把单个模型文本增量立即写入当前 HTTP 响应。 */
-  function sendTextDelta(delta) {
-    writeSseEvent(res, "text-delta", { delta });
-  }
-
-  /** 将 Runtime 工具阶段映射为命名 SSE 事件，不发送工具输入或完整结果。 */
-  function sendToolEvent(event) {
-    writeSseEvent(res, `tool-${event.type}`, event);
-  }
-
-  /** 将已持久化图片资产引用作为结构化 SSE 事件交付。 */
-  function sendArtifactCreated(artifact) {
-    writeSseEvent(res, "artifact-created", artifact);
-  }
+  const eventSubscriber = createSseRunEventSubscriber(res);
 
   try {
     await runTracedConversation(conversationId, body, "sse", {
-      onRunStarted: sendRunStarted,
-      onToolEvent: sendToolEvent,
-      onArtifactCreated: sendArtifactCreated,
-      onTextDelta: sendTextDelta,
+      eventSubscribers: [eventSubscriber],
+      streamText: true,
       /** 在渠道交付阶段写入最终 completed 事件。 */
       onCompleted(result) {
         writeSseEvent(res, "completed", result);
@@ -276,7 +252,7 @@ async function streamConversationRun(req, res, conversationId) {
  * @param {string} conversationId - 会话 ID。
  * @param {object} body - 已解析 Run 输入。
  * @param {"json"|"sse"} transport - 当前渠道协议。
- * @param {object} delivery - 渠道回调。
+ * @param {object} delivery - 渠道终态回调和可选 Runtime 事件订阅者。
  * @returns {Promise<object|null>} Runtime 结果；已交付 SSE 错误时返回 null。
  */
 async function runTracedConversation(conversationId, body, transport, delivery) {
@@ -291,27 +267,35 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
     async (rootSpan) => {
       let runId = null;
       let chainTraceId = null;
-      try {
-        const result = await chatRuntime.runConversation(conversationId, body, {
-          /** Runtime 创建业务 Chain ID 后立即补到根 Span。 */
-          onChainTraceStarted(input) {
-            chainTraceId = input.chainTraceId;
-            rootSpan.setAttribute("ai.platform.chain_trace_id", chainTraceId);
-          },
-          /** Run 创建或重放后补齐 Run ID，并继续通知渠道。 */
-          async onRunStarted(input) {
-            runId = input.run.id;
-            chainTraceId = input.chainTraceId || chainTraceId;
+      const eventSink = createRunEventSink({
+        subscribers: [
+          /** 把 Runtime 关联事件写入当前根 Span，不依赖任何渠道协议。 */
+          async function observeRuntimeIdentity(event) {
+            if (event.type === "chain-trace.started") {
+              chainTraceId = event.chainTraceId;
+              rootSpan.setAttribute("ai.platform.chain_trace_id", chainTraceId);
+              return;
+            }
+            if (event.type !== "run.started") return;
+            runId = event.runId;
+            chainTraceId = event.chainTraceId || chainTraceId;
             rootSpan.setAttributes({
               "ai.platform.run_id": runId,
               "ai.platform.chain_trace_id": chainTraceId,
-              "ai.platform.run.replayed": input.replayed,
+              "ai.platform.run.replayed": event.replayed,
             });
-            if (typeof delivery.onRunStarted === "function") await delivery.onRunStarted(input);
           },
-          onToolEvent: delivery.onToolEvent,
-          onArtifactCreated: delivery.onArtifactCreated,
-          onTextDelta: delivery.onTextDelta,
+          ...(delivery.eventSubscribers || []),
+        ],
+        /** 记录旁路订阅失败；不记录异常正文，也不改变 Runtime 执行事实。 */
+        onSubscriberError(error) {
+          rootSpan.recordError(error, { "ai.platform.event.subscriber.status": "failed" });
+        },
+      });
+      try {
+        const result = await chatRuntime.runConversation(conversationId, body, {
+          eventSink,
+          streamText: Boolean(delivery.streamText),
         });
         const finalStatus = result.cancelled ? "cancelled" : "completed";
         rootSpan.setAttributes({
@@ -348,6 +332,45 @@ async function runTracedConversation(conversationId, body, transport, delivery) 
       }
     },
   );
+}
+
+/**
+ * 创建 Runtime Event 到 POST SSE 的渠道 Adapter，只暴露稳定公开字段。
+ *
+ * @param {import("node:http").ServerResponse} res - 当前 SSE 响应。
+ * @returns {(event: object) => void} Runtime 事件订阅者。
+ */
+function createSseRunEventSubscriber(res) {
+  /** 将一个 Runtime 生命周期事件映射为现有 SSE 事件名与公开载荷。 */
+  return function sendRuntimeEvent(event) {
+    if (event.type === "run.started") {
+      writeSseEvent(res, "run-started", {
+        runId: event.runId,
+        requestId: event.requestId,
+        status: event.status,
+        replayed: event.replayed,
+      });
+      return;
+    }
+    if (event.type === "text.delta") {
+      writeSseEvent(res, "text-delta", { delta: event.delta });
+      return;
+    }
+    if (event.type.startsWith("tool.")) {
+      writeSseEvent(res, event.type.replace("tool.", "tool-"), {
+        type: event.type.slice("tool.".length),
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        title: event.title,
+        status: event.status,
+        source: event.source,
+        observedAt: event.observedAt,
+        error: event.error,
+      });
+      return;
+    }
+    if (event.type === "artifact.created") writeSseEvent(res, "artifact-created", event.artifact);
+  };
 }
 
 /** 生成根 Span 和渠道 Span 共用的安全业务关联属性。 */

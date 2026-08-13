@@ -11,6 +11,7 @@ import { parseOtlpHeaders } from "../src/config/env.mjs";
 import { createGatewayClient } from "../src/gateway/gateway-client.mjs";
 import { createChainTracer } from "../src/observability/chain-tracer.mjs";
 import { initializeOpenTelemetry } from "../src/observability/otel-runtime.mjs";
+import { createRunEventSink } from "../src/runtime/run-event-sink.mjs";
 import { createTestRuntime } from "./test-runtime.mjs";
 import { PocFanoutSpanExporter } from "./run-chain-trace-backend-poc.mjs";
 
@@ -405,24 +406,32 @@ async function observeRun(runtime, conversationId, body, transport) {
     /** 在测试根 Span 中组合 Runtime 回调和最终交付阶段。 */
     async (rootSpan) => {
       try {
+        const eventSink = createRunEventSink({
+          subscribers: [
+            /** 记录 Runtime 业务身份，并仅为 SSE 测试收集文本增量。 */
+            function observeRuntimeEvent(event) {
+              if (event.type === "chain-trace.started") {
+                chainTraceId = event.chainTraceId;
+                rootSpan.setAttribute("ai.platform.chain_trace_id", chainTraceId);
+                return;
+              }
+              if (event.type === "run.started") {
+                runId = event.runId;
+                chainTraceId = event.chainTraceId || chainTraceId;
+                rootSpan.setAttributes({
+                  "ai.platform.run_id": runId,
+                  "ai.platform.chain_trace_id": chainTraceId,
+                  "ai.platform.run.replayed": event.replayed,
+                });
+                return;
+              }
+              if (transport === "sse" && event.type === "text.delta") collectDelta(event.delta);
+            },
+          ],
+        });
         const runtimeResult = await runtime.runConversation(conversationId, body, {
-          /** 记录业务 Chain ID。 */
-          onChainTraceStarted(input) {
-            chainTraceId = input.chainTraceId;
-            rootSpan.setAttribute("ai.platform.chain_trace_id", chainTraceId);
-          },
-          /** 记录 Run ID、重放状态和最终业务 Chain ID。 */
-          onRunStarted(input) {
-            runId = input.run.id;
-            chainTraceId = input.chainTraceId || chainTraceId;
-            rootSpan.setAttributes({
-              "ai.platform.run_id": runId,
-              "ai.platform.chain_trace_id": chainTraceId,
-              "ai.platform.run.replayed": input.replayed,
-            });
-          },
-          /** 仅为 SSE 测试收集文本增量。 */
-          onTextDelta: transport === "sse" ? collectDelta : undefined,
+          eventSink,
+          streamText: transport === "sse",
         });
         rootSpan.setAttributes({
           "ai.platform.run.status": "completed",

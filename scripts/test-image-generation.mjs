@@ -10,6 +10,7 @@ import { createConversationCoordinator } from "../src/runtime/conversation-coord
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { estimateMessagesTokens } from "../src/runtime/context-budget.mjs";
 import { createMemoryManager } from "../src/runtime/memory-manager.mjs";
+import { createRunEventSink } from "../src/runtime/run-event-sink.mjs";
 import { createConversationStore } from "../src/storage/conversation-store.mjs";
 import { ImageAssetStoreError, createLocalImageAssetStore } from "../src/storage/image-asset-store.mjs";
 
@@ -41,12 +42,12 @@ async function testImageGenerationPersistenceAndReplay() {
     };
     const deliveredArtifacts = [];
     /** 记录 Runtime 在完成事件前交付的图片资产引用。 */
-    function recordArtifact(artifact) {
-      deliveredArtifacts.push(artifact);
+    function recordArtifact(event) {
+      if (event.type === "artifact.created") deliveredArtifacts.push(event.artifact);
     }
 
     const first = await fixture.runtime.runConversation(conversation.id, input, {
-      onArtifactCreated: recordArtifact,
+      eventSink: createRunEventSink({ subscribers: [recordArtifact] }),
     });
     const replay = await fixture.runtime.runConversation(conversation.id, input);
     const detail = fixture.runtime.getConversation(conversation.id);
@@ -106,15 +107,15 @@ async function testImageGenerationCancellation() {
     const conversation = fixture.runtime.createConversation();
     let runId = null;
     /** 保存 Runtime 已创建的 Run ID，供测试调用显式取消。 */
-    function recordRunStarted({ run }) {
-      runId = run.id;
+    function recordRunStarted(event) {
+      if (event.type === "run.started") runId = event.runId;
     }
     const resultPromise = fixture.runtime.runConversation(conversation.id, {
       operation: "image.generate",
       requestId: "image-cancel-request",
       clientMessageId: "image-cancel-message",
       message: "生成一张等待取消的图片",
-    }, { onRunStarted: recordRunStarted });
+    }, { eventSink: createRunEventSink({ subscribers: [recordRunStarted] }) });
     await gatewayClient.waitUntilGenerating();
     const cancelled = fixture.runtime.cancelConversationRun(conversation.id, runId);
     const result = await resultPromise;
