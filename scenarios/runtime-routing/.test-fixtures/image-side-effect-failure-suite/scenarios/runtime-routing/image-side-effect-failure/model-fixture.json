@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "runtime-routing-model-fixture.v1",
+  "classifierTurns": [
+    {
+      "conversationId": "unexpected-image-call",
+      "turnId": "backend-fails-after-call",
+      "output": {
+        "operation": "image.generate",
+        "confidence": 0.99,
+        "useActiveImage": false,
+        "relevantMessages": []
+      }
+    }
+  ],
+  "chatTurns": [
+    {
+      "conversationId": "unexpected-image-call",
+      "turnId": "backend-fails-after-call",
+      "content": "固定文本后端不应在这个负控轮次被调用。"
+    }
+  ],
+  "imageTurns": [
+    {
+      "conversationId": "unexpected-image-call",
+      "turnId": "backend-fails-after-call",
+      "operation": "image.generate",
+      "behavior": {
+        "status": "failed",
+        "errorCode": "fixture_image_backend_failed"
+      }
+    }
+  ]
+}

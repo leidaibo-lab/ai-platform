@@ -8,6 +8,64 @@ const RECOVERY_SOURCE_STATUS = Object.freeze({
   regenerate: "completed",
   continue: "cancelled",
 });
+const ROUTING_CONTEXT_STRATEGY_VERSION = "routing-context.v2";
+const ROUTING_CONTEXT_DEFAULT_MAX_MESSAGES = 12;
+const ROUTING_CONTEXT_MAX_MESSAGES = 50;
+const ROUTING_CONTEXT_MESSAGE_MAX_CHARS = 1000;
+const ROUTING_CONTEXT_URL_PLACEHOLDER = "[url]";
+const ROUTING_CONTEXT_DATA_URL_PLACEHOLDER = "[data-url]";
+const ROUTING_CONTEXT_TRUNCATED_CONTENT_PLACEHOLDER = "[message-content-truncated]";
+const ROUTING_URL_HARD_BOUNDARIES = new Set([
+  "<", ">", "\"", "'", "`", "\\",
+  "，", "。", "；", "！", "？", "、", "：",
+  "（", "）", "【", "】", "《", "》", "「", "」", "『", "』",
+]);
+const ROUTING_URL_TRAILING_PUNCTUATION = new Set([".", ",", ";", "!", "?", ":"]);
+const INTENT_DECISION_MAX_CANDIDATES = 8;
+const INTENT_DECISION_MAX_EVIDENCE_MESSAGES = 12;
+const INTENT_DECISION_OPERATIONS = Object.freeze([
+  "conversation.chat",
+  "image.generate",
+  "image.edit",
+]);
+const INTENT_DECISION_SOURCES = Object.freeze([
+  "attachment-constraint",
+  "structured-classifier",
+  "low-confidence-fallback",
+  "classification-fallback",
+  "invalid-candidate-fallback",
+  "invalid-context-evidence-fallback",
+]);
+
+/**
+ * @typedef {object} RoutingActiveImage
+ * @property {string} assetId - 会话内受控图片资产 ID。
+ * @property {string} source - 图片来源类型，如 uploaded、generated 或 edited。
+ * @property {string} anchorMessageId - 最近一次把图片纳入会话事实的消息 ID。
+ * @property {number} anchorSeq - 锚点消息的单调递增序号。
+ * @property {string|null} originRunId - 锚点消息所属 Run。
+ */
+
+/**
+ * @typedef {object} RoutingContextMessage
+ * @property {string} id - 不可变消息 ID。
+ * @property {number} seq - 会话内消息序号。
+ * @property {'user'|'assistant'} role - 消息角色。
+ * @property {string} displayContent - 已移除 URL 的完整有界正文，超限时只返回稳定占位符。
+ * @property {boolean} contentTruncated - 原始安全正文是否超过单条消息预算。
+ * @property {string} runOperation - 消息所属 Run 的真实 operation。
+ * @property {boolean} hasImageArtifact - 消息是否锚定当前时刻可用的图片。
+ */
+
+/**
+ * @typedef {object} RoutingContextSnapshot
+ * @property {'routing-context.v2'} strategyVersion - 快照推导策略版本。
+ * @property {string} conversationId - 会话 ID。
+ * @property {number} conversationVersion - 分类读取时的会话乐观锁版本。
+ * @property {RoutingActiveImage|null} activeImage - 从消息事实推导的当前工作图片。
+ * @property {RoutingContextMessage[]} messages - 按 seq 升序排列的有界近期消息。
+ * @property {boolean} truncated - 是否省略更早消息或裁剪了消息正文。
+ */
 
 export class ConversationStoreError extends Error {
   /**
@@ -101,6 +159,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
       const latestRunRow = database
         .prepare("SELECT * FROM runs WHERE conversation_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1")
         .get(conversationId);
+      const activeImage = deriveActiveImage(database, conversationId, readCurrentDate());
 
       return {
         ...mapConversationRow(conversation),
@@ -113,13 +172,82 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
           items: memoryItems,
           episodes,
         },
+        workingContext: {
+          strategyVersion: ROUTING_CONTEXT_STRATEGY_VERSION,
+          conversationVersion: Number(conversation.version),
+          activeImage,
+        },
         lastRun: lastRunRow ? mapRunWithToolCalls(database, lastRunRow) : null,
         latestRun: latestRunRow ? mapRunWithToolCalls(database, latestRunRow) : null,
       };
     },
 
+    /**
+     * 从已提交消息、Run 和可用图片资产推导有界路由快照，不把上传暂存区当作会话上下文。
+     *
+     * @param {string} conversationId - 路由目标会话。
+     * @param {object} [options] - 路由窗口配置。
+     * @param {number} [options.maxMessages=12] - 返回的最近消息上限。
+     * @returns {RoutingContextSnapshot} 带会话版本、活动图片和近期消息的事实投影。
+     */
+    getRoutingContextSnapshot(
+      conversationId,
+      { maxMessages = ROUTING_CONTEXT_DEFAULT_MAX_MESSAGES } = {},
+    ) {
+      const conversation = getConversationOrThrow(database, conversationId);
+      const limit = normalizeRoutingContextMessageLimit(maxMessages);
+      const now = readCurrentDate();
+      const rows = database
+        .prepare(
+          `SELECT m.*, r.operation AS run_operation
+           FROM messages m
+           LEFT JOIN runs r ON r.id = m.run_id
+           WHERE m.conversation_id = ?
+             AND m.status = 'committed'
+           ORDER BY m.seq DESC
+           LIMIT ?`,
+        )
+        .all(conversationId, limit);
+      let contentTruncated = false;
+      const messages = rows
+        .reverse()
+        .map(
+          /** 将持久化消息收敛为分类器所需的最小有界事实。 */
+          (row) => {
+            const boundedContent = truncateRoutingMessage(row.display_content);
+            if (boundedContent.truncated) contentTruncated = true;
+            return {
+              id: row.id,
+              seq: Number(row.seq),
+              role: row.role,
+              displayContent: boundedContent.value,
+              contentTruncated: boundedContent.truncated,
+              runOperation: row.run_operation || "conversation.chat",
+              hasImageArtifact: Boolean(findMessageImageAsset(database, row, now)),
+            };
+          },
+        );
+      const messageCount = Number(
+        database
+          .prepare(
+            "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ? AND status = 'committed'",
+          )
+          .get(conversationId).count,
+      );
+
+      return {
+        strategyVersion: ROUTING_CONTEXT_STRATEGY_VERSION,
+        conversationId,
+        conversationVersion: Number(conversation.version),
+        activeImage: deriveActiveImage(database, conversationId, now),
+        messages,
+        truncated: contentTruncated || messageCount > rows.length,
+      };
+    },
+
     /** 原子更新会话标题或独立归档状态，不改变 active/closed 生命周期。 */
     updateConversation(conversationId, { title, archived } = {}) {
+      // 事务回调把摘要更新与会话事件作为同一事实提交。
       return withTransaction(database, () => {
         const conversation = getConversationOrThrow(database, conversationId);
         const nextTitle = title === undefined ? conversation.title : String(title);
@@ -145,6 +273,20 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
     },
 
     /**
+     * 按会话和幂等标识只读查询既有 Run，供 Runtime 在模型目录不可用时重放终止事实。
+     *
+     * @param {string} conversationId - Run 所属会话。
+     * @param {string} requestId - 渠道稳定幂等标识。
+     * @returns {object|null} 可重放的完整 Run 结果，缺失时返回 null。
+     */
+    findRunByRequestId(conversationId, requestId) {
+      const row = database
+        .prepare("SELECT * FROM runs WHERE conversation_id = ? AND request_id = ?")
+        .get(conversationId, requestId);
+      return row ? buildRunResult(database, row, true) : null;
+    },
+
+    /**
      * 幂等创建 Run 并先持久化用户消息；重复 requestId 返回已有 Run。
      *
      * @param {object} input - Run 和用户消息输入。
@@ -163,6 +305,8 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
       operation = "conversation.chat",
       deadlineAt = null,
       chainTraceId = null,
+      intentDecision = null,
+      expectedConversationVersion = null,
     }) {
       // Run、用户消息、序号和事件必须在同一事务创建。
       return withTransaction(database, () => {
@@ -172,6 +316,16 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
         if (existing) return buildRunResult(database, existing, true);
 
         const conversation = getConversationOrThrow(database, conversationId);
+        if (
+          expectedConversationVersion != null
+          && Number(conversation.version) !== Number(expectedConversationVersion)
+        ) {
+          throw new ConversationStoreError(
+            "Routing context is stale",
+            409,
+            "routing_context_stale",
+          );
+        }
         if (conversation.status !== "active") {
           throw new ConversationStoreError("Conversation is closed", 409, "conversation_closed");
         }
@@ -191,19 +345,26 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
         if (duplicateMessage) {
           throw new ConversationStoreError("clientMessageId has already been used", 409, "duplicate_client_message");
         }
-        validateRecoverySource(database, conversationId, sourceRunId, recoveryMode);
+        validateRecoverySource(database, conversationId, sourceRunId, recoveryMode, operation);
+        validateImageRunReferences(database, conversationId, operation, references);
 
         const runId = randomUUID();
         const messageId = randomUUID();
         const seq = Number(conversation.next_seq) + 1;
         const now = new Date().toISOString();
         const title = conversation.next_seq === 0 ? buildConversationTitle(displayContent) : conversation.title;
+        const sanitizedIntentDecision = sanitizeIntentDecision(
+          database,
+          conversationId,
+          intentDecision,
+        );
         database
           .prepare(
             `INSERT INTO runs (
               id, conversation_id, request_id, source_run_id, recovery_mode,
-              operation, status, model, deadline_at, chain_trace_id, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
+              operation, status, model, deadline_at, chain_trace_id, intent_decision_json,
+              created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             runId,
@@ -215,6 +376,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
             model,
             normalizeIsoTimestamp(deadlineAt),
             nullableString(chainTraceId),
+            jsonOrNull(sanitizedIntentDecision),
             now,
             now,
           );
@@ -246,6 +408,12 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
              WHERE id = ?`,
           )
           .run(title, seq, now, conversationId);
+        if (sanitizedIntentDecision) {
+          insertEvent(database, conversationId, "run.intent_resolved", {
+            runId,
+            ...sanitizedIntentDecision,
+          });
+        }
         insertEvent(database, conversationId, "message.created", { messageId, seq, role: "user" });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
       });
@@ -265,6 +433,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
       policyDecision,
       lease = null,
     }) {
+      // 事务回调原子校验 Run、去重工具调用并写入开始事件。
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
         if (run.conversation_id !== conversationId || run.status !== "running") {
@@ -367,6 +536,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
       readback = null,
       lease = null,
     }) {
+      // 事务回调把工具结果与完成事件绑定为单一持久化事实。
       return withTransaction(database, () => {
         const row = getToolCallOrThrow(database, runId, toolCallId);
         assertRunLease(database, runId, lease, readCurrentDate());
@@ -421,6 +591,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
       externalRequestId = null,
       lease = null,
     }) {
+      // 事务回调把公开失败字段与工具失败事件原子提交。
       return withTransaction(database, () => {
         const row = getToolCallOrThrow(database, runId, toolCallId);
         assertRunLease(database, runId, lease, readCurrentDate());
@@ -835,14 +1006,15 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
       if (!Array.isArray(assets) || assets.length === 0) {
         throw new ConversationStoreError("Image Run requires at least one asset", 400, "image_asset_required");
       }
-      return withTransaction(database, () => {
+      /** 原子登记图片资产、助手消息和完成状态，任一步失败都不留下部分元数据。 */
+      function commitImageRun() {
         const run = getRunOrThrow(database, runId);
         if (run.status === "completed") {
           assertTerminalReplayLease(database, runId, lease, readCurrentDate());
           return buildRunResult(database, run, true);
         }
-        if (run.status !== "running" || run.operation !== "image.generate") {
-          throw new ConversationStoreError("Run is not an active image generation", 409, "run_not_active");
+        if (run.status !== "running" || !["image.generate", "image.edit"].includes(run.operation)) {
+          throw new ConversationStoreError("Run is not an active image operation", 409, "run_not_active");
         }
         assertRunLease(database, runId, lease, readCurrentDate());
         const conversation = getConversationOrThrow(database, run.conversation_id);
@@ -866,7 +1038,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
               `INSERT INTO image_assets (
                 id, conversation_id, run_id, version, media_type, size_bytes, width, height,
                 sha256, source, status, storage_key, created_at, expires_at
-              ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, 'generated', 'available', ?, ?, NULL)`,
+              ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 'available', ?, ?, NULL)`,
             )
             .run(
               asset.assetId,
@@ -877,6 +1049,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
               asset.width,
               asset.height,
               asset.sha256,
+              run.operation === "image.edit" ? "edited" : "generated",
               asset.storageKey,
               now,
             );
@@ -906,18 +1079,55 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
         releaseRunLeaseAfterTerminal(database, run, lease, now);
         insertEvent(database, run.conversation_id, "run.completed", { runId, messageId, seq, role: "assistant" });
         return buildRunResult(database, database.prepare("SELECT * FROM runs WHERE id = ?").get(runId), false);
-      });
+      }
+      return withTransaction(database, commitImageRun);
+    },
+
+    /**
+     * 登记一张已写入 ImageAssetStore 的会话上传资产，不把物理 storageKey 暴露给渠道。
+     *
+     * @param {object} input - 会话 ID 与已校验图片资产元数据。
+     * @returns {object} 可公开的稳定 image_asset 引用。
+     */
+    createImageAsset({ conversationId, asset }) {
+      /** 原子登记上传资产元数据及对应会话事件。 */
+      function registerUploadedAsset() {
+        const conversation = getConversationOrThrow(database, conversationId);
+        if (conversation.status !== "active") {
+          throw new ConversationStoreError("Conversation is closed", 409, "conversation_closed");
+        }
+        const now = new Date().toISOString();
+        database
+          .prepare(
+            `INSERT INTO image_assets (
+              id, conversation_id, run_id, version, media_type, size_bytes, width, height,
+              sha256, source, status, storage_key, created_at, expires_at
+            ) VALUES (?, ?, NULL, 1, ?, ?, ?, ?, ?, 'uploaded', 'available', ?, ?, NULL)`,
+          )
+          .run(
+            asset.assetId,
+            conversationId,
+            asset.mediaType,
+            asset.sizeBytes,
+            asset.width,
+            asset.height,
+            asset.sha256,
+            asset.storageKey,
+            now,
+          );
+        insertEvent(database, conversationId, "artifact.uploaded", {
+          assetId: asset.assetId,
+          mediaType: asset.mediaType,
+        });
+        return mapImageAssetRow(database.prepare("SELECT * FROM image_assets WHERE id = ?").get(asset.assetId));
+      }
+      return withTransaction(database, registerUploadedAsset);
     },
 
     /** 读取当前会话拥有的可用图片资产及内部 storageKey，越权与缺失统一返回 404。 */
     readImageAsset(conversationId, assetId) {
       getConversationOrThrow(database, conversationId);
-      const row = database
-        .prepare("SELECT * FROM image_assets WHERE id = ? AND conversation_id = ? AND status = 'available'")
-        .get(assetId, conversationId);
-      if (!row || (row.expires_at && Date.parse(row.expires_at) <= Date.now())) {
-        throw new ConversationStoreError("Image asset not found", 404, "image_asset_not_found");
-      }
+      const row = getAvailableImageAssetOrThrow(database, conversationId, assetId);
       return { asset: mapImageAssetRow(row), storageKey: row.storage_key };
     },
 
@@ -993,6 +1203,7 @@ export function createConversationStore({ databasePath, clock = createCurrentDat
      * @returns {object} 当前终止状态；重复取消或完成竞态不会改写既有事实。
      */
     cancelRun({ conversationId, runId, partialContent = "", contextManifest, model, resilience, lease = null }) {
+      // 事务回调把取消状态、可选助手消息与事件作为一个终止事实提交。
       return withTransaction(database, () => {
         const run = getRunOrThrow(database, runId);
         if (run.conversation_id !== conversationId) {
@@ -1293,6 +1504,7 @@ function migrate(database) {
       error_code TEXT,
       deadline_at TEXT,
       chain_trace_id TEXT,
+      intent_decision_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(conversation_id, request_id)
@@ -1437,7 +1649,7 @@ function migrate(database) {
       CREATE TABLE IF NOT EXISTS image_assets (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
       version INTEGER NOT NULL,
       media_type TEXT NOT NULL,
       size_bytes INTEGER NOT NULL,
@@ -1470,7 +1682,12 @@ function migrate(database) {
     ensureColumn(database, "runs", "error_code", "TEXT");
     ensureColumn(database, "runs", "deadline_at", "TEXT");
     ensureColumn(database, "runs", "chain_trace_id", "TEXT");
+    ensureColumn(database, "runs", "intent_decision_json", "TEXT");
     ensureColumn(database, "tool_calls", "operation_id", "TEXT REFERENCES operations(id) ON DELETE SET NULL");
+    migrateImageAssetRunOwnership(database);
+    database.exec(
+      "CREATE INDEX IF NOT EXISTS image_assets_conversation_idx ON image_assets(conversation_id, created_at)",
+    );
     database.exec("CREATE INDEX IF NOT EXISTS conversations_archive_idx ON conversations(archived_at, updated_at DESC)");
   } finally {
     database.exec("PRAGMA foreign_keys = ON");
@@ -1486,6 +1703,7 @@ function migrateCancelledRunStatus(database) {
   const table = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runs'").get();
   if (/['"]cancelled['"]/i.test(String(table?.sql || ""))) return;
 
+  // 事务回调重建关联表并一次性切换到支持 cancelled 的约束。
   withTransaction(database, () => {
     database.exec(`
       CREATE TABLE runs_next (
@@ -1542,9 +1760,65 @@ function migrateCancelledRunStatus(database) {
   });
 }
 
+/** 重建图片资产与消息产物表，使上传资产可以在创建 Run 前拥有空 run_id。 */
+function migrateImageAssetRunOwnership(database) {
+  const columns = database.prepare("PRAGMA table_info(image_assets)").all();
+  const runIdColumn = columns.find(isRunIdColumn);
+  if (!runIdColumn || Number(runIdColumn.notnull) === 0) return;
+
+  /** 原子重建资产及消息关联表，升级失败时完整保留旧表。 */
+  function migrateImageAssetTables() {
+    database.exec(`
+      CREATE TABLE image_assets_next (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      media_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('available', 'blocked', 'expired')),
+      storage_key TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT
+    );
+      INSERT INTO image_assets_next (
+        id, conversation_id, run_id, version, media_type, size_bytes, width, height,
+        sha256, source, status, storage_key, created_at, expires_at
+      ) SELECT
+        id, conversation_id, run_id, version, media_type, size_bytes, width, height,
+        sha256, source, status, storage_key, created_at, expires_at
+      FROM image_assets;
+      CREATE TABLE message_artifacts_next (
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      asset_id TEXT NOT NULL REFERENCES image_assets_next(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      PRIMARY KEY(message_id, asset_id),
+      UNIQUE(message_id, position)
+    );
+      INSERT INTO message_artifacts_next (message_id, asset_id, position)
+      SELECT message_id, asset_id, position FROM message_artifacts;
+      DROP TABLE message_artifacts;
+      DROP TABLE image_assets;
+      ALTER TABLE image_assets_next RENAME TO image_assets;
+      ALTER TABLE message_artifacts_next RENAME TO message_artifacts;
+      CREATE INDEX image_assets_conversation_idx ON image_assets(conversation_id, created_at);
+    `);
+  }
+  withTransaction(database, migrateImageAssetTables);
+}
+
 /** 判断 PRAGMA 表信息行是否表示 status 列。 */
 function isStatusColumn(column) {
   return column.name === "status";
+}
+
+/** 判断 PRAGMA 表信息行是否表示 run_id 列。 */
+function isRunIdColumn(column) {
+  return column.name === "run_id";
 }
 
 /** 为既有 SQLite 数据库补充缺失列；表名、列名和定义只允许由迁移代码常量传入。 */
@@ -1859,6 +2133,17 @@ function assertRunLease(database, runId, credentials, nowDate, { requireActive =
   return row;
 }
 
+/** 查询当前会话拥有且未过期的图片资产，缺失和越权使用同一公开错误。 */
+function getAvailableImageAssetOrThrow(database, conversationId, assetId) {
+  const row = database
+    .prepare("SELECT * FROM image_assets WHERE id = ? AND conversation_id = ? AND status = 'available'")
+    .get(assetId, conversationId);
+  if (!row || (row.expires_at && Date.parse(row.expires_at) <= Date.now())) {
+    throw new ConversationStoreError("Image asset not found", 404, "image_asset_not_found");
+  }
+  return row;
+}
+
 /** 终态幂等读取允许省略凭证；一旦携带凭证，仍校验 owner/token 防止旧实例伪装重放。 */
 function assertTerminalReplayLease(database, runId, credentials, nowDate) {
   if (credentials == null) return null;
@@ -1929,12 +2214,19 @@ function requireStableIdentifier(value, fieldName) {
   return identifier;
 }
 
-/** 校验恢复来源属于当前会话且终止状态与恢复模式匹配。 */
-function validateRecoverySource(database, conversationId, sourceRunId, recoveryMode) {
+/** 在创建图片编辑 Run 前校验源资产归属和可用性，避免无效引用落成用户消息。 */
+function validateImageRunReferences(database, conversationId, operation, references) {
+  if (operation !== "image.edit") return;
+  const reference = Array.isArray(references) ? references[0] : null;
+  getAvailableImageAssetOrThrow(database, conversationId, reference?.assetId);
+}
+
+/** 校验恢复来源属于当前会话，且终止状态和真实 operation 均与恢复请求匹配。 */
+function validateRecoverySource(database, conversationId, sourceRunId, recoveryMode, operation) {
   if (!sourceRunId && !recoveryMode) return;
   const expectedStatus = RECOVERY_SOURCE_STATUS[recoveryMode];
   const source = sourceRunId ? database.prepare("SELECT * FROM runs WHERE id = ? AND conversation_id = ?").get(sourceRunId, conversationId) : null;
-  if (!source || !expectedStatus || source.status !== expectedStatus) {
+  if (!source || !expectedStatus || source.status !== expectedStatus || source.operation !== operation) {
     throw new ConversationStoreError("Recovery source is not valid for this mode", 409, "invalid_run_recovery_source");
   }
 }
@@ -2000,6 +2292,216 @@ function listImageAssetsForRun(database, runId) {
     .map(mapImageAssetRow);
 }
 
+/** 把调用方路由窗口限制为稳定正整数，防止分类上下文无界读取。 */
+function normalizeRoutingContextMessageLimit(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return ROUTING_CONTEXT_DEFAULT_MAX_MESSAGES;
+  return Math.min(Math.max(Math.trunc(parsed), 1), ROUTING_CONTEXT_MAX_MESSAGES);
+}
+
+/** 线性扫描历史正文并替换远程和内联地址，保留 Markdown 外层结构与普通标点。 */
+function redactRoutingMessageUrls(value) {
+  const content = String(value || "");
+  let result = "";
+  let copyStart = 0;
+  let index = 0;
+  while (index < content.length) {
+    const scheme = matchRoutingUrlScheme(content, index);
+    if (!scheme) {
+      index += 1;
+      continue;
+    }
+    const urlEnd = findRoutingUrlEnd(
+      content,
+      scheme.schemeEnd,
+      isParenthesizedUrlDestination(content, index),
+    );
+    result += content.slice(copyStart, index) + scheme.placeholder;
+    copyStart = urlEnd;
+    index = urlEnd;
+  }
+  return result + content.slice(copyStart);
+}
+
+/**
+ * 识别当前位置是否为受支持的 URL scheme，并返回脱敏占位符与正文起点。
+ *
+ * @returns {{placeholder:string, schemeEnd:number}|null} 匹配结果；普通字符返回 null。
+ */
+function matchRoutingUrlScheme(content, index) {
+  const prefix = content.slice(index, index + 8).toLowerCase();
+  if (prefix.startsWith("https://")) {
+    return { placeholder: ROUTING_CONTEXT_URL_PLACEHOLDER, schemeEnd: index + 8 };
+  }
+  if (prefix.startsWith("http://")) {
+    return { placeholder: ROUTING_CONTEXT_URL_PLACEHOLDER, schemeEnd: index + 7 };
+  }
+  if (prefix.startsWith("data:")) {
+    return { placeholder: ROUTING_CONTEXT_DATA_URL_PLACEHOLDER, schemeEnd: index + 5 };
+  }
+  return null;
+}
+
+/** 扫描一个 URL 候选，配对内部括号并在 Markdown/自然语言外层闭合符或文本边界前停止。 */
+function findRoutingUrlEnd(content, schemeEnd, parenthesizedDestination) {
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let braceDepth = 0;
+  let index = schemeEnd;
+  while (index < content.length) {
+    const character = content[index];
+    if (isRoutingUrlHardBoundary(character)) break;
+    if (character === "(") roundDepth += 1;
+    if (character === "[") squareDepth += 1;
+    if (character === "{") braceDepth += 1;
+    if (character === ")") {
+      if (
+        roundDepth === 0
+        && (
+          parenthesizedDestination
+          || isRoutingUrlClosingParenthesisBoundary(content, index + 1)
+        )
+      ) break;
+      if (roundDepth > 0) roundDepth -= 1;
+    }
+    if (character === "]") {
+      if (squareDepth === 0) break;
+      squareDepth -= 1;
+    }
+    if (character === "}") {
+      if (braceDepth === 0) break;
+      braceDepth -= 1;
+    }
+    index += 1;
+  }
+  return trimRoutingUrlTrailingPunctuation(content, schemeEnd, index);
+}
+
+/** 判断 URL 是否位于 Markdown 或自然语言外层圆括号中，以保留对应闭合符。 */
+function isParenthesizedUrlDestination(content, urlStart) {
+  return urlStart >= 1 && content[urlStart - 1] === "(";
+}
+
+/** 判断未配对右括号之后是否已经进入句读或文本边界。 */
+function isRoutingUrlClosingParenthesisBoundary(content, nextIndex) {
+  if (nextIndex >= content.length) return true;
+  const nextCharacter = content[nextIndex];
+  return isRoutingUrlHardBoundary(nextCharacter)
+    || ROUTING_URL_TRAILING_PUNCTUATION.has(nextCharacter)
+    || nextCharacter === ")"
+    || nextCharacter === "]"
+    || nextCharacter === "}";
+}
+
+/** 判断字符是否为 URL 之外的强边界；空白和控制字符同样终止候选。 */
+function isRoutingUrlHardBoundary(character) {
+  return /\s/u.test(character) || ROUTING_URL_HARD_BOUNDARIES.has(character);
+}
+
+/** 从候选尾部退回常见句末标点，使标点留在脱敏后的自然语言中。 */
+function trimRoutingUrlTrailingPunctuation(content, schemeEnd, candidateEnd) {
+  let end = candidateEnd;
+  while (end > schemeEnd && ROUTING_URL_TRAILING_PUNCTUATION.has(content[end - 1])) end -= 1;
+  return end;
+}
+
+/** 在 URL 脱敏后应用单条预算；超限正文整体替换，避免丢失尾部纠正后仍驱动副作用。 */
+function truncateRoutingMessage(value) {
+  const content = redactRoutingMessageUrls(value);
+  const truncated = content.length > ROUTING_CONTEXT_MESSAGE_MAX_CHARS;
+  return {
+    value: truncated ? ROUTING_CONTEXT_TRUNCATED_CONTENT_PLACEHOLDER : content,
+    truncated,
+  };
+}
+
+/** 从最新消息序向前寻找活动图片，未进入消息的上传资产不会成为候选。 */
+function deriveActiveImage(database, conversationId, nowDate) {
+  const rows = database
+    .prepare(
+      `SELECT m.*
+       FROM messages m
+       WHERE m.conversation_id = ?
+         AND m.status = 'committed'
+         AND (
+           (m.role = 'assistant' AND EXISTS (
+             SELECT 1 FROM message_artifacts ma WHERE ma.message_id = m.id
+           ))
+           OR (m.role = 'user' AND m.references_json <> '[]')
+         )
+       ORDER BY m.seq DESC`,
+    )
+    .all(conversationId);
+  for (const message of rows) {
+    const asset = findMessageImageAsset(database, message, nowDate);
+    if (!asset) continue;
+    return {
+      assetId: asset.id,
+      source: asset.source,
+      anchorMessageId: message.id,
+      anchorSeq: Number(message.seq),
+      originRunId: message.run_id || null,
+    };
+  }
+  return null;
+}
+
+/** 解析一条消息锚定的唯一工作图片；多图用户输入不产生隐式活动图片。 */
+function findMessageImageAsset(database, message, nowDate) {
+  if (message.status !== "committed") return null;
+  if (message.role === "assistant") {
+    if (!message.run_id) return null;
+    const assets = database
+      .prepare(
+        `SELECT ia.*
+         FROM message_artifacts ma
+         JOIN image_assets ia ON ia.id = ma.asset_id
+         JOIN runs r ON r.id = ia.run_id
+         WHERE ma.message_id = ?
+           AND ia.conversation_id = ?
+           AND ia.run_id = ?
+           AND r.conversation_id = ?
+           AND r.assistant_message_id = ?
+           AND r.status = 'completed'
+           AND (
+             (r.operation = 'image.generate' AND ia.source = 'generated')
+             OR (r.operation = 'image.edit' AND ia.source = 'edited')
+           )
+         ORDER BY ma.position ASC`,
+      )
+      .all(
+        message.id,
+        message.conversation_id,
+        message.run_id,
+        message.conversation_id,
+        message.id,
+      );
+    for (const asset of assets) {
+      if (isImageAssetAvailableAt(asset, nowDate)) return asset;
+    }
+    return null;
+  }
+  if (message.role !== "user") return null;
+  const references = parseJson(message.references_json, []);
+  const imageReferences = (Array.isArray(references) ? references : []).filter(
+    /** 只统计具有稳定资产 ID 的受控图片引用。 */
+    (reference) => reference?.type === "image_asset" && reference.assetId,
+  );
+  if (imageReferences.length !== 1) return null;
+  const asset = database
+    .prepare("SELECT * FROM image_assets WHERE id = ? AND conversation_id = ?")
+    .get(imageReferences[0].assetId, message.conversation_id);
+  return isImageAssetAvailableAt(asset, nowDate) ? asset : null;
+}
+
+/** 判断图片资产在给定 Store 时钟下是否仍可读取；非法过期时间按不可用处理。 */
+function isImageAssetAvailableAt(asset, nowDate) {
+  if (!asset || asset.status !== "available") return false;
+  if (!asset.expires_at) return true;
+  const expiresAt = Date.parse(asset.expires_at);
+  return Number.isFinite(expiresAt) && expiresAt > nowDate.getTime();
+}
+
 /** 为消息附加经关联表解析的图片产物，不读取图片二进制。 */
 function mapMessageWithArtifacts(database, row) {
   const message = mapMessageRow(row);
@@ -2013,7 +2515,19 @@ function mapMessageWithArtifacts(database, row) {
     )
     .all(row.id)
     .map(mapImageAssetRow);
-  return { ...message, artifacts };
+  const referenceAssets = [];
+  for (const reference of message.references) {
+    if (reference?.type !== "image_asset" || !reference.assetId) continue;
+    const asset = database
+      .prepare(
+        "SELECT * FROM image_assets WHERE id = ? AND conversation_id = ? AND status = 'available'",
+      )
+      .get(reference.assetId, row.conversation_id);
+    if (asset && (!asset.expires_at || Date.parse(asset.expires_at) > Date.now())) {
+      referenceAssets.push(mapImageAssetRow(asset));
+    }
+  }
+  return { ...message, artifacts, referenceAssets };
 }
 
 /** 写入会话事件日志，事件与业务状态共享外层事务。 */
@@ -2032,6 +2546,72 @@ function buildConversationTitle(value) {
 /** 将可空对象序列化为数据库 JSON 文本。 */
 function jsonOrNull(value) {
   return value == null ? null : JSON.stringify(value);
+}
+
+/** 将 Runtime 路由事实收敛到固定白名单，阻止正文、图片 ID 和 provider 原文进入审计。 */
+function sanitizeIntentDecision(database, conversationId, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const decision = {};
+  for (const field of ["schemaVersion", "routerVersion", "contextStrategyVersion"]) {
+    const normalized = sanitizeIntentDecisionIdentifier(value[field]);
+    if (normalized) decision[field] = normalized;
+  }
+  for (const field of ["operation", "classifiedOperation"]) {
+    const normalized = String(value[field] || "");
+    if (INTENT_DECISION_OPERATIONS.includes(normalized)) decision[field] = normalized;
+  }
+  const source = String(value.source || "");
+  if (INTENT_DECISION_SOURCES.includes(source)) decision.source = source;
+  for (const field of ["confidence", "threshold"]) {
+    if (value[field] == null) continue;
+    const number = Number(value[field]);
+    if (Number.isFinite(number)) decision[field] = Math.min(1, Math.max(0, number));
+  }
+  decision.candidates = sanitizeIntentDecisionStrings(
+    value.candidates,
+    INTENT_DECISION_MAX_CANDIDATES,
+  ).filter(
+    /** 丢弃分类器候选集合以外的任意字符串。 */
+    (candidate) => INTENT_DECISION_OPERATIONS.includes(candidate),
+  );
+  decision.useActiveImage = Boolean(value.useActiveImage);
+  const evidenceMessageIds = sanitizeIntentDecisionStrings(
+    value.relevantMessageIds,
+    INTENT_DECISION_MAX_EVIDENCE_MESSAGES,
+  );
+  decision.relevantMessageIds = [];
+  for (const messageId of evidenceMessageIds) {
+    const row = database
+      .prepare("SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?")
+      .get(messageId, conversationId);
+    if (row) decision.relevantMessageIds.push(messageId);
+  }
+  const contextVersion = value.contextVersion == null ? NaN : Number(value.contextVersion);
+  decision.contextVersion = Number.isInteger(contextVersion) && contextVersion >= 0
+    ? contextVersion
+    : null;
+  decision.contextTruncated = Boolean(value.contextTruncated);
+  return Object.freeze(decision);
+}
+
+/** 保持顺序地过滤、去重并限制路由审计中的短字符串数组。 */
+function sanitizeIntentDecisionStrings(values, limit) {
+  const result = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = String(value || "").trim().slice(0, 160);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+/** 仅保留不含空白和控制字符的短标识，版本字段不得承载模型正文。 */
+function sanitizeIntentDecisionIdentifier(value) {
+  const normalized = String(value || "").trim();
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(normalized) ? normalized : null;
 }
 
 /** 将可选时间规范为 ISO 8601；无效值不进入可恢复执行事实。 */
@@ -2134,7 +2714,7 @@ function mapMessageRow(row) {
     conversationId: row.conversation_id,
     seq: Number(row.seq),
     clientMessageId: row.client_message_id,
-    runId: row.run_id,
+    runId: row.run_id || null,
     role: row.role,
     content: parseJson(row.content_json, ""),
     displayContent: row.display_content,
@@ -2163,6 +2743,7 @@ function mapRunRow(row) {
     errorCode: row.error_code || null,
     deadlineAt: row.deadline_at || null,
     chainTraceId: row.chain_trace_id || null,
+    intentDecision: parseJson(row.intent_decision_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

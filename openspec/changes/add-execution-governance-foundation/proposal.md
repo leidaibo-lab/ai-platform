@@ -11,7 +11,7 @@
 - 新增 `operations` 事实表和 Store API，覆盖 planned/running/completed/failed/unknown/confirmation_required/cancelled 状态、幂等键、尝试、外部请求 ID、结果/回读和错误证据。
 - 现有 ToolCall 在同一 SQLite 事务中桥接到 Operation，ToolCall 继续作为 AI SDK 工具协议投影。
 - 新增 SQLite RunLease，支持 acquire/renew/release、过期接管和 fencing token；Runtime 关键 Operation/Run 写入校验 owner/token。
-- 当前天气工具只读能力保持兼容，普通对话不被策略阻断，图片生成仍沿用现有独立切片并不自动获得副作用恢复。
+- 当前天气工具只读能力保持兼容，普通对话不被策略阻断；图片生成与图片编辑作为受限本地资产写入切片被显式允许，但不自动获得副作用恢复。
 - 明确 Sandbox 和有副作用恢复需要后续独立方案、OpenSpec 和真实故障/安全验收。
 
 ## Capabilities

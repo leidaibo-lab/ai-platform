@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "runtime-routing-gold.v1",
+  "thresholds": {
+    "operationAccuracyMin": 1,
+    "sourceAssetAccuracyMin": 1,
+    "evidenceValidityMin": 1,
+    "activeImageAccuracyMin": 1,
+    "visualInputAccuracyMin": 1,
+    "editPromptHistoryAccuracyMin": 1,
+    "unexpectedImageSideEffectRateMax": 0
+  },
+  "turns": [
+    {
+      "conversationId": "unexpected-image-call",
+      "turnId": "backend-fails-after-call",
+      "operation": "conversation.chat",
+      "candidates": ["conversation.chat", "image.generate"],
+      "useActiveImage": false,
+      "artifactCount": 0,
+      "editSource": null,
+      "visionSource": null,
+      "activeImage": null,
+      "evidence": { "minimumCount": 0, "requiredAnyOf": [] },
+      "editPromptHistory": { "requiredAll": [] }
+    }
+  ]
+}

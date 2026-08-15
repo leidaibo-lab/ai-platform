@@ -1,9 +1,30 @@
 /**
+ * @typedef {object} RecoveredImageAsset
+ * @property {"image_asset"} type - 稳定引用判别值。
+ * @property {string} assetId - 当前会话内的图片资产身份。
+ * @property {string} [url] - 可选受控内容地址。
+ * @property {string} [mediaType] - 可选受控 MIME。
+ * @property {number} [sizeBytes] - 可选图片字节数。
+ */
+
+/**
  * @typedef {object} RecoveredRunInput
  * @property {string} message - 可恢复到 Sender 的用户正文。
  * @property {string[]} imageUrls - 从持久化多模态 content 恢复的图片地址。
  * @property {string[]} documentUrls - 从 displayContent 恢复的文档链接。
  * @property {Array<{type: "conversation_message", messageId: string}>} references - 稳定消息引用。
+ * @property {RecoveredImageAsset[]} imageAssets - 按消息引用顺序恢复的受控图片资产。
+ * @property {"auto"|"conversation.chat"|"image.generate"|"image.edit"} operation - 恢复后继续使用的 Run 操作或智能路由。
+ */
+
+/**
+ * @typedef {object} ImageAttachmentReservationInput
+ * @property {string} operation - 当前智能模式或显式 Run 操作。
+ * @property {number} attachmentCount - 已提交到附件队列的总数。
+ * @property {number} imageCount - 已提交到附件队列的图片数。
+ * @property {number} pendingImageReads - 已预留但仍在 FileReader 中的图片数。
+ * @property {number} maxAttachments - 当前渠道附件总上限。
+ * @property {number} maxImages - 当前渠道图片上限。
  */
 
 /**
@@ -18,6 +39,8 @@
  * @property {object[]} attachments - 仅由渠道层持有的附件展示事实。
  * @property {object[]} references - 仅由渠道层持有的待发送消息引用。
  * @property {string} model - 当前会话 Sender 选择的 LiteLLM 模型别名。
+ * @property {"auto"|"conversation.chat"|"image.generate"|"image.edit"} operation - 当前 Sender 的智能模式或显式高级覆盖。
+ * @property {{sourceRunId: string, recoveryMode: string, operation: string}|null} pendingRecovery - 可选历史 Run 恢复关系。
  */
 
 /**
@@ -105,7 +128,7 @@ export function serializeConversationDrafts(drafts) {
       },
     ]);
   }
-  return JSON.stringify({ version: 1, entries });
+  return JSON.stringify({ version: 3, entries });
 }
 
 /**
@@ -117,11 +140,13 @@ export function serializeConversationDrafts(drafts) {
 export function deserializeConversationDrafts(value) {
   try {
     const parsed = JSON.parse(String(value || ""));
-    if (parsed?.version !== 1 || !Array.isArray(parsed.entries)) return new Map();
+    if (![1, 2, 3].includes(parsed?.version) || !Array.isArray(parsed.entries)) return new Map();
     const drafts = new Map();
     for (const entry of parsed.entries) {
       if (!Array.isArray(entry) || entry.length !== 2 || !entry[0]) continue;
-      const normalized = normalizeConversationDraft(entry[1]);
+      const normalized = normalizeConversationDraft(entry[1], {
+        fallbackOperation: parsed.version < 3 ? "conversation.chat" : "auto",
+      });
       normalized.attachments = normalized.attachments.filter(isSessionSafeAttachment);
       drafts.set(String(entry[0]), normalized);
     }
@@ -225,11 +250,21 @@ export function scrollMessageListToLatest(messageList, behavior = "smooth") {
 
 /** 把现有活动 Run 事实映射为回答附近的渠道状态，不推断服务端未提供的阶段。 */
 export function activeRunStageLabel(status, hasContent = false, toolTitle = "") {
+  if (status === "image-uploading") return "正在上传源图片";
+  if (status === "reconciling") return "正在确认运行结果";
   if (status === "stopping") return "正在停止生成";
   if (status === "starting") return "正在连接模型";
   if (status === "tool-running") return `正在查询${toolTitle || "外部数据"}`;
   if (status === "image-generating") return "正在生成图片";
+  if (status === "image-editing") return "正在编辑图片";
   return hasContent ? "正在生成回答" : "正在等待模型响应";
+}
+
+/** 将 Runtime 已解析的最终 operation 映射为活动消息状态，未知值按普通回答处理。 */
+export function activeRunStatusForOperation(operation) {
+  if (operation === "image.generate") return "image-generating";
+  if (operation === "image.edit") return "image-editing";
+  return "running";
 }
 
 /**
@@ -276,6 +311,7 @@ export function buildRunFailureCopy(run) {
   const publicCode = String(publicError.code || "");
   const errorText = String(run?.error || publicError.error || "").toLowerCase();
   const model = String(publicError.model || run?.model || "所选模型");
+  const operation = String(publicError.operation || run?.operation || "conversation.chat");
 
   if (publicCode === "model_authorization_failed" || errorType === "authorization" || statusCode === 401 || statusCode === 403 || /模型鉴权失败|invalid_api_key/.test(errorText)) {
     return {
@@ -301,12 +337,33 @@ export function buildRunFailureCopy(run) {
       code: "model_timeout",
     };
   }
+  if (publicCode === "image_edit_provider_unavailable" || errorText.includes("图片编辑上游不可用")) {
+    return {
+      title: "图片编辑上游不可用",
+      detail: `${model} 的上游未接受 Responses 图片编辑工具请求。`,
+      action: "请使用支持该协议且已开通 GPT Image 工具权限的中转站凭据。",
+      code: "image_edit_provider_unavailable",
+    };
+  }
   if (publicCode === "model_provider_unavailable" || errorType === "provider_unavailable" || statusCode >= 500) {
     return {
       title: "模型服务暂时不可用",
       detail: `${model} 的上游服务当前异常。`,
       action: "请稍后重试；持续失败时检查上游服务状态。",
       code: "model_provider_unavailable",
+    };
+  }
+  if (publicCode === "model_capability_mismatch") {
+    const imageOperation = operation === "image.generate" || operation === "image.edit";
+    return {
+      title: "模型能力不匹配",
+      detail: imageOperation
+        ? `${model} 不能用于当前图片操作。`
+        : `${model} 不能用于当前对话或图片理解。`,
+      action: imageOperation
+        ? "请使用当前操作对应的图片模型后重试。"
+        : "请使用支持当前输入类型的对话模型后重试。",
+      code: "model_capability_mismatch",
     };
   }
   if (publicCode === "unsupported_model" || /所选模型不可用|unsupported model alias/.test(errorText)) {
@@ -357,12 +414,126 @@ export function readGatewayModels(gateway) {
 }
 
 /**
+ * 按 Run 操作和图片硬约束读取可选平台别名；能力对象存在时空数组保持 fail closed。
+ *
+ * @param {object|null|undefined} gateway - `/api/gateway/status` 返回的目录与能力事实。
+ * @param {"auto"|"conversation.chat"|"image.generate"|"image.edit"} operation - 当前智能或显式 Run 操作。
+ * @param {{requiresVision?: boolean}} [requirements] - 对话输入是否包含图片。
+ * @returns {string[]} 同时网关可见且满足当前操作能力的稳定别名。
+ */
+export function readGatewayModelsForOperation(
+  gateway,
+  operation = "conversation.chat",
+  { requiresVision = false } = {},
+) {
+  if (operation === "auto") return [];
+  const visibleModels = readGatewayModels(gateway);
+  const capabilities = gateway?.modelCapabilities;
+  if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) {
+    return readLegacyOperationModels(gateway, visibleModels, operation);
+  }
+
+  let candidates;
+  if (operation === "image.generate") candidates = readCapabilityAliases(capabilities.imageGeneration);
+  else if (operation === "image.edit") candidates = readCapabilityAliases(capabilities.imageEditing);
+  else {
+    candidates = readCapabilityAliases(capabilities.chat);
+    if (requiresVision) {
+      const visionModels = new Set(readCapabilityAliases(capabilities.vision));
+      const compatible = [];
+      for (const model of candidates) if (visionModels.has(model)) compatible.push(model);
+      candidates = compatible;
+    }
+  }
+
+  const visible = new Set(visibleModels);
+  const result = [];
+  for (const model of candidates) if (visible.has(model)) result.push(model);
+  return result;
+}
+
+/** 按 operation 读取服务端默认平台别名，并兼容旧 status 的单字段响应。 */
+export function readGatewayDefaultModel(gateway, operation = "conversation.chat") {
+  if (operation === "auto") return "";
+  const configured = String(gateway?.defaultModels?.[operation] || "").trim();
+  if (configured) return configured;
+  if (operation === "image.generate") return String(gateway?.imageModel || "").trim();
+  if (operation === "image.edit") {
+    return String(gateway?.imageEditModel || gateway?.imageModel || "").trim();
+  }
+  return String(gateway?.model || "").trim();
+}
+
+/** 从助手消息中选择首个可继续编辑的稳定图片产物，不从展示 URL 反推资产身份。 */
+export function selectEditableImageArtifact(message) {
+  for (const artifact of Array.isArray(message?.artifacts) ? message.artifacts : []) {
+    if (
+      artifact?.type === "image_asset" &&
+      artifact.assetId &&
+      ["generated", "edited"].includes(artifact.source)
+    ) {
+      return { ...artifact };
+    }
+  }
+  return null;
+}
+
+/**
+ * 仅在智能模式的单张本地兼容图片或稳定资产没有其他上下文时选择受控源图。
+ *
+ * @param {{operation?: string, attachments?: object[], references?: object[]}} input - 当前模式、附件和消息引用事实。
+ * @returns {object|null} 需要在提交前上传或复用的唯一图片附件。
+ */
+export function selectAutoImageAssetSource({ operation, attachments, references } = {}) {
+  const sources = Array.isArray(attachments) ? attachments : [];
+  const messageReferences = Array.isArray(references) ? references : [];
+  if (operation !== "auto" || sources.length !== 1 || messageReferences.length !== 0) return null;
+  const source = sources[0];
+  if (source?.kind !== "image") return null;
+  if (source.assetId) return source;
+  return /^data:image\/(?:png|jpeg|webp);base64,/i.test(String(source.url || ""))
+    ? source
+    : null;
+}
+
+/** 从单个能力分组读取保持顺序的唯一非空别名。 */
+function readCapabilityAliases(value) {
+  const result = [];
+  const seen = new Set();
+  for (const candidate of Array.isArray(value) ? value : []) {
+    const model = String(candidate || "").trim();
+    if (model && !seen.has(model)) {
+      seen.add(model);
+      result.push(model);
+    }
+  }
+  return result;
+}
+
+/** 兼容旧 status 时只信任默认对话别名和服务端固定图片别名，不猜测未知模型能力。 */
+function readLegacyOperationModels(gateway, visibleModels, operation) {
+  if (operation === "auto") return [];
+  const imageModel = String(gateway?.imageModel || "").trim();
+  if (operation === "image.generate" || operation === "image.edit") {
+    return imageModel && visibleModels.includes(imageModel) ? [imageModel] : [];
+  }
+  if (imageModel) {
+    const result = [];
+    for (const model of visibleModels) if (model !== imageModel) result.push(model);
+    return result;
+  }
+  const defaultModel = String(gateway?.model || "").trim();
+  return defaultModel && visibleModels.includes(defaultModel) ? [defaultModel] : [];
+}
+
+/**
  * 从持久化用户消息恢复渠道可编辑输入，不复用旧幂等标识。
  *
  * @param {object|null|undefined} message - 与失败 Run 关联的用户消息。
+ * @param {string} [requestedOperation] - 来源 Run 已持久化的操作；缺失时可从图片资产引用推断编辑操作。
  * @returns {RecoveredRunInput} 可重新编辑的正文、附件和引用。
  */
-export function recoverRunInput(message) {
+export function recoverRunInput(message, requestedOperation) {
   const display = parseDisplayContent(message?.displayContent);
   const imageUrls = [];
   if (Array.isArray(message?.content)) {
@@ -377,12 +548,44 @@ export function recoverRunInput(message) {
       references.push({ type: "conversation_message", messageId: String(reference.messageId) });
     }
   }
+  const imageAssets = recoverReferencedImageAssets(message);
+  const operation = resolveRecoveredOperation(requestedOperation, imageAssets);
   return {
     message: display.message,
     imageUrls,
     documentUrls: display.documentUrls,
     references,
+    imageAssets,
+    operation,
   };
+}
+
+/**
+ * 在 FileReader 启动前把已提交和在途图片合并校验，避免并发回调绕过单图或数量上限。
+ *
+ * @param {ImageAttachmentReservationInput} input - 当前附件事实、在途预留和渠道上限。
+ * @returns {"image_edit_source_limit"|"image_limit"|"attachment_limit"|null} 可展示错误分类或 null。
+ */
+export function imageAttachmentReservationError({
+  operation,
+  attachmentCount,
+  imageCount,
+  pendingImageReads,
+  maxAttachments,
+  maxImages,
+}) {
+  const pending = Math.max(0, Number(pendingImageReads) || 0);
+  const attachments = Math.max(0, Number(attachmentCount) || 0);
+  const images = Math.max(0, Number(imageCount) || 0);
+  if (operation === "image.edit" && attachments + pending >= 1) return "image_edit_source_limit";
+  if (images + pending >= Math.max(1, Number(maxImages) || 1)) return "image_limit";
+  if (attachments + pending >= Math.max(1, Number(maxAttachments) || 1)) return "attachment_limit";
+  return null;
+}
+
+/** 判断异步附件读取是否仍属于原会话且未被用户取消。 */
+export function isAttachmentPreparationCurrent(originConversationId, currentConversationId, aborted = false) {
+  return Boolean(originConversationId) && originConversationId === currentConversationId && !aborted;
 }
 
 /**
@@ -461,13 +664,27 @@ export function buildMessagePreview(value, emptyLabel = "(空消息)") {
   return normalized.length > 72 ? `${normalized.slice(0, 72)}...` : normalized || emptyLabel;
 }
 
-/** 将任意渠道草稿输入归一化为独立数组快照。 */
-function normalizeConversationDraft(draft) {
+/** 将任意渠道草稿输入归一化为独立数组快照，并允许旧版本指定兼容回退模式。 */
+function normalizeConversationDraft(draft, { fallbackOperation = "auto" } = {}) {
+  const operation = ["auto", "conversation.chat", "image.generate", "image.edit"].includes(draft?.operation)
+    ? draft.operation
+    : fallbackOperation;
+  const pendingRecovery = draft?.pendingRecovery && typeof draft.pendingRecovery === "object"
+    ? {
+        sourceRunId: String(draft.pendingRecovery.sourceRunId || ""),
+        recoveryMode: String(draft.pendingRecovery.recoveryMode || ""),
+        operation: String(draft.pendingRecovery.operation || operation),
+      }
+    : null;
   return {
     value: String(draft?.value || ""),
     attachments: Array.isArray(draft?.attachments) ? [...draft.attachments] : [],
     references: Array.isArray(draft?.references) ? [...draft.references] : [],
     model: String(draft?.model || ""),
+    operation,
+    pendingRecovery: pendingRecovery?.sourceRunId && pendingRecovery?.recoveryMode
+      ? pendingRecovery
+      : null,
   };
 }
 
@@ -522,7 +739,12 @@ function parseDisplayContent(value) {
   const documentUrls = [];
   for (const section of String(value || "").split(/\n\n+/)) {
     const normalized = section.trim();
-    if (!normalized || /^图片：\d+\s*个$/.test(normalized) || /^引用了\s*\d+\s*条消息$/.test(normalized)) continue;
+    if (
+      !normalized ||
+      /^图片：\d+\s*个$/.test(normalized) ||
+      /^源图片：\d+\s*张$/.test(normalized) ||
+      /^引用了\s*\d+\s*条消息$/.test(normalized)
+    ) continue;
     if (normalized.startsWith(DOCUMENT_PREFIX)) {
       for (const line of normalized.slice(DOCUMENT_PREFIX.length).split("\n")) {
         const url = line.replace(/^\s*-\s*/, "").trim();
@@ -533,4 +755,33 @@ function parseDisplayContent(value) {
     messageSections.push(normalized);
   }
   return { message: messageSections.join("\n\n"), documentUrls };
+}
+
+/** 按消息中的 image_asset 引用顺序恢复公开资产，并为缺失详情保留最小稳定身份。 */
+function recoverReferencedImageAssets(message) {
+  const result = [];
+  const availableAssets = Array.isArray(message?.referenceAssets) ? message.referenceAssets : [];
+  for (const reference of message?.references || []) {
+    if (reference?.type !== "image_asset" || !reference.assetId) continue;
+    const assetId = String(reference.assetId);
+    const matched = findImageAssetById(availableAssets, assetId);
+    result.push(matched ? { ...matched, type: "image_asset", assetId } : { type: "image_asset", assetId });
+  }
+  return result;
+}
+
+/** 从公开图片资产列表按稳定 assetId 查找来源，不使用 URL 或展示文本反推。 */
+function findImageAssetById(assets, assetId) {
+  for (const asset of assets) {
+    if (String(asset?.assetId || "") === assetId) return asset;
+  }
+  return null;
+}
+
+/** 优先保留来源 Run 操作；旧消息存在图片资产引用时至少恢复为 image.edit。 */
+function resolveRecoveredOperation(requestedOperation, imageAssets) {
+  if (["auto", "conversation.chat", "image.generate", "image.edit"].includes(requestedOperation)) {
+    return requestedOperation;
+  }
+  return imageAssets.length > 0 ? "image.edit" : "conversation.chat";
 }

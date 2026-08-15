@@ -19,7 +19,7 @@
 ### 必须满足
 
 - 浏览器只提交 LiteLLM 模型别名，所有模型调用继续经过 Agent Runtime 和 GatewayClient。
-- 模型选项来自当前 LiteLLM key 可见的 `/v1/models`，不得在前端维护第二份固定列表。
+- 模型目录以当前 LiteLLM key 可见的 `/v1/models` 为授权输入，再由服务端能力策略按 Run operation 过滤；不得把“可见”当作“兼容”，也不得在前端维护第二份固定列表。
 - 未传模型的既有客户端继续使用 `LITELLM_MODEL` 默认别名。
 - 失败反馈只能使用平台拥有的错误分类、公开状态和安全文案，不展示 provider 原始响应、stack 或密钥。
 - Run 选中的别名必须进入 token counter、模型生成和失败事实，不能只改变 UI 标签。
@@ -60,8 +60,8 @@
 - 结论：适配。
 - 选择方案：LiteLLM `/v1/models` + Ant Design `Select` + 现有 Runtime Adapter。
 - 决策依据：LiteLLM 已拥有模型目录与 key 可见性，Ant Design 已提供成熟选择控件；平台只需拥有模型别名的稳定 Run 契约和错误分类到渠道反馈的映射。
-- 平台拥有：Run 模型字段、默认模型兼容、GatewayClient Port、错误分类、安全反馈文案和验收测试。
-- 外部方案负责：LiteLLM 模型目录与别名路由，Ant Design 选择控件与可访问性交互。
+- 平台拥有：Run 模型字段、默认模型兼容、模型别名能力分组、GatewayClient Port、错误分类、安全反馈文案和验收测试。
+- 外部方案负责：LiteLLM 模型目录可见性与别名路由，Ant Design 选择控件与可访问性交互。
 - 明确不实现：第二套模型目录、浏览器直连模型、provider 原始错误展示和会话级模型策略控制面。
 
 ## 未采用方案及原因
@@ -74,8 +74,8 @@
 
 ## 实施边界
 
-- `GET /api/gateway/status` 增加 `models`，仍只表示 `/v1/models` 可达和当前 key 可见别名，不代表生成可用。
-- Run 的 `model` 可选；缺失时回退 `LITELLM_MODEL`，非默认别名必须存在于网关可见模型集合。
+- `GET /api/gateway/status` 的 `models` 仍只表示 `/v1/models` 可达和当前 key 可见别名，不代表能力兼容或上游生成可用；渠道可选项必须来自服务端返回的 `modelCapabilities` 对应分组。
+- Run 的 `model` 可选；`conversation.chat` 缺失时回退 `LITELLM_MODEL`，别名除网关可见外还必须满足当前 operation 的能力要求。
 - Context Planner token counter 与 GatewayClient generation 使用同一个已解析别名；Memory Manager 后台任务继续使用默认模型。
 - 失败 Run 持久化安全摘要和既有 resilience 分类；渠道按分类生成标题、原因与处理建议，并继续提供恢复输入和运行信息。
 - 渠道草稿按 conversationId 保留模型选择；服务端不把它升级为会话配置或控制面策略。
@@ -90,6 +90,40 @@
 ## 验收与完成报告
 
 - 验证证据：`npm test` 55/55 通过，`npm run demo:build` 通过，`openspec validate --specs --strict` 1/1 通过；桌面端和 390x844 移动端浏览器验收通过。
-- 剩余边界：当前只有 `chat-default` 时选择器仍会显示单一选项；更多模型需要先在 LiteLLM 配置和权限中开放。
+- 剩余边界（原验收时）：当时只有 `chat-default`，选择器显示单一选项；现行别名与能力分组以 2026-08-02 复评为准。
 - 文档与契约：同步 `README.md`、本记录和 `openspec/specs/ai-platform/spec.md`。
 - 重评条件：模型选择需要按租户/用户授权、出现成本或数据驻留策略、模型数量导致检索与分组需求，或未来控制面开始发布版本化模型策略。
+
+## 2026-08-02 能力兼容复评
+
+### 新事实与问题修正
+
+真实多模态排障证明，`/v1/models` 返回别名只表示当前 LiteLLM key 可以看到该路由，不表示该别名支持任意 OpenAI-compatible 端点或输入模态：
+
+- `conversation.chat + gpt-image-2` 到达 Chat Completions 后返回 `400 invalid_request`，因为图片生成模型不支持该端点。
+- 原 `gpt-5.6 -> openai/gpt-5.6` 映射到达上游后返回 `404`，因为当前上游账号目录没有 `gpt-5.6` 这个真实模型 ID。
+- 将稳定平台别名保持为 `gpt-5.6`、把服务端映射修正为 `openai/gpt-5.6-sol` 后，1x1 测试 PNG 与真实架构截图都通过 `Runtime -> GatewayClient -> AI SDK -> LiteLLM` 主链完成图片理解，均为单次请求并返回 `200`。
+
+因此原决策的“网关可见即允许选择”不足以保护业务调用。可见性继续作为授权事实，但 Runtime 必须拥有 operation 到能力分组的确定性门禁。
+
+### 修正方案比较
+
+| 候选 | 路线 | 结论 | 原因 |
+| --- | --- | --- | --- |
+| 继续只使用 LiteLLM `/v1/models` | 既有轻量组合 | 不采用 | 目录没有提供本项目可依赖的 Chat、视觉、生成和编辑兼容保证，真实请求已经出现端点错配 |
+| 用健康探测逐个调用模型和端点推断能力 | 动态探测 | 不采用 | 会产生费用和副作用；账号池瞬时不可用也不能等同于模型类型不兼容，结果不适合作为稳定契约 |
+| 服务端能力策略与 `/v1/models` 可见集合取交集 | 最小稳定适配 | 采用 | 平台只维护 operation 需要的最小能力分组，LiteLLM 继续拥有授权可见性和别名路由；渠道与普通 API 客户端共享同一门禁 |
+
+### 修正后的稳定边界
+
+- Gateway 状态同时返回原始可见别名 `models` 和 `modelCapabilities.chat / vision / imageGeneration / imageEditing`；能力分组只包含当前 key 可见且由服务端声明兼容的稳定平台别名。
+- `conversation.chat` 只能使用 `chat` 分组；请求包含图片输入时还必须属于 `vision` 分组。`image.generate` 只能使用 `imageGeneration`，`image.edit` 只能使用 `imageEditing`。
+- 渠道按当前 operation 展示匹配分组，但前端过滤不是安全边界；Runtime 在 GatewayClient 生成调用前执行相同校验。
+- 可见但能力错配的别名返回 `400 model_capability_mismatch`，不得继续调用不兼容端点，也不得静默丢弃图片、退化为纯文本或改成另一种图片操作。
+- 当前稳定对话别名仍为 `gpt-5.6`，服务端映射为 `openai/gpt-5.6-sol`；图片别名仍为 `gpt-image-2 -> openai/gpt-image-2`。客户端只依赖稳定别名，不接触真实上游模型 ID。
+- `modelCapabilities` 表示静态操作兼容策略，不是健康检查、账号可用性或真实生成成功承诺；上游可用性仍以实际 Run 结果和 smoke 证据为准。
+
+### 维护与重评
+
+- Runtime 维护 operation 与能力门禁及公开错误，模型网关维护别名到真实模型的映射，渠道只消费服务端能力分组。
+- 未来控制面能够发布版本化模型能力目录，或 LiteLLM 提供经过当前上游验证且满足本项目字段要求的可靠能力元数据时，重评并替换当前服务端最小策略；稳定 Run operation 与公开错误码保持不变。

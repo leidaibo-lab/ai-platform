@@ -32,7 +32,7 @@ R 与 A 是正交关系。一个任务可以可恢复但结果不可信，也可
 | --- | --- | --- | --- | --- |
 | 普通 C1 对话 | R2 | A0 | Run/Message 持久化、幂等重放、统一重试和终态查询 | 自然语言事实正确性没有独立验收 |
 | 天气只读工具 | 受限 R3 | A3 | completed ToolResult 后可在服务重启时恢复最终总结；天气 AcceptanceResult 检查地点、数据时间、来源和结果事实 | 只覆盖确定性路由的 `get_weather`；真实模型质量、多实例和复杂多工具未验收 |
-| C2 图片生成开发切片 | R2 | A2 | 幂等重放、图片字节/MIME/尺寸校验、ImageAsset 元数据和哈希 | 进程崩溃窗口、内容安全、语义质量和正式对象存储未完成 |
+| C2 图片生成/编辑开发切片 | R2 | A2 | 幂等重放、图片字节/MIME/尺寸校验、不可变 ImageAsset 元数据、哈希和连续来源链；当前配置已有文生图单轮与图片编辑两轮真实 smoke | 进程崩溃窗口、内容安全、多样本语义质量、成本与正式对象存储未完成 |
 | C6 写操作 | 未实现 | 未实现 | 已有 ExecutionPolicy、Operation journal、RunLease/fencing 和 `unknown` 门禁；尚无外部写 Connector | 确认身份与版本、外部幂等、业务回读、人工处置、补偿和真实故障验收 |
 | C7 批量任务 | 未实现 | 未实现 | 无 | 分片、调度、跨实例恢复、覆盖率和汇总验收 |
 
@@ -89,7 +89,7 @@ Conversation
             -> rejected: AcceptanceResult + run.failed 同事务提交，不保存候选正文
 ```
 
-图片生成、无 completed ToolResult、运行中或失败工具、未知工具、未知副作用和已超时 Run 都不会自动重放。未过期 lease 只会让恢复候选保持 skipped；取得 lease 后，不满足窄恢复资格的 Run 才用稳定原因码收口为 failed，并保留原用户消息和已有工具或资产事实。
+图片生成或编辑、无 completed ToolResult、运行中或失败工具、未知工具、未知副作用和已超时 Run 都不会自动重放。未过期 lease 只会让恢复候选保持 skipped；取得 lease 后，不满足窄恢复资格的 Run 才用稳定原因码收口为 failed，并保留原用户消息和已有工具或资产事实。
 
 ## 完成与交付边界
 

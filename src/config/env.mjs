@@ -13,13 +13,23 @@ export async function loadDemoConfig(rootDir) {
   const fileEnv = await loadEnv(join(rootDir, ".env"));
   const env = { ...fileEnv, ...process.env };
   const runTimeoutMs = readPositiveNumber(env.DEMO_RUN_TIMEOUT_MS, 120000);
+  const chatModel = env.LITELLM_MODEL || "chat-default";
+  const imageModel = env.LITELLM_IMAGE_MODEL || "image-default";
+  const imageEditModel = env.LITELLM_IMAGE_EDIT_MODEL || chatModel;
 
   return {
     port: readPositiveNumber(env.DEMO_PORT, 4010),
     gateway: {
       baseUrl: trimTrailingSlash(env.LITELLM_BASE_URL || "http://localhost:4000"),
-      model: env.LITELLM_MODEL || "chat-default",
-      imageModel: env.LITELLM_IMAGE_MODEL || "image-default",
+      model: chatModel,
+      imageModel,
+      imageEditModel,
+      modelCapabilities: {
+        chat: readModelAliasList(env.LITELLM_CHAT_MODELS, [chatModel]),
+        vision: readModelAliasList(env.LITELLM_VISION_MODELS, [chatModel]),
+        imageGeneration: [imageModel],
+        imageEditing: readModelAliasList(env.LITELLM_IMAGE_EDITING_MODELS, [imageEditModel]),
+      },
       apiKey: resolveGatewayApiKey(env),
       timeoutMs: runTimeoutMs,
       maxAttempts: readPositiveInteger(env.DEMO_MODEL_MAX_ATTEMPTS, 3),
@@ -125,6 +135,26 @@ export function parseOtlpHeaders(value) {
  */
 export function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
+}
+
+/** 将逗号分隔的服务端模型策略整理为去重别名数组，未配置时使用显式默认值。 */
+function readModelAliasList(value, fallback) {
+  const candidates = [];
+  for (const alias of String(value || "").split(",")) {
+    const normalized = alias.trim();
+    if (normalized) candidates.push(normalized);
+  }
+  const source = candidates.length > 0 ? candidates : fallback;
+  const result = [];
+  const seen = new Set();
+  for (const alias of source) {
+    const normalized = String(alias || "").trim();
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      result.push(normalized);
+    }
+  }
+  return result;
 }
 
 // 将环境变量转换为正数配置，无效值回退到调用方提供的默认值。

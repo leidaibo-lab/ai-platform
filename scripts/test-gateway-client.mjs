@@ -54,16 +54,20 @@ test("gateway client converts text and image_url message parts", testAiSdkMessag
 
 /** 验证非法消息在 Gateway Client 边界稳定映射为 400，而不是静默改写或上抛 502。 */
 function testAiSdkMessageValidation() {
+  // 调用无消息转换，验证缺失消息数组被拒绝。
   assert.throws(() => toAiSdkMessages(null), isInvalidMessageError);
   assert.throws(
+    // 调用未知角色转换，验证角色白名单边界。
     () => toAiSdkMessages([{ role: "unknown", content: "hello" }]),
     isInvalidMessageError,
   );
   assert.throws(
+    // 调用含非法 assistant 图片分段的转换，验证角色内容契约。
     () => toAiSdkMessages([{ role: "assistant", content: [{ type: "image_url", image_url: { url: "https://example.com/a.png" } }] }]),
     isInvalidMessageError,
   );
   assert.throws(
+    // 调用缺少 output 的工具结果转换，验证工具消息完整性。
     () => toAiSdkMessages([{ role: "tool", content: [{ type: "tool-result", toolCallId: "call-1" }] }]),
     isInvalidMessageError,
   );
@@ -145,8 +149,11 @@ test("gateway client preserves LiteLLM request and response semantics", testAiSd
 /** 验证图片模型经 LiteLLM 标准端点调用，并固定单次尝试与通用尺寸参数。 */
 async function testAiSdkImageGenerationMapping() {
   const requests = [];
-  /** 返回一张有效 1x1 PNG 的 OpenAI-compatible 图片结果。 */
-  function handleImageGenerationRequest() {
+  /** 返回图片模型目录或一张有效 1x1 PNG 的 OpenAI-compatible 图片结果。 */
+  function handleImageGenerationRequest(request) {
+    if (request.url.endsWith("/v1/models")) {
+      return jsonResponse({ data: [{ id: "chat-default" }, { id: "image-default" }] });
+    }
     return jsonResponse({
       data: [{
         b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -166,11 +173,13 @@ async function testAiSdkImageGenerationMapping() {
     size: "1024x1024",
   });
 
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, "http://gateway.test/v1/images/generations");
-  assert.equal(requests[0].body.model, "image-default");
-  assert.equal(requests[0].body.n, 1);
-  assert.equal(requests[0].body.size, "1024x1024");
+  const imageRequest = requests[1];
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "http://gateway.test/v1/models");
+  assert.equal(imageRequest.url, "http://gateway.test/v1/images/generations");
+  assert.equal(imageRequest.body.model, "image-default");
+  assert.equal(imageRequest.body.n, 1);
+  assert.equal(imageRequest.body.size, "1024x1024");
   assert.equal(result.images.length, 1);
   assert.equal(result.images[0].mediaType, "image/png");
   assert.ok(result.images[0].bytes.length > 0);
@@ -181,6 +190,282 @@ async function testAiSdkImageGenerationMapping() {
 }
 
 test("gateway client generates images through LiteLLM without automatic retries", testAiSdkImageGenerationMapping);
+
+/** 验证图片编辑通过 LiteLLM Responses 工具端点，并携带唯一受控源图。 */
+async function testResponsesImageEditingMapping() {
+  const requests = [];
+  const sourceBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  /** 返回模型目录或混合输出中的一张有效 1x1 PNG Responses 编辑结果。 */
+  function handleImageEditingRequest(request) {
+    if (request.url.endsWith("/v1/models")) {
+      return jsonResponse({ data: [{ id: "chat-default" }, { id: "image-default" }, { id: "edit-default" }] });
+    }
+    return jsonResponse({
+      id: "resp-image-edit",
+      status: "completed",
+      output: [
+        { type: "reasoning", id: "reasoning-1", summary: [] },
+        {
+          type: "image_generation_call",
+          id: "image-call-1",
+          status: "completed",
+          result: sourceBytes.toString("base64"),
+        },
+      ],
+      usage: { input_tokens: 21, output_tokens: 9, total_tokens: 30 },
+    });
+  }
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    imageModel: "image-default",
+    imageEditModel: "edit-default",
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch(requests, handleImageEditingRequest),
+  });
+
+  const result = await client.editImages({
+    prompt: "保留构图并改成蓝色水彩风格",
+    sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }],
+    size: "1024x1024",
+  });
+  const imageRequest = requests[1];
+  const requestBody = imageRequest.body;
+  const inputContent = requestBody.input[0].content;
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "http://gateway.test/v1/models");
+  assert.equal(imageRequest.url, "http://gateway.test/v1/responses");
+  assert.equal(imageRequest.headers.get("authorization"), "Bearer test-key");
+  assert.equal(requestBody.model, "edit-default");
+  assert.equal(requestBody.store, false);
+  assert.deepEqual(requestBody.tools, [{ type: "image_generation", action: "edit", size: "1024x1024" }]);
+  assert.deepEqual(requestBody.tool_choice, { type: "image_generation" });
+  assert.equal(Object.hasOwn(requestBody, "max_tool_calls"), false);
+  assert.deepEqual(inputContent[0], { type: "input_text", text: "保留构图并改成蓝色水彩风格" });
+  assert.equal(inputContent[1].type, "input_image");
+  assert.equal(inputContent[1].image_url, `data:image/png;base64,${sourceBytes.toString("base64")}`);
+  assert.equal(result.images.length, 1);
+  assert.equal(result.images[0].mediaType, "image/png");
+  assert.deepEqual(result.images[0].bytes, sourceBytes);
+  assert.deepEqual(result.usage, {
+    input_tokens: 21,
+    output_tokens: 9,
+    total_tokens: 30,
+    generated_images: 1,
+  });
+  assert.equal(result.resilience.operation, "model.image.edit");
+  assert.equal(result.resilience.maxAttempts, 1);
+  assert.equal(result.resilience.attemptCount, 1);
+}
+
+test("gateway client edits one controlled image through LiteLLM Responses", testResponsesImageEditingMapping);
+
+/** 验证 Responses 编辑拒绝非法、多图片和上游错误结果，且不泄漏 provider 原始正文。 */
+async function testResponsesImageEditingResultGuards() {
+  const sourceBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const invalidClient = createResponsesEditingClient({
+    output: [{ type: "image_generation_call", status: "completed", result: "%%%=" }],
+  });
+  await assert.rejects(
+    invalidClient.editImages({ prompt: "编辑图片", sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }] }),
+    isInvalidResponsesImageResult,
+  );
+
+  const multipleClient = createResponsesEditingClient({
+    output: [
+      { type: "image_generation_call", status: "completed", result: sourceBytes.toString("base64") },
+      { type: "image_generation_call", status: "completed", result: sourceBytes.toString("base64") },
+    ],
+  });
+  await assert.rejects(
+    multipleClient.editImages({ prompt: "编辑图片", sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }] }),
+    isMultipleResponsesImageResult,
+  );
+
+  const deniedClient = createResponsesEditingClient({
+    error: { code: "access_denied", message: "provider secret should stay hidden" },
+  }, 403);
+  await assert.rejects(
+    deniedClient.editImages({ prompt: "编辑图片", sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }] }),
+    isSanitizedResponsesProviderError,
+  );
+}
+
+test("gateway client rejects unsafe Responses image edit results", testResponsesImageEditingResultGuards);
+
+/** 验证 Responses JSON 对无长度、伪小长度、chunked 和非法正文应用统一流式边界。 */
+async function testResponsesImageEditingStreamGuards() {
+  const sourceBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const successPayload = {
+    output: [{
+      type: "image_generation_call",
+      status: "completed",
+      result: sourceBytes.toString("base64"),
+    }],
+  };
+
+  /** 返回没有 Content-Length 的正常分块 JSON，验证长度声明不是成功前提。 */
+  function createNoContentLengthResponse() {
+    return streamedResponse([
+      new TextEncoder().encode(JSON.stringify(successPayload)),
+    ]);
+  }
+  const noContentLengthClient = createResponsesEditingClientFromResponse(createNoContentLengthResponse);
+  const normalResult = await noContentLengthClient.editImages({
+    prompt: "编辑图片",
+    sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }],
+  });
+  assert.deepEqual(normalResult.images[0].bytes, sourceBytes);
+
+  const fakeLengthObservation = { cancelCount: 0 };
+  /** 返回伪造极小 Content-Length、实际解压后超限的成功响应。 */
+  function createFakeSmallLengthResponse() {
+    return streamedResponse(createOversizedResponsesChunks(), {
+      headers: { "Content-Encoding": "gzip", "Content-Length": "1" },
+      observation: fakeLengthObservation,
+    });
+  }
+  const fakeLengthClient = createResponsesEditingClientFromResponse(createFakeSmallLengthResponse);
+  await assert.rejects(
+    fakeLengthClient.editImages({
+      prompt: "编辑图片",
+      sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }],
+    }),
+    isResponsesPayloadTooLarge,
+  );
+  assert.equal(fakeLengthObservation.cancelCount, 1);
+
+  const chunkedObservation = { cancelCount: 0 };
+  /** 返回没有 Content-Length 的超限 chunked 失败响应，验证非 2xx 使用同一硬上限。 */
+  function createOversizedChunkedErrorResponse() {
+    return streamedResponse(createOversizedResponsesChunks(), {
+      status: 503,
+      headers: { "Transfer-Encoding": "chunked" },
+      observation: chunkedObservation,
+    });
+  }
+  const chunkedClient = createResponsesEditingClientFromResponse(createOversizedChunkedErrorResponse);
+  await assert.rejects(
+    chunkedClient.editImages({
+      prompt: "编辑图片",
+      sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }],
+    }),
+    isResponsesPayloadTooLarge,
+  );
+  assert.equal(chunkedObservation.cancelCount, 1);
+
+  /** 返回包含敏感正文的非法成功 JSON，验证只暴露稳定解析错误。 */
+  function createInvalidSuccessResponse() {
+    return streamedResponse([
+      new TextEncoder().encode('{"message":"provider secret"'),
+    ]);
+  }
+  const invalidSuccessClient = createResponsesEditingClientFromResponse(createInvalidSuccessResponse);
+  await assert.rejects(
+    invalidSuccessClient.editImages({
+      prompt: "编辑图片",
+      sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }],
+    }),
+    isSanitizedInvalidResponsesPayload,
+  );
+
+  /** 返回包含敏感正文的非法失败 JSON，验证继续按 HTTP 状态返回脱敏 provider 错误。 */
+  function createInvalidErrorResponse() {
+    return streamedResponse([
+      new TextEncoder().encode('{"message":"provider secret"'),
+    ], { status: 502 });
+  }
+  const invalidErrorClient = createResponsesEditingClientFromResponse(createInvalidErrorResponse);
+  await assert.rejects(
+    invalidErrorClient.editImages({
+      prompt: "编辑图片",
+      sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }],
+    }),
+    isSanitizedMalformedResponsesProviderError,
+  );
+}
+
+test("gateway client bounds streamed Responses image edit payloads", testResponsesImageEditingStreamGuards);
+
+/** 创建只处理模型目录和单次 JSON Responses 结果的 GatewayClient。 */
+function createResponsesEditingClient(payload, status = 200) {
+  /** 将既有测试载荷封装为一次标准 JSON Response。 */
+  function createPayloadResponse() {
+    return jsonResponse(payload, status);
+  }
+  return createResponsesEditingClientFromResponse(createPayloadResponse);
+}
+
+/** 创建接受自定义 Responses 流工厂的 GatewayClient，隔离模型目录请求。 */
+function createResponsesEditingClientFromResponse(responseFactory) {
+  /** 返回编辑模型目录或调用方指定的 Responses 结果。 */
+  function handleResponsesRequest(request) {
+    if (request.url.endsWith("/v1/models")) {
+      return jsonResponse({ data: [{ id: "chat-default" }] });
+    }
+    return responseFactory();
+  }
+  return createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    imageEditModel: "chat-default",
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch([], handleResponsesRequest),
+  });
+}
+
+/** 判断异常是否为非法 Responses 图片 Base64。 */
+function isInvalidResponsesImageResult(error) {
+  return error instanceof GatewayRequestError && error.data?.code === "invalid_image_edit_result";
+}
+
+/** 判断异常是否为一次编辑返回多个图片调用。 */
+function isMultipleResponsesImageResult(error) {
+  return error instanceof GatewayRequestError && error.data?.code === "multiple_image_edit_results";
+}
+
+/** 判断上游错误只保留短分类码且不包含原始正文。 */
+function isSanitizedResponsesProviderError(error) {
+  return error instanceof GatewayRequestError &&
+    error.status === 403 &&
+    error.data?.code === "image_edit_provider_error" &&
+    error.data?.providerCode === "access_denied" &&
+    !JSON.stringify(error.data).includes("provider secret");
+}
+
+/** 判断成功或失败 Responses 流超过解压后统一字节上限。 */
+function isResponsesPayloadTooLarge(error) {
+  return error instanceof GatewayRequestError &&
+    error.status === 502 &&
+    error.data?.code === "image_edit_response_too_large";
+}
+
+/** 判断成功响应的非法 JSON 被映射为不含正文的稳定错误。 */
+function isSanitizedInvalidResponsesPayload(error) {
+  return error instanceof GatewayRequestError &&
+    error.status === 502 &&
+    error.data?.code === "invalid_image_edit_response" &&
+    !JSON.stringify(error.data).includes("provider secret");
+}
+
+/** 判断失败响应的非法 JSON 仍只暴露 HTTP 状态和平台 provider 错误分类。 */
+function isSanitizedMalformedResponsesProviderError(error) {
+  return error instanceof GatewayRequestError &&
+    error.status === 502 &&
+    error.data?.code === "image_edit_provider_error" &&
+    error.data?.providerCode === undefined &&
+    !JSON.stringify(error.data).includes("provider secret");
+}
 
 /** 验证 AI SDK `Output.object` 负责结构化输出请求、解析和 Standard Schema 校验。 */
 async function testAiSdkStructuredOutputMapping() {
@@ -901,6 +1186,7 @@ async function testGatewayPreservesEventStreamApiError() {
   await assert.rejects(
     client.chatCompletions({
       messages: [{ role: "user", content: "hello" }],
+      // 空增量消费者强制走流式分支，错误仍应保留 AI SDK 分类。
       onTextDelta: () => {},
     }),
     isAuthorizationGatewayError,
@@ -1121,6 +1407,17 @@ async function testAiSdkManagementEndpoints() {
   assert.equal(status.ok, true);
   assert.equal(status.gatewayBaseUrl, "http://gateway.test/v1");
   assert.deepEqual(status.models, ["chat-default", "chat-quality"]);
+  assert.deepEqual(status.modelCapabilities, {
+    chat: ["chat-default"],
+    vision: ["chat-default"],
+    imageGeneration: [],
+    imageEditing: ["chat-default"],
+  });
+  assert.deepEqual(status.defaultModels, {
+    "conversation.chat": "chat-default",
+    "image.generate": "image-default",
+    "image.edit": "chat-default",
+  });
   assert.deepEqual(count, { tokens: 29, source: "litellm", model: "resolved-upstream-model" });
   assert.equal(requests[1].body.model, "chat-quality");
   assert.deepEqual(requests.map(getRequestPath), ["/v1/models", "/utils/token_counter"]);
@@ -1134,6 +1431,12 @@ async function testAiSdkManagementEndpoints() {
   const emptyStatus = await emptyDirectoryClient.status();
   assert.equal(emptyStatus.ok, true);
   assert.deepEqual(emptyStatus.models, []);
+  assert.deepEqual(emptyStatus.modelCapabilities, {
+    chat: [],
+    vision: [],
+    imageGeneration: [],
+    imageEditing: [],
+  });
 }
 
 test("gateway client retains LiteLLM status and token counter", testAiSdkManagementEndpoints);
@@ -1150,6 +1453,10 @@ async function testPerRunModelSelection() {
   const client = createGatewayClient({
     baseUrl: "http://gateway.test",
     model: "chat-default",
+    modelCapabilities: {
+      chat: ["chat-default", "chat-quality"],
+      vision: ["chat-default"],
+    },
     apiKey: "test-key",
     fetchImplementation: createFakeFetch(requests, handleSuccessfulGatewayRequest),
   });
@@ -1169,9 +1476,134 @@ async function testPerRunModelSelection() {
 
 test("gateway client routes a gateway-visible model per run", testPerRunModelSelection);
 
+/** 验证可见图片别名不能进入 Chat Completions，视觉输入还必须满足 vision 分组。 */
+async function testConversationCapabilityGuards() {
+  const requests = [];
+  /** 只允许能力校验读取模型目录；任何生成请求都表示前置门禁失效。 */
+  function handleCapabilityDirectoryRequest(request) {
+    if (request.url.endsWith("/v1/models")) {
+      return jsonResponse({ data: [{ id: "chat-default" }, { id: "chat-text" }, { id: "image-default" }] });
+    }
+    throw new Error(`Unexpected model generation request: ${request.url}`);
+  }
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    imageModel: "image-default",
+    modelCapabilities: {
+      chat: ["chat-default", "chat-text"],
+      vision: ["chat-default"],
+      imageGeneration: ["image-default"],
+      imageEditing: ["image-default"],
+    },
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch(requests, handleCapabilityDirectoryRequest),
+  });
+
+  await assert.rejects(
+    client.chatCompletions({
+      model: "image-default",
+      messages: [{ role: "user", content: "解释这个问题" }],
+    }),
+    isModelCapabilityMismatch,
+  );
+  await assert.rejects(
+    client.chatCompletions({
+      model: "chat-text",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "这张图片是什么" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,YQ==" } },
+        ],
+      }],
+    }),
+    isVisionCapabilityMismatch,
+  );
+  assert.deepEqual(requests.map(getRequestPath), ["/v1/models"]);
+}
+
+test("gateway client rejects conversation and vision capability mismatches before generation", testConversationCapabilityGuards);
+
+/** 验证不属于对应图片能力组的模型不能进入生成或 Responses 编辑端点。 */
+async function testImageCapabilityGuards() {
+  const requests = [];
+  /** 只返回可见目录，能力错配不得继续触发任何图片端点。 */
+  function handleCapabilityDirectoryRequest(request) {
+    if (request.url.endsWith("/v1/models")) {
+      return jsonResponse({ data: [{ id: "chat-default" }, { id: "image-default" }, { id: "edit-default" }] });
+    }
+    throw new Error(`Unexpected image generation request: ${request.url}`);
+  }
+  const client = createGatewayClient({
+    baseUrl: "http://gateway.test",
+    model: "chat-default",
+    imageModel: "image-default",
+    imageEditModel: "edit-default",
+    modelCapabilities: {
+      chat: ["chat-default"],
+      vision: ["chat-default"],
+      imageGeneration: ["image-default"],
+      imageEditing: ["edit-default"],
+    },
+    apiKey: "test-key",
+    fetchImplementation: createFakeFetch(requests, handleCapabilityDirectoryRequest),
+  });
+  const sourceBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+
+  await assert.rejects(
+    client.generateImages({ model: "chat-default", prompt: "生成图片" }),
+    isImageGenerationCapabilityMismatch,
+  );
+  await assert.rejects(
+    client.editImages({
+      model: "chat-default",
+      prompt: "编辑图片",
+      sourceImages: [{ bytes: sourceBytes, mediaType: "image/png" }],
+    }),
+    isImageEditingCapabilityMismatch,
+  );
+  assert.deepEqual(requests, []);
+}
+
+test("gateway client rejects capability-incompatible image models", testImageCapabilityGuards);
+
 /** 判断异常是否为未知模型别名产生的稳定 400。 */
 function isUnsupportedModelError(error) {
   return error instanceof GatewayRequestError && error.status === 400 && error.data?.code === "unsupported_model";
+}
+
+/** 判断错误是否为普通对话选择图片模型产生的稳定能力错配。 */
+function isModelCapabilityMismatch(error) {
+  return error instanceof GatewayRequestError &&
+    error.status === 400 &&
+    error.data?.code === "model_capability_mismatch" &&
+    error.data?.requiredCapability === "chat";
+}
+
+/** 判断错误是否为含图对话使用纯文本模型产生的 vision 能力错配。 */
+function isVisionCapabilityMismatch(error) {
+  return error instanceof GatewayRequestError &&
+    error.status === 400 &&
+    error.data?.code === "model_capability_mismatch" &&
+    error.data?.requiredCapability === "vision";
+}
+
+/** 判断错误是否为聊天模型不能用于图片生成。 */
+function isImageGenerationCapabilityMismatch(error) {
+  return error instanceof GatewayRequestError &&
+    error.data?.code === "model_capability_mismatch" &&
+    error.data?.operation === "image.generate";
+}
+
+/** 判断错误是否为聊天模型不能用于图片编辑。 */
+function isImageEditingCapabilityMismatch(error) {
+  return error instanceof GatewayRequestError &&
+    error.data?.code === "model_capability_mismatch" &&
+    error.data?.operation === "image.edit";
 }
 
 /** 验证 Memory Manager 在 schema 400 后仍按原逻辑无 response_format 重试。 */
@@ -1264,12 +1696,20 @@ function createFakeFetch(requests, handler) {
   /** 解析并记录一次 fetch 调用。 */
   async function fakeFetch(input, init = {}) {
     const url = input instanceof Request ? input.url : String(input);
-    const headers = new Headers(input instanceof Request ? input.headers : init.headers);
-    const rawBody = input instanceof Request ? await input.clone().text() : String(init.body || "");
+    const normalizedRequest = input instanceof Request ? input.clone() : new Request(url, init);
+    const headers = new Headers(normalizedRequest.headers);
+    const contentType = String(headers.get("content-type") || "");
+    let body = null;
+    if (/^multipart\/form-data\b/i.test(contentType)) {
+      body = await normalizedRequest.formData();
+    } else {
+      const rawBody = await normalizedRequest.text();
+      body = rawBody ? JSON.parse(rawBody) : null;
+    }
     const request = {
       url,
       headers,
-      body: rawBody ? JSON.parse(rawBody) : null,
+      body,
     };
     requests.push(request);
     return handler(request);
@@ -1283,6 +1723,37 @@ function jsonResponse(body, status = 200, headers = {}) {
     status,
     headers: { "Content-Type": "application/json", ...headers },
   });
+}
+
+/** 创建由指定字节块组成的可取消 Response，用于验证真实网络分块边界。 */
+function streamedResponse(chunks, { status = 200, headers = {}, observation = null } = {}) {
+  let chunkIndex = 0;
+  const stream = new ReadableStream({
+    /** 按需发送下一个字节块，使 Adapter 必须通过 reader 累计实际响应体积。 */
+    pull(controller) {
+      if (chunkIndex >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(chunks[chunkIndex]);
+      chunkIndex += 1;
+    },
+    /** 记录 Adapter 超限后是否主动取消未消费完的响应体。 */
+    cancel() {
+      if (observation) observation.cancelCount += 1;
+    },
+  });
+  return new Response(stream, {
+    status,
+    headers: { "Content-Type": "application/json", ...headers },
+  });
+}
+
+/** 创建 30 个复用的 1 MiB 字节块，在越界点后保留未消费数据以验证主动取消。 */
+function createOversizedResponsesChunks() {
+  const chunk = new Uint8Array(1024 * 1024);
+  chunk.fill(0x20);
+  return new Array(30).fill(chunk);
 }
 
 /** 返回尝试状态，供平台重试顺序断言复用。 */

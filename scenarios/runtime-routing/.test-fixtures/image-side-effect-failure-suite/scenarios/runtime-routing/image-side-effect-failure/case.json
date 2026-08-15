@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "runtime-routing-scenario.v1",
+  "id": "image-side-effect-failure",
+  "version": "1.0.0",
+  "title": "失败轮次图片副作用探针",
+  "description": "验证图片后端调用发生后即使 Run 失败，评测仍记录真实图片副作用。",
+  "tags": ["runtime", "routing-evaluator", "negative-control"],
+  "supportedModes": ["deterministic"],
+  "classifier": {
+    "promptVersion": "runtime-intent.v2",
+    "temperature": 0,
+    "maxCompletionTokens": 180,
+    "confidenceThreshold": 0.85
+  },
+  "runtime": {
+    "runTimeoutMs": 120000
+  },
+  "conversations": [
+    {
+      "id": "unexpected-image-call",
+      "title": "错误图片调用",
+      "assets": [],
+      "turns": [
+        {
+          "id": "backend-fails-after-call",
+          "input": {
+            "operation": "auto",
+            "requestId": "routing-side-effect-failure-request-v1",
+            "clientMessageId": "routing-side-effect-failure-message-v1",
+            "message": "请说明当前会话可以执行哪些操作。",
+            "imageUrls": [],
+            "documentUrls": [],
+            "references": [],
+            "imageOptions": { "size": "1024x1024" }
+          }
+        }
+      ]
+    }
+  ]
+}

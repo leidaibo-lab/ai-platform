@@ -11,6 +11,14 @@ Agent Runtime SHALL 为 Run、Tool 和 Operation 执行提供可替换、版本�
 - **THEN** 策略 SHALL 返回 `allow`、稳定 `policyVersion` 和至少一个稳定 reason code
 - **AND** 没有命中工具路由的普通对话 SHALL NOT 被要求额外通过工具策略
 
+#### Scenario: 受限本地图片资产写入被显式允许
+
+- **GIVEN** 当前 Run 已将入口请求解析为 `image.generate` 或 `image.edit`
+- **AND** Runtime 默认策略将这两个既有 C2 operation 显式注册为受限本地资产写入
+- **WHEN** Runtime 执行前置策略评估
+- **THEN** 策略 SHALL 对真实图片 operation 返回 `allow`，不得评估或持久化入口 `auto`
+- **AND** 该显式允许 SHALL NOT 被解释为图片模型可自动重试、启动恢复或通用外部写操作已获授权
+
 #### Scenario: 未知操作被拒绝
 
 - **WHEN** Runtime 评估当前策略定义未注册的操作

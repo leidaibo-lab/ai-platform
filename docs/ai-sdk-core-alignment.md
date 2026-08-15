@@ -10,12 +10,12 @@ AI SDK 是 Agent Runtime 下游的模型与工具执行基础库，不是平台�
 渠道 Adapter
   -> Agent Runtime
   -> GatewayClient
-  -> AI SDK Core + @ai-sdk/openai-compatible
+  -> AI SDK Core / Responses 图片编辑 Adapter
   -> LiteLLM
   -> 上游 OpenAI-compatible API
 ```
 
-平台继续拥有 Conversation、Run、Memory、Context Manifest、ToolResult、AcceptanceResult、恢复资格、幂等、权限和交付；AI SDK 负责模型消息、结构化输出、工具消息编排和 SDK 遥测；LiteLLM 负责模型访问、路由和网关治理。
+平台继续拥有 Conversation、Run、Memory、Context Manifest、ToolResult、AcceptanceResult、ImageAsset、恢复资格、幂等、权限和交付；AI SDK 负责其已覆盖的模型消息、图片生成、结构化输出、工具消息编排和 SDK 遥测；GatewayClient 内部 Responses Adapter 只补齐锁定 openai-compatible SDK 未覆盖的图片编辑协议；LiteLLM 负责模型访问、路由和网关治理。
 
 ## 采用原则
 
@@ -104,7 +104,8 @@ MemoryDelta 仍由 Runtime 定义数据语义、字段归属、来源约束和 r
 | Embedding | `embed`、`embedMany` | C3 再接 | 文档解析、分块、权限过滤、索引版本和评测基线已定义 |
 | Rerank | `rerank` | C3 再接 | 已有候选检索集，并能独立评估召回与重排收益 |
 | MCP | `@ai-sdk/mcp` | 多 Connector 后 PoC | 出现跨项目工具复用、独立凭据或进程边界；生产优先 Streamable HTTP |
-| 图片生成 | `generateImage` | C2 首个开发切片已采用 | 已经 GatewayClient、LiteLLM、单次尝试和本地 ImageAssetStore 跑通 fake 回归与一次 `gpt-image-2` 真实 happy-path；内容审核、成本、真实异常矩阵和尺寸归一化完成前不得宣称生产可用 |
+| 图片生成 | `generateImage` | C2 文生图开发切片已采用 | 使用字符串 Prompt 调用 `/images/generations`，已有一次 `gpt-image-2` 真实 happy path；继续共用 GatewayClient、LiteLLM、单次尝试和本地 ImageAssetStore |
+| 图片编辑 | GatewayClient Responses Adapter | 适配锁定 SDK 的协议缺口 | 使用受控 `input_image`、强制 `tool_choice` 和 `image_generation(action=edit)` 调用 `/v1/responses`；本地资产承载 A→B→C 多轮版本，严格拒绝文本、多个图片调用或非法 Base64。当前兼容上游的三组对照证明 `max_tool_calls=1` 会触发 502，因此请求省略该字段并保留唯一结果解析；2026-08-15 当前配置已完成两轮真实编辑 smoke |
 | 语音与转写 | speech/transcription APIs | 不属于当前切片 | 渠道需要音频输入输出，且文件、隐私和时延边界已定义 |
 | Realtime | Realtime 能力 | 不属于当前切片 | C5 需要低延迟双向音频或事件会话，不复用当前 POST SSE 硬承载 |
 | 测试工具 | 固定行为模型 + Model Port Adapter | 已采用 | Runtime 进程故障、恢复和验收走版本化 Scenario Runner；脚本结果只算执行回归，不算真实模型准确率 |
@@ -127,7 +128,9 @@ npm test
 openspec validate --specs --strict
 ```
 
-Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 schema 正反例校验、可复用 `ToolLoopAgent` 的动态 call options、真实两步工具调用、结构化工具请求回退 Core、首步强制路由、v7 结果字段、流错误和平台重试边界，以及工具开始后禁止整段重放、从 SQLite ToolResult 进行无工具恢复和恢复失败保留双段证据的 Runtime 集成回归。Runtime 测试额外覆盖受管工具只在确定性命中时开放、验收前正文暂存、缺少 ToolResult 拒绝、恢复交付和单一助手消息；进程级场景覆盖 ToolResult 后退出、重启恢复、Connector 不重放、accepted/rejected AcceptanceResult。固定行为模型只证明 Runtime、SQLite 和判分链路；真实模式必须显式固定模型别名并记录实际模型、Prompt/fixture 版本、token 和延迟，样本不足 30 只作观察。图片生成已用 `gpt-image-2` 完成一次真实 happy-path，但真实天气质量、图片取消/超时/错误、内容安全与成本仍需分别执行并记录。
+Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 schema 正反例校验、可复用 `ToolLoopAgent` 的动态 call options、真实两步工具调用、结构化工具请求回退 Core、首步强制路由、v7 结果字段、流错误和平台重试边界，以及工具开始后禁止整段重放、从 SQLite ToolResult 进行无工具恢复和恢复失败保留双段证据的 Runtime 集成回归。Runtime 测试额外覆盖受管工具只在确定性命中时开放、验收前正文暂存、缺少 ToolResult 拒绝、恢复交付和单一助手消息，并验证文本、工具和终态通过 `RunEventSink` 发布生命周期事件且订阅失败不改写执行事实；进程级场景覆盖 ToolResult 后退出、重启恢复、Connector 不重放、accepted/rejected AcceptanceResult。固定行为模型只证明 Runtime、SQLite 和判分链路；真实模式必须显式固定模型别名并记录实际模型、Prompt/fixture 版本、token 和延迟，样本不足 30 只作观察。
+
+图片生成已用 `gpt-image-2` 完成一次真实 happy-path：请求 `1024x1024` 实际返回 `1254x1254` PNG，usage 只有生成张数而无 token/cost，因此 GatewayClient 保留请求尺寸白名单，资产层以实际返回尺寸为权威值。图片编辑测试覆盖 Responses 请求结构、混合输出提取、非法或多个结果拒绝、错误脱敏、受控上传、A→B→C 连续来源、历史资产不可变、HTTP/SSE、lease/fencing 和离线幂等重放；图片 Run 不进入启动恢复。2026-08-15 当前 `gpt-5.6` 配置完成两轮单尝试真实编辑，第二轮只引用第一轮输出，三个资产哈希不同且会话刷新后仍可读取。真实天气质量、图片取消/超时/错误矩阵、内容安全、成本和多样本语义质量仍需分别执行并记录，不能由 fake LiteLLM、单个文生图或两轮编辑样本替代。
 
 ## 官方资料
 
@@ -138,5 +141,6 @@ Gateway 测试覆盖真实 AI SDK 请求体、`Output.object` 解析与本地 sc
 - [Runtime and Tool Context](https://ai-sdk.dev/docs/ai-sdk-core/runtime-and-tool-context)
 - [Error Handling](https://ai-sdk.dev/docs/ai-sdk-core/error-handling)
 - [Telemetry](https://ai-sdk.dev/docs/ai-sdk-core/telemetry)
+- [Image Generation](https://ai-sdk.dev/docs/ai-sdk-core/image-generation)
 - [Building Agents](https://ai-sdk.dev/docs/agents/building-agents)
 - [Configuring Call Options](https://ai-sdk.dev/docs/agents/configuring-call-options)

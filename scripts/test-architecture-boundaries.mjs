@@ -48,7 +48,7 @@ const GLOBAL_ARCHITECTURE_ASSETS = Object.freeze([
 
 const SCENARIO_CHAIN_LABELS = Object.freeze([
   "C1 对话问答",
-  "C2 图片理解与生成",
+  "C2 图片理解、生成与编辑",
   "C3 文档知识问答",
   "C4 业务数据查询",
   "C5 实时事件处理",
@@ -88,6 +88,22 @@ async function testGovernanceKeepsRuntimeBoundary() {
 }
 
 test("governance keeps Agent Runtime as the sole business model path", testGovernanceKeepsRuntimeBoundary);
+
+/** 验证稳定对话/编辑别名映射到已验证上游，并让图片副作用保持网关零重试。 */
+async function testGatewayModelMappings() {
+  const config = await readProjectText("config.yaml");
+
+  assert.match(
+    config,
+    /  - model_name: gpt-5\.6\n    litellm_params:\n      model: openai\/gpt-5\.6-sol\n      api_base: os\.environ\/UPSTREAM_API_BASE\n      api_key: os\.environ\/UPSTREAM_API_KEY1\n      num_retries: 0/,
+  );
+  assert.match(
+    config,
+    /  - model_name: gpt-image-2\n    litellm_params:\n      model: openai\/gpt-image-2\n      api_base: os\.environ\/UPSTREAM_API_BASE\n      api_key: os\.environ\/UPSTREAM_API_KEY2\n      num_retries: 0/,
+  );
+}
+
+test("gateway keeps verified model mappings and disables image side-effect retries", testGatewayModelMappings);
 
 /** 验证场景治理文档保留 C1 功能焦点、分阶段恢复边界和 ChainTrace 延期口径。 */
 async function testScenarioChainsKeepCurrentFocus() {
@@ -135,6 +151,21 @@ async function testRuntimeEventPortKeepsChannelBoundary() {
 }
 
 test("Runtime event port keeps SSE inside the channel adapter", testRuntimeEventPortKeepsChannelBoundary);
+
+/** 验证普通 Composer 不再把 Runtime operation 和模型选择责任暴露给用户。 */
+async function testDemoDelegatesOrdinaryRoutingToRuntime() {
+  const app = await readProjectText("demo/src/App.jsx");
+  const stableSpec = await readProjectText("openspec/specs/ai-platform/spec.md");
+
+  assert.doesNotMatch(app, /选择运行模式|sender-mode-select|高级覆盖/);
+  assert.doesNotMatch(app, /aria-label="选择模型"/);
+  assert.match(app, /const \[composerMode, setComposerMode\] = useState\("auto"\)/);
+  assert.match(app, /setComposerMode\("image\.edit"\)/);
+  assert.match(app, /setComposerMode\("auto"\)/);
+  assert.match(stableSpec, /Demo SHALL NOT 要求用户选择“对话 \/ 生图 \/ 图生图”模式或模型别名/);
+}
+
+test("Demo delegates ordinary operation routing to Runtime", testDemoDelegatesOrdinaryRoutingToRuntime);
 
 /** 验证当前架构图与核心说明保持执行治理角色分离和未完成能力门禁。 */
 async function testExecutionGovernanceArchitectureBoundary() {

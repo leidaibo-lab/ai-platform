@@ -49,6 +49,17 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 
 Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯文本有界只读工具循环，并只在动态结构化输出等特殊调用中使用带 `tools`、`stopWhen` 和 `prepareStep` 的 Core 函数路径；Runtime 继续拥有 Conversation、Run、权限、工具事实、幂等、交付、验收和审计，LiteLLM SHALL 只负责模型访问、路由和转发，不得执行或保存业务工具结果。
 
+#### Scenario: Model requests current weather
+
+- **GIVEN** `get_weather` 已在服务端 Tool Registry 中启用
+- **WHEN** 当前输入包含明确地点且属于今天或明天的天气查询
+- **THEN** Runtime SHALL 通过服务端 Tool Registry 和 `ToolLoopAgent.prepareStep` 把首步固定路由到 `get_weather`，ToolResult 回填后的后续步骤恢复自动选择
+- **AND** Runtime SHALL 在同一 Run 总截止时间内执行固定目标的 Open-Meteo Connector
+- **AND** Runtime SHALL 持久化 `toolCallId`、工具名、脱敏输入、状态、结构化结果或安全错误、来源和数据时间
+- **AND** Runtime SHALL 将结构化 ToolResult 回填给同一有界生成循环，由模型生成最终回答
+- **AND** 实时天气结果 SHALL NOT 自动写入长期结构化记忆
+- **AND** 最终回答 SHALL 能说明地点、数据时间和来源，不得把模型已有知识伪装成实时查询结果
+
 #### Scenario: Runtime routes current weather to a governed tool
 
 - **GIVEN** `get_weather` 已在服务端 Tool Registry 中启用
@@ -136,7 +147,7 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 
 #### Scenario: Interrupted Run has no safe recovery point
 
-- **GIVEN** 遗留 Run 是图片生成、写操作、无 completed ToolResult、包含 running/failed/未知工具调用，或原绝对截止时间已经耗尽
+- **GIVEN** 遗留 Run 是图片生成或图片编辑、写操作、无 completed ToolResult、包含 running/failed/未知工具调用，或原绝对截止时间已经耗尽
 - **WHEN** Runtime 执行启动恢复扫描
 - **THEN** Runtime SHALL NOT 重放模型工具循环、Connector 或图片模型
 - **AND** Runtime SHALL 把 Run 收口为带稳定恢复错误码的 `failed`
@@ -179,6 +190,16 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 - **AND** 如果已经产生非空文本增量，Runtime SHALL 至多持久化一条状态为 `interrupted` 的助手消息，并保留已交付的部分内容
 - **AND** 如果尚未产生非空文本增量，Runtime SHALL NOT 创建空助手消息
 - **AND** Demo Server SHALL 通过当前流发送 `cancelled` 终止事件，并通过会话事实事件发布最终 Run 和可选中断消息状态
+
+#### Scenario: User explicitly cancels operation routing before a Run exists
+
+- **GIVEN** 渠道已经提交带 `requestId` 的 Run 请求，但尚未收到 `run-started`
+- **WHEN** 渠道请求 `POST /api/runtime/conversations/{conversationId}/run-requests/{requestId}/cancel`
+- **THEN** Demo Server SHALL 只中止当前进程中同时匹配 `conversationId` 与 `requestId` 的活动执行，并向 Runtime 传播显式取消信号
+- **AND** Runtime SHALL 停止排队、结构化分类或后续准备，不得继续调用业务对话或图片模型
+- **AND** 分类完成前的取消 SHALL NOT 创建用户消息、Run、图片资产或伪造 `cancelled` Run
+- **AND** 当前渠道流 SHALL 以 `cancelled` 终止事件收口，并显式返回 `run=null` 与 `assistantMessage=null`
+- **AND** 浏览器断开 Run 流但未调用该端点时 SHALL NOT 触发请求级取消
 
 #### Scenario: Cancellation is repeated or races with completion
 

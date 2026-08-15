@@ -448,6 +448,10 @@ async function createScenarioGateway({
     gatewayClient: createGatewayClient({
       ...config.gateway,
       model: alias,
+      modelCapabilities: {
+        ...config.gateway.modelCapabilities,
+        chat: [alias],
+      },
       fetchImplementation: createModelEvidenceFetch({
         fetchImplementation: fetch,
         evidencePath: modelEvidencePath,

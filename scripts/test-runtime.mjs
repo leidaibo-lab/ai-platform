@@ -6,13 +6,14 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { createGatewayClient } from "../src/gateway/gateway-client.mjs";
+import { GatewayRequestError, createGatewayClient } from "../src/gateway/gateway-client.mjs";
 import { createChatRuntime } from "../src/runtime/chat-runtime.mjs";
 import { createConversationCoordinator } from "../src/runtime/conversation-coordinator.mjs";
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
 import { estimateMessagesTokens } from "../src/runtime/context-budget.mjs";
 import { createMemoryManager, selectCompactionRange } from "../src/runtime/memory-manager.mjs";
 import { createRunEventSink } from "../src/runtime/run-event-sink.mjs";
+import { createRunIntentRouter, resolveIntentCandidates } from "../src/runtime/run-intent-router.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
 import { createToolRegistry } from "../src/tools/tool-registry.mjs";
 import { createWeatherToolDefinition } from "../src/tools/weather-tool.mjs";
@@ -33,11 +34,18 @@ const contextOptions = {
  * @param {object} [options.gatewayClient] - 替换默认脚本模型的 Gateway。
  * @param {object} [options.chainTracer] - 替换默认 Null Object 的 ChainTracer。
  * @param {object} [options.toolRegistry] - 替换默认空工具目录。
+ * @param {object} [options.intentRouter] - 替换默认结构化意图路由器。
+ * @param {object} [options.coordinator] - 替换默认会话串行协调器。
  * @returns {object} 可供单元测试或 fixture runner 使用的 Runtime 装配。
  */
-function createTestRuntime({ gatewayClient = createScriptedGateway(), chainTracer, toolRegistry } = {}) {
+function createTestRuntime({
+  gatewayClient = createScriptedGateway(),
+  chainTracer,
+  toolRegistry,
+  intentRouter,
+  coordinator = createConversationCoordinator(),
+} = {}) {
   const store = createConversationStore({ databasePath: ":memory:" });
-  const coordinator = createConversationCoordinator();
   const contextPlanner = createContextPlanner({
     store,
     gatewayClient,
@@ -54,6 +62,7 @@ function createTestRuntime({ gatewayClient = createScriptedGateway(), chainTrace
     memoryManager,
     chainTracer,
     toolRegistry,
+    intentRouter,
   });
   return { store, gatewayClient, contextPlanner, memoryManager, runtime };
 }
@@ -496,6 +505,7 @@ test("streamed runs emit deltas and persist one final assistant message", async 
   const startedEvent = runEvents.find(isRunStartedEvent);
   assert.equal(runEvents.filter(isRunStartedEvent).length, 1);
   assert.equal(startedEvent.runId, detail.latestRun.id);
+  assert.equal(startedEvent.operation, "conversation.chat");
   assert.equal(response.content, "逐段回复");
   assert.deepEqual(detail.messages.map(getMessageRole), ["user", "assistant"]);
   assert.equal(detail.messages[1].displayContent, "逐段回复");
@@ -978,6 +988,877 @@ test("runtime routes the selected model through planning and generation", async 
   fixture.store.close();
 });
 
+// 验证 Runtime 在 Run 落库前按操作传播稳定能力错配，不创建用户消息或调用生成方法。
+test("runtime rejects model capability mismatches before creating a run", async () => {
+  const gatewayClient = createScriptedGateway();
+  gatewayClient.imageModel = "image-default";
+  /** 模拟 GatewayClient 拒绝含图对话使用未声明 vision 能力的别名。 */
+  async function rejectVisionModel(requestedModel, requirements) {
+    assert.equal(requirements.requiresVision, true);
+    throw new GatewayRequestError("Model capability mismatch", 400, {
+      code: "model_capability_mismatch",
+      model: requestedModel,
+      operation: "conversation.chat",
+      requiredCapability: "vision",
+    });
+  }
+  /** 模拟 GatewayClient 拒绝图片生成使用聊天模型别名。 */
+  async function rejectImageModel(requestedModel, operation) {
+    throw new GatewayRequestError("Model capability mismatch", 400, {
+      code: "model_capability_mismatch",
+      model: requestedModel,
+      operation,
+      requiredCapability: "imageGeneration",
+    });
+  }
+  gatewayClient.resolveConversationModel = rejectVisionModel;
+  gatewayClient.resolveImageModel = rejectImageModel;
+  const fixture = createTestRuntime({ gatewayClient });
+  const conversation = fixture.runtime.createConversation();
+
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      requestId: "runtime-vision-capability-request",
+      clientMessageId: "runtime-vision-capability-message",
+      model: "chat-text",
+      message: "这张图片是什么",
+      imageUrls: ["data:image/png;base64,YQ=="],
+    }),
+    matchesVisionCapabilityMismatch,
+  );
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      operation: "image.generate",
+      requestId: "runtime-image-capability-request",
+      clientMessageId: "runtime-image-capability-message",
+      model: "chat-default",
+      message: "生成图片",
+    }),
+    matchesImageCapabilityMismatch,
+  );
+  assert.equal(fixture.runtime.getConversation(conversation.id).messages.length, 0);
+  fixture.store.close();
+});
+
+/** 验证附件矩阵在分类模型调用前把图片副作用候选收敛到允许集合。 */
+function testAutoIntentAttachmentCandidates() {
+  assert.deepEqual(resolveIntentCandidates({ references: [], imageUrls: [], documentUrls: [] }), [
+    "conversation.chat",
+    "image.generate",
+  ]);
+  assert.deepEqual(resolveIntentCandidates(
+    { references: [], imageUrls: [], documentUrls: [] },
+    { activeImage: { assetId: "active-asset" } },
+  ), ["conversation.chat", "image.generate", "image.edit"]);
+  assert.deepEqual(resolveIntentCandidates({
+    references: [{ type: "image_asset", assetId: "asset-1" }],
+    imageUrls: [],
+    documentUrls: [],
+  }), ["conversation.chat", "image.edit"]);
+  assert.deepEqual(resolveIntentCandidates({
+    references: [],
+    imageUrls: ["https://example.com/image.png"],
+    documentUrls: [],
+  }), ["conversation.chat"]);
+  assert.deepEqual(resolveIntentCandidates({
+    references: [
+      { type: "image_asset", assetId: "asset-1" },
+      { type: "image_asset", assetId: "asset-2" },
+    ],
+    imageUrls: [],
+    documentUrls: [],
+  }), ["conversation.chat"]);
+}
+
+test("auto intent candidates are constrained by attachment facts", testAutoIntentAttachmentCandidates);
+
+/** 验证图片操作只有达到固定阈值才通过，非法候选和分类异常统一安全回退对话。 */
+async function testStructuredIntentConfidenceGate() {
+  const scriptedOutputs = [
+    {
+      operation: "image.generate",
+      confidence: 0.8499,
+      useActiveImage: false,
+      relevantMessageIds: [],
+    },
+    {
+      operation: "image.generate",
+      confidence: 0.85,
+      useActiveImage: false,
+      relevantMessageIds: [],
+    },
+    {
+      operation: "image.generate",
+      confidence: 0.99,
+      useActiveImage: false,
+      relevantMessageIds: [],
+    },
+  ];
+  const gatewayClient = {
+    /** 按调用顺序返回结构化分类结果，第三项故意越过单图编辑候选。 */
+    async chatCompletions() {
+      return { output: scriptedOutputs.shift() };
+    },
+  };
+  const router = createRunIntentRouter({ gatewayClient });
+  const textInput = { message: "生成一张海报", references: [], imageUrls: [], documentUrls: [] };
+  const editInput = {
+    message: "把背景改成蓝色",
+    references: [{ type: "image_asset", assetId: "asset-1" }],
+    imageUrls: [],
+    documentUrls: [],
+  };
+
+  const belowThreshold = await router.resolve(textInput);
+  const atThreshold = await router.resolve(textInput);
+  const outsideCandidate = await router.resolve(editInput);
+
+  assert.equal(belowThreshold.operation, "conversation.chat");
+  assert.equal(belowThreshold.source, "low-confidence-fallback");
+  assert.equal(atThreshold.operation, "image.generate");
+  assert.equal(atThreshold.source, "structured-classifier");
+  assert.equal(outsideCandidate.operation, "conversation.chat");
+  assert.equal(outsideCandidate.source, "classification-fallback");
+
+  const failingRouter = createRunIntentRouter({
+    gatewayClient: {
+      /** 模拟分类模型或结构化解析不可用。 */
+      async chatCompletions() {
+        throw new Error("classifier unavailable");
+      },
+    },
+  });
+  assert.equal((await failingRouter.resolve(textInput)).operation, "conversation.chat");
+}
+
+test("structured intent routing gates image side effects at confidence 0.85", testStructuredIntentConfidenceGate);
+
+/** 验证分类器可读取有界会话语境，但不能选择资产 ID、伪造证据或引用空正文。 */
+async function testStructuredIntentUsesValidatedConversationContext() {
+  const classifierInputs = [];
+  const scriptedOutputs = [
+    {
+      operation: "image.edit",
+      confidence: 0.96,
+      useActiveImage: true,
+      relevantMessageIds: ["message-2"],
+    },
+    {
+      operation: "image.edit",
+      confidence: 0.99,
+      useActiveImage: true,
+      relevantMessageIds: ["forged-message"],
+    },
+    {
+      operation: "image.edit",
+      confidence: 0.99,
+      useActiveImage: true,
+      relevantMessageIds: ["message-3"],
+    },
+    {
+      operation: "image.edit",
+      confidence: 0.99,
+      useActiveImage: true,
+      relevantMessageIds: ["message-4"],
+    },
+  ];
+  const router = createRunIntentRouter({
+    gatewayClient: {
+      /** 保存分类器可见消息并按轮次返回结构化结果。 */
+      async chatCompletions(input) {
+        classifierInputs.push(input.messages);
+        return { output: scriptedOutputs.shift() };
+      },
+    },
+  });
+  const input = {
+    message: "继续处理并返回结果",
+    references: [],
+    imageUrls: [],
+    documentUrls: [],
+  };
+  const routingContextSnapshot = {
+    strategyVersion: "routing-context.v2",
+    conversationVersion: 7,
+    activeImage: {
+      assetId: "private-active-asset",
+      source: "edited",
+      anchorMessageId: "message-2",
+      anchorSeq: 2,
+    },
+    messages: [
+      {
+        id: "message-1",
+        seq: 1,
+        role: "user",
+        displayContent: "把标题颜色调整得更醒目",
+        runOperation: "image.edit",
+        hasImageArtifact: false,
+      },
+      {
+        id: "message-2",
+        seq: 2,
+        role: "assistant",
+        displayContent: "已编辑 1 张图片",
+        runOperation: "image.edit",
+        hasImageArtifact: true,
+      },
+      {
+        id: "message-3",
+        seq: 3,
+        role: "assistant",
+        displayContent: "",
+        runOperation: "conversation.chat",
+        hasImageArtifact: false,
+      },
+      {
+        id: "message-4",
+        seq: 4,
+        role: "user",
+        displayContent: "这条历史正文不完整，不能驱动图片副作用",
+        contentTruncated: true,
+        runOperation: "conversation.chat",
+        hasImageArtifact: false,
+      },
+    ],
+    truncated: false,
+  };
+
+  const accepted = await router.resolve(input, { routingContextSnapshot });
+  const rejected = await router.resolve(input, { routingContextSnapshot });
+  const emptyEvidence = await router.resolve(input, { routingContextSnapshot });
+  const truncatedEvidence = await router.resolve(input, { routingContextSnapshot });
+  const classifierPayload = JSON.parse(classifierInputs[0][1].content);
+
+  assert.equal(accepted.operation, "image.edit");
+  assert.deepEqual(accepted.candidates, ["conversation.chat", "image.generate", "image.edit"]);
+  assert.deepEqual(accepted.relevantMessageIds, ["message-2"]);
+  assert.equal(accepted.contextVersion, 7);
+  assert.equal(classifierPayload.activeImage.anchorMessageId, "message-2");
+  assert.equal(JSON.stringify(classifierPayload).includes("private-active-asset"), false);
+  assert.equal(rejected.operation, "conversation.chat");
+  assert.equal(rejected.source, "invalid-context-evidence-fallback");
+  assert.equal(rejected.useActiveImage, false);
+  assert.equal(emptyEvidence.operation, "conversation.chat");
+  assert.equal(emptyEvidence.source, "invalid-context-evidence-fallback");
+  assert.deepEqual(emptyEvidence.relevantMessageIds, []);
+  assert.equal(classifierPayload.recentMessages[3].contentTruncated, true);
+  assert.equal(truncatedEvidence.operation, "conversation.chat");
+  assert.equal(truncatedEvidence.source, "invalid-context-evidence-fallback");
+  assert.deepEqual(truncatedEvidence.relevantMessageIds, []);
+}
+
+test(
+  "structured intent routing rejects forged, empty, or truncated evidence",
+  testStructuredIntentUsesValidatedConversationContext,
+);
+
+/** 验证路由投影只读取 committed 正文，并在分类前脱敏 URL 而不改写会话事实。 */
+async function testRoutingSnapshotProjectsSafeCommittedHistory() {
+  const store = createConversationStore({ databasePath: ":memory:" });
+  try {
+    const conversation = store.createConversation();
+    const bareDocumentUrl = "https://docs.example.test/design/spec(section)?signature=synthetic-marker-a#part";
+    const markdownDocumentUrl = "https://docs.example.test/guide_(draft)?token=synthetic-marker-b#chapter";
+    const punctuatedDocumentUrl = "http://assets.example.test/export?key=synthetic-marker-c";
+    const parenthesizedDocumentUrl = "https://assets.example.test/archive?key=synthetic-marker-d#result";
+    const privateDataUrl = "data:image/png;base64,c3ludGhldGljLW1hcmtlci1k";
+    const displayContent = [
+      "保留这段普通正文",
+      `参考文档：${bareDocumentUrl}，继续保留后续判断`,
+      `Markdown：[设计说明](${markdownDocumentUrl})。继续保留链接后的说明`,
+      `英文标点：${punctuatedDocumentUrl}, keep following text`,
+      `外层括号：(${parenthesizedDocumentUrl}). keep closing punctuation`,
+      `内联图片：![预览](${privateDataUrl})。继续保留图片后的说明`,
+    ].join("\n");
+    const started = store.startRun({
+      conversationId: conversation.id,
+      requestId: "routing-projection-request",
+      clientMessageId: "routing-projection-message",
+      content: displayContent,
+      displayContent,
+      operation: "conversation.chat",
+    });
+    store.cancelRun({
+      conversationId: conversation.id,
+      runId: started.run.id,
+      partialContent: "这段中断输出不应参与后续意图判断",
+      model: "scripted-test-model",
+    });
+
+    const snapshot = store.getRoutingContextSnapshot(conversation.id, { maxMessages: 1 });
+    const detail = store.getConversation(conversation.id);
+    const classifierCalls = [];
+    const router = createRunIntentRouter({
+      gatewayClient: {
+        /** 保存结构化分类实际收到的消息，并返回无副作用的确定性决定。 */
+        async chatCompletions(input) {
+          classifierCalls.push(input.messages);
+          return {
+            output: {
+              operation: "conversation.chat",
+              confidence: 0.99,
+              useActiveImage: false,
+              relevantMessageIds: [],
+            },
+          };
+        },
+      },
+    });
+    await router.resolve(
+      { message: "select the next operation", references: [], imageUrls: [], documentUrls: [] },
+      { routingContextSnapshot: snapshot },
+    );
+    const classifierPayload = JSON.stringify(classifierCalls);
+
+    assert.equal(snapshot.messages.length, 1);
+    assert.equal(snapshot.messages[0].id, started.userMessage.id);
+    assert.equal(snapshot.messages[0].displayContent, [
+      "保留这段普通正文",
+      "参考文档：[url]，继续保留后续判断",
+      "Markdown：[设计说明]([url])。继续保留链接后的说明",
+      "英文标点：[url], keep following text",
+      "外层括号：([url]). keep closing punctuation",
+      "内联图片：![预览]([data-url])。继续保留图片后的说明",
+    ].join("\n"));
+    assert.equal(snapshot.truncated, false);
+    assert.equal(classifierPayload.includes("docs.example.test"), false);
+    assert.equal(classifierPayload.includes("assets.example.test"), false);
+    assert.equal(classifierPayload.includes("synthetic-marker"), false);
+    assert.equal(classifierPayload.includes("c3ludGhldGljLW1hcmtlci1k"), false);
+    assert.equal(classifierPayload.includes("[url]"), true);
+    assert.equal(classifierPayload.includes("[data-url]"), true);
+    assert.equal(detail.messages.length, 2);
+    assert.equal(detail.messages[0].displayContent, displayContent);
+    assert.equal(detail.messages[1].status, "interrupted");
+
+    const longConversation = store.createConversation();
+    const longContent = `前部旧指令-${"x".repeat(1001)}-尾部纠正结论`;
+    store.startRun({
+      conversationId: longConversation.id,
+      requestId: "routing-long-content-request",
+      clientMessageId: "routing-long-content-message",
+      content: longContent,
+      displayContent: longContent,
+    });
+    const truncatedSnapshot = store.getRoutingContextSnapshot(longConversation.id);
+    assert.equal(truncatedSnapshot.messages[0].displayContent, "[message-content-truncated]");
+    assert.equal(truncatedSnapshot.messages[0].contentTruncated, true);
+    assert.equal(truncatedSnapshot.messages[0].displayContent.includes("前部旧指令"), false);
+    assert.equal(truncatedSnapshot.messages[0].displayContent.includes("尾部纠正结论"), false);
+    assert.equal(truncatedSnapshot.truncated, true);
+  } finally {
+    store.close();
+  }
+}
+
+test(
+  "routing snapshot excludes interrupted messages and redacts URLs before classification",
+  testRoutingSnapshotProjectsSafeCommittedHistory,
+);
+
+/** 验证未知 operation 在创建 Run 或调用模型前被输入契约拒绝。 */
+async function testUnsupportedRunOperation() {
+  const fixture = createTestRuntime();
+  try {
+    const conversation = fixture.runtime.createConversation();
+    await assert.rejects(
+      fixture.runtime.runConversation(conversation.id, {
+        operation: "unknown.operation",
+        requestId: "unsupported-operation-request",
+        clientMessageId: "unsupported-operation-message",
+        message: "验证未知操作",
+      }),
+      /** 只接受输入层的稳定错误码。 */
+      function matchesUnsupportedOperation(error) {
+        return error?.payload?.code === "unsupported_run_operation";
+      },
+    );
+    assert.equal(fixture.runtime.getConversation(conversation.id).messages.length, 0);
+  } finally {
+    fixture.store.close();
+  }
+}
+
+test("runtime rejects unsupported operations before creating a Run", testUnsupportedRunOperation);
+
+/** 验证 auto 请求由 Runtime 持久化真实 operation，完成态重放不会再次调用路由器。 */
+async function testAutoRoutingPersistenceAndReplay() {
+  let routingCalls = 0;
+  const intentRouter = {
+    /** 始终把当前无附件输入解析为普通对话，并记录分类次数。 */
+    async resolve() {
+      routingCalls += 1;
+      return {
+        operation: "conversation.chat",
+        confidence: 0.94,
+        source: "structured-classifier",
+        candidates: ["conversation.chat", "image.generate"],
+      };
+    },
+  };
+  const fixture = createTestRuntime({ intentRouter });
+  const conversation = fixture.runtime.createConversation();
+  const input = {
+    operation: "auto",
+    requestId: "auto-routing-request",
+    clientMessageId: "auto-routing-message",
+    message: "解释一下 Runtime 的职责",
+  };
+
+  const first = await fixture.runtime.runConversation(conversation.id, input);
+  const replay = await fixture.runtime.runConversation(conversation.id, input);
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.equal(first.operation, "conversation.chat");
+  assert.equal(replay.replayed, true);
+  assert.equal(detail.latestRun.operation, "conversation.chat");
+  assert.equal(routingCalls, 1);
+  fixture.store.close();
+}
+
+test("auto routing persists the resolved operation and skips classification on replay", testAutoRoutingPersistenceAndReplay);
+
+/** 验证分类期间会话版本变化会触发一次重新取快照，而不会用旧上下文创建 Run。 */
+async function testAutoRoutingRetriesOneStaleContext() {
+  const observedVersions = [];
+  const intentRouter = {
+    /** 记录每次分类读取的 Store 版本并返回无图片副作用的合法决定。 */
+    async resolve(_input, execution = {}) {
+      const version = execution.routingContextSnapshot.conversationVersion;
+      observedVersions.push(version);
+      return {
+        schemaVersion: "run-intent-decision.v2",
+        routerVersion: "runtime-intent.v2",
+        operation: "conversation.chat",
+        classifiedOperation: "conversation.chat",
+        confidence: 0.93,
+        threshold: 0.85,
+        source: "structured-classifier",
+        candidates: ["conversation.chat", "image.generate"],
+        useActiveImage: false,
+        relevantMessageIds: [],
+        contextVersion: version,
+        contextStrategyVersion: "routing-context.v2",
+        contextTruncated: false,
+      };
+    },
+  };
+  const fixture = createTestRuntime({ intentRouter });
+  try {
+    const conversation = fixture.runtime.createConversation({ title: "初始标题" });
+    const originalStartRun = fixture.store.startRun.bind(fixture.store);
+    let startAttempts = 0;
+    /** 首次创建前模拟另一个实例提交会话更新，使当前分类快照失效。 */
+    function startRunAfterOneConcurrentChange(input) {
+      startAttempts += 1;
+      if (startAttempts === 1) {
+        fixture.store.updateConversation(conversation.id, { title: "并发更新后的标题" });
+      }
+      return originalStartRun(input);
+    }
+    fixture.store.startRun = startRunAfterOneConcurrentChange;
+
+    const result = await fixture.runtime.runConversation(conversation.id, {
+      operation: "auto",
+      requestId: "auto-stale-routing-request",
+      clientMessageId: "auto-stale-routing-message",
+      message: "解释当前会话上下文",
+    });
+    const detail = fixture.runtime.getConversation(conversation.id);
+
+    assert.equal(result.operation, "conversation.chat");
+    assert.equal(startAttempts, 2);
+    assert.deepEqual(observedVersions, [conversation.version, conversation.version + 1]);
+    assert.equal(detail.latestRun.intentDecision.contextVersion, conversation.version + 1);
+    assert.equal(detail.latestRun.status, "completed");
+  } finally {
+    fixture.store.close();
+  }
+}
+
+test("auto routing retries once when its conversation snapshot becomes stale", testAutoRoutingRetriesOneStaleContext);
+
+/** 验证 auto 模式不接受浏览器模型选择或恢复关系，且不会创建 Run。 */
+async function testAutoRoutingRejectsClientOwnedDecisions() {
+  const fixture = createTestRuntime();
+  const conversation = fixture.runtime.createConversation();
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      operation: "auto",
+      requestId: "auto-model-request",
+      clientMessageId: "auto-model-message",
+      model: "client-model",
+      message: "生成一张图",
+    }),
+    /** 只接受 auto 模型注入的稳定输入错误。 */
+    function matchesAutoModelRejection(error) {
+      return error?.payload?.code === "auto_model_not_allowed";
+    },
+  );
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      operation: "auto",
+      requestId: "auto-recovery-request",
+      clientMessageId: "auto-recovery-message",
+      sourceRunId: "source-run",
+      recoveryMode: "retry",
+      message: "重试",
+    }),
+    /** 只接受 auto 恢复关系的稳定输入错误。 */
+    function matchesAutoRecoveryRejection(error) {
+      return error?.payload?.code === "auto_recovery_not_allowed";
+    },
+  );
+  assert.equal(fixture.runtime.getConversation(conversation.id).messages.length, 0);
+  fixture.store.close();
+}
+
+test("auto routing rejects client model selection and recovery lineage", testAutoRoutingRejectsClientOwnedDecisions);
+
+/** 验证分类继承调用方取消，并以最多十秒子截止时间把非取消分类失败回退为对话。 */
+async function testAutoRoutingCancellationAndDeadline() {
+  let resolveRoutingStarted;
+  // Promise executor 暴露分类器已经取得调用方取消信号的事实。
+  const routingStarted = new Promise((resolve) => {
+    resolveRoutingStarted = resolve;
+  });
+  const cancellingRouter = {
+    /** 等待调用方取消后终止分类，不返回任何可落库 operation。 */
+    async resolve(_input, execution) {
+      resolveRoutingStarted();
+      await waitForAbort(execution.abortSignal);
+      throw execution.abortSignal.reason || new DOMException("Intent routing was aborted", "AbortError");
+    },
+  };
+  const cancellingFixture = createTestRuntime({ intentRouter: cancellingRouter });
+  const cancellingConversation = cancellingFixture.runtime.createConversation();
+  const controller = new AbortController();
+  const cancelledRun = cancellingFixture.runtime.runConversation(
+    cancellingConversation.id,
+    {
+      operation: "auto",
+      requestId: "auto-routing-cancel-request",
+      clientMessageId: "auto-routing-cancel-message",
+      message: "生成一张图片",
+    },
+    { abortSignal: controller.signal },
+  );
+  await routingStarted;
+  controller.abort(new DOMException("Caller cancelled routing", "AbortError"));
+  await assert.rejects(
+    cancelledRun,
+    /** 只接受调用方取消原因，不把分类取消改写为对话回退。 */
+    function matchesRoutingCancellation(error) {
+      return error?.name === "AbortError";
+    },
+  );
+  assert.equal(cancellingFixture.runtime.getConversation(cancellingConversation.id).messages.length, 0);
+  cancellingFixture.store.close();
+
+  const gatewayClient = createScriptedGateway();
+  const originalChatCompletions = gatewayClient.chatCompletions.bind(gatewayClient);
+  let classificationCalls = 0;
+  let routingBudgetMs = null;
+  /** 让分类阶段确定性失败并记录 Runtime 分配的子截止时间，业务对话仍走原脚本实现。 */
+  gatewayClient.chatCompletions = async function routeOrGenerate(input) {
+    if (input.operation === "model.intent.classify") {
+      classificationCalls += 1;
+      routingBudgetMs = input.resilienceContext.deadlineAt - Date.now();
+      throw new Error("intent classifier unavailable");
+    }
+    return originalChatCompletions(input);
+  };
+  const fallbackFixture = createTestRuntime({ gatewayClient });
+  const fallbackConversation = fallbackFixture.runtime.createConversation();
+  const fallback = await fallbackFixture.runtime.runConversation(fallbackConversation.id, {
+    operation: "auto",
+    requestId: "auto-routing-deadline-request",
+    clientMessageId: "auto-routing-deadline-message",
+    message: "请解释图片生成能力",
+  });
+  assert.equal(fallback.operation, "conversation.chat");
+  assert.equal(classificationCalls, 1);
+  assert.ok(routingBudgetMs > 0 && routingBudgetMs <= 10000);
+  assert.equal(fallbackFixture.runtime.getConversation(fallbackConversation.id).latestRun.operation, "conversation.chat");
+  fallbackFixture.store.close();
+}
+
+test("auto routing inherits cancellation and bounds the classifier deadline", testAutoRoutingCancellationAndDeadline);
+
+/** 验证预取消请求在显式与单候选 auto 路径都不会创建 Run 或用户消息。 */
+async function testPreCancelledRunsStayUnpersisted() {
+  const fixture = createTestRuntime();
+  try {
+    const conversation = fixture.runtime.createConversation();
+    const explicitController = new AbortController();
+    explicitController.abort(new DOMException("Explicit request was cancelled", "AbortError"));
+    await assert.rejects(
+      fixture.runtime.runConversation(
+        conversation.id,
+        {
+          requestId: "pre-cancelled-explicit-request",
+          clientMessageId: "pre-cancelled-explicit-message",
+          message: "不要创建显式 Run",
+        },
+        { abortSignal: explicitController.signal },
+      ),
+      isAbortError,
+    );
+
+    const autoController = new AbortController();
+    autoController.abort(new DOMException("Auto request was cancelled", "AbortError"));
+    await assert.rejects(
+      fixture.runtime.runConversation(
+        conversation.id,
+        {
+          operation: "auto",
+          requestId: "pre-cancelled-auto-request",
+          clientMessageId: "pre-cancelled-auto-message",
+          message: "解释远程图片",
+          imageUrls: ["https://example.com/reference.png"],
+        },
+        { abortSignal: autoController.signal },
+      ),
+      isAbortError,
+    );
+
+    assert.equal(fixture.store.findRunByRequestId(conversation.id, "pre-cancelled-explicit-request"), null);
+    assert.equal(fixture.store.findRunByRequestId(conversation.id, "pre-cancelled-auto-request"), null);
+    assert.equal(fixture.runtime.getConversation(conversation.id).messages.length, 0);
+  } finally {
+    fixture.store.close();
+  }
+}
+
+test("pre-cancelled explicit and single-candidate auto requests create no Run", testPreCancelledRunsStayUnpersisted);
+
+/** 验证分类器忽略取消并返回决定时，Runtime 仍让取消优先于策略和持久化。 */
+async function testCancellationAfterIntentDecisionStaysUnpersisted() {
+  const controller = new AbortController();
+  const intentRouter = {
+    /** 在返回合法决定前触发调用方取消，模拟不协作的分类实现。 */
+    async resolve() {
+      controller.abort(new DOMException("Routing result arrived after cancellation", "AbortError"));
+      return {
+        operation: "conversation.chat",
+        confidence: 0.93,
+        source: "structured-classifier",
+        candidates: ["conversation.chat", "image.generate"],
+      };
+    },
+  };
+  const fixture = createTestRuntime({ intentRouter });
+  try {
+    const conversation = fixture.runtime.createConversation();
+    await assert.rejects(
+      fixture.runtime.runConversation(
+        conversation.id,
+        {
+          operation: "auto",
+          requestId: "cancelled-after-routing-request",
+          clientMessageId: "cancelled-after-routing-message",
+          message: "生成一张图片",
+        },
+        { abortSignal: controller.signal },
+      ),
+      isAbortError,
+    );
+
+    assert.equal(fixture.store.findRunByRequestId(conversation.id, "cancelled-after-routing-request"), null);
+    assert.equal(fixture.runtime.getConversation(conversation.id).messages.length, 0);
+  } finally {
+    fixture.store.close();
+  }
+}
+
+test("cancellation wins when an intent router returns after abort", testCancellationAfterIntentDecisionStaysUnpersisted);
+
+/** 验证排队期间取消的后续请求在取得串行执行权后不会创建伪 Run。 */
+async function testQueuedCancellationStaysUnpersisted() {
+  let releaseFirstGeneration;
+  let markFirstGenerationStarted;
+  let markSecondQueued;
+  // Promise executor 暴露首个模型调用已占用会话串行区的事实。
+  const firstGenerationStarted = new Promise((resolve) => {
+    markFirstGenerationStarted = resolve;
+  });
+  // Promise executor 让测试在明确时点释放首个模型调用。
+  const firstGenerationGate = new Promise((resolve) => {
+    releaseFirstGeneration = resolve;
+  });
+  // Promise executor 暴露第二个请求已经进入协调器队列的事实。
+  const secondQueued = new Promise((resolve) => {
+    markSecondQueued = resolve;
+  });
+  const gatewayClient = createScriptedGateway();
+  const originalChatCompletions = gatewayClient.chatCompletions.bind(gatewayClient);
+  let generationCalls = 0;
+  /** 首个普通生成保持挂起，结构化调用和后续调用继续使用脚本实现。 */
+  async function holdFirstGeneration(input) {
+    if (!input.outputSchema) {
+      generationCalls += 1;
+      if (generationCalls === 1) {
+        markFirstGenerationStarted();
+        await firstGenerationGate;
+      }
+    }
+    return originalChatCompletions(input);
+  }
+  gatewayClient.chatCompletions = holdFirstGeneration;
+  const baseCoordinator = createConversationCoordinator();
+  let coordinatorCalls = 0;
+  const coordinator = {
+    /** 委托真实协调器，并在第二次调用已同步入队后通知测试。 */
+    async runExclusive(conversationId, operation, execution) {
+      coordinatorCalls += 1;
+      const pending = baseCoordinator.runExclusive(conversationId, operation, execution);
+      if (coordinatorCalls === 2) markSecondQueued();
+      return pending;
+    },
+  };
+  const fixture = createTestRuntime({ gatewayClient, coordinator });
+  const conversation = fixture.runtime.createConversation();
+  const firstRun = fixture.runtime.runConversation(conversation.id, {
+    requestId: "queue-owner-request",
+    clientMessageId: "queue-owner-message",
+    message: "占用会话队列",
+  });
+  let secondRun;
+  try {
+    await firstGenerationStarted;
+    const controller = new AbortController();
+    secondRun = fixture.runtime.runConversation(
+      conversation.id,
+      {
+        requestId: "queue-cancelled-request",
+        clientMessageId: "queue-cancelled-message",
+        message: "排队后取消",
+      },
+      { abortSignal: controller.signal },
+    );
+    await secondQueued;
+    controller.abort(new DOMException("Queued request was cancelled", "AbortError"));
+    let cancellationTimer;
+    const cancellationDeadline = new Promise(
+      /** 排队取消必须在前序 Run 释放前返回，否则用有界失败阻止测试永久挂起。 */
+      (_resolve, reject) => {
+        cancellationTimer = setTimeout(
+          /** 把未及时结算转换为明确回归错误。 */
+          () => reject(new Error("queued cancellation did not settle promptly")),
+          250,
+        );
+      },
+    );
+    try {
+      await assert.rejects(Promise.race([secondRun, cancellationDeadline]), isAbortError);
+    } finally {
+      clearTimeout(cancellationTimer);
+    }
+    assert.equal(fixture.store.findRunByRequestId(conversation.id, "queue-cancelled-request"), null);
+    releaseFirstGeneration();
+
+    await firstRun;
+    assert.equal(generationCalls, 1);
+    assert.equal(fixture.store.findRunByRequestId(conversation.id, "queue-cancelled-request"), null);
+    assert.equal(fixture.runtime.getConversation(conversation.id).messages.length, 2);
+  } finally {
+    releaseFirstGeneration();
+    await Promise.allSettled([firstRun, secondRun].filter(Boolean));
+    fixture.store.close();
+  }
+}
+
+test("cancelling while queued creates no second Run", testQueuedCancellationStaysUnpersisted);
+
+/** 验证三种恢复动作继承来源 operation，并且显式恢复不会再次调用智能分类器。 */
+async function testRecoveryOperationsBypassIntentRouting() {
+  let routingCalls = 0;
+  const intentRouter = {
+    /** 记录任何意外分类调用；显式恢复路径不应进入这里。 */
+    async resolve() {
+      routingCalls += 1;
+      throw new Error("Recovery must not call the intent router");
+    },
+  };
+  const fixture = createTestRuntime({ intentRouter });
+  const conversation = fixture.runtime.createConversation();
+
+  /** 创建一个指定请求的普通对话来源 Run。 */
+  function startSourceRun(requestId, clientMessageId) {
+    return fixture.store.startRun({
+      conversationId: conversation.id,
+      requestId,
+      clientMessageId,
+      content: requestId,
+      displayContent: requestId,
+      operation: "conversation.chat",
+      model: fixture.gatewayClient.model,
+    }).run;
+  }
+
+  const completedSource = startSourceRun("source-completed-request", "source-completed-message");
+  fixture.store.completeRun({
+    runId: completedSource.id,
+    content: "已完成",
+    displayContent: "已完成",
+    usage: null,
+    contextManifest: null,
+    model: fixture.gatewayClient.model,
+    resilience: null,
+  });
+  const failedSource = startSourceRun("source-failed-request", "source-failed-message");
+  fixture.store.failRun(failedSource.id, new Error("source failed"));
+  const cancelledSource = startSourceRun("source-cancelled-request", "source-cancelled-message");
+  fixture.store.cancelRun({
+    conversationId: conversation.id,
+    runId: cancelledSource.id,
+    model: fixture.gatewayClient.model,
+  });
+
+  const recoveryCases = [
+    { mode: "retry", sourceRunId: failedSource.id },
+    { mode: "regenerate", sourceRunId: completedSource.id },
+    { mode: "continue", sourceRunId: cancelledSource.id },
+  ];
+  for (const recovery of recoveryCases) {
+    const requestId = `recovery-${recovery.mode}-request`;
+    await fixture.runtime.runConversation(conversation.id, {
+      operation: "conversation.chat",
+      requestId,
+      clientMessageId: `recovery-${recovery.mode}-message`,
+      sourceRunId: recovery.sourceRunId,
+      recoveryMode: recovery.mode,
+      message: `${recovery.mode} source response`,
+    });
+    const recovered = fixture.store.findRunByRequestId(conversation.id, requestId).run;
+    assert.equal(recovered.operation, "conversation.chat");
+    assert.equal(recovered.sourceRunId, recovery.sourceRunId);
+    assert.equal(recovered.recoveryMode, recovery.mode);
+    assert.equal(recovered.status, "completed");
+  }
+  assert.equal(routingCalls, 0);
+  fixture.store.close();
+}
+
+test("run recovery modes inherit operation without intent reclassification", testRecoveryOperationsBypassIntentRouting);
+
+/** 判断 Runtime 是否保留含图对话所需的 vision 能力分类。 */
+function matchesVisionCapabilityMismatch(error) {
+  return error?.status === 400 &&
+    error?.payload?.code === "model_capability_mismatch" &&
+    error.payload.requiredCapability === "vision" &&
+    error.payload.operation === "conversation.chat";
+}
+
+/** 判断 Runtime 是否保留图片生成所需的能力分类。 */
+function matchesImageCapabilityMismatch(error) {
+  return error?.status === 400 &&
+    error?.payload?.code === "model_capability_mismatch" &&
+    error.payload.requiredCapability === "imageGeneration" &&
+    error.payload.operation === "image.generate";
+}
+
 // 验证标题和归档是独立会话事实，取消归档不会重新打开已关闭会话。
 test("conversation workspace updates title and archive state without reopening closed sessions", async () => {
   const fixture = createTestRuntime();
@@ -1000,6 +1881,18 @@ test("run recovery persists lineage and validates the source terminal state", as
   const conversation = fixture.runtime.createConversation();
   await run(fixture.runtime, conversation.id, 1, "原问题");
   const sourceRun = fixture.runtime.getConversation(conversation.id).latestRun;
+
+  await assert.rejects(
+    fixture.runtime.runConversation(conversation.id, {
+      operation: "image.generate",
+      requestId: "request-operation-tamper",
+      clientMessageId: "client-operation-tamper",
+      sourceRunId: sourceRun.id,
+      recoveryMode: "regenerate",
+      message: "把来源对话篡改成图片生成",
+    }),
+    isInvalidRunRecoverySource,
+  );
 
   await fixture.runtime.runConversation(conversation.id, {
     requestId: "request-regenerate",
@@ -1221,6 +2114,37 @@ test("cancelling before the first delta persists no assistant message", async ()
   assert.equal(controlled.getCallCount(), 1);
   assert.equal(detail.messages.length, 1);
   assert.equal(detail.latestRun.status, "cancelled");
+  fixture.store.close();
+});
+
+// 验证调用方信号在 Run 已开始后仍由 Runtime 完成取消落库，而不是让协调器提前返回裸 AbortError。
+test("caller cancellation after Run start waits for persisted cancellation", async () => {
+  const controlled = createCancellableGateway();
+  const fixture = createTestRuntime({ gatewayClient: controlled.gatewayClient });
+  const conversation = fixture.runtime.createConversation();
+  const controller = new AbortController();
+  const execution = {
+    ...createCollectingExecution(
+      /** 当前测试只需要消费 Run 身份事件，取消由调用方信号触发。 */
+      () => {},
+      { types: ["run.started"] },
+    ),
+    abortSignal: controller.signal,
+  };
+  const runPromise = fixture.runtime.runConversation(
+    conversation.id,
+    { requestId: "caller-cancel-request", clientMessageId: "caller-cancel-message", message: "调用方停止" },
+    execution,
+  );
+
+  await controlled.waitUntilGenerating;
+  controller.abort(new DOMException("Caller cancelled active Run", "AbortError"));
+  const result = await runPromise;
+  const detail = fixture.runtime.getConversation(conversation.id);
+
+  assert.equal(result.cancelled, true);
+  assert.equal(detail.latestRun.status, "cancelled");
+  assert.equal(detail.messages.length, 1);
   fixture.store.close();
 });
 
@@ -1446,9 +2370,11 @@ function createCancellableGateway({ partialText = "" } = {}) {
   let callCount = 0;
   let resolveGenerating;
   let resolveDelta;
+  // Promise executor 暴露首次模型调用开始事实。
   const waitUntilGenerating = new Promise((resolve) => {
     resolveGenerating = resolve;
   });
+  // Promise executor 暴露首个文本增量已经交付的事实。
   const waitUntilDelta = new Promise((resolve) => {
     resolveDelta = resolve;
   });
@@ -1491,6 +2417,7 @@ function createCancellableGateway({ partialText = "" } = {}) {
 /** 等待 AbortSignal 终止；已取消信号立即返回。 */
 function waitForAbort(signal) {
   if (signal.aborted) return Promise.resolve();
+  // Promise executor 把一次 AbortSignal 事件桥接为测试等待结果。
   return new Promise((resolve) => {
     /** 收到一次取消后结束测试等待。 */
     function handleAbort() {
@@ -1498,6 +2425,11 @@ function waitForAbort(signal) {
     }
     signal.addEventListener("abort", handleAbort, { once: true });
   });
+}
+
+/** 只接受标准 AbortError，避免把普通 Runtime 失败误判为取消。 */
+function isAbortError(error) {
+  return error?.name === "AbortError";
 }
 
 /** 创建返回成功或最终失败重试证据的脚本化 Gateway。 */

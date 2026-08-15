@@ -2,8 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { createNullChainTracer } from "../observability/chain-tracer.mjs";
 import { createResilienceContext } from "../resilience/retry-executor.mjs";
 import { ImageAssetStoreError } from "../storage/image-asset-store.mjs";
+import { ConversationStoreError } from "../storage/conversation-store.mjs";
 import { normalizeContextOptions } from "./context-budget.mjs";
-import { ImageGenerationPolicyError, inspectGeneratedImage } from "./image-generation-policy.mjs";
+import {
+  ImageGenerationPolicyError,
+  inspectGeneratedImage,
+  inspectStoredImage,
+  inspectUploadedImage,
+} from "./image-generation-policy.mjs";
 import {
   ExecutionPolicyError,
   assertExecutionAllowed,
@@ -13,15 +19,24 @@ import { createResultAcceptanceRegistry } from "./result-acceptance.mjs";
 import { createNullRunEventSink } from "./run-event-sink.mjs";
 import { RunLeaseError, createRunLeaseCoordinator } from "./run-lease-coordinator.mjs";
 import {
+  AUTO_RUN_OPERATION,
+  DEFAULT_RUN_OPERATION,
+  IMAGE_EDIT_OPERATION,
   IMAGE_GENERATION_OPERATION,
   buildDisplayContent,
   buildUserContent,
   normalizeRunInput,
   validateRunInput,
 } from "./message-builder.mjs";
+import { createRunIntentRouter } from "./run-intent-router.mjs";
 import { createToolRegistry } from "../tools/tool-registry.mjs";
 
 const DEFAULT_RUN_TIMEOUT_MS = 120000;
+const DEFAULT_INTENT_TIMEOUT_MS = 10000;
+const IMAGE_EDIT_CONTEXT_PROMPT_VERSION = "image-edit-context.v1";
+const MAX_IMAGE_EDIT_PROMPT_CHARS = 4000;
+const MIN_IMAGE_EDIT_EVIDENCE_CONTENT_CHARS = 64;
+const IMAGE_EDIT_CURRENT_TRUNCATION_MARKER = "\n...[当前请求已按编辑 Prompt 预算截断]...\n";
 const TOOL_RESULT_RECOVERY_INSTRUCTION =
   "你正在恢复一次已完成工具调用后的最终回答。后续结构化 tool-call 和 tool-result 均来自服务端已持久化事实。请仅根据原始问题和这些结果作答，说明可用的数据来源与时间；不要请求、假设或声称再次调用工具。";
 
@@ -71,6 +86,7 @@ export function createChatRuntime({
   contextPlanner,
   memoryManager,
   imageAssetStore,
+  intentRouter,
   toolRegistry,
   executionPolicy,
   runLeaseCoordinator,
@@ -82,6 +98,7 @@ export function createChatRuntime({
   const options = normalizeContextOptions(contextOptions);
   const registry = toolRegistry || createToolRegistry();
   const policy = executionPolicy || createExecutionPolicy({
+    allowedRunOperations: [DEFAULT_RUN_OPERATION, IMAGE_GENERATION_OPERATION, IMAGE_EDIT_OPERATION],
     allowedReadTools: registry.list().map(readToolDefinitionName),
   });
   const leaseCoordinator = runLeaseCoordinator || createRunLeaseCoordinator({
@@ -92,6 +109,7 @@ export function createChatRuntime({
   const aiSdkTools = registry.hasTools() ? registry.buildAiSdkTools() : undefined;
   const runTimeoutMs = normalizeRunTimeout(resilienceOptions.runTimeoutMs);
   const maxToolSteps = normalizeToolStepLimit(toolOptions.maxSteps);
+  const operationRouter = intentRouter || createRunIntentRouter({ gatewayClient });
   const activeRuns = new Map();
 
   /** 隔离可替换 Policy Port 的后置观察异常，禁止其改写已提交执行事实。 */
@@ -181,18 +199,32 @@ export function createChatRuntime({
       model: run.model,
       operation: run.operation,
       resilienceContext,
+      leaseHandle,
     };
     activeRuns.set(run.id, activeRun);
 
     try {
+      const references = candidate.userMessage.references || [];
+      const messageReferences = references.filter(isConversationMessageReference);
       const referencedMessages = store.resolveMessageReferences(
         run.conversationId,
-        candidate.userMessage.references || [],
+        messageReferences,
+      );
+      const controlledImages = await readControlledImageInputs({
+        conversationId: run.conversationId,
+        references,
+        store,
+        imageAssetStore,
+      });
+      const currentContent = buildPersistedConversationModelContent(
+        candidate.userMessage.content,
+        references,
+        controlledImages,
       );
       let plan = await contextPlanner.plan({
         conversationId: run.conversationId,
         currentMessageId: candidate.userMessage.id,
-        currentContent: candidate.userMessage.content,
+        currentContent,
         currentDisplayContent: candidate.userMessage.displayContent,
         referencedMessages,
         resilienceContext,
@@ -207,7 +239,7 @@ export function createChatRuntime({
         plan = await contextPlanner.plan({
           conversationId: run.conversationId,
           currentMessageId: candidate.userMessage.id,
-          currentContent: candidate.userMessage.content,
+          currentContent,
           currentDisplayContent: candidate.userMessage.displayContent,
           referencedMessages,
           resilienceContext,
@@ -317,7 +349,7 @@ export function createChatRuntime({
         ? buildCancellationResilience(
             ownedActive.resilienceContext,
             ownedActive.partialText.length > 0,
-            ownedActive.operation === IMAGE_GENERATION_OPERATION ? "model.image.generate" : "model.generate",
+            modelOperationForRun(ownedActive.operation),
           )
         : null,
       lease: ownedActive?.leaseHandle?.credentials || null,
@@ -366,6 +398,74 @@ export function createChatRuntime({
       });
     },
 
+    /**
+     * 将一张本地图片登记为当前会话拥有的受控资产；上传不创建 Run 或调用模型。
+     *
+     * @param {string} conversationId - 资产所属会话。
+     * @param {{bytes: Uint8Array|Buffer, mediaType: string}} input - 原始图片字节与声明 MIME。
+     * @returns {Promise<object>} 可供后续 C2 Run 引用的 image_asset。
+     */
+    async uploadImageAsset(conversationId, input) {
+      if (!imageAssetStore || typeof store?.createImageAsset !== "function") {
+        throw new RuntimeExecutionError({
+          error: "图片上传能力未配置",
+          detail: "当前 Runtime 尚未装配图片资产存储。",
+          action: "请配置图片资产目录后重试。",
+          code: "image_asset_upload_unavailable",
+          retryable: false,
+        }, 503);
+      }
+      let inspected;
+      try {
+        inspected = inspectUploadedImage(input?.bytes, input?.mediaType);
+      } catch (error) {
+        if (error instanceof ImageGenerationPolicyError) {
+          throw new RuntimeInputError({ error: error.message, code: error.code }, error.status);
+        }
+        throw error;
+      }
+      const assetId = randomUUID();
+      let stored = null;
+      try {
+        stored = await imageAssetStore.write({
+          assetId,
+          bytes: inspected.bytes,
+          mediaType: inspected.mediaType,
+        });
+        return store.createImageAsset({
+          conversationId,
+          asset: {
+            assetId,
+            storageKey: stored.storageKey,
+            mediaType: inspected.mediaType,
+            sizeBytes: inspected.sizeBytes,
+            width: inspected.width,
+            height: inspected.height,
+            sha256: createHash("sha256").update(inspected.bytes).digest("hex"),
+          },
+        });
+      } catch (error) {
+        if (stored?.storageKey) await cleanupImageAssets(imageAssetStore, [stored]);
+        if (error instanceof ImageAssetStoreError) {
+          throw new RuntimeExecutionError({
+            error: "图片上传保存失败",
+            detail: "上传图片未能保存为可访问的会话资产。",
+            action: "请检查图片资产目录权限与空间后重试。",
+            code: error.code,
+            retryable: false,
+          }, 500, error);
+        }
+        if (error instanceof ConversationStoreError) throw error;
+        throw new RuntimeExecutionError({
+          error: "图片上传登记失败",
+          detail: "上传图片未能登记到会话事实源，已写入的临时内容已清理。",
+          action: "请检查会话存储状态后重试。",
+          code: "image_asset_metadata_write_failed",
+          retryable: true,
+        }, 500, error);
+      }
+    },
+
     cancelConversationRun,
 
     /**
@@ -380,21 +480,20 @@ export function createChatRuntime({
      * @returns {Promise<object>} 回复、会话状态、usage 和 Context Manifest。
      */
     async runConversation(conversationId, body, execution = {}) {
-      const input = normalizeRunInput(body);
+      let input = normalizeRunInput(body);
+      const requestInput = input;
+      const autoRequested = input.operation === AUTO_RUN_OPERATION;
       const validationError = validateRunInput(input);
       if (validationError) throw new RuntimeInputError(validationError);
       const runExecution = normalizeRunExecution(execution);
-      const runPolicyContext = createRunPolicyContext({ conversationId, input });
-      const runPolicyDecision = await policy.evaluateBefore(runPolicyContext);
-      try {
-        assertExecutionAllowed(runPolicyDecision);
-      } catch (error) {
-        throw toRuntimePolicyError(error);
-      }
-      const selectedModel = await resolveRunModel(gatewayClient, input.model, input.operation);
-      const chainTraceId = randomUUID();
+      throwIfAborted(runExecution.abortSignal);
+      const initialExistingRun = typeof store.findRunByRequestId === "function"
+        ? store.findRunByRequestId(conversationId, input.requestId)
+        : null;
+      const chainTraceId = initialExistingRun?.run?.chainTraceId
+        || initialExistingRun?.run?.resilience?.traceId
+        || randomUUID();
       let currentChainTraceId = chainTraceId;
-      const deadlineAt = Date.now() + runTimeoutMs;
       let currentRunId = null;
 
       /** 发布不依赖渠道协议的 Runtime 生命周期事件；Sink 负责隔离具体订阅者异常。 */
@@ -409,50 +508,195 @@ export function createChatRuntime({
         });
       }
 
-      await publishRunEvent("chain-trace.started");
+      const deadlineAt = Date.now() + runTimeoutMs;
       const queueSpan = chainTracer.startSpan("runtime.queue", {
         ...buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
       });
+      let queueSpanEnded = false;
+
+      /** 让当前事件流采用既有 Run 的不可变业务身份。 */
+      function adoptRunIdentity(result) {
+        const effectiveChainTraceId = result.run.chainTraceId
+          || result.run.resilience?.traceId
+          || chainTraceId;
+        currentChainTraceId = effectiveChainTraceId;
+        currentRunId = result.run.id;
+      }
+
+      /** 幂等结束队列 Span，并把并发重放时的临时 Chain ID 修正为既有 Run 身份。 */
+      function endQueueSpan() {
+        if (queueSpanEnded) return;
+        queueSpanEnded = true;
+        queueSpan.setAttribute("ai.platform.chain_trace_id", currentChainTraceId);
+        queueSpan.end();
+      }
+
+      /** 按既有 Run 的持久化身份发布重放事件，并返回不可变完成事实。 */
+      async function publishReplay(result) {
+        adoptRunIdentity(result);
+        await publishRunEvent("run.started", {
+          status: result.run.status,
+          replayed: true,
+          operation: result.run.operation,
+        });
+        const replayed = replayRun(result, store.getConversation(conversationId));
+        await publishRunEvent("run.completed", {
+          replayed: true,
+          operation: replayed.operation,
+          model: replayed.model,
+          acceptanceStatus: replayed.acceptance?.status || null,
+        });
+        return replayed;
+      }
 
       // 同一会话必须按提交顺序生成回复，避免第二个 Run 看不到第一个 Run 的结果。
-      return coordinator.runExclusive(conversationId, async () => {
-        queueSpan.end();
-        const referencedMessages = store.resolveMessageReferences(conversationId, input.references);
-        const content = buildUserContent(input);
-        const displayContent = buildDisplayContent(input);
-        const started = await chainTracer.withSpan(
-          "storage.start_run",
-          buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
-          /** 在独立存储阶段幂等创建 Run 和用户消息。 */
-          () =>
-            store.startRun({
-              conversationId,
-              requestId: input.requestId,
-              clientMessageId: input.clientMessageId,
-              content,
-              displayContent,
-              references: input.references,
-              model: selectedModel,
-              sourceRunId: input.sourceRunId || null,
-              recoveryMode: input.recoveryMode || null,
-              operation: input.operation,
-              deadlineAt,
-              chainTraceId,
-            }),
-        );
+      try {
+        return await coordinator.runExclusive(conversationId, async () => {
+          throwIfAborted(runExecution.abortSignal);
+          const existingRun = typeof store.findRunByRequestId === "function"
+            ? store.findRunByRequestId(conversationId, input.requestId)
+            : null;
+          if (existingRun) adoptRunIdentity(existingRun);
+          endQueueSpan();
+          await publishRunEvent("chain-trace.started");
+          if (existingRun) return publishReplay(existingRun);
+
+          let routingContextSnapshot = null;
+          let routingDecision = null;
+          let runPolicyContext;
+          let runPolicyDecision;
+          let selectedModel;
+          let referencedMessages;
+          let content;
+          let displayContent;
+          let started;
+          const preparationAttempts = autoRequested ? 2 : 1;
+
+          for (let preparationAttempt = 0; preparationAttempt < preparationAttempts; preparationAttempt += 1) {
+            input = requestInput;
+            routingContextSnapshot = null;
+            routingDecision = null;
+
+            if (autoRequested) {
+              routingContextSnapshot = readRoutingContextSnapshot(store, conversationId);
+              await readControlledImageInputs({
+                conversationId,
+                references: input.references,
+                store,
+                imageAssetStore,
+              });
+              throwIfAborted(runExecution.abortSignal);
+              const routingContext = createResilienceContext({
+                traceId: chainTraceId,
+                requestId: input.requestId,
+                conversationId,
+                deadlineAt: Math.min(
+                  deadlineAt,
+                  Date.now() + Math.min(runTimeoutMs, DEFAULT_INTENT_TIMEOUT_MS),
+                ),
+                stage: "intent-routing",
+                lastCommittedStage: "request-validated",
+                idempotencyKey: input.requestId,
+                outputStarted: false,
+              });
+              routingDecision = await chainTracer.withSpan(
+                "runtime.intent.classify",
+                buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
+                /** 在附件和会话快照共同收窄的候选内分类，并只记录脱敏路由事实。 */
+                async (span) => {
+                  const result = await operationRouter.resolve(input, {
+                    routingContextSnapshot,
+                    resilienceContext: routingContext,
+                    abortSignal: runExecution.abortSignal,
+                  });
+                  span.setAttributes({
+                    "ai.platform.intent.operation": result.operation,
+                    "ai.platform.intent.confidence": result.confidence,
+                    "ai.platform.intent.source": result.source,
+                    "ai.platform.intent.candidate_count": result.candidates.length,
+                    "ai.platform.intent.context_version": routingContextSnapshot.conversationVersion,
+                    "ai.platform.intent.active_image": Boolean(routingContextSnapshot.activeImage),
+                  });
+                  return result;
+                },
+              );
+              throwIfAborted(runExecution.abortSignal);
+              const materialized = materializeAutoRunInput(
+                requestInput,
+                routingDecision,
+                routingContextSnapshot,
+              );
+              input = materialized.input;
+              routingDecision = materialized.intentDecision;
+              const routedValidationError = validateRunInput(input, {
+                allowImageAssetConversation: input.operation === DEFAULT_RUN_OPERATION,
+              });
+              if (routedValidationError) throw new RuntimeInputError(routedValidationError);
+            }
+
+            runPolicyContext = createRunPolicyContext({ conversationId, input });
+            runPolicyDecision = await policy.evaluateBefore(runPolicyContext);
+            try {
+              assertExecutionAllowed(runPolicyDecision);
+            } catch (error) {
+              throw toRuntimePolicyError(error);
+            }
+            throwIfAborted(runExecution.abortSignal);
+            selectedModel = await resolveRunModel(gatewayClient, input);
+            throwIfAborted(runExecution.abortSignal);
+            const messageReferences = input.references.filter(isConversationMessageReference);
+            referencedMessages = store.resolveMessageReferences(conversationId, messageReferences);
+            content = buildUserContent(input);
+            displayContent = buildDisplayContent(input);
+            throwIfAborted(runExecution.abortSignal);
+            try {
+              started = await chainTracer.withSpan(
+                "storage.start_run",
+                buildTraceAttributes({ chainTraceId, requestId: input.requestId, conversationId }),
+                /** 原子创建 Run、用户消息、有效图片引用和脱敏路由审计。 */
+                () =>
+                  store.startRun({
+                    conversationId,
+                    requestId: input.requestId,
+                    clientMessageId: input.clientMessageId,
+                    content,
+                    displayContent,
+                    references: input.references,
+                    model: selectedModel,
+                    sourceRunId: input.sourceRunId || null,
+                    recoveryMode: input.recoveryMode || null,
+                    operation: input.operation,
+                    deadlineAt,
+                    chainTraceId,
+                    expectedConversationVersion: routingContextSnapshot?.conversationVersion ?? null,
+                    intentDecision: routingDecision,
+                  }),
+              );
+              break;
+            } catch (error) {
+              if (autoRequested && error instanceof ConversationStoreError && error.code === "routing_context_stale") {
+                if (preparationAttempt === 0) continue;
+                throw new ConversationStoreError(
+                  "Routing context changed repeatedly before Run creation",
+                  409,
+                  "routing_context_changed",
+                );
+              }
+              throw error;
+            }
+          }
+          if (!started) {
+            throw new ConversationStoreError(
+              "Routing context changed before Run creation",
+              409,
+              "routing_context_changed",
+            );
+          }
         const effectiveChainTraceId = started.run.chainTraceId || started.run.resilience?.traceId || chainTraceId;
         currentChainTraceId = effectiveChainTraceId;
         currentRunId = started.run.id;
         if (started.replayed) {
-          await publishRunEvent("run.started", { status: started.run.status, replayed: true });
-          const replayed = replayRun(started, store.getConversation(conversationId));
-          await publishRunEvent("run.completed", {
-            replayed: true,
-            operation: replayed.operation,
-            model: replayed.model,
-            acceptanceStatus: replayed.acceptance?.status || null,
-          });
-          return replayed;
+          return publishReplay(started);
         }
 
         const runId = started.run.id;
@@ -617,34 +861,70 @@ export function createChatRuntime({
         }
 
         try {
-          await publishRunEvent("run.started", { status: started.run.status, replayed: false });
+          await publishRunEvent("run.started", {
+            status: started.run.status,
+            replayed: false,
+            operation: started.run.operation,
+          });
           throwIfAborted(abortSignal);
-          if (input.operation === IMAGE_GENERATION_OPERATION) {
-            if (!imageAssetStore || typeof gatewayClient?.generateImages !== "function") {
+          if (isImageOperation(input.operation)) {
+            const imageMethodAvailable = input.operation === IMAGE_EDIT_OPERATION
+              ? typeof gatewayClient?.editImages === "function"
+              : typeof gatewayClient?.generateImages === "function";
+            if (!imageAssetStore || !imageMethodAvailable) {
               throw new RuntimeExecutionError({
-                error: "图片生成能力未配置",
-                detail: "当前 Runtime 尚未装配图片模型或图片资产存储。",
+                error: input.operation === IMAGE_EDIT_OPERATION ? "图片编辑能力未配置" : "图片生成能力未配置",
+                detail: "当前 Runtime 尚未装配所需图片模型能力或图片资产存储。",
                 action: "请配置图片模型别名与资产目录后重试。",
-                code: "image_generation_unavailable",
+                code: input.operation === IMAGE_EDIT_OPERATION
+                  ? "image_edit_unavailable"
+                  : "image_generation_unavailable",
                 retryable: false,
                 model: selectedModel,
               }, 503);
             }
+          }
+          leaseHandle.assertOwned();
+          const controlledImages = await readControlledImageInputs({
+            conversationId,
+            references: input.references,
+            store,
+            imageAssetStore,
+          });
+          throwIfAborted(abortSignal);
+          leaseHandle.assertOwned();
+          if (isImageOperation(input.operation)) {
+            const sourceImages = [];
+            if (input.operation === IMAGE_EDIT_OPERATION) {
+              const sourceAssetId = input.references[0].assetId;
+              const sourceImage = controlledImages.get(sourceAssetId);
+              sourceImages.push({ bytes: sourceImage.bytes, mediaType: sourceImage.mediaType });
+            }
             const generated = await chainTracer.withSpan(
-              "runtime.image.generate",
+              input.operation === IMAGE_EDIT_OPERATION ? "runtime.image.edit" : "runtime.image.generate",
               {
                 ...traceAttributes,
                 "ai.platform.capability_scenario_id": "C2",
                 "ai.platform.image.size": input.imageOptions.size,
+                "ai.platform.image.source_count": sourceImages.length,
               },
-              /** 通过 GatewayClient 单次调用图片模型，不把提示词写入 Trace。 */
-              () => gatewayClient.generateImages({
-                prompt: input.message,
-                model: selectedModel,
-                size: input.imageOptions.size,
-                resilienceContext,
-                abortSignal,
-              }),
+              /** 通过 GatewayClient 单次调用图片生成或编辑，不把提示词和源图写入 Trace。 */
+              () => input.operation === IMAGE_EDIT_OPERATION
+                ? gatewayClient.editImages({
+                    prompt: input.imageEditPrompt || input.message,
+                    sourceImages,
+                    model: selectedModel,
+                    size: input.imageOptions.size,
+                    resilienceContext,
+                    abortSignal,
+                  })
+                : gatewayClient.generateImages({
+                    prompt: input.message,
+                    model: selectedModel,
+                    size: input.imageOptions.size,
+                    resilienceContext,
+                    abortSignal,
+                  }),
             );
             const storedAssets = [];
             let assetsCommitted = false;
@@ -684,7 +964,9 @@ export function createChatRuntime({
                   return store.completeImageRun({
                     runId,
                     assets: storedAssets,
-                    displayContent: `已生成 ${storedAssets.length} 张图片`,
+                    displayContent: input.operation === IMAGE_EDIT_OPERATION
+                      ? `已编辑 ${storedAssets.length} 张图片`
+                      : `已生成 ${storedAssets.length} 张图片`,
                     usage: generated.usage || null,
                     model: generated.model || selectedModel,
                     resilience: generated.resilience || null,
@@ -725,6 +1007,7 @@ export function createChatRuntime({
               throw error;
             }
           }
+          const currentContent = await buildConversationModelContent(input, controlledImages);
           let plan = await chainTracer.withSpan(
             "runtime.context.plan",
             traceAttributes,
@@ -733,7 +1016,7 @@ export function createChatRuntime({
               const result = await contextPlanner.plan({
                 conversationId,
                 currentMessageId: started.userMessage.id,
-                currentContent: content,
+                currentContent,
                 currentDisplayContent: displayContent,
                 referencedMessages,
                 resilienceContext,
@@ -766,7 +1049,7 @@ export function createChatRuntime({
                 const result = await contextPlanner.plan({
                   conversationId,
                   currentMessageId: started.userMessage.id,
-                  currentContent: content,
+                  currentContent,
                   currentDisplayContent: displayContent,
                   referencedMessages,
                   resilienceContext,
@@ -908,6 +1191,7 @@ export function createChatRuntime({
           if (plan.manifest.highWatermarkReached) memoryManager.schedule(conversationId);
 
           const result = {
+            operation: input.operation,
             content: completed.assistantMessage.displayContent,
             usage: completed.run.usage,
             model: completed.run.model,
@@ -951,7 +1235,7 @@ export function createChatRuntime({
                     buildCancellationResilience(
                       resilienceContext,
                       activeRun.partialText.length > 0,
-                      input.operation === IMAGE_GENERATION_OPERATION ? "model.image.generate" : "model.generate",
+                      modelOperationForRun(input.operation),
                     ),
                   lease: leaseHandle.credentials,
                 }),
@@ -986,11 +1270,15 @@ export function createChatRuntime({
           activeRun.leaseHandle?.stop();
           if (activeRuns.get(runId) === activeRun) activeRuns.delete(runId);
         }
-      });
+        }, { abortSignal: runExecution.abortSignal });
+      } finally {
+        endQueueSpan();
+      }
     },
 
     /** 完成最终记忆 checkpoint 并关闭会话，关闭后拒绝新 Run。 */
     async closeConversation(conversationId) {
+      // 串行回调保证关闭检查点不会与同会话 Run 并发提交。
       return coordinator.runExclusive(conversationId, async () => {
         await memoryManager.flush(conversationId);
         let checkpoint = null;
@@ -1030,12 +1318,13 @@ function readToolDefinitionName(definition) {
 
 /** 构造不含正文或附件的 Run 前置策略上下文。 */
 function createRunPolicyContext({ conversationId, input }) {
+  const imageOperation = isImageOperation(input.operation);
   return {
     kind: "run",
     operation: input.operation,
-    effect: input.operation === IMAGE_GENERATION_OPERATION ? "write" : "read",
-    riskLevel: input.operation === IMAGE_GENERATION_OPERATION ? "medium" : "low",
-    known: ["conversation.chat", IMAGE_GENERATION_OPERATION].includes(input.operation),
+    effect: imageOperation ? "write" : "read",
+    riskLevel: imageOperation ? "medium" : "low",
+    known: [DEFAULT_RUN_OPERATION, IMAGE_GENERATION_OPERATION, IMAGE_EDIT_OPERATION].includes(input.operation),
     conversationId,
     requestId: input.requestId,
   };
@@ -1127,20 +1416,351 @@ function hasActiveRunForConversation(activeRuns, conversationId) {
   return false;
 }
 
-/** 解析 Run 模型别名，并把目录校验异常转换为渠道安全错误。 */
-async function resolveRunModel(gatewayClient, requestedModel, operation) {
+/** 按 Run 操作和附件硬约束解析模型别名，并把能力或目录异常转换为渠道安全错误。 */
+async function resolveRunModel(gatewayClient, input) {
+  const requestedModel = input.model;
+  const operation = input.operation;
   try {
-    if (operation === IMAGE_GENERATION_OPERATION && typeof gatewayClient?.resolveImageModel === "function") {
-      return await gatewayClient.resolveImageModel(requestedModel);
+    if (isImageOperation(operation) && typeof gatewayClient?.resolveImageModel === "function") {
+      return await gatewayClient.resolveImageModel(requestedModel, operation);
     }
-    if (operation === IMAGE_GENERATION_OPERATION) {
+    if (isImageOperation(operation)) {
       return String(requestedModel || gatewayClient?.imageModel || "image-default");
+    }
+    if (typeof gatewayClient?.resolveConversationModel === "function") {
+      return await gatewayClient.resolveConversationModel(requestedModel, {
+        requiresVision: input.imageUrls.length > 0 || input.references.some(isImageAssetReference),
+      });
     }
     if (typeof gatewayClient?.resolveModel === "function") return await gatewayClient.resolveModel(requestedModel);
     return String(requestedModel || gatewayClient?.model || "chat-default");
   } catch (error) {
-    throw toRuntimeExecutionError(error, requestedModel || gatewayClient?.model);
+    const fallbackModel = readGatewayDefaultModel(gatewayClient, operation);
+    throw toRuntimeExecutionError(error, requestedModel || fallbackModel);
   }
+}
+
+/**
+ * 读取分类专用的有界会话快照；旧测试 Port 未实现时只保留版本，不猜测活动图片。
+ *
+ * @param {object} store - Conversation Store Port。
+ * @param {string} conversationId - 当前会话 ID。
+ * @returns {object} 不含图片字节和完整会话对象的路由上下文。
+ */
+function readRoutingContextSnapshot(store, conversationId) {
+  if (typeof store?.getRoutingContextSnapshot === "function") {
+    return store.getRoutingContextSnapshot(conversationId);
+  }
+  const conversation = store.getConversation(conversationId);
+  return {
+    strategyVersion: "routing-context.v2",
+    conversationVersion: Number(conversation?.version) || 0,
+    activeImage: null,
+    messages: [],
+    truncated: false,
+  };
+}
+
+/**
+ * 将已验证路由决定物化为真实 Run 输入，活动图片只能由 Store 快照注入。
+ *
+ * @param {object} requestInput - 渠道原始归一化输入。
+ * @param {object} routingDecision - Router 返回的结构化决定。
+ * @param {object} contextSnapshot - 与决定同版本的 Store 路由快照。
+ * @returns {{input: object, intentDecision: object}} 最终 Run 输入和与实际 Prompt 证据一致的审计决定。
+ */
+function materializeAutoRunInput(requestInput, routingDecision, contextSnapshot) {
+  const references = [...requestInput.references];
+  const hasExplicitImage = references.some(isImageAssetReference);
+  const canInheritImage = [DEFAULT_RUN_OPERATION, IMAGE_EDIT_OPERATION].includes(
+    routingDecision.operation,
+  );
+  if (
+    routingDecision.useActiveImage === true &&
+    canInheritImage &&
+    !hasExplicitImage &&
+    contextSnapshot?.activeImage?.assetId
+  ) {
+    references.push({ type: "image_asset", assetId: contextSnapshot.activeImage.assetId });
+  }
+
+  const promptProjection = routingDecision.operation === IMAGE_EDIT_OPERATION
+    ? buildContextualImageEditPrompt({
+        currentRequest: requestInput.message,
+        relevantMessageIds: routingDecision.relevantMessageIds,
+        contextSnapshot,
+      })
+    : null;
+  const intentDecision = promptProjection
+    ? Object.freeze({
+        ...routingDecision,
+        relevantMessageIds: Object.freeze([...promptProjection.relevantMessageIds]),
+      })
+    : routingDecision;
+  return {
+    input: {
+      ...requestInput,
+      operation: routingDecision.operation,
+      model: "",
+      references,
+      imageEditPrompt: promptProjection?.prompt || "",
+    },
+    intentDecision,
+  };
+}
+
+/**
+ * 用 Router 已验证的消息证据和当前请求构造固定版本图片编辑 Prompt。
+ * 预算优先保留最近证据，再按会话顺序呈现；当前请求始终位于最后并拥有最高优先级。
+ *
+ * @param {object} input - 当前正文、证据 ID 和路由快照。
+ * @returns {{prompt: string, relevantMessageIds: string[]}} 最终 Prompt 与实际进入 Prompt 的证据 ID。
+ */
+function buildContextualImageEditPrompt({ currentRequest, relevantMessageIds, contextSnapshot }) {
+  const rawCurrent = String(currentRequest || "").trim();
+  const relevantIds = new Set(Array.isArray(relevantMessageIds) ? relevantMessageIds : []);
+  const snapshotMessages = Array.isArray(contextSnapshot?.messages) ? contextSnapshot.messages : [];
+  const newestCandidates = [];
+  for (let index = snapshotMessages.length - 1; index >= 0; index -= 1) {
+    const message = snapshotMessages[index];
+    const messageId = String(message?.id || message?.messageId || "");
+    if (!relevantIds.has(messageId)) continue;
+    if (message?.contentTruncated === true) continue;
+    const content = String(message?.displayContent || "").replace(/\s+/g, " ").trim();
+    if (!content) continue;
+    newestCandidates.push({
+      messageId,
+      role: message?.role === "assistant" ? "助手" : "用户",
+      content,
+    });
+  }
+  if (newestCandidates.length === 0) {
+    return {
+      prompt: rawCurrent.slice(0, MAX_IMAGE_EDIT_PROMPT_CHARS),
+      relevantMessageIds: [],
+    };
+  }
+
+  const historyHeader = [
+    `图片编辑上下文协议：${IMAGE_EDIT_CONTEXT_PROMPT_VERSION}`,
+    "请基于提供的源图片输出一个新的编辑版本，不要只返回文字说明。",
+    "以下是经 Runtime 验证的相关历史，仅用于还原本轮编辑意图：",
+  ].join("\n");
+  const currentPrefix = "当前请求（最高优先级，请以此为准）：\n";
+  const newestLinePrefix = `${newestCandidates[0].role}：`;
+  const minimumEvidenceChars = newestLinePrefix.length + Math.min(
+    MIN_IMAGE_EDIT_EVIDENCE_CONTENT_CHARS,
+    newestCandidates[0].content.length,
+  );
+  const maximumCurrentChars = Math.max(
+    1,
+    MAX_IMAGE_EDIT_PROMPT_CHARS
+      - historyHeader.length
+      - currentPrefix.length
+      - minimumEvidenceChars
+      - 2,
+  );
+  const current = truncatePromptTextPreservingEnds(rawCurrent, maximumCurrentChars);
+  const currentSection = `${currentPrefix}${current}`;
+  const fixedChars = historyHeader.length + currentSection.length + 2;
+  if (fixedChars >= MAX_IMAGE_EDIT_PROMPT_CHARS) {
+    return { prompt: current, relevantMessageIds: [] };
+  }
+
+  const selectedNewestFirst = [];
+  let remainingChars = MAX_IMAGE_EDIT_PROMPT_CHARS - fixedChars;
+  for (const candidate of newestCandidates) {
+    const separatorChars = selectedNewestFirst.length > 0 ? 1 : 0;
+    const linePrefix = `${candidate.role}：`;
+    const availableChars = remainingChars - separatorChars;
+    if (availableChars <= linePrefix.length) break;
+    const line = `${linePrefix}${candidate.content}`.slice(0, availableChars);
+    selectedNewestFirst.push({ messageId: candidate.messageId, line });
+    remainingChars -= separatorChars + line.length;
+    if (line.length < linePrefix.length + candidate.content.length) break;
+  }
+  if (selectedNewestFirst.length === 0) {
+    return { prompt: current, relevantMessageIds: [] };
+  }
+
+  const selectedChronological = [...selectedNewestFirst].reverse();
+  const promptParts = [historyHeader];
+  const usedMessageIds = [];
+  for (const selected of selectedChronological) {
+    promptParts.push(selected.line);
+    usedMessageIds.push(selected.messageId);
+  }
+  promptParts.push(currentSection);
+  return {
+    prompt: promptParts.join("\n"),
+    relevantMessageIds: usedMessageIds,
+  };
+}
+
+/** 在固定字符预算内同时保留当前请求的开头和结尾，避免长指令挤掉全部历史证据。 */
+function truncatePromptTextPreservingEnds(value, maxChars) {
+  const content = String(value || "");
+  if (content.length <= maxChars) return content;
+  if (maxChars <= IMAGE_EDIT_CURRENT_TRUNCATION_MARKER.length) return content.slice(0, maxChars);
+  const remainingChars = maxChars - IMAGE_EDIT_CURRENT_TRUNCATION_MARKER.length;
+  const leadingChars = Math.ceil(remainingChars / 2);
+  const trailingChars = Math.floor(remainingChars / 2);
+  return `${content.slice(0, leadingChars)}${IMAGE_EDIT_CURRENT_TRUNCATION_MARKER}${content.slice(-trailingChars)}`;
+}
+
+/** 按稳定 operation 读取 GatewayClient 默认别名，并兼容旧 Port 字段。 */
+function readGatewayDefaultModel(gatewayClient, operation) {
+  const configured = String(gatewayClient?.defaultModels?.[operation] || "").trim();
+  if (configured) return configured;
+  if (operation === IMAGE_EDIT_OPERATION) {
+    return gatewayClient?.imageEditModel || gatewayClient?.imageModel || "image-default";
+  }
+  if (operation === IMAGE_GENERATION_OPERATION) return gatewayClient?.imageModel || "image-default";
+  return gatewayClient?.model || "chat-default";
+}
+
+/** 判断 Run 是否属于会产生图片资产的 C2 模型操作。 */
+function isImageOperation(operation) {
+  return operation === IMAGE_GENERATION_OPERATION || operation === IMAGE_EDIT_OPERATION;
+}
+
+/**
+ * 读取最终输入中的全部受控图片并建立当前阶段的已校验字节快照。
+ *
+ * @param {object} input - 会话、引用和资产存储依赖。
+ * @returns {Promise<Map<string, object>>} 以 assetId 索引的已校验图片快照。
+ */
+async function readControlledImageInputs({ conversationId, references, store, imageAssetStore }) {
+  const result = new Map();
+  for (const reference of references || []) {
+    if (!isImageAssetReference(reference)) continue;
+    const image = await readControlledImageInput({
+      conversationId,
+      assetId: reference.assetId,
+      store,
+      imageAssetStore,
+    });
+    result.set(reference.assetId, image);
+  }
+  return result;
+}
+
+/**
+ * 从会话事实和二进制存储读取一张图片，并核对当前字节与不可变元数据。
+ *
+ * @param {object} input - 当前会话、资产 ID 和存储依赖。
+ * @returns {Promise<{asset: object, bytes: Buffer, mediaType: string}>} 已验证源图片。
+ */
+async function readControlledImageInput({ conversationId, assetId, store, imageAssetStore }) {
+  if (!imageAssetStore || typeof store?.readImageAsset !== "function") {
+    throw new RuntimeExecutionError({
+      error: "图片资产读取能力未配置",
+      detail: "当前 Runtime 无法读取受控源图片。",
+      action: "请配置图片资产存储后重试。",
+      code: "image_asset_read_unavailable",
+      retryable: false,
+    }, 503);
+  }
+  const stored = store.readImageAsset(conversationId, assetId);
+  try {
+    const sourceBytes = await imageAssetStore.read(stored.storageKey);
+    const inspected = inspectStoredImage(sourceBytes, stored.asset.mediaType);
+    assertStoredImageIntegrity(stored.asset, inspected);
+    return {
+      asset: stored.asset,
+      bytes: Buffer.from(inspected.bytes),
+      mediaType: inspected.mediaType,
+    };
+  } catch (error) {
+    if (error instanceof RuntimeExecutionError) throw error;
+    if (error instanceof ImageAssetStoreError) {
+      throw new RuntimeExecutionError({
+        error: "源图片读取失败",
+        detail: "受控源图片当前无法从资产存储读取。",
+        action: "请重新选择或上传图片后重试。",
+        code: "image_asset_read_failed",
+        retryable: false,
+      }, 409, error);
+    }
+    if (error instanceof ImageGenerationPolicyError) {
+      throw buildImageAssetIntegrityError(error);
+    }
+    throw error;
+  }
+}
+
+/** 将受控资产的字节数、尺寸与 SHA-256 同 SQLite 不可变元数据逐项核对。 */
+function assertStoredImageIntegrity(asset, inspected) {
+  const actualSha256 = createHash("sha256").update(inspected.bytes).digest("hex");
+  if (
+    inspected.sizeBytes !== asset.sizeBytes ||
+    inspected.width !== asset.width ||
+    inspected.height !== asset.height ||
+    actualSha256 !== asset.sha256
+  ) {
+    throw buildImageAssetIntegrityError();
+  }
+}
+
+/** 创建不泄漏物理路径或异常字节的稳定图片完整性错误。 */
+function buildImageAssetIntegrityError(cause) {
+  return new RuntimeExecutionError({
+    error: "源图片完整性校验失败",
+    detail: "源图片内容与会话中登记的不可变资产事实不一致。",
+    action: "请重新选择或上传图片后重试。",
+    code: "image_asset_integrity_mismatch",
+    retryable: false,
+  }, 409, cause);
+}
+
+/** 把 auto 视觉对话的受控资产临时转换为模型输入，不修改已持久化用户消息。 */
+function buildConversationModelContent(input, controlledImages) {
+  const assetReferences = input.references.filter(isImageAssetReference);
+  if (assetReferences.length === 0) return buildUserContent(input);
+  const imageUrls = [...input.imageUrls];
+  for (const reference of assetReferences) {
+    const image = controlledImages.get(reference.assetId);
+    if (!image) throw buildImageAssetIntegrityError();
+    imageUrls.push(`data:${image.mediaType};base64,${image.bytes.toString("base64")}`);
+  }
+  return buildUserContent({ ...input, imageUrls });
+}
+
+/** 从持久化用户消息和不可变资产重建重启恢复所需的视觉输入。 */
+function buildPersistedConversationModelContent(content, references, controlledImages) {
+  const assetReferences = references.filter(isImageAssetReference);
+  if (assetReferences.length === 0) return content;
+  const parts = Array.isArray(content)
+    ? [...content]
+    : String(content || "")
+      ? [{ type: "text", text: String(content) }]
+      : [{ type: "text", text: "请分析这些图片。" }];
+  for (const reference of assetReferences) {
+    const image = controlledImages.get(reference.assetId);
+    if (!image) throw buildImageAssetIntegrityError();
+    parts.push({
+      type: "image_url",
+      image_url: { url: `data:${image.mediaType};base64,${image.bytes.toString("base64")}` },
+    });
+  }
+  return parts;
+}
+
+/** 将 Runtime 操作映射为模型韧性证据中的稳定操作名。 */
+function modelOperationForRun(operation) {
+  if (operation === IMAGE_EDIT_OPERATION) return "model.image.edit";
+  if (operation === IMAGE_GENERATION_OPERATION) return "model.image.generate";
+  return "model.generate";
+}
+
+/** 判断分类型引用是否为普通会话消息引用。 */
+function isConversationMessageReference(reference) {
+  return reference?.type === "conversation_message";
+}
+
+/** 判断分类型引用是否为当前会话拥有的受控图片资产。 */
+function isImageAssetReference(reference) {
+  return reference?.type === "image_asset";
 }
 
 /** 将模型或运行阶段异常映射为稳定、可执行且不包含原始响应正文的渠道错误。 */
@@ -1154,22 +1774,55 @@ function toRuntimeExecutionError(error, model) {
   let payload;
 
   if (error instanceof ImageGenerationPolicyError) {
-    payload = {
-      error: "图片生成结果无效",
-      detail: "图片模型返回的结果未通过平台格式、大小或尺寸校验。",
-      action: "请检查图片模型兼容性后重试。",
-      code: error.code,
-      retryable: false,
-      model: modelLabel,
-    };
+    const sourceImageFailure = [
+      "invalid_source_image",
+      "source_image_media_mismatch",
+      "source_image_dimensions_invalid",
+    ].includes(error.code);
+    payload = sourceImageFailure
+      ? {
+          error: "源图片不可用",
+          detail: "源图片资产无法读取或未通过平台媒体校验。",
+          action: "请重新上传源图片后再试。",
+          code: error.code,
+          retryable: false,
+          model: modelLabel,
+        }
+      : {
+          error: "图片生成结果无效",
+          detail: "图片模型返回的结果未通过平台格式、大小或尺寸校验。",
+          action: "请检查图片模型兼容性后重试。",
+          code: error.code,
+          retryable: false,
+          model: modelLabel,
+        };
   } else if (error instanceof ImageAssetStoreError) {
+    payload = error.code === "image_asset_read_failed"
+      ? {
+          error: "源图片读取失败",
+          detail: "源图片元数据存在，但二进制内容当前无法读取。",
+          action: "请检查资产存储状态或重新上传源图片。",
+          code: error.code,
+          retryable: false,
+          model: modelLabel,
+        }
+      : {
+          error: "图片资产保存失败",
+          detail: "图片已经生成，但未能保存为可访问的会话资产。",
+          action: "请检查图片资产目录权限与空间后重新发起生成。",
+          code: error.code,
+          retryable: false,
+          model: modelLabel,
+        };
+  } else if (error?.data?.code === "image_edit_provider_error" && statusCode >= 500) {
     payload = {
-      error: "图片资产保存失败",
-      detail: "图片已经生成，但未能保存为可访问的会话资产。",
-      action: "请检查图片资产目录权限与空间后重新发起生成。",
-      code: error.code,
+      error: "图片编辑上游不可用",
+      detail: `${modelLabel} 的上游未接受 Responses 图片编辑工具请求。`,
+      action: "请确认中转站支持 /v1/responses 的 image_generation(action=edit)，并使用已开通 GPT Image 工具权限的凭据。",
+      code: "image_edit_provider_unavailable",
       retryable: false,
       model: modelLabel,
+      operation: IMAGE_EDIT_OPERATION,
     };
   } else if (errorType === "authorization" || statusCode === 401 || statusCode === 403 || /invalid_api_key|unauthorized|forbidden/.test(rawMessage)) {
     payload = {
@@ -1207,6 +1860,8 @@ function toRuntimeExecutionError(error, model) {
       retryable: true,
       model: modelLabel,
     };
+  } else if (error?.data?.code === "model_capability_mismatch") {
+    payload = buildModelCapabilityMismatchPayload(error.data, modelLabel);
   } else if (error?.data?.code === "unsupported_model" || /unsupported model alias/.test(rawMessage)) {
     payload = {
       error: "所选模型不可用",
@@ -1247,6 +1902,51 @@ function toRuntimeExecutionError(error, model) {
 
   const publicStatus = Number.isFinite(statusCode) ? statusCode : 502;
   return new RuntimeExecutionError(payload, publicStatus, error);
+}
+
+/** 将 GatewayClient 能力错配转换为按 operation 可执行且不暴露上游模型名的公开错误。 */
+function buildModelCapabilityMismatchPayload(data, modelLabel) {
+  const operation = String(data?.operation || "conversation.chat");
+  const requiredCapability = String(data?.requiredCapability || "chat");
+  if (operation === "image.generate") {
+    return {
+      error: "模型能力与当前操作不匹配",
+      detail: `${modelLabel} 不能用于图片生成。`,
+      action: "请使用服务端配置的图片生成模型后重试。",
+      code: "model_capability_mismatch",
+      retryable: false,
+      model: modelLabel,
+      operation,
+      requiredCapability,
+    };
+  }
+  if (operation === "image.edit") {
+    return {
+      error: "模型能力与当前操作不匹配",
+      detail: `${modelLabel} 不能用于图片编辑。`,
+      action: "请使用服务端配置的图片编辑模型后重试。",
+      code: "model_capability_mismatch",
+      retryable: false,
+      model: modelLabel,
+      operation,
+      requiredCapability,
+    };
+  }
+  const requiresVision = requiredCapability === "vision";
+  return {
+    error: "模型能力与当前操作不匹配",
+    detail: requiresVision
+      ? `${modelLabel} 未配置图片理解能力。`
+      : `${modelLabel} 不能用于对话。`,
+    action: requiresVision
+      ? "请使用支持图片理解的对话模型，或移除图片后重试。"
+      : "请使用服务端配置的对话模型后重试。",
+    code: "model_capability_mismatch",
+    retryable: false,
+    model: modelLabel,
+    operation,
+    requiredCapability,
+  };
 }
 
 /** 从逐尝试证据中读取最后一个失败分类，忽略成功尝试。 */
@@ -1590,9 +2290,9 @@ function combineAbortSignals(runtimeSignal, callerSignal) {
   return callerSignal ? AbortSignal.any([runtimeSignal, callerSignal]) : runtimeSignal;
 }
 
-/** 在进入耗时阶段前同步检查取消，避免已取消 Run 发起新的模型调用。 */
+/** 在进入耗时或持久化阶段前同步检查可选取消信号。 */
 function throwIfAborted(signal) {
-  if (signal.aborted) throw signal.reason || new DOMException("Run was aborted", "AbortError");
+  if (signal?.aborted) throw signal.reason || new DOMException("Run was aborted", "AbortError");
 }
 
 /** 判断错误是否来自 Runtime 或调用方取消，而不是普通模型失败。 */

@@ -9,6 +9,7 @@ import {
 } from "../resilience/retry-executor.mjs";
 import { GatewayRequestError } from "./gateway-contract.mjs";
 import { createLiteLlmManagementClient } from "./litellm-management-client.mjs";
+import { createResponsesImageEditAdapter } from "./responses-image-edit-adapter.mjs";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -16,6 +17,7 @@ const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 const DEFAULT_RETRY_MAX_DELAY_MS = 5000;
 const RETRYABLE_MODEL_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const SUPPORTED_MESSAGE_ROLES = new Set(["system", "user", "assistant", "tool"]);
+const MODEL_CAPABILITY_KEYS = ["chat", "vision", "imageGeneration", "imageEditing"];
 const CONVERSATION_AGENT_CALL_OPTIONS_SCHEMA = z
   .object({
     model: z.string().min(1),
@@ -32,12 +34,14 @@ export { GatewayRequestError } from "./gateway-contract.mjs";
 
 /**
  * 创建 Runtime 到 LiteLLM 的唯一模型网关客户端。
- * Facade 模式把 AI SDK 模型生成和 LiteLLM 管理端点组合为稳定 GatewayClient Port。
+ * Facade 模式把 AI SDK 模型生成、Responses 图片编辑 Adapter 和 LiteLLM 管理端点组合为稳定 GatewayClient Port。
  *
  * @param {object} options - LiteLLM 连接和模型配置。
  * @param {string} options.baseUrl - LiteLLM Proxy 根地址，不包含 `/v1`。
  * @param {string} options.model - Runtime 使用的 LiteLLM 模型别名。
  * @param {string} [options.imageModel="image-default"] - Runtime 使用的 LiteLLM 图片模型别名。
+ * @param {string} [options.imageEditModel=options.model] - Runtime 使用的 Responses 图片编辑模型别名。
+ * @param {{chat?: string[], vision?: string[], imageGeneration?: string[], imageEditing?: string[]}} [options.modelCapabilities] - 服务端声明的模型能力分组；不从 `/v1/models` 猜测。
  * @param {string} options.apiKey - LiteLLM master key 或 virtual key。
  * @param {number} [options.timeoutMs=120000] - 未传 Run 截止时间时使用的模型调用总预算。
  * @param {number} [options.maxAttempts=3] - 包含首次调用的最大模型尝试次数。
@@ -52,6 +56,8 @@ export function createGatewayClient(
     baseUrl,
     model,
     imageModel = "image-default",
+    imageEditModel = model,
+    modelCapabilities,
     apiKey,
     timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
@@ -80,6 +86,13 @@ export function createGatewayClient(
   const gatewayRootUrl = managementClient.baseUrl;
   const modelAlias = managementClient.model;
   const imageModelAlias = String(imageModel || "image-default").trim() || "image-default";
+  const imageEditModelAlias = String(imageEditModel || modelAlias).trim() || modelAlias;
+  const configuredModelCapabilities = normalizeModelCapabilities(modelCapabilities, {
+    chat: [modelAlias],
+    vision: [modelAlias],
+    imageGeneration: [imageModelAlias],
+    imageEditing: [imageEditModelAlias],
+  });
   const key = apiKey || "sk-local-admin-key";
   const conversationProvider = createProvider({
     name: "litellm",
@@ -95,6 +108,11 @@ export function createGatewayClient(
     apiKey: key,
     fetch: fetchImplementation,
   });
+  const responsesImageEditAdapter = createResponsesImageEditAdapter({
+    baseUrl: `${gatewayRootUrl}/v1`,
+    apiKey: key,
+    fetchImplementation,
+  });
   const conversationAgent = createToolLoopAgent({
     id: "ai-platform-conversation",
     model: conversationProvider.chatModel(modelAlias),
@@ -105,20 +123,137 @@ export function createGatewayClient(
     prepareStep: prepareConversationAgentStep,
   });
 
+  /**
+   * 执行一次有副作用的图片模型请求，统一生成/编辑的别名、截止时间、取消和无重试证据。
+   *
+   * @param {object} input - 图片请求和稳定执行边界。
+   * @returns {Promise<object>} 图片字节、最小 usage 和单次尝试证据。
+   */
+  async function executeImageRequest({
+    prompt,
+    sourceImages = [],
+    model: requestedModel,
+    size = "1024x1024",
+    operation,
+    resilienceContext,
+    abortSignal,
+  }) {
+    const selectedModel = await resolveConfiguredImageModel(
+      managementClient,
+      configuredModelCapabilities,
+      requestedModel,
+      operation,
+    );
+    const context = createResilienceContext({
+      ...(resilienceContext || {}),
+      deadlineAt: resilienceContext?.deadlineAt ?? nowImplementation() + timeoutMs,
+      stage: operation,
+    });
+    const policy = createImageGenerationRetryPolicy(operation);
+
+    /** 执行唯一一次图片模型调用；发起请求即越过不可静默重试边界。 */
+    async function generateImageAttempt({ remainingMs, markRetryBoundaryCrossed }) {
+      markRetryBoundaryCrossed();
+      const effectiveSignal = combineAbortSignalWithTimeout(abortSignal, remainingMs);
+      try {
+        if (operation === "model.image.edit") {
+          const result = await responsesImageEditAdapter.editImage({
+            model: selectedModel,
+            prompt,
+            sourceImage: sourceImages[0],
+            size,
+            abortSignal: effectiveSignal,
+          });
+          return { model: selectedModel, ...result };
+        }
+        const result = await generateImageImplementation({
+          model: imageProvider.imageModel(selectedModel),
+          prompt: String(prompt || ""),
+          n: 1,
+          size,
+          maxRetries: 0,
+          abortSignal: effectiveSignal,
+        });
+        return {
+          model: selectedModel,
+          images: result.images.map(mapGeneratedImage),
+          usage: mapImageUsage(result.usage, result.images.length),
+          warnings: Array.isArray(result.warnings) ? result.warnings.length : 0,
+        };
+      } catch (error) {
+        throw mapAiSdkError(error, abortSignal?.aborted ? abortSignal : undefined, nowImplementation());
+      }
+    }
+
+    try {
+      const execution = await executeWithRetry({
+        context,
+        policy,
+        task: generateImageAttempt,
+        nowImplementation,
+        sleepImplementation,
+        abortSignal,
+      });
+      return { ...execution.value, resilience: execution.resilience };
+    } catch (error) {
+      if (error instanceof RetryExecutionError) {
+        const gatewayError = mapAiSdkError(error.cause, abortSignal, nowImplementation());
+        gatewayError.resilience = error.resilience;
+        throw gatewayError;
+      }
+      throw mapAiSdkError(error, abortSignal, nowImplementation());
+    }
+  }
+
   return {
     baseUrl: gatewayRootUrl,
     gatewayBaseUrl: managementClient.gatewayBaseUrl,
     model: modelAlias,
     imageModel: imageModelAlias,
-    /** 返回模型网关可达性，并公开平台图片模型别名但不公开真实上游模型。 */
+    imageEditModel: imageEditModelAlias,
+    defaultModels: {
+      "conversation.chat": modelAlias,
+      "image.generate": imageModelAlias,
+      "image.edit": imageEditModelAlias,
+    },
+    modelCapabilities: copyModelCapabilities(configuredModelCapabilities),
+    /** 返回模型网关可达性和可见能力交集，不公开真实上游模型。 */
     async status() {
-      return { ...(await managementClient.status()), imageModel: imageModelAlias };
+      const gatewayStatus = await managementClient.status();
+      return {
+        ...gatewayStatus,
+        imageModel: imageModelAlias,
+        imageEditModel: imageEditModelAlias,
+        defaultModels: {
+          "conversation.chat": modelAlias,
+          "image.generate": imageModelAlias,
+          "image.edit": imageEditModelAlias,
+        },
+        modelCapabilities: filterVisibleModelCapabilities(
+          configuredModelCapabilities,
+          gatewayStatus.models,
+        ),
+      };
     },
     listModels: managementClient.listModels,
     resolveModel: managementClient.resolveModel,
-    /** 校验图片 Run 选择的别名；默认图片别名由服务端配置拥有。 */
-    async resolveImageModel(requestedModel) {
-      return resolveConfiguredImageModel(managementClient, imageModelAlias, requestedModel);
+    /** 按纯文本或视觉输入要求校验对话模型，不把目录可见性当作能力证据。 */
+    async resolveConversationModel(requestedModel, { requiresVision = false } = {}) {
+      return resolveConfiguredConversationModel(
+        managementClient,
+        configuredModelCapabilities,
+        requestedModel,
+        requiresVision,
+      );
+    },
+    /** 按图片生成或编辑操作校验模型；默认图片别名由服务端配置拥有。 */
+    async resolveImageModel(requestedModel, operation = "image.generate") {
+      return resolveConfiguredImageModel(
+        managementClient,
+        configuredModelCapabilities,
+        requestedModel,
+        operation,
+      );
     },
     countTokens: managementClient.countTokens,
 
@@ -140,61 +275,52 @@ export function createGatewayClient(
       resilienceContext,
       abortSignal,
     }) {
-      const selectedModel = await resolveConfiguredImageModel(
-        managementClient,
-        imageModelAlias,
-        requestedModel,
-      );
-      const operation = "model.image.generate";
-      const context = createResilienceContext({
-        ...(resilienceContext || {}),
-        deadlineAt: resilienceContext?.deadlineAt ?? nowImplementation() + timeoutMs,
-        stage: operation,
+      return executeImageRequest({
+        prompt,
+        model: requestedModel,
+        size,
+        operation: "model.image.generate",
+        resilienceContext,
+        abortSignal,
       });
-      const policy = createImageGenerationRetryPolicy(operation);
+    },
 
-      /** 执行唯一一次图片模型调用；发起请求即越过不可静默重试边界。 */
-      async function generateImageAttempt({ remainingMs, markRetryBoundaryCrossed }) {
-        markRetryBoundaryCrossed();
-        const effectiveSignal = combineAbortSignalWithTimeout(abortSignal, remainingMs);
-        try {
-          const result = await generateImageImplementation({
-            model: imageProvider.imageModel(selectedModel),
-            prompt,
-            n: 1,
-            size,
-            maxRetries: 0,
-            abortSignal: effectiveSignal,
-          });
-          return {
-            model: selectedModel,
-            images: result.images.map(mapGeneratedImage),
-            usage: mapImageUsage(result.usage, result.images.length),
-            warnings: Array.isArray(result.warnings) ? result.warnings.length : 0,
-          };
-        } catch (error) {
-          throw mapAiSdkError(error, abortSignal?.aborted ? abortSignal : undefined, nowImplementation());
-        }
+    /**
+     * 通过 Responses 图片工具经 LiteLLM 编辑一张受控源图，固定关闭自动重试。
+     *
+     * @param {object} input - 规范化图片编辑请求。
+     * @param {string} input.prompt - 用户可见编辑指令。
+     * @param {Array<{bytes: Uint8Array|Buffer, mediaType: string}>} input.sourceImages - 已校验源图片。
+     * @param {string} [input.model] - 平台图片模型别名。
+     * @param {string} [input.size="1024x1024"] - 平台白名单内尺寸。
+     * @param {import("../resilience/retry-executor.mjs").ResilienceContext} [input.resilienceContext] - Run 共享截止时间。
+     * @param {AbortSignal} [input.abortSignal] - Runtime 取消信号。
+     * @returns {Promise<object>} 编辑图片字节、最小 usage 和无重试证据。
+     */
+    async editImages({
+      prompt,
+      sourceImages,
+      model: requestedModel,
+      size = "1024x1024",
+      resilienceContext,
+      abortSignal,
+    }) {
+      if (!Array.isArray(sourceImages) || sourceImages.length !== 1) {
+        throw new GatewayRequestError(
+          "Image editing requires exactly one source image",
+          400,
+          { code: "image_edit_source_required" },
+        );
       }
-
-      try {
-        const execution = await executeWithRetry({
-          context,
-          policy,
-          task: generateImageAttempt,
-          nowImplementation,
-          sleepImplementation,
-          abortSignal,
-        });
-        return { ...execution.value, resilience: execution.resilience };
-      } catch (error) {
-        if (error instanceof RetryExecutionError) {
-          const gatewayError = mapAiSdkError(error.cause, abortSignal, nowImplementation());
-          gatewayError.resilience = error.resilience;
-          throw gatewayError;
-        }
-        throw mapAiSdkError(error, abortSignal, nowImplementation());
-      }
+      return executeImageRequest({
+        prompt,
+        sourceImages,
+        model: requestedModel,
+        size,
+        operation: "model.image.edit",
+        resilienceContext,
+        abortSignal,
+      });
     },
 
     /**
@@ -233,8 +359,13 @@ export function createGatewayClient(
       onTextDelta,
       abortSignal,
     }) {
-      const selectedModel = await managementClient.resolveModel(requestedModel);
       const modelMessages = toAiSdkMessages(messages);
+      const selectedModel = await resolveConfiguredConversationModel(
+        managementClient,
+        configuredModelCapabilities,
+        requestedModel,
+        modelMessagesRequireVision(modelMessages),
+      );
       const output = createStructuredOutput(outputSchema);
       const useConversationAgent = shouldUseConversationAgent({ tools, outputSchema, responseFormat });
       let requestModel = null;
@@ -357,17 +488,104 @@ export function createGatewayClient(
   };
 }
 
-/** 校验图片模型别名属于当前 LiteLLM key 可见目录。 */
-async function resolveConfiguredImageModel(managementClient, configuredModel, requestedModel) {
-  const candidate = String(requestedModel || configuredModel).trim() || configuredModel;
-  if (candidate === configuredModel) return candidate;
-  const aliases = await managementClient.listModels();
-  if (aliases.includes(candidate)) return candidate;
-  throw new GatewayRequestError("Unsupported image model alias", 400, {
-    error: "Unsupported image model alias",
-    code: "unsupported_model",
-    model: candidate,
+/** 按服务端声明的 chat/vision 能力解析对话别名，并继续复用目录授权校验。 */
+async function resolveConfiguredConversationModel(
+  managementClient,
+  modelCapabilities,
+  requestedModel,
+  requiresVision,
+) {
+  const candidate = String(requestedModel || managementClient.model).trim() || managementClient.model;
+  const selectedModel = await managementClient.resolveModel(candidate);
+  assertModelCapability(candidate, modelCapabilities, "chat", "conversation.chat");
+  if (requiresVision) assertModelCapability(candidate, modelCapabilities, "vision", "conversation.chat");
+  return selectedModel;
+}
+
+/** 按显式图片操作解析模型别名，并继续复用 LiteLLM 目录授权校验。 */
+async function resolveConfiguredImageModel(managementClient, modelCapabilities, requestedModel, operation) {
+  const capability = operation === "model.image.edit" || operation === "image.edit"
+    ? "imageEditing"
+    : "imageGeneration";
+  const configuredModels = modelCapabilities[capability];
+  const candidate = String(requestedModel || configuredModels[0] || "").trim();
+  const selectedModel = await managementClient.resolveModel(candidate);
+  assertModelCapability(candidate, modelCapabilities, capability, normalizeImageOperation(operation));
+  return selectedModel;
+}
+
+/** 当模型不属于当前操作能力分组时返回稳定 400，不触发任何模型生成端点。 */
+function assertModelCapability(model, modelCapabilities, capability, operation) {
+  if (model && modelCapabilities[capability].includes(model)) return;
+  throw new GatewayRequestError("Model capability mismatch", 400, {
+    error: "Model capability mismatch",
+    code: "model_capability_mismatch",
+    model: model || "unknown",
+    requiredCapability: capability,
+    operation,
   });
+}
+
+/** 把 GatewayClient 能力策略规范为固定四组去重别名，缺失分组使用当前稳定默认值。 */
+function normalizeModelCapabilities(value, defaults) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const result = {};
+  for (const capability of MODEL_CAPABILITY_KEYS) {
+    const candidates = Array.isArray(source[capability]) ? source[capability] : defaults[capability];
+    result[capability] = normalizeModelAliases(candidates);
+  }
+  return result;
+}
+
+/** 返回能力策略副本，避免状态调用方修改 GatewayClient 内部集合。 */
+function copyModelCapabilities(modelCapabilities) {
+  const result = {};
+  for (const capability of MODEL_CAPABILITY_KEYS) {
+    result[capability] = [...modelCapabilities[capability]];
+  }
+  return result;
+}
+
+/** 只公开同时由服务端声明且在本次 LiteLLM 目录中可见的别名。 */
+function filterVisibleModelCapabilities(modelCapabilities, visibleModels) {
+  const visible = new Set(normalizeModelAliases(visibleModels));
+  const result = {};
+  for (const capability of MODEL_CAPABILITY_KEYS) {
+    const compatible = [];
+    for (const model of modelCapabilities[capability]) if (visible.has(model)) compatible.push(model);
+    result[capability] = compatible;
+  }
+  return result;
+}
+
+/** 将任意别名数组整理为保持声明顺序的唯一非空字符串。 */
+function normalizeModelAliases(value) {
+  const result = [];
+  const seen = new Set();
+  for (const model of Array.isArray(value) ? value : []) {
+    const normalized = String(model || "").trim();
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      result.push(normalized);
+    }
+  }
+  return result;
+}
+
+/** 判断已校验的 AI SDK 消息是否包含图片 FilePart，从而要求 vision 能力。 */
+function modelMessagesRequireVision(messages) {
+  for (const message of messages) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const part of message.content) {
+      if (part?.type === "file" && String(part?.mediaType || "").startsWith("image")) return true;
+    }
+  }
+  return false;
+}
+
+/** 把内部模型操作名收敛为 Runtime 稳定 operation。 */
+function normalizeImageOperation(operation) {
+  return operation === "model.image.edit" || operation === "image.edit" ? "image.edit" : "image.generate";
 }
 
 /** 把 AI SDK GeneratedFile 复制为不依赖 SDK 对象生命周期的稳定二进制结果。 */
@@ -394,16 +612,16 @@ function normalizeOptionalUsageNumber(value) {
   return Number.isFinite(number) && number >= 0 ? number : null;
 }
 
-/** 创建图片生成专用单次尝试策略，任何错误都不得自动重发付费请求。 */
+/** 创建图片生成/编辑专用单次尝试策略，任何错误都不得自动重发付费请求。 */
 function createImageGenerationRetryPolicy(operation) {
   return {
     operation,
     maxAttempts: 1,
-    /** 图片生成失败始终不进入自动重试。 */
+    /** 图片模型副作用失败始终不进入自动重试。 */
     shouldRetry() {
       return false;
     },
-    /** 图片生成无退避，因为最多只允许一次模型尝试。 */
+    /** 图片模型副作用无退避，因为最多只允许一次模型尝试。 */
     calculateBackoffMs() {
       return 0;
     },

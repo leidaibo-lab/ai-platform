@@ -21,7 +21,7 @@
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
-所有业务模型请求统一经过 Agent Runtime；GatewayClient、AI SDK 和 LiteLLM 只作为 Runtime 下游模型调用链，不得形成与 Runtime 并列的业务入口。
+所有业务模型请求统一经过 Agent Runtime；GatewayClient、其内部 AI SDK/Responses Adapter 和 LiteLLM 只作为 Runtime 下游模型调用链，不得形成与 Runtime 并列的业务入口。
 
 全局业务主链：
 
@@ -30,7 +30,7 @@
         -> Demo Server 渠道 HTTP Adapter
         -> Agent Runtime
         -> GatewayClient
-        -> AI SDK Core + @ai-sdk/openai-compatible
+        -> AI SDK Core / Responses 图片编辑 Adapter
         -> LiteLLM Proxy
         -> 上游 OpenAI-compatible API
 ```
@@ -130,7 +130,8 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `src/observability/chain-tracer.mjs`：Runtime 依赖的后端中立 `ChainTracer` Port，负责 C1 阶段 Span、业务标识和错误脱敏语义。
 - `src/observability/otel-runtime.mjs`：OpenTelemetry Facade，负责默认关闭、OTLP/HTTP protobuf exporter、采样、AI SDK Telemetry 和进程生命周期。
 - `src/gateway/gateway-contract.mjs`：Runtime 依赖的 GatewayClient 数据契约和统一错误类型。
-- `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 的 `generateText` / `streamText`、`tools + stopWhen + prepareStep` 和 `Output.object`，通过 `@ai-sdk/openai-compatible` 调用 LiteLLM，并保持 Runtime 的 chat completions 契约。
+- `src/gateway/gateway-client.mjs`：唯一模型生成客户端，使用 AI SDK Core 的 `generateText` / `streamText`、`generateImage`、`tools + stopWhen + prepareStep` 和 `Output.object`；图片编辑通过内部 Responses Adapter 调用同一 LiteLLM，并保持 Runtime 的稳定 Port。
+- `src/gateway/responses-image-edit-adapter.mjs`：GatewayClient 内部的最小 Responses 图片编辑协议 Adapter，只负责 `/v1/responses` 请求、严格图片结果解析和错误脱敏，不拥有会话、资产或重试。
 - `src/gateway/litellm-management-client.mjs`：LiteLLM 专属管理客户端，仅封装 `/v1/models` 和 token counter，不负责模型生成。
 - `src/tools/tool-registry.mjs`：连接器与知识层的服务端只读工具 allowlist，并把平台工具定义适配为 AI SDK ToolSet。
 - `src/tools/weather-tool.mjs`：当前首个 `get_weather` 只读工具定义，收敛输入 schema 与公开错误。
