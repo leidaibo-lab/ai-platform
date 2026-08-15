@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "runtime-routing-gold.v1",
+  "thresholds": {
+    "operationAccuracyMin": 1,
+    "sourceAssetAccuracyMin": 1,
+    "evidenceValidityMin": 1,
+    "activeImageAccuracyMin": 1,
+    "visualInputAccuracyMin": 1,
+    "editPromptHistoryAccuracyMin": 1,
+    "unexpectedImageSideEffectRateMax": 0
+  },
+  "turns": [
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "initial-edit",
+      "operation": "image.edit",
+      "candidates": ["conversation.chat", "image.edit"],
+      "useActiveImage": false,
+      "artifactCount": 1,
+      "editSource": { "kind": "fixture-asset", "assetId": "source-a" },
+      "visionSource": null,
+      "activeImage": { "kind": "turn-artifact", "turnId": "initial-edit", "index": 0 },
+      "evidence": { "minimumCount": 0, "requiredAnyOf": [] },
+      "editPromptHistory": { "requiredAll": [] }
+    },
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "visual-check",
+      "operation": "conversation.chat",
+      "candidates": ["conversation.chat", "image.generate", "image.edit"],
+      "useActiveImage": true,
+      "artifactCount": 0,
+      "editSource": null,
+      "visionSource": { "kind": "turn-artifact", "turnId": "initial-edit", "index": 0 },
+      "activeImage": { "kind": "turn-artifact", "turnId": "initial-edit", "index": 0 },
+      "evidence": {
+        "minimumCount": 1,
+        "requiredAnyOf": [
+          { "turnId": "initial-edit", "role": "user" }
+        ]
+      },
+      "editPromptHistory": { "requiredAll": [] }
+    },
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "contextual-edit",
+      "operation": "image.edit",
+      "candidates": ["conversation.chat", "image.generate", "image.edit"],
+      "useActiveImage": true,
+      "artifactCount": 1,
+      "editSource": { "kind": "turn-artifact", "turnId": "initial-edit", "index": 0 },
+      "visionSource": null,
+      "activeImage": { "kind": "turn-artifact", "turnId": "contextual-edit", "index": 0 },
+      "evidence": {
+        "minimumCount": 1,
+        "requiredAnyOf": [
+          { "turnId": "visual-check", "role": "assistant" }
+        ]
+      },
+      "editPromptHistory": {
+        "requiredAll": [
+          { "turnId": "visual-check", "role": "assistant" }
+        ]
+      }
+    },
+    {
+      "conversationId": "no-active-image-flow",
+      "turnId": "missing-source",
+      "operation": "conversation.chat",
+      "candidates": ["conversation.chat", "image.generate"],
+      "useActiveImage": false,
+      "artifactCount": 0,
+      "editSource": null,
+      "visionSource": null,
+      "activeImage": null,
+      "evidence": { "minimumCount": 0, "requiredAnyOf": [] },
+      "editPromptHistory": { "requiredAll": [] }
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 
 本文件把“输入源到大模型”从一张全局总图拆成可单独建设、观测和验收的业务链路。后续新增能力时，先确定所属场景和链路节点，再完善实现、评测、监控与稳定契约，避免把所有输入都塞进同一条不可验证的通用流程。
 
-所有业务模型请求仍必须经过 `Agent Runtime`。`GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 是 Runtime 的统一下游模型调用段，不是与 Runtime 并列的业务入口。
+所有业务模型请求仍必须经过 `Agent Runtime`。`GatewayClient -> AI SDK / Responses 图片编辑 Adapter -> LiteLLM -> 上游模型` 是 Runtime 的统一下游模型调用段，不是与 Runtime 并列的业务入口。
 
 链路节点使用以下状态：
 
@@ -35,7 +35,7 @@
 输入治理 / 身份 / 校验 / 关联标识
   -> Agent Runtime / Run 状态 / 幂等
   -> 上下文装箱 / Token 预算
-  -> GatewayClient / AI SDK / LiteLLM / 上游模型
+  -> GatewayClient / AI SDK 或 Responses Adapter / LiteLLM / 上游模型
        -> [按需] Runtime 工具 allowlist / 只读 Connector / ToolResult 回填
   -> 结果校验 / 独立 AcceptanceResult / 错误分类 / 状态交付
   -> 准确度 / 实时性 / 稳定性 / Token 观测
@@ -60,7 +60,7 @@
 | 场景 | 引用类型方向 | 核心标识与语义 | 数据所有者 | 当前契约状态 |
 | --- | --- | --- | --- | --- |
 | C1 对话问答 | `conversation_message` | `messageId`；引用当前会话中已持久化的用户或助手消息 | Agent Runtime | 已进入稳定契约并实现 |
-| C2 图片理解与生成 | `image_asset` | 受控资产 ID、MIME、尺寸、哈希和版本；生成产物已使用，理解输入仍不能只依赖临时 URL | 媒体连接器 | 生成侧已实现本地开发切片；理解侧仍是目标 |
+| C2 图片理解、生成与编辑 | `image_asset` | 受控资产 ID、MIME、尺寸、哈希和版本；生成/编辑产物及单图编辑输入已使用，图片理解仍不能只依赖临时 URL | 媒体连接器 | 文生图和单图编辑已实现本地开发切片；理解侧仍是目标 |
 | C3 文档知识问答 | `document_chunk`、`web_page_snapshot` | 文档/片段或网页快照 ID、版本、抓取时间和可打开来源 | 文档与知识连接器 | 目标分类，未实现 |
 | C4 业务数据查询 | `business_record`、`tool_result` | 业务主键、查询口径、数据时间、工具调用 ID 和 schema 版本 | 业务连接器 | `tool_result` 已由天气只读工具进入稳定契约；企业业务记录仍未实现 |
 | C5 实时事件处理 | `event_record` | 事件 ID、来源、发生时间、接收时间和去重语义 | 事件连接器 | 目标分类，未实现 |
@@ -126,7 +126,7 @@ durability: ordinary C1 R2; weather checkpoint restricted R3
 | 链路 | 输入源 | 期望输出 | 当前状态 | 首个建设目标 |
 | --- | --- | --- | --- | --- |
 | C1 对话问答 | Web 文本；未来 IM、IDE、API 文本 | 连续、可纠正的自然语言回答 | V0.6 Demo 已跑通；ChainTrace 技术接入默认关闭，真实 Runtime 验收为 TODO | 保持功能回归；按触发条件恢复运行态验收 |
-| C2 图片理解与生成 | 理解：图片 URL、图片 data URL；生成：显式提示词 | 理解：图片分析、问答或结构化结果；生成：受控图片资产 | 理解输入已透传但缺少媒体治理；生成开发切片已具备单模型调用、落存、重放、取消和交付，并通过一次真实 happy-path | 补真实取消/超时/错误、内容审核与成本证据，再建设受控理解输入和多轮资产引用 |
+| C2 图片理解、生成与编辑 | 默认自然语言输入；可选远程图片/文档，或一张受控本地源图 | Runtime 解析为对话、生成或编辑；生成/编辑返回新的受控图片资产 | `auto` 使用附件硬约束、结构化分类和 `0.85` 图片阈值；生成、显式连续编辑和首个无附件上下文续改均有真实 smoke，但路由样本仅 4 轮 `observation-only` | 扩充智能路由发布样本，补取消/超时/错误、内容审核与成本证据，再建设受控理解输入和多轮资产引用 |
 | C3 文档知识问答 | 文档链接、文件、知识库 | 带引用和时效说明的回答 | 当前只把 URL 当文本，不读取文档 | 跑通单一文档源的解析、检索、引用 |
 | C4 业务数据查询 | 业务 API、数据库、MCP、搜索 | 基于实时业务事实的可验证回答 | 已通过 C1 渠道跑通 Open-Meteo 确定性只读工具、受限重启恢复和天气 A3 验收；企业业务数据仍未实现 | 补真实模型天气质量、追问复用证据和更多业务 Connector 的选型 |
 | C5 实时事件处理 | Webhook、IM 事件、消息队列、告警 | 分类、摘要、建议或及时通知 | 未实现；当前 SSE 仅用于模型文本交付和会话事实同步 | 跑通单一事件源的去重、富化和通知 |
@@ -146,11 +146,11 @@ durability: ordinary C1 R2; weather checkpoint restricted R3
 | 会话与 Run | SQLite 会话事实源；`requestId`、`clientMessageId` 幂等；同进程同会话串行；RunLease owner/expiry/fencing；标题与独立归档事实；completed 只读 ToolResult 后可在 lease 过期时接管并恢复原 Run | 生产多实例部署、跨实例取消、运行中工具、图片、写副作用与更多稳定点仍未覆盖 |
 | 执行治理 | `execution-policy.v1`、前置收紧/后置隔离 Hook、Operation 状态机、ToolCall 同事务投影和旧 fencing token 拒绝已有确定性回归 | Sandbox、外部策略发布、确认 API、业务 readback、`unknown` 人工处理和补偿仍未实现 |
 | 上下文与记忆 | 结构化记忆、Context Planner、Context Manifest、token 高低水位 | 用真实模型验证纠正、实体隔离、任务状态和来源追溯 |
-| 模型调用 | `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 已跑通；Runtime 场景已固定 fixture、Prompt、生成参数和模型别名，并分开记录请求别名与成功响应的实际模型 | 当前 `gpt-5.6` 天气恢复单样本因上游连接超时为 `0/1 observation-only`；仍需成功样本和至少 30 个真实案例建立质量基线 |
+| 模型调用 | `GatewayClient -> AI SDK / Responses Adapter -> LiteLLM -> 上游模型` 已跑通协议回归；Runtime 场景已固定 fixture、Prompt、生成参数和模型别名，并分开记录请求别名与成功响应的实际模型 | 当前 `gpt-5.6` 天气恢复单样本因上游连接超时为 `0/1 observation-only`；图片编辑已有两轮真实成功样本，但仍需至少 30 个真实案例建立质量与成本基线 |
 | 只读工具 | Runtime 只在明确地点的今明日天气命中确定性路由时向模型开放 `get_weather`；ToolCall/Operation/ToolResult 同事务持久化后可在同进程故障或服务重启时无工具恢复总结 | 补真实模型天气质量和追问证据；该切片只达到受限 R3，不代表完整 C4、通用工作流或生产多实例能力 |
 | 结果验收 | 天气候选在交付前暂存，由 `weather-answer.v1` 根据 ToolResult 独立检查地点、数据时间、来源和结果事实；结论持久化为 AcceptanceResult | 普通 C1 仍为 A0 且 `acceptance=null`；天气规则不证明整段自然语言全部正确 |
 | 结果交付 | Runtime Event Port、JSON Run、POST SSE 模型文本流、助手消息最终单次落库和 SQLite 事实 SSE 多端同步；订阅者异常与 A3 终态后的交付失败不改写执行状态，可幂等取回结果 | 尚无持久化 DeliveryAttempt/Outbox 和保证送达；当前以功能回归和 gzip 预算为主 |
-| 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace；双模式场景已覆盖进程退出恢复，并如实记录真实模型 120 秒上游连接超时 | 仍需更多网关错误、断连和成功恢复样本；单次失败不构成稳定性基线 |
+| 重试与恢复 | 幂等、模型重试、SSE 重连、记忆版本冲突、Token Counter 回退和逐尝试证据已进入 Run 或 Trace；双模式场景已覆盖只读 ToolResult 后的进程退出恢复。`retry / regenerate / continue` 新 Run 继承来源真实 operation，图片生成/编辑 Run 明确不参与启动恢复 | 仍需更多网关错误、断连和成功恢复样本；单次失败不构成稳定性基线，图片副作用不得靠通用重放恢复 |
 | 可观测 | 已有后端中立 `ChainTracer`、OTLP/HTTP protobuf、Phoenix 选型、部署入口、PoC 业务 ID 查询和敏感正文脱敏 | TODO：正式实例真实 JSON/SSE Run、三业务 ID 查询、隐私复核、故障隔离和四维基线 |
 
 ### C1 完整运行态验收定义（TODO）
@@ -229,57 +229,74 @@ flowchart LR
 | 稳定性 | 保留 `requestId` 和 `clientMessageId` 幂等；区分输入错误、Run 冲突、鉴权、限流、模型超时、上游故障和空响应，并向渠道返回安全处理建议 |
 | Token 合理性 | 记录系统规则、当前输入、结构化记忆、Episode、历史消息和输出的分段 token；检查被排除内容是否符合优先级 |
 
-友好交互要求：收到输入后明确当前状态；用户可选择网关授权的模型别名；本地会话加载不依赖网关探测完成；工具阶段只能由服务端事实驱动，并在实时天气回答中说明地点、数据时间和来源；生成失败时在对应输入后说明安全原因和处理建议，并允许用新 Run 重试、编辑后发送、重新生成或继续生成；长回答可导航和消费；问题缺少关键条件时先澄清；回答中区分已知事实、推断和不确定项；用户纠正后能在后续轮次稳定使用新事实。
+友好交互要求：收到输入后明确当前状态；普通 `auto` 请求由 Runtime 按真实 operation 选择服务端默认模型，显式兼容请求只能选择网关授权且能力匹配的别名；本地会话加载不依赖网关探测完成；工具阶段只能由服务端事实驱动，并在实时天气回答中说明地点、数据时间和来源；生成失败时在对应输入后说明安全原因和处理建议，并允许用新 Run 重试、编辑后发送、重新生成或继续生成；长回答可导航和消费；问题缺少关键条件时先澄清；回答中区分已知事实、推断和不确定项；用户纠正后能在后续轮次稳定使用新事实。
 
-## C2 图片理解与生成链路
+## C2 图片理解、生成与编辑链路
 
 ### 适用范围
 
-适用于截图分析、视觉问答、图片信息提取、图文混合输入和图片生成。图片理解当前仍只有图片 URL 与 data URL 的基础传输，缺少受控上传、多轮资产引用、恶意内容和视觉能力治理。图片生成已实现首个开发切片：渠道显式提交 `image.generate`，Runtime 经 GatewayClient、AI SDK 和 LiteLLM 调用独立图片别名，校验结果后写入本地 ImageAssetStore，再以 `image_asset` 完成 Run；fake 回归和一次 `gpt-image-2` 真实 happy-path smoke 已通过。该单样本不等于内容安全、成本、异常矩阵或生产可用性验收。C1 可以作为会话入口，但图片操作、资产与模型语义归 C2。
+适用于截图分析、视觉问答、图片信息提取、图文混合输入、图片生成和多轮单图整体编辑。普通新 Run 默认提交 `operation=auto`。首版 Runtime 只用当前消息与附件形成候选并通过 AI SDK `Output.object` 返回 operation/confidence；它已解决发送前三选一，但看不到无当前附件请求所依赖的历史图片和编辑要求。本次上下文感知改造的稳定契约要求 Runtime 从已提交 Message、真实 Run operation 和可用 `image_asset` 派生活动图片，读取有界 routing snapshot，并让分类模型只返回 `operation / confidence / useActiveImage / relevantMessageIds`。显式当前图片覆盖历史；无当前附件但有活动图片时可候选对话/生图/编辑，无活动图片时只候选对话/生图，远程图片、文档、多图或消息引用固定对话且不继承活动图片。Runtime 校验证据、选择源图并从不可变消息组装输入；图片 operation 仍要求合法候选和 `confidence >= 0.85`。
+
+该改造不能通过几个中文关键词特判完成，也不能把 Composer 最近附件当会话事实。普通无图片聊天不应清空活动图片；视觉追问只有在 `useActiveImage=true` 且所有已声明证据有效时才继承服务端活动图片，无关聊天不携图。视觉问题本身自包含时 `relevantMessageIds` 可以为空；无当前附件的隐式编辑必须引用至少一条有效历史消息。非法证据、失效资产、低置信度或分类失败回退不继承历史图片的对话，不产生图片副作用。Run 保存真实 operation、实际图片引用和脱敏 intentDecision；显式历史图片“继续编辑”及 Run 恢复仍继承已经确定的 operation，不重新分类。
+
+图片理解当前仍只有图片 URL 与 data URL 的基础传输，缺少受控资产输入、多轮引用、恶意内容和视觉能力治理。图片生成已实现首个开发切片：Runtime 解析为 `image.generate` 后经 GatewayClient、AI SDK 和 LiteLLM 调用独立图片别名，校验结果后写入本地 ImageAssetStore，再以 `image_asset` 完成 Run；fake 回归和一次 `gpt-image-2` 真实 happy-path smoke 已通过。图片编辑仍使用独立真实 operation `image.edit`：浏览器先上传一张 PNG、JPEG 或 WebP 为当前会话的 `source=uploaded` 资产，Run 只引用 assetId，Runtime 读取源图并经 Responses `image_generation(action=edit)` 调用模型，成功输出成为新的 `source=edited` 资产并可直接作为下一轮源图。Responses 请求、A→B→C 资产链和 HTTP/SSE 回归已通过；2026-08-15 当前 `gpt-5.6` 配置也完成两轮真实编辑，第二轮只引用第一轮输出且刷新后资产仍可读取。现有证据不等于内容安全、成本、异常矩阵或生产可用性验收。C1 可以作为会话入口，但图片操作、资产与模型语义归 C2。
 
 ```mermaid
 flowchart LR
-  Source["C1 会话 / 未来 API<br/>显式图片操作"]
-  Adapter["渠道 Adapter<br/>问题或提示词 + 图片引用"]
-  Route["C2 操作路由<br/>[目标] image.understand / [当前] image.generate"]
-  MediaGuard["媒体校验<br/>[目标] 输入 / [当前] 生成结果"]
-  InputAsset["[目标] image_asset 输入<br/>元数据 / 权限 / 版本"]
+  Source["C1 会话 / 未来 API<br/>自然语言 + 可选附件"]
+  Adapter["渠道 Adapter<br/>默认 auto / 显式恢复"]
+  RoutingFacts["会话路由事实<br/>Message / 真实 Run / image_asset"]
+  Snapshot["[本次改造] 有界 routing snapshot<br/>活动图片 / 近期消息 / 版本"]
+  Route["Runtime 智能操作路由<br/>当前附件硬约束 + 可验证证据<br/>图片 confidence >= 0.85"]
+  MediaGuard["媒体校验<br/>[当前] 编辑上传与模型结果<br/>[目标] 理解输入完整治理"]
+  InputAsset["image_asset 输入<br/>[当前] 单图编辑<br/>[目标] 图片理解 / 多轮引用"]
   Runtime["Agent Runtime<br/>Run / 幂等 / 取消 / 结果"]
   Planner["Context Planner<br/>会话事实 / 资产引用 / 视觉预算"]
-  Capability["模型能力路由<br/>[目标] image-input / [当前] 独立 image-output 别名"]
+  Capability["模型能力路由<br/>[目标] image-input 目录<br/>[当前] 操作级默认模型"]
   Gateway["[当前] GatewayClient"]
-  AiSdk["AI SDK<br/>理解：多模态消息<br/>生成：generateImage"]
+  ModelAdapters["模型 Adapter<br/>理解/生成：AI SDK<br/>编辑：Responses action=edit"]
   LiteLLM["[当前] LiteLLM"]
   Vision["[当前基础] 上游视觉模型"]
   ImageModel["上游图片模型<br/>[当前] 单模型真实 smoke<br/>[目标] 能力目录 / 质量基线"]
   UnderstandValidator["[下一步] 理解结果校验<br/>结构化字段 / 空结果 / 截断"]
-  GenerationGuard["生成结果治理<br/>[当前] 格式 / 大小 / 尺寸<br/>[目标] 内容安全 / 成本"]
-  Store["[当前] 本地 ImageAssetStore<br/>生成结果先落存"]
+  GenerationGuard["图片结果治理<br/>[当前] 格式 / 大小 / 尺寸<br/>[目标] 内容安全 / 成本"]
+  Store["[当前] 本地 ImageAssetStore<br/>上传源图 / 生成与编辑结果"]
   OutputAsset["image_asset 产物<br/>[当前] 稳定 ID / [目标] 正式生命周期"]
   Delivery["渠道输出<br/>文本结果或 image_asset"]
 
-  Source --> Adapter --> Runtime --> Route
-  Route -->|理解| MediaGuard --> InputAsset --> Planner --> Capability
-  Route -->|生成| Capability
-  Capability --> Gateway --> AiSdk --> LiteLLM
+  Source --> Adapter --> Runtime --> Snapshot --> Route
+  RoutingFacts --> Snapshot
+  Adapter -->|上传编辑源图| MediaGuard --> InputAsset
+  InputAsset -->|对话视觉输入| Planner
+  Route -->|对话 / 不确定回退| Planner --> Capability
+  Route -->|生成且高置信度| Capability
+  Route -->|编辑且高置信度| InputAsset
+  InputAsset -->|编辑源图| Capability
+  Capability --> Gateway --> ModelAdapters --> LiteLLM
   LiteLLM --> Vision --> UnderstandValidator --> Delivery
   LiteLLM --> ImageModel --> GenerationGuard --> Store --> OutputAsset --> Delivery
 ```
 
 | 质量维度 | 本链路控制点 |
 | --- | --- |
-| 准确度 | 理解建立截图、表格、文档照片和多图 fixture；生成验证提示词一致性、图片有效性、文字可读性和内容安全 |
-| 实时性 | 分开统计上传或取图、媒体检查、视觉推理、图片生成、审核、资产落存和结果组装耗时 |
-| 稳定性 | 理解返回逐图错误；生成重放不得重复调用或计费；模型不支持目标模态时不得静默降级为文本 |
-| Token 与成本合理性 | 理解记录文本 token 与视觉计费单位；生成记录张数、尺寸、模型成本和资产存储，多图不无条件重发原图 |
+| 准确度 | 路由验证 operation、源资产、活动图片包含和 relevantMessageIds；覆盖 `0.8499/0.85` 边界与 A→B→视觉澄清→无附件续改→C。理解建立截图、表格、文档照片和多图 fixture；生成验证提示词一致性、图片有效性、文字可读性和内容安全；编辑验证源图主体/构图保留和指令符合度 |
+| 实时性 | 分开统计 routing snapshot、意图分类、证据校验、上传或取图、媒体检查、视觉推理、图片生成、审核、资产落存和结果组装耗时；路由报告平均与 P95 |
+| 稳定性 | 非法证据、上下文版本冲突或分类失败不得产生图片副作用；生成或编辑重放不得重新分类、重复调用或计费；显式源图和活动图片均按会话鉴权，模型不支持目标模态时不得静默降级为其他操作 |
+| Token 与成本合理性 | routing snapshot 同时限制消息数量与单条正文字符，分类只接收最小消息投影而非完整图片/会话，并记录实际 token；理解记录文本 token 与视觉计费单位；生成/编辑记录张数、尺寸、模型成本和资产存储，不无条件重发历史原图 |
+
+### 智能路由分层评测
+
+会话上下文感知路由使用独立 `scenarios/runtime-routing/` 协议，不与当前天气恢复场景的 `scenarios/runtime/` 约束混用。确定性模式由 fixture 驱动脚本分类器并使用 fake 图片 Gateway，验证 Store/Runtime/资产引用/intentDecision/幂等和错误图片副作用为零；真实模型模式只把分类器换成经 GatewayClient/LiteLLM 调用的固定模型，图片执行仍用 fake，从而把语义识别质量与真实图片模型费用、限流和生成失败隔离。
+
+两种模式复用同一版本化输入和标准答案，Runner 不得写“继续优化”“输出图片”等关键词分支。Runner 直接观察图片编辑后端收到的源图指纹、视觉对话实际携带的 data URL、编辑 Prompt 历史和失败图片调用；不能只根据持久化引用或最终产物推断链路正确。真实模型报告固定模型别名、实际模型、Prompt/schema、采样参数和 fixture 版本，并给出 operation、源图引用/字节、视觉输入、编辑 Prompt 历史、活动图片、证据、错误图片副作用率、token、平均延迟和 P95。少于 30 个有效真实分类样本只报告 `observation-only`；确定性通过不能代替真实模型准确率。当前已落地版本化 schema、首个 case/model-fixture/gold、独立契约校验和通用双模式 Runner。2026-08-15 最终代码的 `gpt-5.6` 真实分类 smoke 共 4 个有效样本，上述准确率指标均为 1，错误图片副作用率为 0，总 token 为 21,482，路由平均约 5.04 秒、P95 约 6.13 秒；该结果只验证首个场景链，按样本门禁仍为 `observation-only`。
 
 ### 当前真实模型证据
 
 2026-07-31 的单模型 smoke 通过完整业务主链执行，`gpt-image-2` 在一次模型尝试内约 41.7 秒生成 1 张有效 PNG，资产校验、SHA-256、SQLite 元数据、Run/Message 引用和受控读取均通过。请求 `1024x1024`，实际资产为 `1254x1254`、1,091,928 字节；因此实际资产元数据是交付事实，请求尺寸暂不能作为精确输出承诺。上游 usage 只提供 `generated_images: 1`，没有 token 或成本数据。
 
-本证据只覆盖 happy path 和单张提示词一致性观察。真实模型取消、超时、错误、内容安全、成本阈值、多样本质量与尺寸兼容矩阵尚未完成，不能据此把 C2 写成生产可用；对应增量任务保留在 `openspec/changes/add-c2-image-understanding-and-generation/tasks.md`。
+本证据最初只覆盖文生图 happy path 和单张提示词一致性观察。2026-08-01 的旧图片编辑验证使用无敏感内容的合成 PNG，三次独立 Run 均到达 `/images/edits`，但上游账号池均返回无可用兼容账号；该失败触发方案重评。2026-08-02 的 Responses 对照 PoC 中，`gpt-5.6` 纯文本 `/v1/responses` 成功，加入 `input_image` 与 `image_generation(action=edit)` 后被上游拒绝访问。2026-08-15 使用当前配置重新验证，默认智能模式连续完成 A→B→C 两轮真实编辑：两次均为单次模型尝试，第二轮显式引用第一轮输出，三个 PNG 哈希不同且会话刷新后仍可读取。同日进一步用全新 SQLite 和浏览器会话完成 `上传 A -> 编辑得到 B -> 无附件视觉核查 -> 无附件继续完善 -> C`：核查 Run 与第二次编辑 Run 均由 Runtime 自动引用 B，第二次编辑的 `intentDecision` 为 `image.edit / useActiveImage=true`，刷新后活动图片稳定指向 C，A/B/C 哈希均不同。当前证据已证明首个无附件上下文续改链路可行，但真实分类仍只有 4 轮 `observation-only` 样本；内容安全、成本阈值、完整语义矩阵、多样本质量、尺寸兼容和异常矩阵也尚未完成，不能据此把 C2 写成生产可用。对应任务保留在 `openspec/changes/add-c2-image-understanding-and-generation/tasks.md`、`openspec/changes/add-c2-image-editing/tasks.md` 和 `openspec/changes/add-smart-operation-routing/tasks.md`。
 
-友好交互要求：明确当前是图片理解还是生成；展示已接收图片、失败项、生成阶段和最终图片资产；用户未给理解问题时使用明确的默认分析目标；结构化识别结果允许纠正单个字段；生成失败时给出稳定原因和重新发起入口，不把同一 Run 静默重做。
+友好交互要求：普通发送不要求用户预先理解或三选一内部模式；Runtime 解析后以真实 operation 驱动状态和结果。单张受控源图在创建 Run 前展示图片和上传状态，远程 URL、文档与多图不得进入编辑候选；展示失败项、生成/编辑阶段和最终图片资产；编辑成功后把最新产物作为下一轮源图，并允许从历史图片显式“继续编辑”；恢复和继续编辑不重新分类；用户未给理解问题时使用明确的默认分析目标；结构化识别结果允许纠正单个字段；图片操作失败时给出稳定原因和重新发起入口，不把同一 Run 静默重做。
 
 ## C3 文档知识问答链路
 
@@ -414,7 +431,7 @@ flowchart LR
   Source --> Adapter --> Runtime --> Read --> Plan --> Validate --> Preview --> Confirm --> Execute --> Verify --> Delivery
 ```
 
-模型调用段由 Runtime 内部统一使用 `GatewayClient -> AI SDK -> LiteLLM -> 上游模型`，图中将其收敛为“模型生成操作计划”，以突出写操作的确认和验证边界。
+模型调用段由 Runtime 内部统一使用 `GatewayClient -> AI SDK / Responses Adapter -> LiteLLM -> 上游模型`，图中将其收敛为“模型生成操作计划”，以突出写操作的确认和验证边界。
 
 | 质量维度 | 本链路控制点 |
 | --- | --- |
@@ -511,7 +528,7 @@ flowchart LR
 | 顺序 | 链路 | 原因 | 完成标志 |
 | --- | --- | --- | --- |
 | 1 | C1 对话问答 | 当前已经可运行，先保持功能回归和能力理解 | 主链回归稳定；触发运行态验收后再补阶段耗时和分段 Token 基线 |
-| 2 | C2 图片理解与生成 | 已有理解传输通道，先建设共享图片资产与输入治理，再复用底座增加生图 | `image_asset`、媒体校验、视觉能力路由和理解 fixture 稳定；单模型文生图另以资产、审核、幂等和成本验收 |
+| 2 | C2 图片理解、生成与编辑 | 已有理解传输通道、文生图和多轮单图编辑开发切片，下一步补共享图片输入治理与生产验收矩阵 | `image_asset` 生命周期、媒体安全、视觉能力路由和理解 fixture 稳定；文生图与多轮编辑分别完成多样本质量、审核、幂等和成本验收 |
 | 3 | C4 业务数据查询 | 符合 V0.6 到 V1 的“第一个真实只读工具”里程碑 | 一个只读业务源完成权限、schema、超时、来源和追问闭环 |
 | 4 | C6 操作执行 | 必须建立在只读工具、幂等和审计稳定之后 | 一个低风险写操作具备预览、确认、执行和回读验证 |
 | 5 | C3 文档知识问答 | 需要独立解析、索引、权限和引用能力 | 单一文档源从解析到带引用回答可回归 |

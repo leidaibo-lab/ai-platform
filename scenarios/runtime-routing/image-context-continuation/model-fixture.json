@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "runtime-routing-model-fixture.v1",
+  "classifierTurns": [
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "initial-edit",
+      "output": {
+        "operation": "image.edit",
+        "confidence": 0.99,
+        "useActiveImage": false,
+        "relevantMessages": []
+      }
+    },
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "visual-check",
+      "output": {
+        "operation": "conversation.chat",
+        "confidence": 0.98,
+        "useActiveImage": true,
+        "relevantMessages": [
+          { "turnId": "initial-edit", "role": "user" }
+        ]
+      }
+    },
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "contextual-edit",
+      "output": {
+        "operation": "image.edit",
+        "confidence": 0.97,
+        "useActiveImage": true,
+        "relevantMessages": [
+          { "turnId": "visual-check", "role": "user" },
+          { "turnId": "visual-check", "role": "assistant" }
+        ]
+      }
+    },
+    {
+      "conversationId": "no-active-image-flow",
+      "turnId": "missing-source",
+      "output": {
+        "operation": "conversation.chat",
+        "confidence": 0.99,
+        "useActiveImage": false,
+        "relevantMessages": []
+      }
+    }
+  ],
+  "chatTurns": [
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "initial-edit",
+      "content": "当前请求需要输出图片版本，文本回复仅作为隔离兜底。"
+    },
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "visual-check",
+      "content": "检查后发现蓝色色调变化不够明显，需要增强蓝色表现并保持原构图。"
+    },
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "contextual-edit",
+      "content": "当前请求需要继续编辑活动图片，文本回复仅作为隔离兜底。"
+    },
+    {
+      "conversationId": "no-active-image-flow",
+      "turnId": "missing-source",
+      "content": "当前会话没有可继续编辑的活动图片，请先上传或生成图片。"
+    }
+  ],
+  "imageTurns": [
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "initial-edit",
+      "operation": "image.edit",
+      "behavior": {
+        "status": "completed",
+        "image": {
+          "mediaType": "image/png",
+          "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        }
+      }
+    },
+    {
+      "conversationId": "active-image-flow",
+      "turnId": "contextual-edit",
+      "operation": "image.edit",
+      "behavior": {
+        "status": "completed",
+        "image": {
+          "mediaType": "image/png",
+          "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQI12Ng+M/AAAAEAQEA3F812QAAAABJRU5ErkJggg=="
+        }
+      }
+    }
+  ]
+}

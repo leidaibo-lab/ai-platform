@@ -12,7 +12,17 @@ import test from "node:test";
 async function testStreamingRunOverHttp() {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "ai-platform-stream-http-"));
   const generatedModels = [];
-  const fakeGateway = createServer(createFakeGatewayHandler(generatedModels));
+  const imageEditRequests = [];
+  let resolveRoutingStarted;
+  // Promise executor 暴露结构化分类请求已经到达 fake gateway 的确定性时点。
+  const routingStarted = new Promise((resolve) => {
+    resolveRoutingStarted = resolve;
+  });
+  const fakeGateway = createServer(createFakeGatewayHandler(
+    generatedModels,
+    imageEditRequests,
+    { onRoutingStarted: resolveRoutingStarted },
+  ));
   let demoProcess = null;
   let demoStderr = "";
   try {
@@ -28,6 +38,10 @@ async function testStreamingRunOverHttp() {
         LITELLM_MASTER_KEY: "sk-http-stream-test",
         LITELLM_MODEL: "chat-default",
         LITELLM_IMAGE_MODEL: "image-default",
+        LITELLM_IMAGE_EDIT_MODEL: "chat-default",
+        LITELLM_CHAT_MODELS: "chat-default,chat-quality",
+        LITELLM_VISION_MODELS: "chat-default,chat-quality",
+        LITELLM_IMAGE_EDITING_MODELS: "chat-default",
         DEMO_IMAGE_ASSET_DIR: join(temporaryDirectory, "image-assets"),
         DEMO_MODEL_RETRY_BASE_DELAY_MS: "0",
         OTEL_ENABLED: "false",
@@ -42,11 +56,64 @@ async function testStreamingRunOverHttp() {
     demoProcess.stderr.on("data", appendDemoStderr);
     const demoBaseUrl = `http://127.0.0.1:${demoPort}`;
     await waitForDemo(demoBaseUrl, demoProcess);
+    const gatewayStatus = await requestJson(`${demoBaseUrl}/api/gateway/status`);
+    assert.deepEqual(gatewayStatus.modelCapabilities, {
+      chat: ["chat-default", "chat-quality"],
+      vision: ["chat-default", "chat-quality"],
+      imageGeneration: ["image-default"],
+      imageEditing: ["chat-default"],
+    });
+    assert.deepEqual(gatewayStatus.defaultModels, {
+      "conversation.chat": "chat-default",
+      "image.generate": "image-default",
+      "image.edit": "chat-default",
+    });
 
     const conversation = await requestJson(`${demoBaseUrl}/api/runtime/conversations`, {
       method: "POST",
       body: {},
     });
+    const mismatchedChatResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: "http-chat-capability-mismatch",
+          clientMessageId: "http-chat-capability-message",
+          model: "image-default",
+          message: "图片生成模型不能用于对话",
+        }),
+      },
+    );
+    const mismatchedChatEvents = await readSseEvents(mismatchedChatResponse.body);
+    const mismatchedChatError = mismatchedChatEvents.find(isErrorEvent)?.data;
+    assert.deepEqual(mismatchedChatEvents.map(readEventName), ["error"]);
+    assert.equal(mismatchedChatError.status, 400);
+    assert.equal(mismatchedChatError.code, "model_capability_mismatch");
+    assert.equal(mismatchedChatError.requiredCapability, "chat");
+    assert.equal(generatedModels.length, 0);
+
+    const mismatchedImageResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation: "image.generate",
+          requestId: "http-image-capability-mismatch",
+          clientMessageId: "http-image-capability-message",
+          model: "chat-default",
+          message: "聊天模型不能用于图片生成",
+        }),
+      },
+    );
+    const mismatchedImageError = await mismatchedImageResponse.json();
+    assert.equal(mismatchedImageResponse.status, 400);
+    assert.equal(mismatchedImageError.code, "model_capability_mismatch");
+    assert.equal(mismatchedImageError.requiredCapability, "imageGeneration");
+    assert.equal(generatedModels.length, 0);
+
     const response = await fetch(
       `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
       {
@@ -68,6 +135,7 @@ async function testStreamingRunOverHttp() {
     const completed = events.find(isCompletedEvent)?.data;
 
     assert.deepEqual(events.map(readEventName), ["run-started", "text-delta", "text-delta", "completed"]);
+    assert.equal(events[0].data.operation, "conversation.chat");
     assert.deepEqual(events.filter(isTextDeltaEvent).map(readTextDelta), ["流式", "回复"]);
     assert.equal(completed.content, "流式回复");
     assert.equal(completed.resilience.outputStarted, true);
@@ -100,6 +168,7 @@ async function testStreamingRunOverHttp() {
     const imageCompleted = imageEvents.find(isCompletedEvent)?.data;
     const imageArtifact = imageEvents.find(isArtifactCreatedEvent)?.data;
     assert.deepEqual(imageEvents.map(readEventName), ["run-started", "artifact-created", "completed"]);
+    assert.equal(imageEvents[0].data.operation, "image.generate");
     assert.equal(imageCompleted.operation, "image.generate");
     assert.equal(imageCompleted.artifacts[0].assetId, imageArtifact.assetId);
     assert.equal(imageCompleted.conversation.messages.at(-1).artifacts[0].assetId, imageArtifact.assetId);
@@ -119,9 +188,105 @@ async function testStreamingRunOverHttp() {
     const imageReplayEvents = await readSseEvents(imageReplayResponse.body);
     const imageReplay = imageReplayEvents.find(isCompletedEvent)?.data;
     assert.deepEqual(imageReplayEvents.map(readEventName), ["run-started", "completed"]);
+    assert.equal(imageReplayEvents[0].data.operation, "image.generate");
     assert.equal(imageReplay.replayed, true);
     assert.equal(imageReplay.artifacts[0].assetId, imageArtifact.assetId);
     assert.equal(generatedModels.filter(isImageModel).length, 1);
+
+    const sourceImageBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const sourceUploadResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/image-assets`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "image/png" },
+        body: sourceImageBytes,
+      },
+    );
+    const sourceAsset = await sourceUploadResponse.json();
+    assert.equal(sourceUploadResponse.status, 201);
+    assert.equal(sourceAsset.source, "uploaded");
+    assert.equal(sourceAsset.runId, null);
+
+    const editResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation: "image.edit",
+          requestId: "http-image-edit-request",
+          clientMessageId: "http-image-edit-message",
+          model: "chat-default",
+          message: "保留构图并改成蓝色水彩风格",
+          references: [{ type: "image_asset", assetId: sourceAsset.assetId }],
+          imageOptions: { size: "1024x1024" },
+        }),
+      },
+    );
+    const editEvents = await readSseEvents(editResponse.body);
+    const editCompleted = editEvents.find(isCompletedEvent)?.data;
+    const editedArtifact = editEvents.find(isArtifactCreatedEvent)?.data;
+    assert.deepEqual(editEvents.map(readEventName), ["run-started", "artifact-created", "completed"]);
+    assert.equal(editEvents[0].data.operation, "image.edit");
+    assert.equal(editCompleted.operation, "image.edit");
+    assert.equal(editCompleted.artifacts[0].source, "edited");
+    assert.equal(editCompleted.artifacts[0].assetId, editedArtifact.assetId);
+    assert.equal(imageEditRequests.length, 1);
+    assert.equal(imageEditRequests[0].body.model, "chat-default");
+    assert.equal(imageEditRequests[0].body.store, false);
+    assert.deepEqual(imageEditRequests[0].body.tools, [{
+      type: "image_generation",
+      action: "edit",
+      size: "1024x1024",
+    }]);
+    assert.equal(imageEditRequests[0].body.input[0].content[0].text, "保留构图并改成蓝色水彩风格");
+    assert.equal(
+      imageEditRequests[0].body.input[0].content[1].image_url,
+      `data:image/png;base64,${sourceImageBytes.toString("base64")}`,
+    );
+    const editedAssetResponse = await fetch(`${demoBaseUrl}${editedArtifact.url}`);
+    assert.equal(editedAssetResponse.status, 200);
+    assert.equal(editedAssetResponse.headers.get("content-type"), "image/png");
+    assert.deepEqual(
+      Buffer.from(await editedAssetResponse.arrayBuffer()),
+      Buffer.from(imageEditRequests[0].outputBase64, "base64"),
+    );
+
+    const secondEditResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation: "image.edit",
+          requestId: "http-image-edit-request-2",
+          clientMessageId: "http-image-edit-message-2",
+          model: "chat-default",
+          message: "继续保留构图，把背景调亮",
+          references: [{ type: "image_asset", assetId: editedArtifact.assetId }],
+          imageOptions: { size: "1024x1024" },
+        }),
+      },
+    );
+    const secondEditEvents = await readSseEvents(secondEditResponse.body);
+    const secondEditedArtifact = secondEditEvents.find(isArtifactCreatedEvent)?.data;
+    assert.deepEqual(secondEditEvents.map(readEventName), ["run-started", "artifact-created", "completed"]);
+    assert.notEqual(secondEditedArtifact.assetId, editedArtifact.assetId);
+    assert.equal(imageEditRequests.length, 2);
+    assert.equal(
+      imageEditRequests[1].body.input[0].content[1].image_url,
+      `data:image/png;base64,${imageEditRequests[0].outputBase64}`,
+    );
+    const originalAssetAfterEdits = await fetch(`${demoBaseUrl}${sourceAsset.url}`);
+    assert.deepEqual(Buffer.from(await originalAssetAfterEdits.arrayBuffer()), sourceImageBytes);
+    const firstEditAfterSecond = await fetch(`${demoBaseUrl}${editedArtifact.url}`);
+    assert.deepEqual(
+      Buffer.from(await firstEditAfterSecond.arrayBuffer()),
+      Buffer.from(imageEditRequests[0].outputBase64, "base64"),
+    );
 
     const archivedConversation = await requestJson(
       `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
@@ -229,6 +394,50 @@ async function testStreamingRunOverHttp() {
     assert.equal(cancellationResult.assistantMessage.displayContent, "取消前片段");
     assert.equal(repeatedCancellation.run.status, "cancelled");
 
+    const detailBeforeRoutingCancellation = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
+    );
+    const modelCallsBeforeRoutingCancellation = generatedModels.length;
+    const imageEditsBeforeRoutingCancellation = imageEditRequests.length;
+    const routingRequestId = "http/routing-cancel-request";
+    const routingCancellationResponse = await fetch(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
+      {
+        method: "POST",
+        headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation: "auto",
+          requestId: routingRequestId,
+          clientMessageId: "http-routing-cancel-message",
+          message: "验证分类阶段取消，不得继续业务模型",
+        }),
+      },
+    );
+    const routingEventsPromise = readSseEvents(routingCancellationResponse.body);
+    await withTimeout(routingStarted, "waiting for intent routing request");
+    const routingCancellation = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/run-requests/${encodeURIComponent(routingRequestId)}/cancel`,
+      { method: "POST", body: {} },
+    );
+    const routingEvents = await withTimeout(routingEventsPromise, "waiting for pre-run cancelled SSE event");
+    const detailAfterRoutingCancellation = await requestJson(
+      `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}`,
+    );
+    assert.deepEqual(routingCancellation, {
+      cancellationRequested: true,
+      requestId: routingRequestId,
+      runId: null,
+    });
+    assert.deepEqual(routingEvents.map(readEventName), ["cancelled"]);
+    assert.equal(routingEvents[0].data.cancelled, true);
+    assert.equal(routingEvents[0].data.requestId, routingRequestId);
+    assert.equal(routingEvents[0].data.run, null);
+    assert.equal(routingEvents[0].data.assistantMessage, null);
+    assert.equal(detailAfterRoutingCancellation.latestRun.id, detailBeforeRoutingCancellation.latestRun.id);
+    assert.equal(detailAfterRoutingCancellation.messages.length, detailBeforeRoutingCancellation.messages.length);
+    assert.equal(generatedModels.length, modelCallsBeforeRoutingCancellation + 1);
+    assert.equal(imageEditRequests.length, imageEditsBeforeRoutingCancellation);
+
     const disconnectController = new AbortController();
     const disconnectResponse = await fetch(
       `${demoBaseUrl}/api/runtime/conversations/${encodeURIComponent(conversation.id)}/runs/stream`,
@@ -267,7 +476,7 @@ async function testStreamingRunOverHttp() {
 test("POST SSE supports completion, explicit cancellation, and disconnect continuation", testStreamingRunOverHttp);
 
 /** 创建可按用户输入模拟完成、取消等待和渠道断线的 OpenAI-compatible Gateway。 */
-function createFakeGatewayHandler(generatedModels) {
+function createFakeGatewayHandler(generatedModels, imageEditRequests, routingHarness = {}) {
   /** 为 Demo 测试提供 models、token counter 和标准文本流。 */
   return async function handleFakeGatewayRequest(req, res) {
     if (req.method === "GET" && req.url === "/v1/models") {
@@ -284,6 +493,11 @@ function createFakeGatewayHandler(generatedModels) {
       const requestBody = await readRequestBody(req);
       const parsedBody = JSON.parse(requestBody);
       generatedModels.push(parsedBody.model);
+      if (parsedBody.response_format && requestBody.includes("验证分类阶段取消")) {
+        routingHarness.onRoutingStarted?.();
+        await withTimeout(waitForResponseClose(res), "intent routing request was not aborted");
+        return;
+      }
       const latestMessage = parsedBody.messages.at(-1);
       if (latestMessage?.role === "user" && latestMessage.content === "验证模型鉴权失败") {
         sendJson(res, { error: { message: "INVALID_API_KEY provider secret" } }, 401);
@@ -322,6 +536,24 @@ function createFakeGatewayHandler(generatedModels) {
       });
       return;
     }
+    if (req.method === "POST" && req.url === "/v1/responses") {
+      const requestBody = JSON.parse(await readRequestBody(req));
+      const outputBase64 = createEditedPngFixture(imageEditRequests.length + 1);
+      generatedModels.push(requestBody.model);
+      imageEditRequests.push({ body: requestBody, outputBase64 });
+      sendJson(res, {
+        id: `response-image-edit-${imageEditRequests.length}`,
+        status: "completed",
+        output: [{
+          type: "image_generation_call",
+          id: `image-call-${imageEditRequests.length}`,
+          status: "completed",
+          result: outputBase64,
+        }],
+        usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+      });
+      return;
+    }
     req.resume();
     sendJson(res, { error: "not found" }, 404);
   };
@@ -335,6 +567,17 @@ function isArtifactCreatedEvent(event) {
 /** 判断模型调用记录是否为图片模型别名。 */
 function isImageModel(model) {
   return model === "image-default";
+}
+
+/** 为每轮编辑创建结构完整但字节不同的 PNG fixture，验证下一轮读取上一轮输出。 */
+function createEditedPngFixture(version) {
+  const bytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const imageDataTypeOffset = bytes.indexOf("IDAT", 0, "ascii");
+  bytes[imageDataTypeOffset + 4] ^= Number(version) & 0xff;
+  return bytes.toString("base64");
 }
 
 /** 判断 SSE 事件是否为失败终止事件。 */
@@ -465,6 +708,7 @@ function appendSseEvent(events, block, onEvent) {
 
 /** 读取完整测试请求体，供 fake gateway 根据当前输入选择响应行为。 */
 function readRequestBody(req) {
+  // Promise executor 把 Node 请求流事件聚合为单个测试正文。
   return new Promise((resolve, reject) => {
     let body = "";
     /** 累积一个测试请求块。 */
@@ -483,6 +727,7 @@ function readRequestBody(req) {
 
 /** 等待 Runtime 取消下游请求后 fake gateway 响应连接关闭。 */
 function waitForResponseClose(res) {
+  // Promise executor 把一次响应关闭事件桥接为取消传播事实。
   return new Promise((resolve) => {
     /** 下游连接关闭后结束等待。 */
     function handleResponseClose() {
@@ -497,6 +742,7 @@ async function withTimeout(promise, label, timeoutMs = 5000) {
   let timeout;
   /** 超时后抛出带当前阶段的错误。 */
   const timeoutPromise = new Promise((resolve, reject) => {
+    // 定时器回调只负责拒绝当前测试阶段，不触碰被测 Promise。
     timeout = setTimeout(() => reject(new Error(label)), timeoutMs);
   });
   try {

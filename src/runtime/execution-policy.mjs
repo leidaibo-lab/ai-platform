@@ -42,7 +42,7 @@ export class ExecutionPolicyError extends Error {
 export function createExecutionPolicy({
   policy = DEFAULT_POLICY_NAME,
   policyVersion = DEFAULT_POLICY_VERSION,
-  allowedRunOperations = ["conversation.chat", "image.generate"],
+  allowedRunOperations = ["conversation.chat", "image.generate", "image.edit"],
   allowedReadTools = [],
   beforeHooks = [],
   afterHooks = [],

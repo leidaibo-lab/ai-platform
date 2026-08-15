@@ -21,7 +21,7 @@ Runtime
 {
   phase: "before" | "after",
   kind: "run" | "tool" | "operation",
-  operation: "conversation.chat" | "image.generate" | "tool.execute" | ...,
+  operation: "conversation.chat" | "image.generate" | "image.edit" | "tool.execute" | ...,
   toolName: string | null,
   effect: "read" | "write" | "external" | "unknown",
   riskLevel: "low" | "medium" | "high" | "critical"

@@ -30,7 +30,7 @@ AI 应用基础平台不是单纯的 LiteLLM Proxy 包装，也不把所有后�
   -> Demo Server 渠道 HTTP Adapter
   -> Agent Runtime
   -> GatewayClient
-  -> AI SDK Core + @ai-sdk/openai-compatible
+  -> AI SDK Core / Responses 图片编辑 Adapter
   -> LiteLLM Proxy
   -> 上游 OpenAI-compatible API
 ```
@@ -52,11 +52,11 @@ Runtime 返回 / 抛错 -> Demo Server 渠道终态交付
 
 `RunEventSink` 只负责进程内实时观察，订阅者失败不会把模型、工具或已提交 Run 改写为失败；它按顺序等待当前本地订阅者，因此不能直接承载远程消费、积压、重放或保证送达。POST SSE 的事件名和公开载荷属于 Demo Server Adapter，SQLite `conversation_events` 才是可恢复的会话事实历史。
 
-执行治理采用三块可替换边界：`ExecutionPolicy` 只做版本化前置决策和后置观察，不访问 Store 或 Connector；`ConversationStore` 独占 Operation、ToolCall 和 RunLease 事实；Runtime 负责按策略取得 lease、调用下游并携带 fencing token 提交。未知操作默认拒绝，未显式允许的 `write`、`external` 或 `unknown` 操作默认要求确认；当前 `image.generate` 是显式允许的本地写入开发切片，不因此获得通用副作用恢复。
+执行治理采用三块可替换边界：`ExecutionPolicy` 只做版本化前置决策和后置观察，不访问 Store 或 Connector；`ConversationStore` 独占 Operation、ToolCall 和 RunLease 事实；Runtime 负责按策略取得 lease、调用下游并携带 fencing token 提交。未知操作默认拒绝，未显式允许的 `write`、`external` 或 `unknown` 操作默认要求确认；当前 `image.generate` 和 `image.edit` 是显式允许的本地图片资产写入开发切片，不因此获得通用副作用恢复。
 
 `scripts/test-chat.sh -> LiteLLM -> 上游模型` 仅用于检查模型连通性和排障，不属于全局业务链路、平台能力规划或客户端接入方式。
 
-当前交付以 C1 对话问答为基线，并以 Open-Meteo 跑通首个只读天气工具。天气切片已从“保存 ToolResult”推进到“服务重启后从 completed ToolResult 恢复最终总结”，恢复实例会先被未过期 lease 阻断，过期后以递增 fencing token 接管，并通过持久化 `AcceptanceResult` 独立检查地点、数据时间、来源和结果事实；该能力只覆盖一个已证明的只读稳定点，不等于通用持久工作流或生产级多实例协调。项目同时增加 C2 文生图的首个开发切片：显式图片操作、独立图片模型别名、生成结果校验、本地图片资产、幂等重放、取消和 JSON/SSE 交付已经通过 fake 回归，并用 `gpt-image-2` 跑通一次真实模型 happy-path smoke。该单样本不代表内容审核、精确尺寸、成本、取消/超时/错误或生产可用性已经验收。具体等级与边界见[运行可靠性与结果验收](./docs/runtime-reliability-and-acceptance.md)和[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
+当前交付以 C1 对话问答为基线，并以 Open-Meteo 跑通首个只读天气工具。天气切片已从“保存 ToolResult”推进到“服务重启后从 completed ToolResult 恢复最终总结”：恢复实例会先被未过期 lease 阻断，过期后以递增 fencing token 接管，并通过持久化 `AcceptanceResult` 独立检查地点、数据时间、来源和结果事实；该能力只覆盖一个已证明的只读稳定点，不等于通用持久工作流或生产级多实例协调。项目同时增加 C2 文生图与多轮单图编辑开发切片：普通新请求默认提交 `operation=auto`，Runtime 从当前附件和有界会话 routing snapshot 形成候选，再复用 AI SDK `Output.object` 返回 operation/confidence/useActiveImage/relevantMessageIds；Runtime 校验证据并选择实际源图，图片生成或编辑只有在候选合法且 `confidence >= 0.85` 时自动执行，不确定或分类失败回退普通对话。受控源图上传、会话级图片资产、操作级默认模型、结果校验、幂等重放、取消、连续版本、无附件活动图片续接和 JSON/SSE 交付已经通过 fake 回归。`image.generate` 已用 `gpt-image-2` 跑通一次真实模型 happy-path smoke；旧 `/images/edits` 路径连续三次被账号池拒绝后，`image.edit` 改用 Responses `image_generation(action=edit)`，并于 2026-08-15 用当前 `gpt-5.6` 配置跑通两轮 A→B→C 真实编辑 smoke。同日新增 `scenarios/runtime-routing/` 双模式 Runner：确定性链路通过，真实分类 smoke 的 4/4 个有效样本中，operation、源图引用/字节、视觉输入、编辑 Prompt 历史、证据和活动图片均命中且错误图片副作用为 0；由于样本少于 30，该结果只属于 `observation-only`，不构成发布准确率。内容审核、完整路由样本矩阵、精确尺寸、成本基线、取消/超时/错误矩阵、正式对象存储和图片理解资产输入仍未完成。具体等级与边界见[运行可靠性与结果验收](./docs/runtime-reliability-and-acceptance.md)和[场景化输入到大模型交互链路](./docs/scenario-interaction-chains.md)。
 
 ## 本地启动
 
@@ -83,6 +83,10 @@ UPSTREAM_API_KEY2=你的图片模型真实key
 LITELLM_MASTER_KEY=换成你自己的本地访问key
 LITELLM_MODEL=gpt-5.6
 LITELLM_IMAGE_MODEL=gpt-image-2
+LITELLM_IMAGE_EDIT_MODEL=gpt-5.6
+LITELLM_CHAT_MODELS=gpt-5.6
+LITELLM_VISION_MODELS=gpt-5.6
+LITELLM_IMAGE_EDITING_MODELS=gpt-5.6
 ```
 
 再确认 `config.yaml` 里的模型映射：
@@ -91,15 +95,17 @@ LITELLM_IMAGE_MODEL=gpt-image-2
 model_list:
   - model_name: gpt-5.6
     litellm_params:
-      model: openai/gpt-5.6
+      model: openai/gpt-5.6-sol
       api_key: os.environ/UPSTREAM_API_KEY1
+      num_retries: 0
   - model_name: gpt-image-2
     litellm_params:
       model: openai/gpt-image-2
       api_key: os.environ/UPSTREAM_API_KEY2
+      num_retries: 0
 ```
 
-`model_name` 是 Runtime 使用的 LiteLLM 平台别名，`model` 是中转站实际支持的上游模型名。`LITELLM_MODEL` 与 `LITELLM_IMAGE_MODEL` 必须分别对应 `config.yaml` 中的对话和图片别名；真实模型名、上游地址和 key 只保留在 LiteLLM 配置与服务端 `.env`，不会进入浏览器或 Run 请求。
+`model_name` 是 Runtime 使用的 LiteLLM 平台别名，`model` 是中转站实际支持的上游模型名。当前稳定别名 `gpt-5.6` 映射到上游实际存在且已通过视觉 smoke 的 `gpt-5.6-sol`。`LITELLM_MODEL`、`LITELLM_IMAGE_MODEL` 与 `LITELLM_IMAGE_EDIT_MODEL` 分别声明对话、图片生成和 Responses 图片编辑默认别名；`LITELLM_CHAT_MODELS`、`LITELLM_VISION_MODELS` 与 `LITELLM_IMAGE_EDITING_MODELS` 声明静态操作能力，不能只凭 `/v1/models` 可见性推断。承载图片副作用的两个映射均固定 `num_retries: 0`，避免 LiteLLM 在不确定失败后绕过 Runtime 的单次图片尝试边界。真实模型名、上游地址和 key 只保留在 LiteLLM 配置与服务端 `.env`，不会进入浏览器或 Run 请求。
 
 启动：
 
@@ -161,7 +167,8 @@ Agent Runtime 和模型连通性测试使用以下服务端配置：
 Base URL: http://localhost:4000/v1
 API Key: 你的 LITELLM_MASTER_KEY
 Chat model: gpt-5.6
-Image model: gpt-image-2
+Image generation model: gpt-image-2
+Image editing model: gpt-5.6
 ```
 
 这些配置不用于浏览器或普通业务客户端直连；业务请求统一通过 Agent Runtime API 进入平台。
@@ -176,6 +183,10 @@ Image model: gpt-image-2
 - 单张样本的提示词一致性和图片有效性观察通过，但内容安全、真实取消、超时、错误矩阵与多样本质量评测仍是 TODO。
 
 因此，`imageOptions.size` 当前是平台允许提交的请求值，不是上游精确输出尺寸承诺。模型能力目录和尺寸归一化完成前，渠道应以 `image_asset.width` / `height` 的实际返回值为准。
+
+图片编辑使用独立 `image.edit` 操作和操作级编辑默认模型。浏览器先把一张 PNG、JPEG 或 WebP 本地图片上传为当前会话拥有的 `source=uploaded` 资产，再只把稳定 `assetId` 提交给 Run；Runtime 读取源图后由 GatewayClient 的受控 Adapter 经 LiteLLM `/v1/responses` 发起 `image_generation(action=edit)` 请求。成功结果保存为新的 `source=edited` 资产并自动成为下一轮当前源图，历史生成或编辑结果也提供“继续编辑”；每轮创建新 Run 和新资产，旧版本保持不变。当前上传上限为 5 MiB，不支持遮罩、局部重绘、多图融合或远程 URL 导入。
+
+2026-08-01 使用无敏感内容的合成 PNG 连续执行三次真实 `/images/edits` 请求，均被上游账号池以无兼容账号拒绝；该证据触发了方案重评。2026-08-02 按官方会话式图片编辑建议执行 Responses 对照 PoC：同一 `gpt-5.6` 别名的纯文本 `/v1/responses` 返回 `200 completed`，加入一张合成图和 `image_generation(action=edit)` 后返回 502，上游拒绝图片工具访问。2026-08-15 使用当前配置重新验证：Demo 普通发送将单张受控图片和明确优化指令以 `operation=auto` 交给 Runtime，并解析为 `image.edit`，两次单尝试分别约 70.7 秒和 69.2 秒完成；第二轮用户消息只引用第一轮输出资产，A/B/C 三张 PNG 的哈希各不相同，刷新会话后两个输出仍可读取。同日对无业务信息合成图执行协议字段对照：`action=edit` 与增加 `tool_choice` 分别约 33.5 秒和 30.7 秒返回 200 图片结果，增加 `max_tool_calls=1` 后当前中转站返回 502；因此 Adapter 保留强制工具选择，并通过唯一 completed 图片结果解析收口，不发送该不兼容字段。以上证据补齐当前配置的真实多轮 happy path 和协议兼容边界，但样本量、内容安全、质量和成本仍不足以支撑生产可用声明。
 
 ## 交互 Demo
 
@@ -233,24 +244,25 @@ LITELLM_GOVERNANCE_ENABLE_REAL_RUNTIME_SMOKE=true node scripts/test-runtime-gove
 
 当前切片只验证一个本地应用身份。动态多租户 key 映射、正式 secret manager、轮换、撤销、Redis 多实例限流和 provider 账单对账仍未完成。
 
-会话输入区的模型选择器读取 `GET /api/gateway/status` 返回的 `models`，这些值是当前 `LITELLM_MASTER_KEY` 在 LiteLLM `/v1/models` 中可见的稳定别名，不是真实上游模型配置。当前 `config.yaml` 分别配置 `gpt-5.6` 和 `gpt-image-2`；对话模式显示对话别名，生图模式固定显示服务端 `LITELLM_IMAGE_MODEL` 对应的图片别名。需要更多选项时，先在 LiteLLM `model_list` 中增加对应别名和上游映射。
+会话输入区同时读取 `GET /api/gateway/status` 的 `models`、`defaultModels` 和 `modelCapabilities`。`models` 只表示当前 Runtime key 在 LiteLLM `/v1/models` 中可见的稳定别名，`defaultModels` 分别声明对话、图片生成和图片编辑默认别名，能力分组按 `chat`、`vision`、`imageGeneration` 和 `imageEditing` 声明服务端操作兼容策略；目录可见不等于能力兼容或上游账号健康。当前图片生成使用 `gpt-image-2`，图片编辑使用支持 Responses 工具调用的 `gpt-5.6` 平台别名。增加模型时必须同时更新 LiteLLM 映射、Runtime key 模型白名单和对应服务端能力策略。
 
 Demo 输入区支持：
 
-- 运行模式：显式选择“对话”或“生图”；生图固定使用服务端 `LITELLM_IMAGE_MODEL`，不会靠 Prompt 猜测，也不会允许浏览器选择真实 provider 参数。
+- 默认路由：普通输入区不展示模式或模型选择器，只提交正文、当前附件和 `operation=auto`。Runtime 从服务端消息/Run/资产事实派生活动图片：无当前附件且存在活动图片时从对话/生图/编辑中分类，无活动图片时从对话/生图中分类，恰好一张当前会话受控图片时从对话/编辑中分类；远程图片、文档或多图固定走对话。图片操作必须达到 `0.85` 置信度；编辑成功后的最新结果成为服务端活动图片，普通聊天和刷新不会依赖浏览器缓存清空它。
 - 正文：直接输入问题或指令。
 - 图片：可以上传本地图片，也可以粘贴图片 URL；Demo Server 会按 OpenAI-compatible 的 `image_url` 多模态格式转发。
 - 文档链接：可以粘贴一个或多个链接，Demo Server 会把它们作为文本上下文附在用户消息里。
 - 消息引用：可以引用当前会话中的用户或助手消息；渠道只提交稳定 `messageId`，Runtime 从 SQLite 事实源解析正文。
-- 模型选择：Sender 内选择当前 Run 使用的 LiteLLM 模型别名；未选择时回退服务端 `LITELLM_MODEL`，token counter 与模型生成使用同一别名。
+- 模型选择：普通 Composer 不提交模型别名，Runtime 按解析后的真实 operation 使用服务端 `defaultModels`；历史图片继续编辑与恢复入口也只使用服务端能力兼容的操作级默认别名。Runtime 和 GatewayClient 会独立校验，错配以 `model_capability_mismatch` 在生成调用前拒绝。
 - 多会话工作台：Runtime 使用 SQLite 持久化会话和完整原始消息；渠道支持标题搜索、今天/昨天/最近 7 天/更早分组、当前/归档/全部筛选、重命名与独立归档。归档不删除事实，取消归档也不会重新打开 `closed` 会话。
 - 流式 Markdown：Runtime 使用 `streamText` 或 `ToolLoopAgent.stream()` 生成文本增量，经 `RunEventSink -> Demo Server SSE Adapter` 映射为 POST SSE；Runtime 不依赖 SSE 协议。天气候选在系统验收前只暂存在 Runtime，验收通过并提交终态后才发布；其他普通回答继续实时透传，最终都只落一条完整助手消息。
-- 停止生成：生成期间调用 Runtime 取消端点，中止模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
-- 图片产物：`image.generate` 固定单张和平台尺寸白名单，SDK 自动重试关闭；模型结果通过真实 MIME、字节和尺寸校验后写入 `DEMO_IMAGE_ASSET_DIR`，SQLite 只保存 `image_asset` 元数据与 Message/Run 引用，页面通过受控会话端点展示和下载。
+- 停止生成：收到 `run-started` 前按 `requestId`、之后按 `runId` 调用显式取消端点，中止分类、模型调用、退避和后续重试；已有增量显示并保存为 `interrupted`。
+- 图片资产：`image.generate` 固定单张和平台尺寸白名单；`image.edit` 要求一张当前会话受控源图。两者都关闭 SDK 自动重试，模型结果通过真实 MIME、字节和尺寸校验后写入 `DEMO_IMAGE_ASSET_DIR`；SQLite 只保存 `image_asset` 元数据与 Message/Run 引用，页面通过受控会话端点展示和下载。
 - 发送门禁：本地会话先独立加载，模型网关状态在后台刷新；网关未确认可达时仍可浏览和整理会话、编辑草稿和附件，但禁止提交无效 Run。该探测只验证 LiteLLM `/v1/models`，不代表上游模型生成一定可用。
 - 失败反馈与恢复：最近一次失败 Run 会在对应用户消息后说明鉴权、限流、超时、模型不可用或上游服务异常，并给出处理建议；页面不展示 provider 原始错误正文。失败可直接重试或编辑后发送，最后一条正常助手回答可重新生成，中断回答可继续生成；每次动作都使用新的幂等标识，并以 `sourceRunId + recoveryMode` 记录来源而不修改历史。
 - 启动恢复：Demo Server 监听端口前扫描 SQLite 中遗留的 `running` Run。只有 completed 只读 ToolResult、完整恢复元数据、无助手消息且原截止时间未耗尽时继续最终总结；其他遗留 Run 使用稳定原因码明确失败，不猜测或重放图片、写操作和未知状态。
 - 结果验收：天气模型输出先是候选。Runtime 根据 SQLite ToolResult 独立检查地点、数据时间、来源和至少一个结果事实；accepted 结果与助手消息、Run 完成同事务提交，rejected 结果不保存候选正文。普通对话当前返回 `acceptance=null`，不宣称已经系统验收。
+- 图片失败语义：Responses 图片编辑协议或工具权限不可用时返回独立安全错误，不展示 provider 原始正文或上游分类码。`retry / regenerate / continue` 继承来源 Run 已持久化的真实 operation，不再执行意图分类；历史图片上的“继续编辑”仍创建新的普通 `image.edit` Run。
 - 多端同步：同一会话通过独立的 SSE 事件游标刷新已持久化事实；客户端不再保存或提交历史事实源。
 - 消息操作：已持久化消息不提供删除或原位编辑；桌面在消息悬停或操作聚焦时显示快捷操作，移动端收敛为单一操作菜单。助手 Markdown 支持整段复制、代码块复制、回答标题导航、安全外链、移动端表格横向滚动和下载 `.md`。
 - 会话导航：桌面会话区左侧将用户发起的消息聚合为居中的等长锚点；悬停时刻度横向展开并预览摘要，点击后按稳定 `messageId` 定位并高亮原消息，助手回复不生成锚点。
@@ -265,7 +277,7 @@ Demo 输入区支持：
 
 注意：LiteLLM Proxy 只负责转发请求，不会自动打开文档链接、读取私有文档，也不会自动提取文档里的图片。如果要让模型处理文档里的图片，需要把图片单独上传，或提供可公开访问的图片直链，并确保当前上游模型支持视觉输入。
 
-当前图片生成已完成一次真实模型 smoke。后续更换图片模型、上游映射或 key 后，应重新启动 LiteLLM 与 Demo，在输入区切到“生图”并提交一条安全提示词；只有页面返回可打开的图片资产、会话刷新后仍可读取，才算新配置的 happy-path 复验通过。
+当前图片生成已完成一次真实 happy path，Responses 图片编辑也已完成两轮 A→B→C 真实 happy path；旧 Image API 编辑路径仍保留三次账号池拒绝的历史证据。更换上游映射、key 或图片模型版本后，应重新启动 LiteLLM 与 Demo，分别复验“生图”和至少连续两轮“图生图”：只有 A→B→C 都返回可打开图片、第二轮确实以 B 为源且会话刷新后 A/B/C 仍可读取，才算新配置继续具备真实生成与多轮编辑 happy path；失败或未执行的模式必须重新标记为 TODO。
 
 ## C1 ChainTrace 后端（预留，默认关闭）
 
@@ -293,41 +305,37 @@ Demo Server API 按层级暴露：
 
 | API | 说明 |
 | --- | --- |
-| `GET /api/gateway/status` | 检查 LiteLLM `/v1/models` 可达性，并返回 gateway base url、默认对话别名、服务端图片别名和当前 key 可见的 `models` |
+| `GET /api/gateway/status` | 检查 LiteLLM `/v1/models` 可达性，并返回 gateway base url、默认别名、可见 `models` 与四组静态 `modelCapabilities`；不代表上游账号健康 |
 | `GET /api/runtime/conversations` | 列出持久化会话 |
 | `POST /api/runtime/conversations` | 创建会话 |
 | `GET /api/runtime/conversations/{id}` | 查询完整消息、结构化记忆、版本状态，以及 `latestRun` 可空的 `acceptance` 事实 |
 | `PATCH /api/runtime/conversations/{id}` | 更新 1-80 字符标题或独立归档状态，不改变会话生命周期 |
-| `POST /api/runtime/conversations/{id}/runs` | 按显式 `operation` 发送当前输入并执行幂等 Run；图片结果通过 `artifacts` 返回 |
+| `POST /api/runtime/conversations/{id}/image-assets` | 以原始二进制上传一张 PNG、JPEG 或 WebP 源图，校验后登记为当前会话拥有的 `image_asset`；上传本身不创建 Run |
+| `POST /api/runtime/conversations/{id}/runs` | 普通新请求默认按 `operation=auto` 解析并持久化真实 operation；显式兼容和恢复请求保持原 operation，图片结果通过 `artifacts` 返回 |
 | `POST /api/runtime/conversations/{id}/runs/stream` | 通过 SSE 接收 `run-started`、文本 `text-delta` 或图片 `artifact-created`，再以 `completed`、`cancelled` 或 `error` 收口 |
+| `POST /api/runtime/conversations/{id}/run-requests/{requestId}/cancel` | 在 `run-started` 前按请求身份中止排队或结构化分类；不创建伪 Run |
 | `POST /api/runtime/conversations/{id}/runs/{runId}/cancel` | 主动取消模型调用与后续重试，并返回最终 Run 和可选中断消息 |
-| `GET /api/runtime/conversations/{id}/image-assets/{assetId}/content` | 校验资产属于当前会话后读取生成图片内容，不暴露物理路径 |
+| `GET /api/runtime/conversations/{id}/image-assets/{assetId}/content` | 校验资产属于当前会话后读取上传、生成或编辑图片内容，不暴露物理路径 |
 | `POST /api/runtime/conversations/{id}/close` | 完成最终 checkpoint 并结束会话 |
 | `GET /api/runtime/conversations/{id}/events` | 订阅多端增量事件流 |
 
-Run 请求包含模型别名、当前输入和幂等标识；恢复动作额外携带可选来源：
+普通新 Run 默认不提交模型别名，由 Runtime 解析真实 operation 后选择服务端默认模型：
 
 ```json
 {
-  "operation": "conversation.chat",
+  "operation": "auto",
   "requestId": "request-uuid",
   "clientMessageId": "message-uuid",
-  "model": "gpt-5.6",
   "message": "当前问题",
   "imageUrls": [],
   "documentUrls": [],
-  "sourceRunId": "可选的来源 Run ID",
-  "recoveryMode": "retry | regenerate | continue",
-  "references": [
-    {
-      "type": "conversation_message",
-      "messageId": "当前会话中的消息 ID"
-    }
-  ]
+  "references": []
 }
 ```
 
-图片生成使用独立操作与服务端图片模型别名，不接受附件、引用或 provider 专属参数：
+`retry / regenerate / continue` 恢复动作额外携带 `sourceRunId` 和 `recoveryMode`，并继承来源 Run 已持久化的真实 operation；恢复请求不得使用 `auto` 重新分类。
+
+需要强制文生图的显式兼容调用仍可提交独立 operation；它不接受附件、引用或 provider 专属参数：
 
 ```json
 {
@@ -342,7 +350,29 @@ Run 请求包含模型别名、当前输入和幂等标识；恢复动作额外�
 }
 ```
 
-当前只开放 `conversation_message` 引用。Runtime 会校验消息属于当前会话，并从 SQLite 事实源读取正文；渠道重复提交的引用正文不会被信任。`retry`、`regenerate`、`continue` 的来源状态必须分别为 `failed`、`completed`、`cancelled`，恢复动作仍创建新 Run。显式取消后，已有文本增量时最多保存一条 `interrupted` 助手消息，没有增量时不创建空消息；关闭浏览器或 SSE 断线不等于取消。
+普通图片优化先调用上面的图片资产上传入口，再以默认 `auto` 提交一张当前会话资产的稳定引用和文字指令；Run JSON 不携带浏览器模型、源图片二进制、MIME、尺寸或物理地址：
+
+```json
+{
+  "operation": "auto",
+  "requestId": "image-edit-request-uuid",
+  "clientMessageId": "image-edit-message-uuid",
+  "message": "保留构图并改成蓝色水彩风格",
+  "references": [
+    {
+      "type": "image_asset",
+      "assetId": "当前会话上传返回的资产 ID"
+    }
+  ],
+  "imageOptions": {
+    "size": "1024x1024"
+  }
+}
+```
+
+自动模式的附件与会话矩阵是硬约束：恰好一张当前会话受控 `image_asset` 且没有其他附件时只候选 `conversation.chat / image.edit`，该显式图片覆盖历史活动图片；无当前附件但存在活动图片时候选 `conversation.chat / image.generate / image.edit`；没有活动图片时只候选 `conversation.chat / image.generate`；任意远程图片 URL、文档、多图或消息引用只允许不继承活动图片的对话。分类模型只能返回 `operation / confidence / useActiveImage / relevantMessageIds`，Runtime 会校验历史证据、引用所有权和资产状态，从 SQLite 事实选择源图并组装实际编辑指令；渠道重复提交的正文、MIME、尺寸、URL 或二进制不会被信任。Run 持久化真实 operation、实际图片引用和脱敏 `intentDecision`，不保存 provider 原始分类文本或隐藏推理。
+
+继续编辑上一版图片属于新的显式 `image.edit` Run：使用新 requestId/clientMessageId，并把上一版输出 assetId 作为唯一源图，不设置 recovery 字段。`retry`、`regenerate`、`continue` 的来源状态必须分别为 `failed`、`completed`、`cancelled`，恢复动作继承来源 Run 的真实 operation 且不重新分类。显式取消后，已有文本增量时最多保存一条 `interrupted` 助手消息，没有增量时不创建空消息；分类期按 requestId 取消时不创建消息或 Run。关闭浏览器或 SSE 断线不等于取消。
 
 ## Runtime 验证
 
@@ -373,13 +403,22 @@ npm run eval:runtime-scenarios:real -- --model <fixed-model-alias>
 
 双模式的 setup 都使用固定行为模型构造 ToolResult 已提交的稳定故障点。`deterministic` 的 evaluation 只证明 Runtime、SQLite、恢复和判分链路；`real-model` 的 evaluation 才经过现有 `GatewayClient -> AI SDK -> LiteLLM -> 上游模型`。真实调用失败直接失败，不回退固定模型。报告分别写入 `.data/evaluations/runtime-scenarios-deterministic.json` 和 `.data/evaluations/runtime-scenarios-real-model.json`；协议与扩展方式见 [`scenarios/runtime/README.md`](./scenarios/runtime/README.md)。
 
+单独验证会话上下文驱动的智能 operation 路由。确定性模式使用 fixture 分类器和 fake 业务后端；真实模式只让 Intent Router 经过真实 GatewayClient，聊天和图片执行仍为 fake，避免把语义识别与图片模型成功率混在一起：
+
+```bash
+npm run eval:runtime-routing:deterministic
+npm run eval:runtime-routing:real -- --model <fixed-model-alias>
+```
+
+报告分别写入 `.data/evaluations/runtime-routing-deterministic.json` 和 `.data/evaluations/runtime-routing-real-model.json`。核心指标包括 operation、源图片引用与实际字节、视觉模型图片输入、编辑 Prompt 历史、路由证据、活动图片和错误图片副作用率；真实有效分类样本少于 30 时固定标记为 `observation-only`。
+
 只检查全局架构边界：
 
 ```bash
 npm run test:architecture
 ```
 
-只验证 C2 图片调用、结果校验、资产落存、幂等、取消和超时边界：
+只验证 C2 图片生成/编辑调用、上传与结果校验、资产落存、权限、幂等、取消和超时边界：
 
 ```bash
 npm run test:images
@@ -403,14 +442,16 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 
 ## 配置与密钥
 
-- `gpt-5.6` 和 `gpt-image-2` 是当前 LiteLLM 对话与图片模型别名；Runtime 分别通过 `LITELLM_MODEL` 和 `LITELLM_IMAGE_MODEL` 使用，浏览器和普通业务客户端不接触真实上游配置。
+- `gpt-5.6` 和 `gpt-image-2` 是当前 LiteLLM 对话/编辑与图片生成模型别名；Runtime 通过 `LITELLM_MODEL`、`LITELLM_IMAGE_MODEL` 和 `LITELLM_IMAGE_EDIT_MODEL` 分别选择对话、图片生成与 Responses 图片编辑模型，浏览器和普通业务客户端不接触真实上游配置。
 - `model_list[].litellm_params.model` 是 LiteLLM 转发给中转站的真实模型名。中转站是 OpenAI-compatible 时，通常保留 `openai/` 前缀。
 - `UPSTREAM_API_BASE` 通常要带 `/v1`。
 - `UPSTREAM_API_KEY1` 和 `UPSTREAM_API_KEY2` 分别是当前对话、图片模型的上游真实 key，只应放在服务端 `.env`。
 - `LITELLM_MASTER_KEY` 是 Runtime 和模型连通性诊断访问内部模型网关的服务端凭据，不提供给浏览器或普通业务客户端；部署前请改成强随机值。
 - `LITELLM_BASE_URL` 是 Runtime 使用的 LiteLLM Proxy 根地址，默认 `http://localhost:4000`，不要追加 `/v1`。
 - `LITELLM_MODEL` 是 Runtime 请求的对话模型别名；当前示例配置为 `gpt-5.6`。
-- `LITELLM_IMAGE_MODEL` 是 Runtime 请求的图片模型别名；当前示例配置为 `gpt-image-2`，必须与 `config.yaml` 的图片 `model_name` 完全一致。
+- `LITELLM_IMAGE_MODEL` 是 Runtime 请求的图片生成模型别名；当前示例配置为 `gpt-image-2`，必须与 `config.yaml` 的图片 `model_name` 完全一致。
+- `LITELLM_IMAGE_EDIT_MODEL` 是 Runtime 经 `/v1/responses` 请求图片编辑的主线模型别名；当前示例配置为 `gpt-5.6`，未配置时回退 `LITELLM_MODEL`。
+- `LITELLM_CHAT_MODELS`、`LITELLM_VISION_MODELS` 与 `LITELLM_IMAGE_EDITING_MODELS` 是逗号分隔的服务端能力别名；前两者未配置时回退 `LITELLM_MODEL`，编辑能力未配置时回退 `LITELLM_IMAGE_EDIT_MODEL`。含图片对话必须同时属于 `chat` 与 `vision`，图片生成固定使用 `LITELLM_IMAGE_MODEL`，图片编辑模型还必须属于 `imageEditing` 能力集合。
 - `DEMO_DATABASE_PATH` 是 Runtime SQLite 文件，默认 `.data/ai-platform.sqlite`。
 - `DEMO_IMAGE_ASSET_DIR` 是开发阶段图片二进制目录，默认 `.data/image-assets`；SQLite 只保存资产元数据和引用。
 - `DEMO_CONTEXT_HIGH_WATERMARK_RATIO`、`DEMO_CONTEXT_LOW_WATERMARK_RATIO` 和 `DEMO_CONTEXT_HARD_WATERMARK_RATIO` 控制压缩水位。
@@ -445,6 +486,9 @@ node .agents/skills/docs/context-memory-evaluation/scripts/run-deterministic-eva
 | R0-R4 执行可靠性、A0-A4 结果可信度和场景扩展模板 | `docs/runtime-reliability-and-acceptance.md` |
 | AI SDK Core v7 当前采用、延后与不采用的 API 边界 | `docs/ai-sdk-core-alignment.md` |
 | C2 图片理解与生成的场景归属、模型调用和资产边界 | `docs/decisions/2026-07-31-c2-image-understanding-and-generation-boundary.md` |
+| Runtime 智能默认 operation 的附件矩阵、置信度和恢复边界 | `docs/decisions/2026-08-02-runtime-smart-operation-routing.md` |
+| C2 多轮图片编辑采用 Responses 图片工具的协议、资产和权限边界 | `docs/decisions/2026-08-02-c2-multi-turn-image-editing-responses-path.md` |
+| C2 单图编辑 AI SDK `/images/edits` 历史路径 | `docs/decisions/2026-07-31-c2-image-editing-ai-sdk-path.md` |
 | 会话、结构化记忆、上下文规划、并发和评测 | `docs/context-management.md` |
 | 函数注释、数据结构、设计模式和设计原则 | `docs/coding-standards.md` |
 | 项目级技术约定 | `openspec/project.md` |

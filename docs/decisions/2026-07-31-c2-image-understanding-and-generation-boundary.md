@@ -54,7 +54,7 @@
 
 | 假设 | 验证方法 | 输入与版本 | 结果 | 证据位置 |
 | --- | --- | --- | --- | --- |
-| 现有链路具备图片理解传输基础 | 运行 GatewayClient 多模态映射测试并核对 Runtime 输入契约 | `ai@7.0.37`、`@ai-sdk/openai-compatible@3.0.14`、图片 URL 与 data URL | 已通过；当前只证明传输，不证明媒体治理和视觉质量 | `scripts/test-gateway-client.mjs`、`src/runtime/message-builder.mjs` |
+| 现有链路具备图片理解传输与真实模型调用基础 | 运行 GatewayClient 多模态映射测试，并通过完整 Runtime 主链执行真实视觉 smoke | `ai@7.0.37`、`@ai-sdk/openai-compatible@3.0.14`、图片 data URL、`gpt-5.6 -> openai/gpt-5.6-sol` | fake 映射与两次真实视觉请求已通过；证明当前映射可完成图片理解，不证明受控资产治理和视觉质量基线 | `scripts/test-gateway-client.mjs`、`src/runtime/message-builder.mjs`、本地 SQLite Run 证据 |
 | 当前 SDK 可承载独立图片模型调用 | 核对锁定依赖，运行 fake LiteLLM 协议测试与真实 Runtime smoke | `ai@7.0.37`、`@ai-sdk/openai-compatible@3.0.14`、`gpt-image-2` | 静态、fake HTTP 与真实 happy-path 已通过；真实异常矩阵仍待完成 | `scripts/test-gateway-client.mjs`、`src/gateway/gateway-client.mjs`、本地 SQLite Run 证据 |
 | C2 可复用一个稳定图片资产类型 | 运行生成、落盘、读取和会话恢复测试 | `image_asset` 生成产物 | 生成侧已实现；理解输入、多轮引用和正式生命周期仍待实现 | `scripts/test-image-generation.mjs`、`src/storage/conversation-store.mjs` |
 | 生图可继承现有 Run 重放语义 | 模拟完成、取消、资产写入失败和同一 `requestId` 重放 | 单张文生图、无 provider 幂等假设 | 已通过 fake 回归；同 requestId 不重复调用，图片模型固定单次尝试 | `scripts/test-image-generation.mjs`、`scripts/test-streaming-http.mjs` |
@@ -104,3 +104,11 @@ C1 渠道继续提交会话 Run；渠道显式选择图片操作，或者未来�
 - 剩余边界：真实模型取消/超时/错误矩阵、图片理解资产输入、审核方案、资产保留期、正式对象存储、尺寸能力目录和成本阈值待定。
 - 文档与契约：本记录关联独立 OpenSpec change；实现时同步 `docs/scenario-interaction-chains.md`、`docs/ai-sdk-core-alignment.md`、README 和稳定 spec。
 - 重评条件：出现独立图片产品、跨项目资产复用、生产数据驻留要求、异步批量生图、图片编辑或独立扩缩容需求。
+
+## 2026-08-02 图片理解模型兼容补充
+
+- 图片理解继续走 `conversation.chat` 的多模态消息路径，必须选择同时属于 `chat` 与 `vision` 能力分组的语言模型；`gpt-image-2` 是图片生成/编辑别名，不得用于 Chat Completions 或图片理解。
+- 当前稳定对话别名 `gpt-5.6` 映射到上游真实模型 `openai/gpt-5.6-sol`。修正映射后，1x1 测试 PNG 和一张真实架构截图均通过 `Agent Runtime -> GatewayClient -> AI SDK -> LiteLLM` 单次完成图片内容识别。
+- `/v1/models` 中出现别名只证明路由对当前 key 可见，不证明该别名具备 `chat`、`vision`、`imageGeneration` 或 `imageEditing` 能力。Runtime 必须在模型调用前按 operation 和输入模态校验能力；错配统一返回 `model_capability_mismatch`。
+- 图片模型的 `imageGeneration` / `imageEditing` 声明只描述端点与操作兼容边界，不代表当前上游账号池持续健康。既有证据包括文生图真实 happy path、旧 `/images/edits` 三次无兼容账号、2026-08-02 Responses 图片工具拒绝，以及 2026-08-15 当前配置两轮真实编辑成功；映射或 key 变化后仍需重复 smoke，不能由能力声明直接推断可用。
+- 真实视觉 smoke 只补齐当前 data URL 图片理解主路径；受控 `image_asset` 理解输入、多轮引用、媒体安全、稳定视觉 fixture 和质量基线仍是后续边界。

@@ -8,36 +8,93 @@
 
 ### Requirement: OpenAI-compatible proxy
 
-系统 SHALL 通过 LiteLLM Proxy 暴露 OpenAI-compatible API，供 Agent Runtime 和本地模型连通性诊断访问 gateway。
+系统 SHALL 通过 LiteLLM Proxy 暴露 OpenAI-compatible 对话、图片生成和图片编辑 API，供 Agent Runtime 与本地模型连通性诊断访问 gateway；上游凭据只存在于模型网关服务端。
 
 #### Scenario: Gateway receives chat completions
 
 - **GIVEN** LiteLLM Proxy 已启动
-- **AND** `.env` 提供了 `LITELLM_MASTER_KEY`、`UPSTREAM_API_BASE` 和 `UPSTREAM_API_KEY`
+- **AND** `.env` 提供了 `LITELLM_MASTER_KEY`、`UPSTREAM_API_BASE` 和对话模型使用的 `UPSTREAM_API_KEY1`
 - **WHEN** Agent Runtime 或模型连通性测试请求 `POST /v1/chat/completions`
 - **AND** 请求使用 `Authorization: Bearer LITELLM_MASTER_KEY`
 - **THEN** 系统 SHALL 将请求转发到配置的上游 OpenAI-compatible API
 - **AND** 系统 SHALL 返回 OpenAI-compatible 响应
 
+#### Scenario: Gateway receives image generations
+
+- **GIVEN** LiteLLM Proxy 已启动且 `.env` 提供了图片模型使用的 `UPSTREAM_API_KEY2`
+- **WHEN** Agent Runtime 经 GatewayClient 请求 `POST /v1/images/generations` 并使用 `LITELLM_MASTER_KEY`
+- **THEN** LiteLLM SHALL 使用图片别名对应的上游映射和服务端 key 转发请求
+- **AND** Runtime、渠道和浏览器 SHALL NOT 获取 `UPSTREAM_API_KEY2`
+
+#### Scenario: Gateway receives image edits
+
+- **GIVEN** LiteLLM Proxy 已启动且编辑模型别名对应的上游支持 Responses 图片工具
+- **WHEN** Agent Runtime 经 GatewayClient 请求 `POST /v1/responses`，携带一张受控输入图片和 `image_generation.action=edit`，并使用 `LITELLM_MASTER_KEY`
+- **THEN** LiteLLM SHALL 使用编辑别名对应的上游映射和服务端 key 转发请求
+- **AND** Runtime、渠道和浏览器 SHALL NOT 获取真实上游 key 或地址
+
 ### Requirement: Model alias routing
 
 系统 SHALL 向 Runtime GatewayClient 和模型连通性诊断提供稳定模型别名，并在模型网关服务端配置中映射到真实上游模型。
 
-#### Scenario: Runtime or diagnostics uses chat-default
+#### Scenario: Runtime or diagnostics uses configured chat alias
 
-- **GIVEN** `config.yaml` 中存在 `model_name: chat-default`
-- **WHEN** Runtime GatewayClient 或 `scripts/test-chat.sh` 发送 `model: chat-default`
+- **GIVEN** `config.yaml` 中存在服务端 `LITELLM_MODEL` 对应的模型别名
+- **WHEN** Runtime GatewayClient 或 `scripts/test-chat.sh` 发送当前 `LITELLM_MODEL`
 - **THEN** LiteLLM SHALL 使用 `litellm_params.model` 指定的真实模型调用上游
 - **AND** Runtime 和诊断脚本不需要知道真实上游模型名
 
-#### Scenario: Browser selects a gateway-visible model alias
+#### Scenario: Current stable chat alias maps to a supported upstream model
 
-- **GIVEN** LiteLLM `/v1/models` 返回当前服务端 key 可见的模型别名
-- **WHEN** 浏览器在会话 Sender 中选择一个别名并通过 Run 请求提交 `model`
-- **THEN** Runtime SHALL 校验并使用该别名执行当前 Run 的 token counter 和模型生成
+- **GIVEN** `config.yaml` 声明 `model_name: gpt-5.6` 且 `litellm_params.model: openai/gpt-5.6-sol`
+- **AND** 服务端配置 `LITELLM_MODEL=gpt-5.6`
+- **WHEN** Runtime 使用默认对话别名调用 LiteLLM
+- **THEN** LiteLLM SHALL 把稳定平台别名 `gpt-5.6` 路由到上游 `gpt-5.6-sol`
+- **AND** 渠道、Run 请求和普通业务客户端 SHALL NOT 依赖或获得真实上游模型 ID
+
+#### Scenario: Runtime uses operation-specific image aliases
+
+- **GIVEN** `config.yaml` 中存在服务端图片生成和编辑默认模型对应的平台别名
+- **WHEN** Runtime 执行 `image.generate`
+- **THEN** GatewayClient SHALL 使用 `LITELLM_IMAGE_MODEL` 对应的图片生成别名
+- **AND** Runtime 执行 `image.edit` 时 SHALL 使用 `LITELLM_IMAGE_EDIT_MODEL` 对应的 Responses 工具模型别名
+- **AND** LiteLLM SHALL 使用各别名对应的真实模型映射与服务端 key 调用上游
+
+#### Scenario: Browser selects an operation-compatible model alias
+
+- **GIVEN** LiteLLM `/v1/models` 返回当前服务端 key 可见的模型别名，且 Demo Server 已按能力策略完成分组
+- **WHEN** 浏览器为显式 operation 在会话 Sender 中选择一个别名并通过 Run 请求提交 `model`
+- **THEN** 渠道 SHALL 只展示当前 operation 对应能力分组中的别名
+- **AND** Runtime SHALL 独立校验并使用该别名执行当前 Run 的 token counter 和模型生成
 - **AND** GatewayClient SHALL 继续只把模型别名交给 LiteLLM，不得向浏览器返回真实上游模型配置
-- **AND** Run 请求未提供 `model` 时 SHALL 回退服务端 `LITELLM_MODEL`
+- **AND** `conversation.chat` 请求未提供 `model` 时 SHALL 回退服务端 `LITELLM_MODEL`
 - **AND** 非默认且不在当前网关可见模型集合中的别名 SHALL 被拒绝
+- **AND** `image.generate` 和 `image.edit` SHALL 分别使用服务端 `defaultModels` 中对应且网关可见的别名
+
+#### Scenario: Auto operation uses a server-side default alias
+
+- **WHEN** 浏览器提交 `operation=auto`
+- **THEN** 浏览器 SHALL NOT 提交模型别名，Runtime SHALL 拒绝携带 `model` 的 auto 请求
+- **AND** Runtime SHALL 在解析真实 operation 后使用 `defaultModels` 中对应且网关可见、能力兼容的平台别名
+- **AND** 分类模型 SHALL NOT 选择真实上游模型、provider 参数或图片选项
+
+#### Scenario: Runtime rejects a capability-incompatible conversation alias
+
+- **GIVEN** 请求中的模型别名存在于 LiteLLM `/v1/models`
+- **WHEN** `conversation.chat` 使用不属于 `chat` 分组的别名，或带图片输入时使用不属于 `vision` 分组的别名
+- **THEN** Runtime SHALL 在 GatewayClient 生成调用前返回 `400 model_capability_mismatch`
+- **AND** Runtime SHALL NOT 请求不兼容的 Chat Completions 端点
+- **AND** Runtime SHALL NOT 静默删除图片或退化为纯文本
+- **AND** JSON 与 POST SSE 公开错误 SHALL 使用 `model_capability_mismatch`，且不得包含 provider 原始响应正文或真实上游模型 ID
+
+#### Scenario: Runtime rejects a capability-incompatible image alias
+
+- **GIVEN** 请求中的模型别名存在于 LiteLLM `/v1/models`
+- **WHEN** `image.generate` 使用不属于 `imageGeneration` 分组的别名，或 `image.edit` 使用不属于 `imageEditing` 分组的别名
+- **THEN** Runtime SHALL 在 GatewayClient 生成调用前返回 `400 model_capability_mismatch`
+- **AND** Runtime SHALL NOT 请求不兼容的图片生成或图片编辑端点
+- **AND** Runtime SHALL NOT 静默切换为另一种 operation
+- **AND** JSON 与 POST SSE 公开错误 SHALL 使用 `model_capability_mismatch`，且不得包含 provider 原始响应正文或真实上游模型 ID
 
 ### Requirement: Server-side secret boundary
 
@@ -50,7 +107,7 @@
 - **THEN** 浏览器 SHALL 只请求 Demo Server
 - **AND** Demo Server 装配的 Agent Runtime SHALL 通过 GatewayClient 使用服务端的 `LITELLM_MASTER_KEY` 调用 LiteLLM
 - **AND** 浏览器 SHALL NOT 获取 `LITELLM_MASTER_KEY`
-- **AND** 浏览器 SHALL NOT 获取 `UPSTREAM_API_KEY`
+- **AND** 浏览器 SHALL NOT 获取 `UPSTREAM_API_KEY1` 或 `UPSTREAM_API_KEY2`
 
 ### Requirement: Model connectivity smoke test
 
@@ -59,11 +116,11 @@
 #### Scenario: Operator runs test-chat script
 
 - **GIVEN** 本地 LiteLLM Proxy 已启动
-- **AND** shell 环境中存在可用的 `LITELLM_MASTER_KEY`
+- **AND** shell 环境中存在可用的 `LITELLM_MASTER_KEY` 和 `LITELLM_MODEL`
 - **WHEN** 操作者执行 `bash scripts/test-chat.sh`
 - **THEN** 脚本 SHALL 请求 `/v1/chat/completions`
-- **AND** 请求体 SHALL 使用 `model: chat-default`
-- **AND** 脚本 SHALL 只使用 `LITELLM_MASTER_KEY`，不得读取或接触 `UPSTREAM_API_KEY`
+- **AND** 请求体 SHALL 使用当前 `LITELLM_MODEL`
+- **AND** 脚本 SHALL 只使用 `LITELLM_MASTER_KEY`，不得读取或接触 `UPSTREAM_API_KEY1` 或 `UPSTREAM_API_KEY2`
 - **AND** 该调用 SHALL 仅作为 LiteLLM、模型配置和上游连通性的诊断证据
 
 ### Requirement: Global business topology boundary
@@ -78,30 +135,35 @@
 
 ### Requirement: Gateway status endpoint
 
-Demo Server SHALL 提供状态检查接口，返回 LiteLLM 连接状态、gateway base url 和模型别名。
+Demo Server SHALL 提供状态检查接口，返回 LiteLLM 连接状态、gateway base url、按操作划分的默认模型和模型能力分组。
 
 #### Scenario: Browser checks status
 
 - **GIVEN** Demo Server 已启动
 - **WHEN** 浏览器请求 `GET /api/gateway/status`
 - **THEN** Demo Server SHALL 尝试请求 LiteLLM `/v1/models`
-- **AND** 响应 SHALL 包含 `ok`、`gatewayBaseUrl`、默认别名 `model` 和当前 key 可见的别名数组 `models`
-- **AND** 该状态 SHALL 只表示模型目录可达，不得表述为上游生成可用
+- **AND** 响应 SHALL 包含 `ok`、`gatewayBaseUrl`、兼容字段 `model` 与 `imageModel`、当前 key 可见的别名数组 `models`、`defaultModels` 和 `modelCapabilities`
+- **AND** `defaultModels` SHALL 分别声明 `conversation.chat`、`image.generate` 和 `image.edit` 的服务端默认平台别名
+- **AND** `modelCapabilities` SHALL 包含 `chat`、`vision`、`imageGeneration` 和 `imageEditing` 别名数组，每个数组只包含同时网关可见且由服务端策略声明兼容的稳定平台别名
+- **AND** `/v1/models` 可见性 SHALL NOT 被解释为模型支持任意输入模态或端点
+- **AND** 状态与能力分组 SHALL 只表示目录可达和静态操作兼容策略，不得表述为上游账号健康或真实生成可用
 
-### Requirement: AI SDK Runtime gateway client
+### Requirement: Runtime gateway client
 
-Agent Runtime SHALL 使用 AI SDK Core 和 `@ai-sdk/openai-compatible` 作为唯一模型生成客户端，并通过稳定 GatewayClient Port 调用 LiteLLM。
+Agent Runtime SHALL 只通过稳定 GatewayClient Port 调用 LiteLLM；GatewayClient SHALL 复用 AI SDK Core 与 `@ai-sdk/openai-compatible` 处理其已覆盖的模型协议，并用受控 Adapter 补齐锁定依赖未覆盖的 Responses 图片编辑协议。
 
 #### Scenario: Runtime calls the model through LiteLLM
 
 - **GIVEN** Runtime 已配置 LiteLLM 地址、模型别名和访问 key
 - **WHEN** Runtime 执行模型调用
-- **THEN** 系统 SHALL 使用 `@ai-sdk/openai-compatible` 请求 `LITELLM_BASE_URL/v1`
+- **THEN** 对话和图片生成 SHALL 使用 `@ai-sdk/openai-compatible` 请求 `LITELLM_BASE_URL/v1`
+- **AND** 图片编辑 SHALL 由 GatewayClient 内部 Responses Adapter 请求同一 `LITELLM_BASE_URL/v1`
 - **AND** SHALL 使用当前 Run 选择的模型别名；未选择时继续使用 `LITELLM_MODEL`
 - **AND** SHALL 继续使用 `LITELLM_MASTER_KEY`
 - **AND** SHALL NOT 读取 `UPSTREAM_API_KEY` 或绕过 LiteLLM
-- **AND** SHALL 禁用 AI SDK 内建自动重试，由平台统一重试执行器拥有唯一模型尝试预算
+- **AND** SHALL 禁用 SDK 或 Adapter 路径之外的内建自动重试，由平台统一重试执行器拥有唯一模型尝试预算
 - **AND** 默认一次模型生成 SHALL 最多尝试三次，包含首次调用和两次自动重试
+- **AND** `image.generate` 与 `image.edit` SHALL 固定单次模型尝试，不得因超时、不确定结果或资产写入失败自动重复调用图片模型
 - **AND** 所有尝试 SHALL 复用同一个 Run 和绝对截止时间，不得重复持久化用户消息
 - **AND** Runtime SHALL 持久化逐尝试结果、错误分类、退避和最终重试判定
 - **AND** 无工具的流式 Run SHALL 使用 AI SDK `streamText`，无工具的非流式 Run SHALL 使用 `generateText`
@@ -193,12 +255,12 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 
 ### Requirement: Conversation run endpoint
 
-Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，两者均支持模型别名、文本、图片 URL、图片 data URL、文档链接和分类型引用。
+Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，并按请求或解析后的 `operation` 校验模型别名、文本、附件、图片选项和分类型引用。
 
 #### Scenario: User sends mixed content
 
 - **GIVEN** 目标会话存在且状态为 `active`
-- **WHEN** 请求至少包含非空 `message`、`imageUrls` 或 `documentUrls` 中的一项
+- **WHEN** `conversation.chat` 请求至少包含非空 `message`、`imageUrls` 或 `documentUrls` 中的一项
 - **AND** 请求包含幂等 `requestId` 和 `clientMessageId`
 - **THEN** Runtime SHALL 先持久化用户消息，再构造 OpenAI-compatible `messages`
 - **AND** 图片 SHALL 使用 `image_url` 多模态格式
@@ -226,11 +288,13 @@ Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/
 - **AND** Runtime SHALL 只装箱被直接引用的消息，不得递归展开该消息可能包含的其他引用
 - **AND** 被显式引用的 `interrupted` 助手消息 MAY 作为带中断状态的引用进入当前上下文
 
-#### Scenario: Run contains an unsupported reference type
+#### Scenario: Run contains an unsupported reference type for its operation
 
-- **WHEN** Run 请求中的 `references[].type` 不是当前稳定契约支持的 `conversation_message`
+- **WHEN** Run 引用类型不在当前 operation 的 allowlist，或缺少该类型要求的稳定 ID
 - **THEN** Demo Server SHALL 返回 `400` 输入错误
 - **AND** Runtime SHALL NOT 把未知引用降级为字符串、通用 `sourceId` 或 Prompt 拼接内容
+- **AND** 普通对话 SHALL 只允许 `conversation_message`，`image.edit` SHALL 只允许 `image_asset`
+- **AND** `operation=auto` MAY 按智能路由附件矩阵接受一张受控 `image_asset`；解析为对话后 SHALL 继续把该资产作为受控视觉输入，不得信任渠道提交的 URL、MIME、尺寸或二进制
 - **AND** 文档片段、网页快照、业务记录、工具结果、事件、操作回读和批量产物等类型 SHALL 在对应场景明确所有权、版本、时效、权限和失败语义后再加入稳定契约
 
 #### Scenario: Browser receives a streamed answer
@@ -316,6 +380,16 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 - **AND** 如果尚未产生非空文本增量，Runtime SHALL NOT 创建空助手消息
 - **AND** Demo Server SHALL 通过当前流发送 `cancelled` 终止事件，并通过会话事实事件发布最终 Run 和可选中断消息状态
 
+#### Scenario: User explicitly cancels operation routing before a Run exists
+
+- **GIVEN** 渠道已经提交带 `requestId` 的 Run 请求，但尚未收到 `run-started`
+- **WHEN** 渠道请求 `POST /api/runtime/conversations/{conversationId}/run-requests/{requestId}/cancel`
+- **THEN** Demo Server SHALL 只中止当前进程中同时匹配 `conversationId` 与 `requestId` 的活动执行，并向 Runtime 传播显式取消信号
+- **AND** Runtime SHALL 停止排队、结构化分类或后续准备，不得继续调用业务对话或图片模型
+- **AND** 分类完成前的取消 SHALL NOT 创建用户消息、Run、图片资产或伪造 `cancelled` Run
+- **AND** 当前渠道流 SHALL 以 `cancelled` 终止事件收口，并显式返回 `run=null` 与 `assistantMessage=null`
+- **AND** 浏览器断开 Run 流但未调用该端点时 SHALL NOT 触发请求级取消
+
 #### Scenario: Cancellation is repeated or races with completion
 
 - **GIVEN** 目标 Run 已处于 `completed`、`cancelled` 或 `failed` 终止状态
@@ -356,6 +430,217 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 
 - **WHEN** `message`、`imageUrls`、`documentUrls` 和 `references` 均为空或缺失
 - **THEN** Demo Server SHALL 返回 `400` 输入错误
+
+### Requirement: Runtime smart operation routing
+
+系统 SHALL 允许渠道为普通新 Run 提交 `operation=auto`，并由 Agent Runtime 根据当前输入和有界会话 routing snapshot 解析、校验和持久化真实 operation；分类模型不得直接拥有图片副作用、源资产选择、模型选择、Prompt 组装或附件判定权。
+
+#### Scenario: Browser delegates ordinary routing to Runtime
+
+- **WHEN** 用户在 Demo 普通输入区提交正文、附件或消息引用
+- **THEN** Demo SHALL NOT 要求用户选择“对话 / 生图 / 图生图”模式或模型别名
+- **AND** Demo SHALL 提交 `operation=auto` 且不提交 `model`，由 Runtime 解析真实 operation
+- **AND** 只有历史图片“继续编辑”和 `retry / regenerate / continue` 恢复入口 SHALL 提交已经确定的显式 operation
+
+#### Scenario: Runtime builds a bounded routing snapshot
+
+- **GIVEN** 当前 Conversation 存在已提交的 Message、Run 和 `image_asset` 事实
+- **WHEN** Runtime 解析一个普通 auto 请求
+- **THEN** Runtime SHALL 读取带会话版本的有界 routing snapshot，并把当前规范化输入与快照分开
+- **AND** `routing-context.v2` 快照 SHALL 只包含 `committed` 消息，并排除默认不可信的 `interrupted` 助手片段
+- **AND** 快照 SHALL 只包含策略允许消息数量与单条正文字符上限内的近期消息投影、关联真实 Run operation、稳定 messageId 和可空活动图片投影
+- **AND** 历史正文投影 SHALL 在字符截断前把 HTTP(S) 与 data URL 替换为稳定占位符，且不得改写 SQLite 中的原始 Message 事实
+- **AND** 快照 SHALL NOT 包含图片二进制、storageKey、provider 原始正文、受控读取 URL 或预算外完整会话
+- **AND** Runtime SHALL NOT 使用异步 Memory Manager 或渠道本地状态决定本轮活动图片和 operation
+
+#### Scenario: Runtime derives the active image from committed facts
+
+- **WHEN** Runtime 构造 routing snapshot 的活动图片投影
+- **THEN** Runtime SHALL 按已提交消息顺序从 Message、真实 Run operation 和 `image_asset` 引用推导最近的合格图片
+- **AND** 资产 SHALL 属于当前会话、状态可用且未过期；助手图片 SHALL 来自 completed `image.generate` 或 `image.edit` Run，用户图片 SHALL 是该消息已持久化的唯一受控引用
+- **AND** 没有图片引用的普通聊天 SHALL NOT 清空此前可推导的活动图片
+- **AND** 仅上传但尚未进入消息的图片、远程 URL、多图、过期资产和跨会话资产 SHALL NOT 成为活动图片
+
+#### Scenario: Runtime derives candidates from current facts and active image
+
+- **GIVEN** Runtime 已校验当前输入、附件类型、数量、会话所有权和资产状态
+- **WHEN** auto Run 恰好包含一张当前会话可读取的显式 `image_asset` 且没有其他附件
+- **THEN** 允许候选 SHALL 仅为 `conversation.chat` 与 `image.edit`
+- **AND** 显式当前图片 SHALL 覆盖历史活动图片，模型不得选择另一 assetId
+- **WHEN** auto Run 不包含当前附件或引用但存在可用活动图片
+- **THEN** 允许候选 SHALL 仅为 `conversation.chat`、`image.generate` 与 `image.edit`
+- **WHEN** auto Run 不包含当前附件或引用且不存在可用活动图片
+- **THEN** 允许候选 SHALL 仅为 `conversation.chat` 与 `image.generate`
+- **WHEN** auto Run 包含任意 `conversation_message` 引用、远程图片 URL、文档链接或多张图片
+- **THEN** Runtime SHALL 将真实 operation 固定为 `conversation.chat`，不得执行图片生成或编辑
+- **AND** Runtime SHALL NOT 为该受限输入隐式继承历史活动图片
+
+#### Scenario: Runtime classifies against validated context and evidence
+
+- **GIVEN** 当前候选集包含至少两个 operation
+- **WHEN** Runtime 解析 auto Run
+- **THEN** Runtime SHALL 通过 GatewayClient 使用 AI SDK `Output.object` 请求且只接受 `operation`、`0..1 confidence`、布尔值 `useActiveImage` 和 `relevantMessageIds` 的结构化结果
+- **AND** 分类模型 SHALL NOT 返回或选择 assetId、模型、尺寸、provider 参数、完整 Prompt 或历史消息正文
+- **AND** Runtime SHALL 验证 operation 属于当前候选，并验证 `relevantMessageIds` 只指向当前快照内、顺序有效且数量受限的真实消息
+- **AND** 视觉问题的当前输入已经自包含完整意图时 `relevantMessageIds` MAY 为空；无当前显式图片的 `image.edit` SHALL 至少包含一条通过校验的历史消息
+- **AND** 只有候选中的 `image.generate` 或 `image.edit` 且 `confidence >= 0.85` 时，Runtime MAY 解析为对应图片 operation
+- **AND** 无当前显式图片的 `image.edit` SHALL 额外要求 `useActiveImage=true`、可用活动图片和至少一条有效历史消息；`image.generate` SHALL NOT 继承活动图片
+- **AND** 候选越权、低置信度、结构不合法、非法证据、活动图片失效、非取消分类失败或剩余截止时间不足 SHALL 安全回退为不继承历史图片的 `conversation.chat`
+- **AND** 安全回退 SHALL NOT 创建图片资产、调用图片模型或把同一 Run 作为失败图片 Run 收口
+- **AND** 调用方在分类完成前中止请求时 Runtime SHALL 停止分类，不得继续发起对话或图片模型调用，也不得创建或伪造 `cancelled` Run
+
+#### Scenario: Visual chat inherits the active image only when supported
+
+- **GIVEN** auto 请求没有当前附件但 routing snapshot 存在活动图片
+- **WHEN** 分类结果为 `conversation.chat`、`useActiveImage=true` 且所有已声明证据通过 Runtime 校验
+- **THEN** Runtime SHALL 把服务端选择的活动图片作为受控视觉输入交给能力兼容的对话模型
+- **AND** 实际图片引用 SHALL 进入当前 Message/Run 事实，刷新与重放不得依赖前端附件缓存
+- **WHEN** `useActiveImage=false`、证据无效或当前输入被附件矩阵固定为对话
+- **THEN** Runtime SHALL 执行不携带历史活动图片的普通对话
+
+#### Scenario: Runtime assembles an implicit image edit from immutable evidence
+
+- **GIVEN** auto 请求没有当前附件，分类结果合法选择 `image.edit`
+- **WHEN** Runtime 准备业务模型输入
+- **THEN** Runtime SHALL 自行选择 snapshot 中已校验的活动图片作为唯一源资产
+- **AND** Runtime SHALL 始终包含当前输入，并只从校验通过的 `relevantMessageIds` 对应消息按原顺序组装历史编辑要求
+- **AND** Runtime SHALL NOT 使用分类模型自由生成的替代编辑 Prompt
+- **AND** 图片调用前 SHALL 再次校验源资产所有权、状态、类型和字节
+
+#### Scenario: Runtime persists a sanitized intent decision
+
+- **WHEN** Runtime 完成 auto 解析并准备执行业务分支
+- **THEN** Runtime SHALL 在 Run 事实中保存 `conversation.chat`、`image.generate` 或 `image.edit` 的真实 operation，不得把 `auto` 保存为执行 operation
+- **AND** Run SHALL 持久化版本化、脱敏的 `intentDecision`，至少记录 schema/router/context strategy 版本、解析与分类 operation、confidence/threshold、决策来源、候选、`useActiveImage`、校验后的 `relevantMessageIds`、context version 和截断标记
+- **AND** 实际 assetId SHALL 通过受控 Message/Run 图片引用持久化，不得来自分类模型输出
+- **AND** Runtime SHALL NOT 在 Message、Run JSON、普通日志、Trace 或 intentDecision 中持久化 provider 原始分类文本、隐藏推理、图片内容或完整历史正文
+- **AND** 后续模型能力校验、默认别名选择、结果类型、错误语义和重放 SHALL 以真实 operation 为准
+- **AND** ExecutionPolicy SHALL 在解析完成后评估真实 operation，不得把入口 `auto` 作为可执行或可持久化操作
+
+#### Scenario: Routing snapshot changes before Run creation
+
+- **GIVEN** Runtime 已基于一个 routing snapshot 完成分类
+- **WHEN** Run 创建前当前会话版本已变化
+- **THEN** Runtime SHALL NOT 使用过期证据或源资产执行图片 operation
+- **AND** Runtime MAY 在有界次数内重新读取和分类；持续冲突 SHALL 返回稳定 `routing_context_changed`
+
+#### Scenario: Auto routing selects a server-side default model
+
+- **WHEN** 渠道提交 `operation=auto`
+- **THEN** 渠道 SHALL NOT 提交 `model`，Runtime SHALL 拒绝携带浏览器模型别名的 auto 请求
+- **AND** Runtime SHALL 根据真实 operation 使用服务端 `defaultModels` 中对应且当前网关可见、能力兼容的平台别名
+- **AND** 分类模型和浏览器 SHALL NOT 选择真实上游模型、provider 参数或图片选项
+
+#### Scenario: Explicit continuation bypasses classification
+
+- **GIVEN** 用户从历史图片显式选择“继续编辑”，或通过 `retry`、`regenerate`、`continue` 从一个既有 Run 发起恢复
+- **WHEN** Runtime 创建具有新幂等标识的 Run
+- **THEN** 历史图片继续编辑 SHALL 使用显式 `image.edit` 和选定的唯一源资产
+- **AND** 恢复 Run SHALL 继承来源 Run 已持久化的真实 operation
+- **AND** Runtime SHALL NOT 再次执行意图分类，也不得允许渠道把恢复 operation 改成其他值
+
+#### Scenario: Completed auto request is replayed
+
+- **WHEN** 渠道使用相同 requestId 重放一个已经解析或完成的 auto 请求
+- **THEN** Runtime SHALL 返回或继续既有 Run 及其已持久化真实 operation、图片引用和 intentDecision
+- **AND** Runtime SHALL NOT 重新分类、切换 operation、重复调用图片模型或创建重复资产
+
+#### Scenario: Routing evaluation separates deterministic and real-model evidence
+
+- **WHEN** 平台验收会话上下文感知的 operation 路由
+- **THEN** 确定性模式 SHALL 使用 fixture 驱动分类器和 fake 图片模型验证 snapshot、证据、源资产引用与实际字节、视觉输入、编辑 Prompt 历史、持久化、幂等与零错误图片副作用
+- **AND** 真实模型模式 SHALL 固定模型别名、实际模型、Prompt/schema、采样参数和 fixture 版本，只替换分类器并继续使用 fake 图片模型
+- **AND** Runner SHALL 根据业务 Gateway 的实际调用参数和失败调用计数判定源图、视觉输入、Prompt 与图片副作用，不得只根据最终持久化引用或产物推断
+- **AND** 报告 SHALL 分开给出 operation、错误图片副作用、源资产引用/字节、视觉输入、编辑 Prompt 历史、活动图片包含、证据、token、平均延迟和 P95
+- **AND** 通过动态 schema 校验的真实分类样本少于 30 时 SHALL 标记 `observation-only`，不得把未调用分类器的轮次、确定性通过率或小样本百分比表述为真实模型发布准确率
+
+### Requirement: Controlled image upload for C2 editing
+
+Demo Server SHALL 提供会话范围的受控图片上传入口，供 C2 图片编辑建立稳定源资产；上传入口不得成为模型调用或绕过 Runtime 的业务入口。
+
+#### Scenario: Browser uploads a valid source image
+
+- **GIVEN** 目标 Conversation 存在且状态为 `active`
+- **WHEN** 浏览器向 `POST /api/runtime/conversations/{conversationId}/image-assets` 提交一张不超过 5 MiB 的 PNG、JPEG 或 WebP 本地图片
+- **THEN** Runtime SHALL 校验真实图片类型与声明 MIME 一致，并校验字节和尺寸限制
+- **AND** Runtime SHALL 先原子写入 ImageAssetStore，再登记 `source=uploaded` 且无创建 Run 的 SQLite 元数据
+- **AND** 响应 SHALL 返回稳定 assetId、版本、MIME、尺寸、哈希、状态和受控读取地址，不得返回 storageKey 或物理路径
+- **AND** 上传本身 SHALL NOT 创建 Run 或调用图片模型
+
+#### Scenario: Source image upload fails
+
+- **WHEN** 上传超过限制、声明类型与真实内容不符、图片头或尺寸无效、会话不存在/已关闭或资产存储/元数据登记失败
+- **THEN** 系统 SHALL 返回稳定错误并清理未成为可用事实的临时二进制
+- **AND** 系统 SHALL NOT 创建 Run 或调用图片模型
+
+#### Scenario: Caller reads an image asset
+
+- **WHEN** 调用方请求 `GET /api/runtime/conversations/{conversationId}/image-assets/{assetId}/content`
+- **THEN** Runtime SHALL 校验资产属于当前会话、状态可用且未过期后返回受控 MIME 的图片内容
+- **AND** 不存在、过期或跨会话资产 SHALL 使用不泄漏来源会话的缺失错误
+- **AND** 响应 SHALL NOT 暴露 storageKey 或物理路径
+
+### Requirement: C2 image generation and editing operations
+
+系统 SHALL 在现有 Conversation Run 和图片资产边界内提供显式 `image.generate` 与 `image.edit`，并让所有图片模型请求统一经过 Agent Runtime、GatewayClient 与 LiteLLM。
+
+#### Scenario: Channel starts an image generation run
+
+- **WHEN** 渠道向 active Conversation 提交 `operation=image.generate`、非空提示词和平台允许的 `imageOptions.size`
+- **THEN** Runtime SHALL 拒绝图片 URL、文档和任何引用，只把纯文本提示词与白名单尺寸交给 GatewayClient
+- **AND** GatewayClient SHALL 使用 AI SDK `generateImage` 经 LiteLLM `/images/generations` 调用服务端图片模型别名
+- **AND** 浏览器 SHALL NOT 提交 provider 专属参数、真实模型名或模型访问密钥
+
+#### Scenario: Channel starts an image editing run
+
+- **WHEN** 渠道向 active Conversation 提交 `operation=image.edit`、非空编辑指令、恰好一条当前会话可访问的 `image_asset` 引用和平台允许的 `imageOptions.size`
+- **THEN** Runtime SHALL 根据 assetId 从会话事实源解析资产和内部 storageKey，不得信任渠道提交的 MIME、尺寸、URL 或二进制
+- **AND** Runtime SHALL 读取并重新校验源资产字节，再调用 GatewayClient 的图片编辑能力
+- **AND** GatewayClient SHALL 把已校验源图转换为请求局部 `input_image` data URL，经 LiteLLM `/v1/responses` 调用 `image_generation` 工具并强制 `action=edit`
+- **AND** GatewayClient SHALL NOT 把 Responses 文本输出、缺失图片调用或多个图片调用静默当作编辑成功
+- **AND** 浏览器 SHALL NOT 在 Run JSON 中提交图片二进制、provider 参数、真实模型名或模型访问密钥
+
+#### Scenario: Image edit input is invalid
+
+- **WHEN** `image.edit` 缺少非空指令、未恰好提供一张源资产、携带文档/临时图片 URL、引用跨会话资产或提交未知图片选项
+- **THEN** Runtime SHALL 在图片模型调用前返回稳定输入或资产错误
+- **AND** Runtime SHALL NOT 静默降级为文生图、普通图片理解或远程 URL 导入
+- **AND** 当前版本 SHALL NOT 接受遮罩、局部重绘、多图融合或任意 provider 参数透传
+
+#### Scenario: Image operation completes successfully
+
+- **WHEN** 图片模型返回满足平台格式、字节和尺寸策略的单张结果
+- **THEN** Runtime SHALL 先写入 ImageAssetStore，再在同一 SQLite 事务中登记资产、助手 Message 引用和 completed Run
+- **AND** `image.generate` 结果 SHALL 标记 `source=generated`，`image.edit` 结果 SHALL 标记 `source=edited`
+- **AND** 图片编辑 SHALL 创建新的资产，不得覆盖源资产二进制或元数据
+- **AND** JSON 结果、助手 Message 和 POST SSE `artifact-created` SHALL 交付稳定 `image_asset` 引用，SSE 继续使用 `completed` 事件收口
+
+#### Scenario: User continues editing the latest image version
+
+- **GIVEN** 一次 `image.edit` 已完成并产生新的 `source=edited` 图片资产
+- **WHEN** 渠道把该输出资产作为下一次 `image.edit` 的唯一 `image_asset` 引用并提交新的文字指令
+- **THEN** Runtime SHALL 创建具有新 requestId 和 clientMessageId 的普通业务 Run，不得把它标记为 retry、regenerate 或 continue 恢复 Run
+- **AND** 第二轮 SHALL 读取上一轮输出资产作为源图，生成新的不可变资产；更早版本 SHALL 保持可读且不被覆盖
+- **AND** 渠道 SHALL 允许用户从历史生成或编辑结果显式选择“继续编辑”，成功后把最新输出作为下一轮当前源图
+
+#### Scenario: Completed image operation is replayed
+
+- **WHEN** 客户端使用相同 `requestId` 重放已完成的 `image.generate` 或 `image.edit` Run
+- **THEN** Runtime SHALL 返回原 Run 与原图片资产
+- **AND** Runtime SHALL NOT 再次调用图片模型、创建重复产物或产生重复费用
+
+#### Scenario: Upstream rejects the Responses image editing tool
+
+- **WHEN** LiteLLM 已接收 `image.edit`，但上游以服务端错误拒绝 Responses 图片工具请求
+- **THEN** Runtime SHALL 返回稳定 `image_edit_provider_unavailable` 错误和协议/权限配置建议
+- **AND** Runtime、渠道、Run、普通日志和 Trace SHALL NOT 暴露 provider 原始正文或上游分类码
+
+#### Scenario: Image operation cannot be completed safely
+
+- **WHEN** 图片模型请求超时、连接中断、被取消、返回无效图片，或图片二进制/元数据无法持久化
+- **THEN** Runtime SHALL 使用 Run 的稳定失败或取消语义收口，并清理未成为可引用事实的临时文件
+- **AND** Runtime、GatewayClient 内部 SDK/Adapter 与 LiteLLM SHALL NOT 自动重试图片模型，承载图片副作用的模型别名 SHALL 配置 `num_retries: 0`
+- **AND** 渠道、普通日志和 Trace SHALL NOT 包含图片二进制、storageKey、provider 原始错误正文或模型访问密钥
 
 ### Requirement: Structured conversation memory
 

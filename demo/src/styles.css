@@ -932,12 +932,6 @@ textarea {
   gap: 4px;
 }
 
-.sender-mode-select .ant-segmented-item-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
 .sender-tool-button.ant-btn {
   flex: 0 0 auto;
   width: 36px;
@@ -948,25 +942,6 @@ textarea {
 .sender-tool-button.ant-btn:hover {
   color: #24292f;
   background: #f3f4f6;
-}
-
-.sender-model-select {
-  min-width: 0;
-}
-
-.sender-model-select .ant-select {
-  width: auto;
-  min-width: 132px;
-  max-width: min(220px, 40vw);
-}
-
-.sender-model-select .ant-select-selector {
-  padding-inline: 8px 6px !important;
-}
-
-.sender-model-select .ant-select-selection-item,
-.sender-model-select .ant-select-selection-placeholder {
-  font-size: 13px;
 }
 
 .sender-submit-action {
@@ -1146,6 +1121,38 @@ textarea {
   font-size: 11px;
 }
 
+.working-image-fact {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.working-image-fact .ant-image,
+.working-image-fact .ant-image-img {
+  width: 64px;
+  height: 64px;
+}
+
+.working-image-fact .ant-image-img {
+  object-fit: cover;
+  border: 1px solid #d8dee4;
+  border-radius: 6px;
+}
+
+.working-image-fact > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.working-image-fact strong,
+.working-image-fact .ant-typography {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .memory-section {
   min-height: 0;
 }
@@ -1312,10 +1319,6 @@ textarea {
     justify-content: flex-start;
   }
 
-  .sender-model-select .ant-select {
-    min-width: 104px;
-    max-width: 32vw;
-  }
 }
 
 @media (max-width: 520px) {
@@ -1325,11 +1328,6 @@ textarea {
 
   .sender-footer-actions {
     gap: 2px;
-  }
-
-  .sender-mode-select .ant-segmented-item-label {
-    gap: 3px;
-    padding-inline: 5px;
   }
 
   .chat-heading h4.ant-typography {
@@ -1370,6 +1368,17 @@ textarea {
 
   .answer-heading-link {
     max-width: 100%;
+  }
+}
+
+@media (max-width: 430px) {
+  .sender-footer {
+    gap: 2px;
+  }
+
+  .sender-footer-actions {
+    flex: 1;
+    gap: 0;
   }
 }
 

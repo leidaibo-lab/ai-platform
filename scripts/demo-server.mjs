@@ -10,6 +10,7 @@ import { initializeOpenTelemetry } from "../src/observability/otel-runtime.mjs";
 import { RuntimeExecutionError, RuntimeInputError, createChatRuntime } from "../src/runtime/chat-runtime.mjs";
 import { createConversationCoordinator } from "../src/runtime/conversation-coordinator.mjs";
 import { createContextPlanner } from "../src/runtime/context-planner.mjs";
+import { MAX_UPLOADED_IMAGE_BYTES } from "../src/runtime/image-generation-policy.mjs";
 import { createMemoryManager } from "../src/runtime/memory-manager.mjs";
 import { createRunEventSink } from "../src/runtime/run-event-sink.mjs";
 import { ConversationStoreError, createConversationStore } from "../src/storage/conversation-store.mjs";
@@ -57,6 +58,17 @@ const chatRuntime = createChatRuntime({
   resilienceOptions: config.resilience,
 });
 const startupRecoveryReport = await chatRuntime.recoverInterruptedRuns();
+
+/**
+ * @typedef {object} ActiveRunRequest
+ * @property {string} conversationId - 请求所属会话。
+ * @property {string} requestId - 渠道生成的幂等请求 ID。
+ * @property {AbortController} controller - 只由显式 requestId 取消入口触发的控制器。
+ * @property {string|null} runId - Runtime 创建 Run 后关联的稳定 ID，分类阶段保持 null。
+ */
+
+// Registry 模式集中维护进程内 HTTP 请求执行权；连接断开不会触碰这里的取消控制器。
+const activeRunRequests = new Map();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -144,8 +156,16 @@ async function handleConversationRoute(req, res, url, route) {
     await streamConversationRun(req, res, route.conversationId);
     return;
   }
+  if (route.action === "image-assets" && req.method === "POST") {
+    await uploadImageAsset(req, res, route.conversationId);
+    return;
+  }
   if (route.action === "run/cancel" && req.method === "POST") {
     sendJson(res, 200, chatRuntime.cancelConversationRun(route.conversationId, route.runId));
+    return;
+  }
+  if (route.action === "run-request/cancel" && req.method === "POST") {
+    sendJson(res, 202, cancelActiveRunRequest(route.conversationId, route.requestId));
     return;
   }
   if (route.action === "close" && req.method === "POST") {
@@ -184,7 +204,7 @@ function parseConversationRoute(pathname) {
   if (!match) return null;
   const conversationId = decodeURIComponent(match[1]);
   const action = match[2] || "";
-  if (["", "runs", "runs/stream", "close", "events"].includes(action)) {
+  if (["", "runs", "runs/stream", "close", "events", "image-assets"].includes(action)) {
     return { conversationId, action };
   }
   const imageAsset = action.match(/^image-assets\/([^/]+)\/content$/);
@@ -193,6 +213,14 @@ function parseConversationRoute(pathname) {
       conversationId,
       action: "image-asset-content",
       assetId: decodeURIComponent(imageAsset[1]),
+    };
+  }
+  const requestCancellation = action.match(/^run-requests\/([^/]+)\/cancel$/);
+  if (requestCancellation) {
+    return {
+      conversationId,
+      action: "run-request/cancel",
+      requestId: decodeURIComponent(requestCancellation[1]),
     };
   }
   const cancellation = action.match(/^runs\/([^/]+)\/cancel$/);
@@ -247,7 +275,7 @@ async function streamConversationRun(req, res, conversationId) {
 }
 
 /**
- * 在 `c1.conversation.run` 根 Span 内执行 Runtime，并组合业务 ID 与渠道最终交付。
+ * 在按请求模式命名的根 Span 内执行 Runtime，并组合真实 operation、业务 ID 与渠道最终交付。
  *
  * @param {string} conversationId - 会话 ID。
  * @param {object} body - 已解析 Run 输入。
@@ -257,81 +285,194 @@ async function streamConversationRun(req, res, conversationId) {
  */
 async function runTracedConversation(conversationId, body, transport, delivery) {
   const requestId = String(body?.requestId || "");
-  const operation = body?.operation === "image.generate" ? "image.generate" : "conversation.chat";
-  const scenarioId = operation === "image.generate" ? "C2" : "C1";
-  const rootSpanName = operation === "image.generate" ? "c2.image.generate" : "c1.conversation.run";
-  return chainTracer.withSpan(
-    rootSpanName,
-    buildRunTraceAttributes({ requestId, conversationId, transport, scenarioId, operation }),
-    /** 在根 Span 生命周期内执行排队、Runtime 和最终渠道交付。 */
-    async (rootSpan) => {
-      let runId = null;
-      let chainTraceId = null;
-      const eventSink = createRunEventSink({
-        subscribers: [
-          /** 把 Runtime 关联事件写入当前根 Span，不依赖任何渠道协议。 */
-          async function observeRuntimeIdentity(event) {
-            if (event.type === "chain-trace.started") {
-              chainTraceId = event.chainTraceId;
-              rootSpan.setAttribute("ai.platform.chain_trace_id", chainTraceId);
-              return;
-            }
-            if (event.type !== "run.started") return;
-            runId = event.runId;
-            chainTraceId = event.chainTraceId || chainTraceId;
-            rootSpan.setAttributes({
-              "ai.platform.run_id": runId,
-              "ai.platform.chain_trace_id": chainTraceId,
-              "ai.platform.run.replayed": event.replayed,
-            });
+  const activeRequest = registerActiveRunRequest(conversationId, requestId);
+  const requestedOperation = String(body?.operation || "conversation.chat");
+  const operation = ["auto", "image.generate", "image.edit"].includes(requestedOperation)
+    ? requestedOperation
+    : "conversation.chat";
+  const scenarioId = operation === "auto" ? "AUTO" : operation.startsWith("image.") ? "C2" : "C1";
+  const rootSpanName = operation === "auto"
+    ? "runtime.auto.run"
+    : operation.startsWith("image.")
+      ? `c2.${operation}`
+      : "c1.conversation.run";
+  try {
+    return await chainTracer.withSpan(
+      rootSpanName,
+      buildRunTraceAttributes({ requestId, conversationId, transport, scenarioId, operation }),
+      /** 在根 Span 生命周期内执行排队、Runtime 和最终渠道交付。 */
+      async (rootSpan) => {
+        let runId = null;
+        let chainTraceId = null;
+        let resolvedOperation = operation;
+        let resolvedScenarioId = scenarioId;
+        const eventSink = createRunEventSink({
+          subscribers: [
+            /** 把 Runtime 关联事件写入当前根 Span，不依赖任何渠道协议。 */
+            async function observeRuntimeIdentity(event) {
+              if (event.type === "chain-trace.started") {
+                chainTraceId = event.chainTraceId;
+                rootSpan.setAttribute("ai.platform.chain_trace_id", chainTraceId);
+                return;
+              }
+              if (event.type !== "run.started") return;
+              runId = event.runId;
+              associateActiveRunRequestWithRun(activeRequest, runId);
+              chainTraceId = event.chainTraceId || chainTraceId;
+              resolvedOperation = event.operation || resolvedOperation;
+              resolvedScenarioId = resolvedOperation.startsWith("image.") ? "C2" : "C1";
+              rootSpan.setAttributes({
+                "ai.platform.run_id": runId,
+                "ai.platform.chain_trace_id": chainTraceId,
+                "ai.platform.run.replayed": event.replayed,
+                "ai.platform.operation": resolvedOperation,
+                "ai.platform.scenario_id": resolvedScenarioId,
+              });
+            },
+            ...(delivery.eventSubscribers || []),
+          ],
+          /** 记录旁路订阅失败；不记录异常正文，也不改变 Runtime 执行事实。 */
+          onSubscriberError(error) {
+            rootSpan.recordError(error, { "ai.platform.event.subscriber.status": "failed" });
           },
-          ...(delivery.eventSubscribers || []),
-        ],
-        /** 记录旁路订阅失败；不记录异常正文，也不改变 Runtime 执行事实。 */
-        onSubscriberError(error) {
-          rootSpan.recordError(error, { "ai.platform.event.subscriber.status": "failed" });
-        },
-      });
-      try {
-        const result = await chatRuntime.runConversation(conversationId, body, {
-          eventSink,
-          streamText: Boolean(delivery.streamText),
         });
-        const finalStatus = result.cancelled ? "cancelled" : "completed";
-        rootSpan.setAttributes({
-          "ai.platform.run.status": finalStatus,
-          "ai.platform.run.replayed": result.replayed,
-        });
-        const finalDelivery = result.cancelled ? delivery.onCancelled : delivery.onCompleted;
-        if (typeof finalDelivery === "function") {
-          try {
-            await chainTracer.withSpan(
-              `channel.${transport}.delivery`,
-              buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: finalStatus, scenarioId, operation }),
-              /** 把最终完成或取消载荷交给当前渠道，Span 本身不记录载荷正文。 */
-              () => finalDelivery(result),
-            );
-            rootSpan.setAttribute("ai.platform.delivery.status", "completed");
-          } catch {
-            // 子 Span 已记录脱敏异常；终态后的投递失败不得反向改写 Run 执行状态。
-            rootSpan.setAttribute("ai.platform.delivery.status", "failed");
+        try {
+          const result = await chatRuntime.runConversation(conversationId, body, {
+            abortSignal: activeRequest.controller.signal,
+            eventSink,
+            streamText: Boolean(delivery.streamText),
+          });
+          const finalStatus = result.cancelled ? "cancelled" : "completed";
+          rootSpan.setAttributes({
+            "ai.platform.run.status": finalStatus,
+            "ai.platform.run.replayed": result.replayed,
+          });
+          const finalDelivery = result.cancelled ? delivery.onCancelled : delivery.onCompleted;
+          if (typeof finalDelivery === "function") {
+            try {
+              await chainTracer.withSpan(
+                `channel.${transport}.delivery`,
+                buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: finalStatus, scenarioId: resolvedScenarioId, operation: resolvedOperation }),
+                /** 把最终完成或取消载荷交给当前渠道，Span 本身不记录载荷正文。 */
+                () => finalDelivery(result),
+              );
+              rootSpan.setAttribute("ai.platform.delivery.status", "completed");
+            } catch {
+              // 子 Span 已记录脱敏异常；终态后的投递失败不得反向改写 Run 执行状态。
+              rootSpan.setAttribute("ai.platform.delivery.status", "failed");
+            }
           }
+          return result;
+        } catch (error) {
+          if (activeRequest.controller.signal.aborted && !runId) {
+            const result = buildPreRunCancellationResult(requestId);
+            rootSpan.setAttribute("ai.platform.request.status", "cancelled_before_run");
+            if (typeof delivery.onCancelled === "function") {
+              try {
+                await chainTracer.withSpan(
+                  `channel.${transport}.delivery`,
+                  buildRunTraceAttributes({ requestId, conversationId, chainTraceId, transport, scenarioId: resolvedScenarioId, operation: resolvedOperation }),
+                  /** 交付未创建 Run 的请求级取消事实，不写入虚假的 Run 状态属性。 */
+                  () => delivery.onCancelled(result),
+                );
+                rootSpan.setAttribute("ai.platform.delivery.status", "completed");
+              } catch {
+                // 请求已经取消；渠道投递失败只记旁路状态，不补造 Run 或错误事实。
+                rootSpan.setAttribute("ai.platform.delivery.status", "failed");
+              }
+            }
+            return result;
+          }
+          rootSpan.setAttribute("ai.platform.run.status", "failed");
+          if (typeof delivery.onError !== "function") throw error;
+          rootSpan.recordError(error);
+          await chainTracer.withSpan(
+            `channel.${transport}.delivery`,
+            buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: "failed", scenarioId: resolvedScenarioId, operation: resolvedOperation }),
+            /** 把脱敏后的公开错误交给当前渠道。 */
+            () => delivery.onError(error),
+          );
+          return null;
         }
-        return result;
-      } catch (error) {
-        rootSpan.setAttribute("ai.platform.run.status", "failed");
-        if (typeof delivery.onError !== "function") throw error;
-        rootSpan.recordError(error);
-        await chainTracer.withSpan(
-          `channel.${transport}.delivery`,
-          buildRunTraceAttributes({ requestId, conversationId, runId, chainTraceId, transport, status: "failed", scenarioId, operation }),
-          /** 把脱敏后的公开错误交给当前渠道。 */
-          () => delivery.onError(error),
-        );
-        return null;
-      }
-    },
-  );
+      },
+    );
+  } finally {
+    unregisterActiveRunRequest(activeRequest);
+  }
+}
+
+/** 登记一个 HTTP Run 请求执行实例，允许相同幂等 ID 的并发重放被统一取消。 */
+function registerActiveRunRequest(conversationId, requestId) {
+  let requestsById = activeRunRequests.get(conversationId);
+  if (!requestsById) {
+    requestsById = new Map();
+    activeRunRequests.set(conversationId, requestsById);
+  }
+  let executions = requestsById.get(requestId);
+  if (!executions) {
+    executions = new Set();
+    requestsById.set(requestId, executions);
+  }
+  const execution = {
+    conversationId,
+    requestId,
+    controller: new AbortController(),
+    runId: null,
+  };
+  executions.add(execution);
+  return execution;
+}
+
+/** 在 Runtime 发布 run.started 后，把请求级取消入口与真实 Run 身份关联。 */
+function associateActiveRunRequestWithRun(execution, runId) {
+  execution.runId = String(runId || "") || null;
+}
+
+/** 从请求注册表移除一个已经终止的 HTTP 执行，并清理空索引。 */
+function unregisterActiveRunRequest(execution) {
+  const requestsById = activeRunRequests.get(execution.conversationId);
+  const executions = requestsById?.get(execution.requestId);
+  if (!executions) return;
+  executions.delete(execution);
+  if (executions.size === 0) requestsById.delete(execution.requestId);
+  if (requestsById.size === 0) activeRunRequests.delete(execution.conversationId);
+}
+
+/**
+ * 显式取消当前进程中匹配 conversationId 与 requestId 的全部活动 HTTP 执行。
+ *
+ * @returns {{cancellationRequested: true, requestId: string, runId: string|null}} 已接受的取消动作。
+ */
+function cancelActiveRunRequest(conversationId, requestId) {
+  chatRuntime.getConversation(conversationId);
+  const executions = activeRunRequests.get(conversationId)?.get(requestId);
+  if (!executions || executions.size === 0) {
+    throw new RuntimeInputError({
+      error: "Run request is not active",
+      code: "run_request_not_active",
+    }, 404);
+  }
+  let runId = null;
+  for (const execution of [...executions]) {
+    runId ||= execution.runId;
+    if (!execution.controller.signal.aborted) {
+      execution.controller.abort(new DOMException("Run request was cancelled by user", "AbortError"));
+    }
+  }
+  return { cancellationRequested: true, requestId, runId };
+}
+
+/** 构造分类完成前的渠道取消终态，显式声明没有 Run 或助手消息事实。 */
+function buildPreRunCancellationResult(requestId) {
+  return {
+    cancelled: true,
+    requestId,
+    run: null,
+    assistantMessage: null,
+    content: "",
+    artifacts: [],
+    replayed: false,
+  };
 }
 
 /**
@@ -347,6 +488,7 @@ function createSseRunEventSubscriber(res) {
       writeSseEvent(res, "run-started", {
         runId: event.runId,
         requestId: event.requestId,
+        operation: event.operation,
         status: event.status,
         replayed: event.replayed,
       });
@@ -371,6 +513,27 @@ function createSseRunEventSubscriber(res) {
     }
     if (event.type === "artifact.created") writeSseEvent(res, "artifact-created", event.artifact);
   };
+}
+
+/** 读取并登记一张会话级受控源图片，上传本身不创建 Run。 */
+async function uploadImageAsset(req, res, conversationId) {
+  const mediaType = normalizeUploadMediaType(req.headers["content-type"]);
+  if (!mediaType) {
+    req.resume();
+    throw new RuntimeInputError({
+      error: "Only PNG, JPEG, or WebP image uploads are supported",
+      code: "unsupported_image_media_type",
+    });
+  }
+  const bytes = await readBinaryBody(req, MAX_UPLOADED_IMAGE_BYTES);
+  const asset = await chatRuntime.uploadImageAsset(conversationId, { bytes, mediaType });
+  sendJson(res, 201, asset);
+}
+
+/** 从 Content-Type 读取平台允许的图片 MIME，忽略可选参数。 */
+function normalizeUploadMediaType(value) {
+  const mediaType = String(value || "").split(";", 1)[0].trim().toLowerCase();
+  return ["image/png", "image/jpeg", "image/webp"].includes(mediaType) ? mediaType : "";
 }
 
 /** 生成根 Span 和渠道 Span 共用的安全业务关联属性。 */
@@ -509,6 +672,7 @@ function sendJson(res, statusCode, payload) {
 /** 聚合并解析受体积限制的 JSON 请求体。 */
 function readJson(req) {
   // Node 请求流通过单个 Promise 聚合为 JSON 对象。
+  // Promise executor 只桥接 Node JSON 请求流与解析/体积错误。
   return new Promise((resolve, reject) => {
     let raw = "";
     /** 累积请求块并阻止超大附件请求。 */
@@ -529,6 +693,45 @@ function readJson(req) {
     }
     req.on("data", collectChunk);
     req.on("end", parseBody);
+    req.on("error", reject);
+  });
+}
+
+/** 聚合受硬上限保护的二进制请求体，超限时返回稳定 413 输入错误。 */
+function readBinaryBody(req, maxBytes) {
+  const declaredLength = Number(req.headers["content-length"]);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    req.resume();
+    return Promise.reject(new RuntimeInputError({
+      error: "Uploaded image is too large",
+      code: "uploaded_image_too_large",
+    }, 413));
+  }
+  // Promise executor 只桥接 Node 二进制请求流与稳定的体积上限错误。
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let sizeBytes = 0;
+    let tooLarge = false;
+    /** 累积一个二进制块，达到上限后继续消费连接但不再保留内容。 */
+    function collectBinaryChunk(chunk) {
+      if (tooLarge) return;
+      sizeBytes += chunk.length;
+      if (sizeBytes > maxBytes) {
+        tooLarge = true;
+        reject(new RuntimeInputError({
+          error: "Uploaded image is too large",
+          code: "uploaded_image_too_large",
+        }, 413));
+        return;
+      }
+      chunks.push(chunk);
+    }
+    /** 请求结束时组合完整 Buffer；超限请求已经由首次错误收口。 */
+    function finishBinaryBody() {
+      if (!tooLarge) resolve(Buffer.concat(chunks, sizeBytes));
+    }
+    req.on("data", collectBinaryChunk);
+    req.on("end", finishBinaryBody);
     req.on("error", reject);
   });
 }
@@ -559,6 +762,7 @@ async function closeResources() {
 /** 将 HTTP Server close 回调转换为可等待的 Promise。 */
 function closeHttpServer() {
   if (!server.listening) return Promise.resolve();
+  // Promise executor 只桥接 Node HTTP Server 的错误优先关闭回调。
   return new Promise((resolve, reject) => {
     /** Server 停止监听后完成关闭等待。 */
     function handleClosed(error) {

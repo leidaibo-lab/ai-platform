@@ -1,14 +1,16 @@
 model_list:
   - model_name: gpt-5.6
     litellm_params:
-      model: openai/gpt-5.6
+      model: openai/gpt-5.6-sol
       api_base: os.environ/UPSTREAM_API_BASE
       api_key: os.environ/UPSTREAM_API_KEY1
+      num_retries: 0
   - model_name: gpt-image-2
     litellm_params:
       model: openai/gpt-image-2
       api_base: os.environ/UPSTREAM_API_BASE
       api_key: os.environ/UPSTREAM_API_KEY2
+      num_retries: 0
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 

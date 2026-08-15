@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-platform.local/schemas/runtime-routing-scenario.v1.json",
+  "title": "AI Platform Runtime Routing Scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "title",
+    "description",
+    "supportedModes",
+    "classifier",
+    "runtime",
+    "conversations"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": "runtime-routing-scenario.v1" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{2,79}$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "tags": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "supportedModes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["deterministic", "real-model"] }
+    },
+    "classifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["promptVersion", "temperature", "maxCompletionTokens", "confidenceThreshold"],
+      "properties": {
+        "promptVersion": { "type": "string", "minLength": 1 },
+        "temperature": { "const": 0 },
+        "maxCompletionTokens": { "type": "integer", "minimum": 1 },
+        "confidenceThreshold": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runTimeoutMs"],
+      "properties": {
+        "runTimeoutMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "conversations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/conversation" }
+    }
+  },
+  "$defs": {
+    "assetTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "assetId"],
+          "properties": {
+            "kind": { "const": "fixture-asset" },
+            "assetId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "turnId"],
+          "properties": {
+            "kind": { "const": "turn-artifact" },
+            "turnId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+            "index": { "type": "integer", "minimum": 0, "default": 0 }
+          }
+        }
+      ]
+    },
+    "conversation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "turns"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+        "title": { "type": "string", "minLength": 1 },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "mediaType", "base64"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+              "mediaType": { "enum": ["image/png", "image/jpeg", "image/webp"] },
+              "base64": { "type": "string", "pattern": "^[a-zA-Z0-9+/]+={0,2}$" }
+            }
+          }
+        },
+        "turns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "input"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+              "input": { "$ref": "#/$defs/runInput" }
+            }
+          }
+        }
+      }
+    },
+    "runInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "requestId",
+        "clientMessageId",
+        "message",
+        "imageUrls",
+        "documentUrls",
+        "references",
+        "imageOptions"
+      ],
+      "properties": {
+        "operation": { "const": "auto" },
+        "requestId": { "type": "string", "minLength": 1 },
+        "clientMessageId": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "imageUrls": { "type": "array", "items": { "type": "string" } },
+        "documentUrls": { "type": "array", "items": { "type": "string" } },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "source"],
+            "properties": {
+              "type": { "const": "image_asset" },
+              "source": { "$ref": "#/$defs/assetTarget" }
+            }
+          }
+        },
+        "imageOptions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size"],
+          "properties": {
+            "size": { "enum": ["1024x1024", "1536x1024", "1024x1536"] }
+          }
+        }
+      }
+    }
+  }
+}

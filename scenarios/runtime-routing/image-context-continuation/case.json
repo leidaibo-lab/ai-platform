@@ -1,0 +1,98 @@
+{
+  "$schema": "../schema.json",
+  "schemaVersion": "runtime-routing-scenario.v1",
+  "id": "image-context-continuation",
+  "version": "1.0.0",
+  "title": "活动图片上下文驱动的多轮路由",
+  "description": "验证显式源图编辑、视觉核查、无附件上下文续改和无活动图片回退均经过 Runtime 通用路由链。",
+  "tags": ["runtime", "intent-routing", "image-context", "multi-turn"],
+  "supportedModes": ["deterministic", "real-model"],
+  "classifier": {
+    "promptVersion": "runtime-intent.v2",
+    "temperature": 0,
+    "maxCompletionTokens": 180,
+    "confidenceThreshold": 0.85
+  },
+  "runtime": {
+    "runTimeoutMs": 120000
+  },
+  "conversations": [
+    {
+      "id": "active-image-flow",
+      "title": "图片连续完善",
+      "assets": [
+        {
+          "id": "source-a",
+          "mediaType": "image/png",
+          "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQI12Ng+M/AAAAEAQEA3F812QAAAABJRU5ErkJggg=="
+        }
+      ],
+      "turns": [
+        {
+          "id": "initial-edit",
+          "input": {
+            "operation": "auto",
+            "requestId": "routing-active-initial-request-v1",
+            "clientMessageId": "routing-active-initial-message-v1",
+            "message": "请把这张图的主色调改成清新的蓝色，并输出新版本。",
+            "imageUrls": [],
+            "documentUrls": [],
+            "references": [
+              {
+                "type": "image_asset",
+                "source": { "kind": "fixture-asset", "assetId": "source-a" }
+              }
+            ],
+            "imageOptions": { "size": "1024x1024" }
+          }
+        },
+        {
+          "id": "visual-check",
+          "input": {
+            "operation": "auto",
+            "requestId": "routing-active-check-request-v1",
+            "clientMessageId": "routing-active-check-message-v1",
+            "message": "颜色看起来还是没有变化，你先检查一下问题在哪里。",
+            "imageUrls": [],
+            "documentUrls": [],
+            "references": [],
+            "imageOptions": { "size": "1024x1024" }
+          }
+        },
+        {
+          "id": "contextual-edit",
+          "input": {
+            "operation": "auto",
+            "requestId": "routing-active-continue-request-v1",
+            "clientMessageId": "routing-active-continue-message-v1",
+            "message": "按刚才检查到的问题继续完善，直接输出新图。",
+            "imageUrls": [],
+            "documentUrls": [],
+            "references": [],
+            "imageOptions": { "size": "1024x1024" }
+          }
+        }
+      ]
+    },
+    {
+      "id": "no-active-image-flow",
+      "title": "无活动图片回退",
+      "assets": [],
+      "turns": [
+        {
+          "id": "missing-source",
+          "input": {
+            "operation": "auto",
+            "requestId": "routing-no-image-request-v1",
+            "clientMessageId": "routing-no-image-message-v1",
+            "message": "沿用上一张图片再优化一下，输出新图。",
+            "imageUrls": [],
+            "documentUrls": [],
+            "references": [],
+            "imageOptions": { "size": "1024x1024" }
+          }
+        }
+      ]
+    }
+  ]
+}

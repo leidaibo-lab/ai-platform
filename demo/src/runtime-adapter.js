@@ -2,7 +2,15 @@
  * @typedef {object} RuntimeAdapterOptions
  * @property {typeof fetch} [fetchImpl] - 可注入的 Fetch Port，测试用 fake 实现替代浏览器网络。
  * @property {(url: string) => EventSource} [eventSourceFactory] - 会话事实流连接工厂。
+ * @property {number} [imageUploadTimeoutMs=30000] - 单次本地图片上传的渠道超时。
  */
+
+/**
+ * @typedef {object} ImageUploadOptions
+ * @property {AbortSignal} [abortSignal] - 页面取消源图片准备时向上传请求传播的信号。
+ */
+
+const DEFAULT_IMAGE_UPLOAD_TIMEOUT_MS = 30000;
 
 /**
  * @typedef {object} RunStreamHandlers
@@ -38,8 +46,10 @@ export class RuntimeAdapterError extends Error {
 export function createRuntimeAdapter({
   fetchImpl = globalThis.fetch?.bind(globalThis),
   eventSourceFactory = createBrowserEventSource,
+  imageUploadTimeoutMs = DEFAULT_IMAGE_UPLOAD_TIMEOUT_MS,
 } = {}) {
   if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required");
+  const normalizedImageUploadTimeoutMs = normalizeImageUploadTimeout(imageUploadTimeoutMs);
 
   return {
     /** 查询模型网关公开状态。 */
@@ -68,6 +78,24 @@ export function createRuntimeAdapter({
       return requestJson(fetchImpl, conversationPath(conversationId), { method: "PATCH", body: input });
     },
 
+    /**
+     * 上传一张本地图片并返回当前会话拥有的稳定 image_asset。
+     *
+     * @param {string} conversationId - 图片所属会话。
+     * @param {Blob} image - 带受控 MIME 的原始图片。
+     * @param {ImageUploadOptions} [options] - 页面取消信号。
+     * @returns {Promise<object>} 服务端登记的稳定图片资产。
+     */
+    uploadImageAsset(conversationId, image, options = {}) {
+      if (!(image instanceof Blob) || !String(image.type || "").startsWith("image/")) {
+        throw new TypeError("A typed image Blob is required");
+      }
+      return requestImageUpload(fetchImpl, `${conversationPath(conversationId)}/image-assets`, image, {
+        abortSignal: options.abortSignal,
+        timeoutMs: normalizedImageUploadTimeoutMs,
+      });
+    },
+
     /** 完成最终 checkpoint 并关闭会话。 */
     closeConversation(conversationId) {
       return requestJson(fetchImpl, `${conversationPath(conversationId)}/close`, { method: "POST", body: {} });
@@ -78,6 +106,15 @@ export function createRuntimeAdapter({
       return requestJson(
         fetchImpl,
         `${conversationPath(conversationId)}/runs/${encodeURIComponent(runId)}/cancel`,
+        { method: "POST", body: {} },
+      );
+    },
+
+    /** 在 Runtime 尚未创建 Run 时按幂等请求身份显式取消当前执行。 */
+    cancelRunRequest(conversationId, requestId) {
+      return requestJson(
+        fetchImpl,
+        `${conversationPath(conversationId)}/run-requests/${encodeURIComponent(requestId)}/cancel`,
         { method: "POST", body: {} },
       );
     },
@@ -141,6 +178,86 @@ async function requestJson(fetchImpl, path, options = {}) {
   const data = await readJsonPayload(response);
   if (!response.ok) throw buildResponseError(response, data);
   return data;
+}
+
+/** 发送原始图片二进制，并把服务端、用户取消和渠道超时转换为统一 Adapter 错误。 */
+async function requestImageUpload(fetchImpl, path, image, { abortSignal, timeoutMs }) {
+  const abortContext = createTimedAbortContext(abortSignal, timeoutMs);
+  try {
+    const response = await fetchImpl(path, {
+      method: "POST",
+      headers: { "Content-Type": image.type },
+      body: image,
+      signal: abortContext.signal,
+    });
+    if (abortContext.signal.aborted) throw abortContext.signal.reason;
+    const data = await readJsonPayload(response);
+    if (abortContext.signal.aborted) throw abortContext.signal.reason;
+    if (!response.ok) throw buildResponseError(response, data);
+    return data;
+  } catch (error) {
+    if (abortContext.timedOut()) {
+      throw new RuntimeAdapterError("源图片上传超时", 408, {
+        error: "源图片上传超时",
+        code: "image_upload_timeout",
+      });
+    }
+    if (abortSignal?.aborted || abortContext.signal.aborted) {
+      throw new RuntimeAdapterError("源图片上传已取消", 499, {
+        error: "源图片上传已取消",
+        code: "image_upload_cancelled",
+      });
+    }
+    throw error;
+  } finally {
+    abortContext.dispose();
+  }
+}
+
+/** 创建可清理的上传取消上下文，把调用方信号与本地超时合并为单一 Fetch 信号。 */
+function createTimedAbortContext(callerSignal, timeoutMs) {
+  const controller = new AbortController();
+  let didTimeOut = false;
+
+  /** 把调用方取消原因原样传播给 Fetch。 */
+  function relayCallerAbort() {
+    if (!controller.signal.aborted) {
+      controller.abort(callerSignal?.reason || new DOMException("Image upload was cancelled", "AbortError"));
+    }
+  }
+
+  /** 在渠道时限耗尽时以 TimeoutError 终止 Fetch。 */
+  function abortOnTimeout() {
+    didTimeOut = true;
+    if (!controller.signal.aborted) {
+      controller.abort(new DOMException("Image upload timed out", "TimeoutError"));
+    }
+  }
+
+  if (callerSignal?.aborted) relayCallerAbort();
+  else callerSignal?.addEventListener("abort", relayCallerAbort, { once: true });
+  const timer = controller.signal.aborted ? null : setTimeout(abortOnTimeout, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    /** 返回超时是否先于正常完成触发。 */
+    timedOut() {
+      return didTimeOut;
+    },
+    /** 清理计时器和调用方监听，避免成功上传后残留生命周期资源。 */
+    dispose() {
+      if (timer !== null) clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", relayCallerAbort);
+    },
+  };
+}
+
+/** 把外部超时配置限制为正整数，异常输入回退到默认时限。 */
+function normalizeImageUploadTimeout(value) {
+  const timeoutMs = Number(value);
+  return Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : DEFAULT_IMAGE_UPLOAD_TIMEOUT_MS;
 }
 
 /** 读取 POST SSE，按事件名映射运行阶段并要求出现明确终止事件。 */

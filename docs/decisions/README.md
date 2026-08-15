@@ -23,10 +23,15 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-08-15 | [Runtime 智能操作路由采用会话上下文快照与可验证模型证据](./2026-08-15-runtime-context-aware-operation-routing.md) | 接受 | 从 Message/Run/image_asset 不可变事实派生活动图片，以有界 routing snapshot 驱动结构化分类；Runtime 校验证据、选择源图并持久化脱敏 intentDecision，确定性链路与真实模型识别分开评测 |
 | 2026-08-13 | [Runtime 生命周期事件端口与渠道交付解耦](./2026-08-13-runtime-event-port-and-delivery.md) | 接受 | 以项目自有 `RunEventSink` 发布易失生命周期事件，Demo Server Adapter 映射 SSE；订阅失败不反向污染执行事实，SQLite 事件继续作为可恢复历史 |
+| 2026-08-13 | [Runtime 执行治理基础](./2026-08-13-execution-governance-foundation.md) | 接受 | 以版本化 ExecutionPolicy、Operation journal 和 SQLite RunLease/fencing 建立执行治理边界；写操作确认、业务回读和补偿仍未完成 |
 | 2026-08-13 | [首期可恢复执行与独立结果验收](./2026-08-13-durable-run-recovery-and-acceptance.md) | 接受 | 复用 SQLite Run + ToolCall 恢复 completed 只读 ToolResult 后的最终总结，并以持久化 AcceptanceResult 阻断缺少事实证据的天气回答；复杂生命周期再重评成熟引擎 |
+| 2026-08-02 | [Runtime 智能默认操作路由采用结构化意图分类](./2026-08-02-runtime-smart-operation-routing.md) | 已替代 | 首版当前附件候选矩阵与结构化分类保留为历史依据；会话活动图片、历史证据与路由审计由 2026-08-15 决策替代 |
 | 2026-08-02 | [Runtime 使用 LiteLLM Virtual Key 的模型映射边界](./2026-08-02-runtime-virtual-key-mapping.md) | 接受 | 运维预配受限 virtual key，Runtime 只消费最小权限 key；模型目录、计数、生成和 spend 使用同一身份 |
 | 2026-08-01 | [LiteLLM 网关治理专项 PoC](./2026-08-01-litellm-governance-poc.md) | 接受 | 固定 LiteLLM `1.89.1` + 独立 PostgreSQL 已验证 virtual key、预算硬拒绝、真实 spend 与 team 累计；Runtime 不重复实现网关预算和限流 |
+| 2026-08-02 | [C2 多轮图片编辑采用 Responses 图片工具路径](./2026-08-02-c2-multi-turn-image-editing-responses-path.md) | 接受 | `image.edit` 改用 Responses `image_generation(action=edit)`；本地资产继续作为每轮事实源，2026-08-15 当前配置已通过两轮真实编辑 smoke |
+| 2026-07-31 | [C2 图生图采用 AI SDK 图片编辑路径](./2026-07-31-c2-image-editing-ai-sdk-path.md) | 已替代 | `/images/edits` 协议与资产边界保留为历史证据，主路径由 2026-08-02 Responses 决策替代 |
 | 2026-07-31 | [C2 图片理解与生成能力边界](./2026-07-31-c2-image-understanding-and-generation-boundary.md) | 接受 | C1 保持会话入口，C2 统一承载图片理解与生成并复用 `image_asset`，但使用独立操作契约；具体图片模型、存储与审核方案继续通过 PoC 选型 |
 | 2026-07-31 | [ToolResult 持久化总结恢复](./2026-07-31-tool-result-summary-recovery.md) | 接受 | 工具后模型瞬时失败且尚未交付正文时，从 SQLite ToolResult 构造 AI SDK 结构化消息做无工具恢复；不重复 Connector，也不建设工作流引擎 |
 | 2026-07-31 | [AI SDK Core v7 调用边界对齐](./2026-07-31-ai-sdk-core-v7-alignment.md) | 接受 | 工具型对话复用 `ToolLoopAgent` 并按 Run 动态配置；普通调用和动态结构化输出保留 Core 函数路径，同时停止依赖 v7 弃用结果字段 |

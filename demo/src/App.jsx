@@ -20,7 +20,6 @@ import {
   Modal,
   Progress,
   Segmented,
-  Select,
   Tag,
   Tooltip,
   Typography,
@@ -54,6 +53,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  activeRunStatusForOperation,
   activeRunStageLabel,
   buildConversationWorkspace,
   buildGatewayReachabilityCopy,
@@ -64,18 +64,28 @@ import {
   conversationStatusLabel,
   deserializeConversationDrafts,
   extractMarkdownHeadings,
+  imageAttachmentReservationError,
   insertLatestRunFailure,
+  isAttachmentPreparationCurrent,
   isMessageListAtLatest,
   isSafeMarkdownHref,
-  readGatewayModels,
+  readGatewayDefaultModel,
+  readGatewayModelsForOperation,
   readConversationDraft,
   recoverRunInput,
   scrollMessageListToLatest as scrollReadyMessageListToLatest,
+  selectAutoImageAssetSource,
+  selectEditableImageArtifact,
   serializeConversationDrafts,
   storeConversationDraft,
 } from "./conversation-view-model.js";
 import ConversationAnchorRail from "./conversation-anchor-rail.jsx";
 import { runtimeAdapter } from "./runtime-adapter.js";
+import {
+  findRunByRequestId,
+  isTerminalRunStatus,
+  waitForRunTerminalFact,
+} from "./run-reconciliation.js";
 
 const { Text, Title } = Typography;
 const MAX_ATTACHMENTS = 8;
@@ -135,7 +145,8 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [gatewayChecking, setGatewayChecking] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
-  const [composerMode, setComposerMode] = useState("conversation.chat");
+  const [composerMode, setComposerMode] = useState("auto");
+  const [imagePreparing, setImagePreparing] = useState(false);
   const [runError, setRunError] = useState("");
   const [lastLatency, setLastLatency] = useState(null);
   const [conversationQuery, setConversationQuery] = useState("");
@@ -156,10 +167,14 @@ export default function App() {
   const attachmentFactsRef = useRef([]);
   const referenceFactsRef = useRef([]);
   const selectedModelRef = useRef("");
+  const currentConversationIdRef = useRef(null);
   const conversationDraftsRef = useRef(loadStoredConversationDrafts());
   const visibleMessageCountRef = useRef({ conversationId: null, count: 0 });
   const activeRunRef = useRef(null);
+  const imagePreparingRef = useRef(false);
+  const imagePreparationTasksRef = useRef(new Map());
   const cancelRequestedRef = useRef(false);
+  const gatewayStatusRequestRef = useRef(0);
 
   // 首次挂载时复用唯一初始化 Promise，并忽略卸载后的异步结果。
   useEffect(() => {
@@ -170,7 +185,7 @@ export default function App() {
         const data = await initializeWorkspace();
         if (disposed) return;
         setConversations(data.conversations);
-        setCurrentConversationId(data.conversation.id);
+        setCurrentConversationFact(data.conversation.id);
         setConversation(data.conversation);
         restoreConversationDraft(data.conversation.id);
         void refreshGatewayStatus();
@@ -184,6 +199,21 @@ export default function App() {
     /** 标记本次 effect 已卸载，避免延迟网络结果写入旧组件。 */
     return function disposeInitialization() {
       disposed = true;
+    };
+  }, []);
+
+  // 页面卸载时终止仍在读取或上传的图片，并先清空注册表阻止异步结果回写状态。
+  useEffect(() => {
+    /** 释放组件拥有的全部图片准备任务，不把页面卸载解释为 Runtime Run 取消。 */
+    return function disposeImagePreparationTasks() {
+      const tasks = [...imagePreparationTasksRef.current.values()];
+      imagePreparationTasksRef.current.clear();
+      imagePreparingRef.current = false;
+      for (const task of tasks) {
+        if (!task.controller.signal.aborted) {
+          task.controller.abort(new DOMException("Image preparation owner was disposed", "AbortError"));
+        }
+      }
     };
   }, []);
 
@@ -203,7 +233,7 @@ export default function App() {
         }
         return;
       }
-      if (event.shiftKey && event.key.toLocaleLowerCase() === "o" && !activeRunRef.current) {
+      if (event.shiftKey && event.key.toLocaleLowerCase() === "o" && !activeRunRef.current && !imagePreparingRef.current) {
         event.preventDefault();
         void handleCreateConversation();
       }
@@ -223,15 +253,21 @@ export default function App() {
 
     /** 从 SQLite API 同步当前会话与会话列表。 */
     async function refreshFromFactEvent() {
-      if (disposed || activeRunRef.current?.conversationId === currentConversationId) return;
+      if (disposed) return;
       try {
         const [detail, items] = await Promise.all([
           runtimeAdapter.getConversation(currentConversationId),
           runtimeAdapter.listConversations(),
         ]);
         if (!disposed) {
-          setConversation(detail);
-          setConversations(items);
+          const active = activeRunRef.current?.conversationId === currentConversationId
+            ? activeRunRef.current
+            : null;
+          const matchingRun = active ? findRunByRequestId(detail, active.requestId) : null;
+          if (!active || (matchingRun && isTerminalRunStatus(matchingRun.status))) {
+            setConversation(detail);
+            setConversations(items);
+          }
         }
       } catch (error) {
         if (!disposed) setRunError(error.message);
@@ -240,7 +276,6 @@ export default function App() {
 
     /** 合并相邻事实事件，避免一轮 Run 的多条日志触发重复详情请求。 */
     function scheduleFactRefresh() {
-      if (activeRunRef.current?.conversationId === currentConversationId) return;
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(refreshFromFactEvent, 120);
     }
@@ -267,6 +302,13 @@ export default function App() {
     const normalized = String(next || "");
     composerValueRef.current = normalized;
     setComposerValue(normalized);
+  }
+
+  /** 同步 React 与 ref 中的当前会话身份，供异步附件读取拒绝跨会话提交。 */
+  function setCurrentConversationFact(next) {
+    const normalized = next == null ? null : String(next);
+    currentConversationIdRef.current = normalized;
+    setCurrentConversationId(normalized);
   }
 
   /** 同步 React 与 ref 中的附件事实，供并发 FileReader 回调稳定追加。 */
@@ -300,13 +342,26 @@ export default function App() {
     }
   }
 
-  /** 在网关可见别名中保留当前选择，不可用时回退默认或第一个别名。 */
-  function resolveSelectedModel(nextGateway, requestedModel = selectedModelRef.current) {
-    const models = readGatewayModels(nextGateway);
+  /** 按显式 operation 与图片硬约束解析模型；智能模式由 Runtime 选择且不指定模型。 */
+  function resolveOperationModel(
+    nextGateway,
+    operation,
+    requestedModel,
+    inputAttachments = attachmentFactsRef.current,
+  ) {
+    if (operation === "auto") return "";
+    const models = readGatewayModelsForOperation(nextGateway, operation, {
+      requiresVision: operation === "conversation.chat" && countImageAttachments(inputAttachments) > 0,
+    });
     const requested = String(requestedModel || "").trim();
     if (models.includes(requested)) return requested;
-    const defaultModel = String(nextGateway?.model || "").trim();
+    const defaultModel = readGatewayDefaultModel(nextGateway, operation);
     return models.includes(defaultModel) ? defaultModel : models[0] || "";
+  }
+
+  /** 为对话草稿解析当前兼容模型，图片附件存在时自动收紧到 vision 分组。 */
+  function resolveSelectedModel(nextGateway, requestedModel = selectedModelRef.current) {
+    return resolveOperationModel(nextGateway, "conversation.chat", requestedModel);
   }
 
   /** 保存当前会话尚未发送的渠道草稿；空草稿会清理旧快照。 */
@@ -319,6 +374,8 @@ export default function App() {
         attachments: attachmentFactsRef.current,
         references: referenceFactsRef.current,
         model: selectedModelRef.current,
+        operation: composerMode,
+        pendingRecovery,
       },
     );
     persistConversationDrafts();
@@ -330,7 +387,13 @@ export default function App() {
     setComposerFact(draft.value);
     setAttachmentFacts(draft.attachments);
     setReferenceFacts(draft.references);
-    setSelectedModelFact(resolveSelectedModel(nextGateway, draft.model));
+    setComposerMode(draft.operation);
+    setPendingRecovery(draft.pendingRecovery);
+    setSelectedModelFact(
+      draft.operation === "auto"
+        ? resolveSelectedModel(nextGateway, draft.model)
+        : resolveOperationModel(nextGateway, draft.operation, draft.model, draft.attachments),
+    );
   }
 
   /** 删除指定会话已经发送或主动结束的渠道草稿。 */
@@ -338,7 +401,14 @@ export default function App() {
     conversationDraftsRef.current = storeConversationDraft(
       conversationDraftsRef.current,
       conversationId,
-      { value: "", attachments: [], references: [], model: selectedModelRef.current },
+      {
+        value: "",
+        attachments: [],
+        references: [],
+        model: selectedModelRef.current,
+        operation: composerMode,
+        pendingRecovery: null,
+      },
     );
     persistConversationDrafts();
   }
@@ -354,15 +424,66 @@ export default function App() {
         attachments,
         references,
         model: selectedModel,
+        operation: composerMode,
+        pendingRecovery,
       },
     );
     persistConversationDrafts();
-  }, [currentConversationId, composerValue, attachments, references, selectedModel]);
+  }, [currentConversationId, composerValue, attachments, references, selectedModel, composerMode, pendingRecovery]);
 
   /** 同步 React 与 ref 中的活动 Run，供事实 SSE effect 读取最新生成状态。 */
   function setActiveRunFact(next) {
     activeRunRef.current = next;
     setActiveRun(next);
+  }
+
+  /** 创建一项绑定原会话且可取消的图片准备任务，并同步页面忙碌状态。 */
+  function beginImagePreparation(kind, conversationId = currentConversationIdRef.current) {
+    const task = {
+      id: crypto.randomUUID(),
+      kind,
+      conversationId,
+      controller: new AbortController(),
+    };
+    imagePreparationTasksRef.current.set(task.id, task);
+    imagePreparingRef.current = true;
+    setImagePreparing(true);
+    return task;
+  }
+
+  /** 幂等释放一项图片准备任务，并仅在全部任务完成后解除页面锁定。 */
+  function finishImagePreparation(task) {
+    if (!task || !imagePreparationTasksRef.current.delete(task.id)) return;
+    const preparing = imagePreparationTasksRef.current.size > 0;
+    imagePreparingRef.current = preparing;
+    setImagePreparing(preparing);
+  }
+
+  /** 取消当前页面全部图片读取或上传任务，等待各任务 finally 自行释放状态。 */
+  function cancelImagePreparation() {
+    for (const task of imagePreparationTasksRef.current.values()) {
+      if (!task.controller.signal.aborted) {
+        task.controller.abort(new DOMException("Image preparation was cancelled", "AbortError"));
+      }
+    }
+  }
+
+  /** 统计已经预留附件槽但仍在 FileReader 中的本地图片。 */
+  function countPendingImageReads() {
+    let count = 0;
+    for (const task of imagePreparationTasksRef.current.values()) {
+      if (task.kind === "file-read") count += 1;
+    }
+    return count;
+  }
+
+  /** 判断图片准备任务仍在注册表中、属于当前会话且没有被取消。 */
+  function isCurrentImagePreparation(task) {
+    return imagePreparationTasksRef.current.get(task?.id) === task && isAttachmentPreparationCurrent(
+      task?.conversationId,
+      currentConversationIdRef.current,
+      task?.controller.signal.aborted,
+    );
   }
 
   /** 在当前活动 Run 上合并局部状态，Run 已收口时忽略迟到增量。 */
@@ -374,8 +495,11 @@ export default function App() {
 
   /** 重新检查模型网关，并按用户主动触发与后台刷新区分提示。 */
   async function refreshGatewayStatus({ announce = false } = {}) {
+    const statusRequestId = gatewayStatusRequestRef.current + 1;
+    gatewayStatusRequestRef.current = statusRequestId;
     setGatewayChecking(true);
     const next = await loadGatewayStatusSafely();
+    if (statusRequestId !== gatewayStatusRequestRef.current) return next;
     setGateway(next);
     setSelectedModelFact(resolveSelectedModel(next));
     setGatewayChecking(false);
@@ -394,16 +518,15 @@ export default function App() {
 
   /** 选择会话并读取服务端完整事实；生成期间保持当前 Run 视图稳定。 */
   async function handleConversationChange(conversationId) {
-    if (activeRunRef.current || conversationId === currentConversationId) return;
+    if (activeRunRef.current || imagePreparingRef.current || conversationId === currentConversationId) return;
     saveCurrentConversationDraft();
-    setCurrentConversationId(conversationId);
+    setCurrentConversationFact(conversationId);
     setConversation(null);
     setRunError("");
     restoreConversationDraft(conversationId);
     setIsFollowingLatest(true);
     setUnseenMessageCount(0);
     setMessageLimit(MESSAGE_PAGE_SIZE);
-    setPendingRecovery(null);
     setConversationDrawerOpen(false);
     try {
       setConversation(await runtimeAdapter.getConversation(conversationId));
@@ -414,19 +537,18 @@ export default function App() {
 
   /** 创建新的服务端会话并立即切换，不在浏览器生成虚拟会话事实。 */
   async function handleCreateConversation() {
-    if (activeRunRef.current) return;
+    if (activeRunRef.current || imagePreparingRef.current) return;
     saveCurrentConversationDraft();
     try {
       const created = await runtimeAdapter.createConversation();
       const items = await runtimeAdapter.listConversations();
       setConversations(items);
-      setCurrentConversationId(created.id);
+      setCurrentConversationFact(created.id);
       setConversation(created);
       restoreConversationDraft(created.id);
       setIsFollowingLatest(true);
       setUnseenMessageCount(0);
       setMessageLimit(MESSAGE_PAGE_SIZE);
-      setPendingRecovery(null);
       setConversationDrawerOpen(false);
     } catch (error) {
       setRunError(error.message);
@@ -452,7 +574,7 @@ export default function App() {
 
   /** 打开受控重命名对话框，标题仍由 Runtime 校验并持久化。 */
   function handleOpenConversationRename(item) {
-    if (activeRunRef.current) return;
+    if (activeRunRef.current || imagePreparingRef.current) return;
     setRenameDraft({ open: true, conversation: item, value: item.title || "", error: "" });
   }
 
@@ -487,7 +609,7 @@ export default function App() {
 
   /** 切换独立归档状态，不改变 active/closed 生命周期。 */
   async function handleConversationArchive(item) {
-    if (activeRunRef.current) return;
+    if (activeRunRef.current || imagePreparingRef.current) return;
     try {
       const archived = !item.archivedAt;
       const updated = await runtimeAdapter.updateConversation(item.id, { archived });
@@ -522,7 +644,7 @@ export default function App() {
 
   /** 打开关闭确认，避免误触造成会话永久拒绝新 Run。 */
   function handleCloseConversation() {
-    if (!conversation || conversation.status !== "active" || activeRunRef.current) return;
+    if (!conversation || conversation.status !== "active" || activeRunRef.current || imagePreparingRef.current) return;
     Modal.confirm({
       title: "结束当前会话？",
       content: "结束后将完成最终记忆 checkpoint，已持久化消息会保留。",
@@ -535,17 +657,6 @@ export default function App() {
   /** 更新受控 Sender 文本。 */
   function handleComposerChange(value) {
     setComposerFact(value);
-  }
-
-  /** 更新当前会话 Sender 使用的模型别名，活动 Run 期间保持选择不可变。 */
-  function handleModelChange(value) {
-    if (activeRunRef.current) return;
-    setSelectedModelFact(value);
-  }
-
-  /** 切换显式 Run 操作，避免依赖自然语言猜测是否调用图片模型。 */
-  function handleComposerModeChange(value) {
-    setComposerMode(value === "image.generate" ? "image.generate" : "conversation.chat");
   }
 
   /** 将选中的建议填入 Sender，仍由用户决定是否发送。 */
@@ -578,6 +689,46 @@ export default function App() {
     ]);
   }
 
+  /** 把历史生成或编辑产物设为新的当前源图；下一次发送始终创建普通新 Run。 */
+  function handleContinueImageEdit(message) {
+    if (activeRunRef.current || imagePreparingRef.current || conversation?.status !== "active") return;
+    const asset = selectEditableImageArtifact(message);
+    if (!asset) {
+      toastApi.error("这张图片已不可继续编辑");
+      return;
+    }
+
+    /** 用稳定 assetId 替换当前草稿并进入图片编辑模式。 */
+    function prepareSelectedAsset() {
+      setComposerFact("");
+      setAttachmentFacts(buildRecoveredImageAssetAttachments([asset]));
+      setReferenceFacts([]);
+      setComposerMode("image.edit");
+      setPendingRecovery(null);
+      setRunError("");
+      toastApi.success("已设为当前编辑图片");
+    }
+
+    const currentSource = attachmentFactsRef.current[0]?.assetId;
+    const hasDifferentDraft = Boolean(
+      composerValueRef.current.trim() ||
+      referenceFactsRef.current.length > 0 ||
+      (attachmentFactsRef.current.length > 0 && currentSource !== asset.assetId) ||
+      pendingRecovery,
+    );
+    if (!hasDifferentDraft) {
+      prepareSelectedAsset();
+      return;
+    }
+    Modal.confirm({
+      title: "使用这张图片继续编辑？",
+      content: "当前未发送的正文、附件和引用将被替换。",
+      okText: "继续编辑",
+      cancelText: "保留草稿",
+      onOk: prepareSelectedAsset,
+    });
+  }
+
   /** 按稳定 messageId 从当前发送引用队列移除一项。 */
   function handleRemoveReference(messageId) {
     const next = [];
@@ -585,6 +736,14 @@ export default function App() {
       if (reference.messageId !== messageId) next.push(reference);
     }
     setReferenceFacts(next);
+  }
+
+  /** 从会话公开的最新/最近完成 Run 中读取恢复来源操作，不从提示词推断模型能力。 */
+  function readSourceRunOperation(sourceRunId) {
+    for (const run of [conversation?.latestRun, conversation?.lastRun]) {
+      if (run?.id === sourceRunId) return run.operation;
+    }
+    return "";
   }
 
   /** 用服务端消息事实恢复 Run 的正文、附件和引用，生成新 Run 时再创建新幂等标识。 */
@@ -597,13 +756,14 @@ export default function App() {
       toastApi.error("未找到失败 Run 对应的用户消息");
       return;
     }
-    const recovered = recoverRunInput(sourceMessage);
-    const recoveredAttachments = buildRecoveredAttachments(recovered.imageUrls, recovered.documentUrls);
+    const recovered = recoverRunInput(sourceMessage, readSourceRunOperation(sourceRunId));
+    const recoveredAttachments = buildRecoveredInputAttachments(recovered);
     const recoveredReferences = buildRecoveredReferences(recovered.references, conversation.messages);
     setComposerFact(recovered.message);
     setAttachmentFacts(recoveredAttachments);
     setReferenceFacts(recoveredReferences);
-    setPendingRecovery({ sourceRunId, recoveryMode });
+    setComposerMode(recovered.operation);
+    setPendingRecovery({ sourceRunId, recoveryMode, operation: recovered.operation });
     setRunError("");
     toastApi.success("原输入已恢复，可调整后重新发送");
   }
@@ -627,9 +787,10 @@ export default function App() {
     });
   }
 
-  /** 取消待发送输入与历史 Run 的恢复关系，不清空用户已经编辑的草稿。 */
+  /** 取消待发送输入与历史 Run 的恢复关系，并让后续普通发送重新交给 Runtime 路由。 */
   function clearPendingRecovery() {
     setPendingRecovery(null);
+    setComposerMode("auto");
   }
 
   /** 从指定历史 Run 的持久化用户消息构造新的恢复 Run 载荷。 */
@@ -639,13 +800,24 @@ export default function App() {
       (message) => message.runId === sourceRunId && message.role === "user",
     );
     if (!sourceMessage) return null;
-    const recovered = recoverRunInput(sourceMessage);
+    const recovered = recoverRunInput(sourceMessage, readSourceRunOperation(sourceRunId));
+    const recoveredAttachments = buildRecoveredInputAttachments(recovered);
+    const requestedModel = isImageModelOperation(recovered.operation)
+      ? readGatewayDefaultModel(gateway, recovered.operation)
+      : selectedModelRef.current;
+    const model = resolveOperationModel(
+      gateway,
+      recovered.operation,
+      requestedModel,
+      recoveredAttachments,
+    );
     return buildRunPayload(
       recovered.message,
-      buildRecoveredAttachments(recovered.imageUrls, recovered.documentUrls),
+      recoveredAttachments,
       buildRecoveredReferences(recovered.references, conversation.messages),
-      selectedModelRef.current,
+      model,
       { sourceRunId, recoveryMode },
+      recovered.operation,
     );
   }
 
@@ -669,21 +841,22 @@ export default function App() {
     void executeRun(payload, { preserveDraft: true });
   }
 
-  /** 用显式用户输入继续已取消 Run，不尝试 Token 级断点续传。 */
+  /** 继续已取消 Run 时复用来源的真实 operation 和原输入，不尝试 Token 级断点续传。 */
   function handleContinueRun(sourceRunId) {
-    const payload = buildRunPayload(
-      "请从上次中断处继续回答，避免重复已经生成的内容。",
-      [],
-      [],
-      selectedModelRef.current,
-      { sourceRunId, recoveryMode: "continue" },
-    );
+    const payload = buildRecoveryRunPayload(sourceRunId, "continue");
+    if (!payload) {
+      toastApi.error("未找到已取消 Run 对应的用户消息");
+      return;
+    }
     void executeRun(payload, { preserveDraft: true });
   }
 
   /** 触发 Ant Design X Attachments 的隐藏图片选择器。 */
   function openImagePicker() {
-    attachmentComponentRef.current?.select({ accept: "image/*", multiple: true });
+    attachmentComponentRef.current?.select({
+      accept: "image/*",
+      multiple: composerMode !== "image.edit",
+    });
   }
 
   /** 根据附件菜单动作打开图片选择器或 URL 输入框。 */
@@ -695,7 +868,14 @@ export default function App() {
     setLinkDraft({ open: true, type: key === "image-url" ? "image" : "document", value: "", error: "" });
   }
 
-  /** 校验本地图片并转换为 Runtime 已支持的 data URL。 */
+  /** 按稳定分类展示附件预留失败，不让并发 FileReader 静默丢弃用户选择。 */
+  function showImageReservationError(code) {
+    if (code === "image_edit_source_limit") toastApi.warning("图生图只能使用一张源图片");
+    if (code === "image_limit") toastApi.warning(`最多添加 ${MAX_IMAGES} 张图片`);
+    if (code === "attachment_limit") toastApi.warning(`最多添加 ${MAX_ATTACHMENTS} 个附件`);
+  }
+
+  /** 校验并预留本地图片槽位，读取完成后只写回发起读取的原会话。 */
   async function handleBeforeUpload(file) {
     if (!file.type.startsWith("image/")) {
       toastApi.error("只能上传图片文件");
@@ -705,29 +885,48 @@ export default function App() {
       toastApi.error("单张图片不能超过 5 MB");
       return false;
     }
-    if (countImageAttachments(attachmentFactsRef.current) >= MAX_IMAGES) {
-      toastApi.warning(`最多添加 ${MAX_IMAGES} 张图片`);
+    if (composerMode === "image.edit" && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      toastApi.error("图生图仅支持 PNG、JPEG 或 WebP");
       return false;
     }
-    if (attachmentFactsRef.current.length >= MAX_ATTACHMENTS) {
-      toastApi.warning(`最多添加 ${MAX_ATTACHMENTS} 个附件`);
+    const operation = composerMode;
+    const reservationError = imageAttachmentReservationError({
+      operation,
+      attachmentCount: attachmentFactsRef.current.length,
+      imageCount: countImageAttachments(attachmentFactsRef.current),
+      pendingImageReads: countPendingImageReads(),
+      maxAttachments: MAX_ATTACHMENTS,
+      maxImages: MAX_IMAGES,
+    });
+    if (reservationError) {
+      showImageReservationError(reservationError);
       return false;
     }
-    const url = await readFileAsDataUrl(file);
-    setAttachmentFacts([
-      ...attachmentFactsRef.current,
-      {
-        uid: crypto.randomUUID(),
-        name: file.name,
-        status: "done",
-        type: file.type,
-        size: file.size,
-        url,
-        thumbUrl: url,
-        cardType: "image",
-        kind: "image",
-      },
-    ]);
+    const task = beginImagePreparation("file-read", currentConversationIdRef.current);
+    try {
+      const url = await readFileAsDataUrl(file, task.controller.signal);
+      if (!isCurrentImagePreparation(task)) return false;
+      setAttachmentFacts([
+        ...attachmentFactsRef.current,
+        {
+          uid: crypto.randomUUID(),
+          name: file.name,
+          status: "done",
+          type: file.type,
+          size: file.size,
+          url,
+          thumbUrl: url,
+          cardType: "image",
+          kind: "image",
+        },
+      ]);
+    } catch (error) {
+      if (!isImagePreparationCancellation(error)) {
+        toastApi.error(error?.message || "图片读取失败");
+      }
+    } finally {
+      finishImagePreparation(task);
+    }
     return false;
   }
 
@@ -743,6 +942,9 @@ export default function App() {
       if (attachment.uid !== item.uid) next.push(attachment);
     }
     setAttachmentFacts(next);
+    if (composerMode === "image.edit" && !pendingRecovery && next.length === 0) {
+      setComposerMode("auto");
+    }
     return true;
   }
 
@@ -798,29 +1000,61 @@ export default function App() {
     }
   }
 
-  /** 标记用户停止意图；尚无 runId 时等待 run-started 后立即取消。 */
+  /** 在结构化分类尚未产生 Run 时按 requestId 中止请求，失败后允许用户重试停止。 */
+  async function cancelPendingRunRequest(conversationId, requestId) {
+    try {
+      await runtimeAdapter.cancelRunRequest(conversationId, requestId);
+    } catch (error) {
+      const active = activeRunRef.current;
+      if (active?.conversationId !== conversationId || active?.requestId !== requestId) return;
+      if (active.runId) {
+        void cancelKnownRun(conversationId, active.runId);
+        return;
+      }
+      cancelRequestedRef.current = false;
+      patchActiveRun({ status: "starting" });
+      setRunError(`停止生成失败：${error.message}`);
+    }
+  }
+
+  /** 优先取消图片准备；执行期按 requestId 或 runId 调用对应的显式取消端点。 */
   function handleCancelGeneration() {
+    if (imagePreparingRef.current) {
+      cancelImagePreparation();
+      toastApi.info("已取消图片准备");
+      return;
+    }
     const run = activeRunRef.current;
     if (!run || cancelRequestedRef.current) return;
     cancelRequestedRef.current = true;
     patchActiveRun({ status: "stopping" });
-    if (run.runId) void cancelKnownRun(run.conversationId, run.runId);
+    if (run.runId) {
+      void cancelKnownRun(run.conversationId, run.runId);
+      return;
+    }
+    void cancelPendingRunRequest(run.conversationId, run.requestId);
   }
 
   /** 执行一个已经归一化的 Run 载荷，并按选项保留用户当前草稿。 */
   async function executeRun(payload, { preserveDraft = false } = {}) {
     const current = conversation;
-    if (!current || current.status !== "active" || activeRunRef.current) return;
+    if (!current || current.status !== "active" || activeRunRef.current || imagePreparingRef.current) return;
     if (gateway?.ok !== true) {
       toastApi.warning("模型网关不可达，请重新检测后再发送");
       return;
     }
-    if (!selectedModelRef.current) {
-      toastApi.warning("当前没有可用模型，请重新检测模型网关");
-      return;
-    }
     if (!hasRunInput(payload)) return;
 
+    const submittedDraft = preserveDraft
+      ? null
+      : {
+          value: composerValueRef.current,
+          attachments: [...attachmentFactsRef.current],
+          references: [...referenceFactsRef.current],
+          model: selectedModelRef.current,
+          operation: composerMode,
+          pendingRecovery,
+        };
     const startedAt = performance.now();
     const optimisticUser = buildOptimisticUserMessage(current.id, payload);
     const runState = {
@@ -830,11 +1064,16 @@ export default function App() {
       status: "starting",
       model: payload.model,
       operation: payload.operation,
+      requestedOperation: payload.operation,
+      preserveDraft,
       partialText: "",
       artifacts: [],
       optimisticUser,
     };
     cancelRequestedRef.current = false;
+    let serverRunStarted = false;
+    let executedOperation = payload.operation;
+    let keepActiveRun = false;
     setActiveRunFact(runState);
     setRunError("");
     if (!preserveDraft) {
@@ -842,20 +1081,24 @@ export default function App() {
       setComposerFact("");
       setAttachmentFacts([]);
       setReferenceFacts([]);
+      setComposerMode("auto");
       setPendingRecovery(null);
     } else {
       saveCurrentConversationDraft();
     }
 
-    /** 接收稳定 runId，并补偿 run-started 前已经点击的停止意图。 */
+    /** 接收稳定 runId 和 Runtime 最终 operation，并补偿 run-started 前的停止意图。 */
     function handleRunStarted(event) {
+      serverRunStarted = true;
+      if (["conversation.chat", "image.generate", "image.edit"].includes(event.operation)) {
+        executedOperation = event.operation;
+      }
       patchActiveRun({
         runId: event.runId,
+        operation: executedOperation,
         status: cancelRequestedRef.current
           ? "stopping"
-          : payload.operation === "image.generate"
-            ? "image-generating"
-            : "running",
+          : activeRunStatusForOperation(executedOperation),
       });
       if (cancelRequestedRef.current) void cancelKnownRun(current.id, event.runId);
     }
@@ -882,12 +1125,92 @@ export default function App() {
     function handleArtifactCreated(artifact) {
       const run = activeRunRef.current;
       if (!run || run.conversationId !== current.id) return;
-      patchActiveRun({ artifacts: [...(run.artifacts || []), artifact], status: "image-generating" });
+      patchActiveRun({
+        artifacts: [...(run.artifacts || []), artifact],
+        status: activeRunStatusForOperation(executedOperation),
+      });
     }
 
     /** 把 SSE 取消终止阶段映射为 UI 中的停止状态，最终仍由详情事实覆盖。 */
     function handleCancelled() {
       patchActiveRun({ status: "cancelled" });
+    }
+
+    /** 在服务端确认没有创建 Run 后恢复本次发送前的草稿快照。 */
+    function restoreSubmittedDraft() {
+      if (!submittedDraft) return;
+      setComposerFact(submittedDraft.value);
+      setAttachmentFacts(submittedDraft.attachments);
+      setReferenceFacts(submittedDraft.references);
+      setSelectedModelFact(submittedDraft.model);
+      setComposerMode(submittedDraft.operation);
+      setPendingRecovery(submittedDraft.pendingRecovery);
+      conversationDraftsRef.current = storeConversationDraft(
+        conversationDraftsRef.current,
+        current.id,
+        submittedDraft,
+      );
+      persistConversationDrafts();
+    }
+
+    /** SSE 终止事件缺失时持续查询同一 requestId，只有事实终态或确认未创建才解除发送门禁。 */
+    async function reconcileUnknownRun(failure) {
+      /** 页面仍持有同一活动请求时继续轮询。 */
+      function shouldContinueReconciliation() {
+        return activeRunRef.current?.conversationId === current.id &&
+          activeRunRef.current?.requestId === payload.requestId;
+      }
+
+      /** 用轮询快照补齐稳定 runId 和真实 operation，但运行中不替换消息视图。 */
+      function handleReconciliationSnapshot(detail, run) {
+        if (!run || !shouldContinueReconciliation()) return;
+        if (["conversation.chat", "image.generate", "image.edit"].includes(run.operation)) {
+          executedOperation = run.operation;
+        }
+        patchActiveRun({
+          runId: run.id,
+          operation: executedOperation,
+          status: run.status === "running" ? "reconciling" : activeRunStatusForOperation(executedOperation),
+        });
+        if (run.status !== "running" && currentConversationIdRef.current === current.id) {
+          setConversation(detail);
+        }
+      }
+
+      const outcome = await waitForRunTerminalFact(current.id, payload.requestId, {
+        readConversation: runtimeAdapter.getConversation,
+        shouldContinue: shouldContinueReconciliation,
+        onSnapshot: handleReconciliationSnapshot,
+        /** 超过常规生成窗口只更新提示，继续持有原 requestId 等待最终事实。 */
+        onStalled() {
+          if (!shouldContinueReconciliation()) return;
+          patchActiveRun({ status: "reconciling" });
+          setRunError("运行仍在后台处理中，已继续确认原 Run；可停止当前 Run 或等待事实同步");
+        },
+      });
+      if (outcome.state === "abandoned") return;
+      if (outcome.detail && currentConversationIdRef.current === current.id) {
+        setConversation(outcome.detail);
+      }
+      try {
+        setConversations(await runtimeAdapter.listConversations());
+      } catch {
+        // 会话列表刷新失败不覆盖已确认的 Run 终态。
+      }
+      if (outcome.state === "completed") {
+        setLastLatency(Math.round(performance.now() - startedAt));
+        setRunError("");
+      } else if (outcome.state === "failed") {
+        setRunError("");
+      } else if (outcome.state === "cancelled") {
+        setRunError("");
+        toastApi.info("已停止生成");
+      } else if (outcome.state === "not-found") {
+        restoreSubmittedDraft();
+        setRunError(`${failure.title}：${failure.detail}`);
+      }
+      if (shouldContinueReconciliation()) setActiveRunFact(null);
+      cancelRequestedRef.current = false;
     }
 
     try {
@@ -905,7 +1228,10 @@ export default function App() {
       if (currentConversationId === current.id) setConversation(detail);
       setConversations(items);
       setLastLatency(Math.round(performance.now() - startedAt));
-      if (terminal.type === "cancelled") toastApi.info("已停止生成");
+      if (terminal.type === "cancelled") {
+        if (!serverRunStarted && terminal.data?.run == null) restoreSubmittedDraft();
+        toastApi.info("已停止生成");
+      }
     } catch (error) {
       const failure = buildRunFailureCopy({
         status: "failed",
@@ -913,28 +1239,123 @@ export default function App() {
         error: error.message,
         publicError: error.payload,
         model: payload.model,
+        operation: executedOperation,
       });
-      void refreshGatewayStatus();
       let persistedFailure = false;
+      let persistedCompletion = false;
+      let persistedCancellation = false;
+      let persistedRun = null;
       try {
         const detail = await runtimeAdapter.getConversation(current.id);
-        persistedFailure = detail.latestRun?.status === "failed" && detail.latestRun?.requestId === payload.requestId;
+        persistedRun = findRunByRequestId(detail, payload.requestId);
+        persistedFailure = persistedRun?.status === "failed";
+        persistedCompletion = persistedRun?.status === "completed";
+        persistedCancellation = persistedRun?.status === "cancelled";
         if (currentConversationId === current.id) setConversation(detail);
       } catch {
         // 原始流错误已经足够诊断，恢复读取失败不覆盖它。
       }
+      if (persistedCompletion) {
+        setLastLatency(Math.round(performance.now() - startedAt));
+        setRunError("");
+        return;
+      }
+      if (persistedCancellation) {
+        setRunError("");
+        toastApi.info("已停止生成");
+        return;
+      }
+      const outcomeUnknown = !persistedFailure && (
+        serverRunStarted ||
+        persistedRun?.status === "running" ||
+        error.status == null ||
+        error.status === 200
+      );
+      if (outcomeUnknown) {
+        keepActiveRun = true;
+        patchActiveRun({
+          runId: persistedRun?.id || activeRunRef.current?.runId || null,
+          operation: persistedRun?.operation || executedOperation,
+          status: "reconciling",
+        });
+        setRunError("连接已中断，正在确认原 Run 的最终结果");
+        void reconcileUnknownRun(failure);
+        return;
+      }
+      void refreshGatewayStatus();
+      if (!serverRunStarted && !persistedFailure) restoreSubmittedDraft();
       setRunError(persistedFailure ? "" : `${failure.title}：${error.payload?.detail || failure.detail}`);
     } finally {
       cancelRequestedRef.current = false;
-      setActiveRunFact(null);
+      if (!keepActiveRun) setActiveRunFact(null);
     }
   }
 
-  /** 提交当前 Sender 输入；编辑恢复态会携带来源，但仍创建全新幂等 Run。 */
-  function handleSubmit(value) {
-    const model = composerMode === "image.generate"
-      ? String(gateway?.imageModel || "").trim()
-      : selectedModelRef.current;
+  /** 提交当前输入；智能单图或显式图生图先上传/复用受控资产，再创建全新 Run。 */
+  async function handleSubmit(value) {
+    if (imagePreparingRef.current) return;
+    const requestedModel = composerMode === "auto"
+      ? ""
+      : isImageModelOperation(composerMode)
+        ? readGatewayDefaultModel(gateway, composerMode)
+        : selectedModelRef.current;
+    const model = resolveOperationModel(
+      gateway,
+      composerMode,
+      requestedModel,
+      attachmentFactsRef.current,
+    );
+    if (composerMode === "conversation.chat" && model !== selectedModelRef.current) {
+      setSelectedModelFact(model);
+    }
+    const source = composerMode === "image.edit"
+      ? attachmentFactsRef.current[0]
+      : selectAutoImageAssetSource({
+          operation: composerMode,
+          attachments: attachmentFactsRef.current,
+          references: referenceFactsRef.current,
+        });
+    if (composerMode === "image.edit" && !isEditableSourceAttachment(source)) return;
+    if (source) {
+      const originConversationId = currentConversationIdRef.current;
+      const task = beginImagePreparation("asset-upload", originConversationId);
+      let payload = null;
+      setRunError("");
+      try {
+        const asset = source.assetId
+          ? (source.asset || { assetId: source.assetId })
+          : await runtimeAdapter.uploadImageAsset(
+              originConversationId,
+              await dataUrlToImageBlob(source.url, task.controller.signal),
+              { abortSignal: task.controller.signal },
+            );
+        if (!isCurrentImagePreparation(task)) return;
+        const preparedSource = { ...source, assetId: asset.assetId, asset };
+        payload = buildRunPayload(
+          value,
+          [preparedSource],
+          [],
+          model,
+          pendingRecovery || undefined,
+          composerMode,
+        );
+      } catch (error) {
+        if (!isImagePreparationCancellation(error)) {
+          setRunError(error.payload?.error || error.message || "源图片上传失败");
+        }
+      } finally {
+        finishImagePreparation(task);
+      }
+      if (
+        payload &&
+        isAttachmentPreparationCurrent(
+          originConversationId,
+          currentConversationIdRef.current,
+          task.controller.signal.aborted,
+        )
+      ) void executeRun(payload);
+      return;
+    }
     const payload = buildRunPayload(
       value,
       composerMode === "image.generate" ? [] : attachmentFactsRef.current,
@@ -1153,11 +1574,12 @@ export default function App() {
   const bubbleItems = useMemo(
     // Bubble 项只承载展示状态，messageId 和正文事实仍来自服务端消息。
     () => buildBubbleItems(messageWindow.messages, {
-      busy: Boolean(activeRun),
+      busy: Boolean(activeRun) || imagePreparing,
       onQuote: handleQuoteMessage,
       onCopy: handleCopyMessage,
       onCopyCode: handleCopyCode,
       onDownload: handleDownloadMessage,
+      onContinueImageEdit: handleContinueImageEdit,
       onNavigateReference: handleNavigateToMessage,
       onNavigateHeading: handleNavigateToHeading,
       onEditRecoveryInput: handleEditRecoveryInput,
@@ -1166,27 +1588,39 @@ export default function App() {
       onContinueRun: handleContinueRun,
       onOpenContext: openRunContext,
     }),
-    [messageWindow.messages],
+    [messageWindow.messages, activeRun, imagePreparing],
   );
+  const requiresVisionModel = composerMode === "conversation.chat" && countImageAttachments(attachments) > 0;
+  const operationModels = composerMode === "auto"
+    ? []
+    : readGatewayModelsForOperation(gateway, composerMode, {
+        requiresVision: requiresVisionModel,
+      });
+  const operationDefaultModel = composerMode === "auto" ? "" : readGatewayDefaultModel(gateway, composerMode);
+  const operationDefaultAvailable = operationModels.includes(operationDefaultModel);
+  const visibleModel = composerMode === "auto"
+    ? ""
+    : isImageModelOperation(composerMode)
+      ? (operationDefaultAvailable ? operationDefaultModel : operationModels[0] || "")
+      : (operationModels.includes(selectedModel) ? selectedModel : operationModels[0] || "");
   const canSubmit = canSubmitRun({
     conversationStatus: conversation?.status,
     gatewayOk: gateway?.ok,
-    activeRun,
-    hasInput: composerMode === "image.generate"
-      ? Boolean(composerValue.trim() && readGatewayModels(gateway).includes(String(gateway?.imageModel || "")))
-      : composerValue.trim() || attachments.length > 0 || references.length > 0,
+    activeRun: activeRun || imagePreparing,
+    hasInput: composerMode === "auto"
+      ? Boolean(composerValue.trim() || attachments.length > 0 || references.length > 0)
+      : isImageModelOperation(composerMode)
+      ? Boolean(
+          composerValue.trim() &&
+          visibleModel &&
+          (composerMode !== "image.edit" || (
+            attachments.length === 1 &&
+            references.length === 0 &&
+            isEditableSourceAttachment(attachments[0])
+          )),
+        )
+      : Boolean(visibleModel && (composerValue.trim() || attachments.length > 0 || references.length > 0)),
   });
-  const gatewayModels = readGatewayModels(gateway);
-  const modelOptions = gatewayModels.map(
-    // Ant Design Select 只需要稳定别名，不暴露真实上游模型配置。
-    (model) => ({ value: model, label: model }),
-  );
-  const imageModel = String(gateway?.imageModel || "image-default");
-  const imageModelAvailable = gatewayModels.includes(imageModel);
-  const visibleModelOptions = composerMode === "image.generate"
-    ? [{ value: imageModel, label: imageModel }]
-    : modelOptions;
-  const visibleModel = composerMode === "image.generate" ? imageModel : selectedModel;
 
   /** 将附件、模型和发送动作收口到 Sender 底部工具栏，正文输入独占上层。 */
   function renderSenderFooter(originalNode, { components }) {
@@ -1195,7 +1629,7 @@ export default function App() {
         <Dropdown
           menu={attachmentMenu}
           trigger={["click"]}
-          disabled={Boolean(activeRun) || composerMode === "image.generate" || !conversation || conversation.status !== "active"}
+          disabled={Boolean(activeRun) || imagePreparing || composerMode === "image.generate" || !conversation || conversation.status !== "active"}
         >
           <Tooltip title="添加附件">
             <Button
@@ -1208,32 +1642,10 @@ export default function App() {
           </Tooltip>
         </Dropdown>
         <div className="sender-footer-actions">
-          <Segmented
-            className="sender-mode-select"
-            size="small"
-            value={composerMode}
-            disabled={Boolean(activeRun)}
-            options={[
-              { value: "conversation.chat", label: "对话", icon: <Bot size={14} /> },
-              { value: "image.generate", label: "生图", icon: <FileImage size={14} /> },
-            ]}
-            aria-label="选择运行模式"
-            onChange={handleComposerModeChange}
-          />
-          <div className="sender-model-select">
-            <Select
-              variant="borderless"
-              value={visibleModel || undefined}
-              options={visibleModelOptions}
-              disabled={Boolean(activeRun) || composerMode === "image.generate" || gateway?.ok !== true || visibleModelOptions.length === 0}
-              placeholder="无可用模型"
-              aria-label="选择模型"
-              popupMatchSelectWidth={false}
-              onChange={handleModelChange}
-            />
-          </div>
           <div className="sender-submit-action">
-            {activeRun ? originalNode : <components.SendButton disabled={!canSubmit} aria-label="发送消息" />}
+            {activeRun || imagePreparing
+              ? originalNode
+              : <components.SendButton disabled={!canSubmit} aria-label="发送消息" />}
           </div>
         </div>
       </div>
@@ -1241,11 +1653,13 @@ export default function App() {
   }
 
   const attachmentMenu = {
-    items: [
-      { key: "upload-image", label: "上传图片", icon: <FileImage size={16} /> },
-      { key: "image-url", label: "图片链接", icon: <Link2 size={16} /> },
-      { key: "document-url", label: "文档链接", icon: <FileText size={16} /> },
-    ],
+    items: composerMode === "image.edit"
+      ? [{ key: "upload-image", label: "上传源图片", icon: <FileImage size={16} /> }]
+      : [
+          { key: "upload-image", label: "上传图片", icon: <FileImage size={16} /> },
+          { key: "image-url", label: "图片链接", icon: <Link2 size={16} /> },
+          { key: "document-url", label: "文档链接", icon: <FileText size={16} /> },
+        ],
     onClick: handleAttachmentMenuClick,
   };
   const senderHeaderOpen = attachments.length > 0 || references.length > 0;
@@ -1259,7 +1673,7 @@ export default function App() {
         <ConversationPanel
           workspace={conversationWorkspace}
           currentId={currentConversationId}
-          activeRun={activeRun}
+          activeRun={activeRun || imagePreparing}
           gateway={gateway}
           gatewayChecking={gatewayChecking}
           query={conversationQuery}
@@ -1277,7 +1691,11 @@ export default function App() {
 
       <main className="chat-workspace">
         <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {buildLiveStatus(activeRun, runError, unseenMessageCount)}
+          {buildLiveStatus(
+            activeRun || (imagePreparing ? { status: "image-uploading", partialText: "", toolTitle: "" } : null),
+            runError,
+            unseenMessageCount,
+          )}
         </div>
         <header className="chat-header">
           <Tooltip title="会话">
@@ -1295,7 +1713,11 @@ export default function App() {
               <Tag color={conversation?.status === "closed" ? "default" : "green"}>
                 {conversationStatusLabel(conversation?.status)}
               </Tag>
-              {activeRun ? <Tag color="processing">{activeRun.status === "stopping" ? "正在停止" : "生成中"}</Tag> : null}
+              {activeRun || imagePreparing ? (
+                <Tag color="processing">
+                  {imagePreparing ? "上传中" : activeRun.status === "stopping" ? "正在停止" : "生成中"}
+                </Tag>
+              ) : null}
               {lastLatency != null ? <Text type="secondary">{lastLatency} ms</Text> : null}
             </div>
           </div>
@@ -1305,7 +1727,7 @@ export default function App() {
                 type="text"
                 icon={<Archive size={18} />}
                 aria-label="结束当前会话"
-                disabled={!conversation || conversation.status !== "active" || Boolean(activeRun)}
+                disabled={!conversation || conversation.status !== "active" || Boolean(activeRun) || imagePreparing}
                 onClick={handleCloseConversation}
               />
             </Tooltip>
@@ -1375,7 +1797,7 @@ export default function App() {
               className="gateway-alert"
               type="warning"
               showIcon
-              message="模型网关不可达，当前输入会保留但无法发送"
+              title="模型网关不可达，当前输入会保留但无法发送"
               action={(
                 <Button size="small" loading={gatewayChecking} onClick={handleRefreshGateway}>
                   重新检测
@@ -1383,12 +1805,12 @@ export default function App() {
               )}
             />
           ) : null}
-          {runError ? <Alert type="error" showIcon closable message={runError} onClose={clearRunError} /> : null}
-          {composerMode === "image.generate" && gateway?.ok === true && !imageModelAvailable ? (
+          {runError ? <Alert type="error" showIcon closable title={runError} onClose={clearRunError} /> : null}
+          {isImageModelOperation(composerMode) && gateway?.ok === true && operationModels.length === 0 ? (
             <Alert
               type="warning"
               showIcon
-              message={`图片模型 ${imageModel} 不在当前 LiteLLM 模型列表中`}
+              title="当前操作没有已配置且网关可见的兼容模型"
             />
           ) : null}
           {pendingRecovery ? (
@@ -1402,9 +1824,17 @@ export default function App() {
           ) : null}
           <Sender
             value={composerValue}
-            loading={Boolean(activeRun)}
+            loading={Boolean(activeRun) || imagePreparing}
             disabled={!conversation || conversation.status !== "active"}
-            placeholder={conversation?.status === "closed" ? "当前会话已结束" : composerMode === "image.generate" ? "描述要生成的图片" : "输入消息"}
+            placeholder={conversation?.status === "closed"
+              ? "当前会话已结束"
+              : composerMode === "image.generate"
+                ? "描述要生成的图片"
+                : composerMode === "image.edit"
+                  ? "描述如何修改源图片"
+                  : composerMode === "auto"
+                    ? "输入问题，或描述希望如何优化图片"
+                    : "输入消息"}
             autoSize={{ minRows: 1, maxRows: 6 }}
             onChange={handleComposerChange}
             onSubmit={handleSubmit}
@@ -1421,8 +1851,8 @@ export default function App() {
                   className={attachments.length === 0 ? "attachment-uploader-empty" : undefined}
                   items={attachments}
                   accept="image/*"
-                  multiple
-                  maxCount={MAX_ATTACHMENTS}
+                  multiple={composerMode !== "image.edit"}
+                  maxCount={composerMode === "image.edit" ? 1 : MAX_ATTACHMENTS}
                   beforeUpload={handleBeforeUpload}
                   onRemove={handleRemoveAttachment}
                   overflow="scrollX"
@@ -1434,21 +1864,25 @@ export default function App() {
       </main>
 
       <aside className="context-sidebar desktop-only" hidden={!contextExpanded}>
-        <ContextPanel conversation={conversation} manifest={currentManifest} activeRun={activeRun} />
+        <ContextPanel
+          conversation={conversation}
+          manifest={currentManifest}
+          activeRun={activeRun || (imagePreparing ? { status: "image-uploading" } : null)}
+        />
       </aside>
 
       <Drawer
         className="mobile-drawer"
         title="会话"
         placement="left"
-        width="min(88vw, 320px)"
+        size="min(88vw, 320px)"
         open={conversationDrawerOpen}
         onClose={closeConversationDrawer}
       >
         <ConversationPanel
           workspace={conversationWorkspace}
           currentId={currentConversationId}
-          activeRun={activeRun}
+          activeRun={activeRun || imagePreparing}
           gateway={gateway}
           gatewayChecking={gatewayChecking}
           query={conversationQuery}
@@ -1467,11 +1901,15 @@ export default function App() {
         className="mobile-drawer"
         title="运行上下文"
         placement="right"
-        width="min(92vw, 360px)"
+        size="min(92vw, 360px)"
         open={contextDrawerOpen}
         onClose={closeContextDrawer}
       >
-        <ContextPanel conversation={conversation} manifest={currentManifest} activeRun={activeRun} />
+        <ContextPanel
+          conversation={conversation}
+          manifest={currentManifest}
+          activeRun={activeRun || (imagePreparing ? { status: "image-uploading" } : null)}
+        />
       </Drawer>
 
       <Modal
@@ -1922,12 +2360,14 @@ function MessageActions({
   message,
   canRegenerate,
   canContinue,
+  canEditImage,
   disabled,
   onQuote,
   onCopy,
   onDownload,
   onRegenerate,
   onContinue,
+  onEditImage,
 }) {
   /** 把当前稳定消息交给页面引用队列。 */
   function quoteCurrentMessage() {
@@ -1949,6 +2389,10 @@ function MessageActions({
   function continueCurrentMessage() {
     onContinue(message.runId);
   }
+  /** 把当前助手图片产物设为新的编辑源图。 */
+  function editCurrentImage() {
+    onEditImage(message);
+  }
   /** 将移动端菜单命令映射到同一复制和引用动作。 */
   function handleMobileMessageAction({ key }) {
     if (key === "copy") copyCurrentMessage();
@@ -1956,6 +2400,7 @@ function MessageActions({
     if (key === "download") downloadCurrentMessage();
     if (key === "regenerate") regenerateCurrentMessage();
     if (key === "continue") continueCurrentMessage();
+    if (key === "edit-image") editCurrentImage();
   }
   const desktopActions = [
     {
@@ -1986,6 +2431,24 @@ function MessageActions({
             icon={<Download size={15} />}
             aria-label="下载 Markdown"
             onClick={downloadCurrentMessage}
+          />
+        </Tooltip>
+      ),
+    });
+  }
+  if (canEditImage) {
+    desktopActions.push({
+      key: "edit-image",
+      label: "继续编辑图片",
+      actionRender: (
+        <Tooltip title="继续编辑图片">
+          <Button
+            type="text"
+            size="small"
+            disabled={disabled}
+            icon={<Pencil size={15} />}
+            aria-label="继续编辑图片"
+            onClick={editCurrentImage}
           />
         </Tooltip>
       ),
@@ -2032,6 +2495,7 @@ function MessageActions({
     { key: "quote", label: "引用", icon: <Quote size={15} /> },
   ];
   if (message.role === "assistant") mobileItems.push({ key: "download", label: "下载 Markdown", icon: <Download size={15} /> });
+  if (canEditImage) mobileItems.push({ key: "edit-image", label: "继续编辑图片", icon: <Pencil size={15} />, disabled });
   if (canRegenerate) mobileItems.push({ key: "regenerate", label: "重新生成", icon: <RefreshCw size={15} />, disabled });
   if (canContinue) mobileItems.push({ key: "continue", label: "继续生成", icon: <RotateCcw size={15} />, disabled });
   const mobileMenu = {
@@ -2152,12 +2616,14 @@ function buildBubbleItems(messages, handlers) {
             message={message}
             canRegenerate={message.id === lastRegeneratableMessageId}
             canContinue={message.role === "assistant" && message.status === "interrupted" && Boolean(message.runId)}
+            canEditImage={Boolean(selectEditableImageArtifact(message))}
             disabled={handlers.busy}
             onQuote={handlers.onQuote}
             onCopy={handlers.onCopy}
             onDownload={handlers.onDownload}
             onRegenerate={handlers.onRegenerateRun}
             onContinue={handlers.onContinueRun}
+            onEditImage={handlers.onContinueImageEdit}
           />
         ),
     });
@@ -2204,11 +2670,14 @@ function resolveReferenceMessages(references, messages) {
   return resolved;
 }
 
-/** 生成包含显式操作、当前输入、稳定引用、恢复来源和全新幂等标识的 Run 载荷。 */
+/** 生成包含智能/显式操作、当前输入、稳定引用、恢复来源和全新幂等标识的 Run 载荷。 */
 function buildRunPayload(value, attachments, references, model, recovery = {}, operation = "conversation.chat") {
   const imageUrls = [];
   const documentUrls = [];
+  const autoImageAssetSource = selectAutoImageAssetSource({ operation, attachments, references });
   for (const attachment of attachments) {
+    if (operation === "image.edit") continue;
+    if (attachment === autoImageAssetSource) continue;
     if (attachment.kind === "image") imageUrls.push(attachment.url);
     else documentUrls.push(attachment.url);
   }
@@ -2216,16 +2685,24 @@ function buildRunPayload(value, attachments, references, model, recovery = {}, o
   for (const reference of references) {
     stableReferences.push({ type: "conversation_message", messageId: reference.messageId });
   }
+  if (operation === "image.edit") {
+    for (const attachment of attachments) {
+      if (attachment.assetId) stableReferences.push({ type: "image_asset", assetId: attachment.assetId });
+    }
+  } else if (autoImageAssetSource?.assetId) {
+    stableReferences.push({ type: "image_asset", assetId: autoImageAssetSource.assetId });
+  }
+  const requestedModel = String(model || "").trim();
   return {
     operation,
     requestId: crypto.randomUUID(),
     clientMessageId: crypto.randomUUID(),
-    model: String(model || "").trim(),
+    ...(requestedModel ? { model: requestedModel } : {}),
     message: String(value || "").trim(),
     imageUrls,
     documentUrls,
     references: stableReferences,
-    ...(operation === "image.generate" ? { imageOptions: { size: "1024x1024" } } : {}),
+    ...(isImageModelOperation(operation) ? { imageOptions: { size: "1024x1024" } } : {}),
     ...(recovery.sourceRunId ? { sourceRunId: recovery.sourceRunId } : {}),
     ...(recovery.recoveryMode ? { recoveryMode: recovery.recoveryMode } : {}),
   };
@@ -2263,6 +2740,8 @@ function formatDisplayInput(payload) {
     for (const url of payload.documentUrls) links.push(`- ${url}`);
     sections.push(`参考文档链接：\n${links.join("\n")}`);
   }
+  const sourceAssets = payload.references.filter(isImageAssetReference);
+  if (sourceAssets.length > 0) sections.push(`源图片：${sourceAssets.length} 张`);
   if (sections.length === 0 && payload.references.length > 0) sections.push(`引用了 ${payload.references.length} 条消息`);
   return sections.join("\n\n");
 }
@@ -2277,7 +2756,18 @@ function getMessageImages(message) {
         assetId: artifact.assetId,
         width: artifact.width,
         height: artifact.height,
-        generated: artifact.source === "generated",
+        generated: ["generated", "edited"].includes(artifact.source),
+      });
+    }
+  }
+  for (const asset of Array.isArray(message.referenceAssets) ? message.referenceAssets : []) {
+    if (asset?.type === "image_asset" && asset.url) {
+      images.push({
+        url: asset.url,
+        assetId: asset.assetId,
+        width: asset.width,
+        height: asset.height,
+        generated: false,
       });
     }
   }
@@ -2308,6 +2798,37 @@ function buildRecoveredAttachments(imageUrls, documentUrls) {
   for (const url of documentUrls) {
     if (items.length >= MAX_ATTACHMENTS) break;
     items.push(createRecoveredAttachment(url, "document", items.length));
+  }
+  return items;
+}
+
+/** 按恢复操作选择 URL 附件或稳定 image_asset，图片编辑不得退化为临时图片 URL。 */
+function buildRecoveredInputAttachments(recovered) {
+  if (recovered.operation === "image.edit") {
+    return buildRecoveredImageAssetAttachments(recovered.imageAssets);
+  }
+  return buildRecoveredAttachments(recovered.imageUrls, recovered.documentUrls);
+}
+
+/** 把恢复出的受控源资产转换为单张 Attachments 展示事实，同时保留发送所需 assetId。 */
+function buildRecoveredImageAssetAttachments(imageAssets) {
+  const items = [];
+  for (const asset of imageAssets.slice(0, 1)) {
+    const url = asset?.url || undefined;
+    items.push({
+      uid: crypto.randomUUID(),
+      name: "恢复源图片",
+      status: "done",
+      type: asset?.mediaType,
+      size: asset?.sizeBytes,
+      url,
+      thumbUrl: url,
+      cardType: "image",
+      kind: "image",
+      description: "受控源图片",
+      assetId: asset.assetId,
+      asset,
+    });
   }
   return items;
 }
@@ -2352,21 +2873,96 @@ function messageElementId(messageId) {
   return `conversation-message-${String(messageId)}`;
 }
 
-/** 将浏览器 File 对象异步读取为 data URL。 */
-function readFileAsDataUrl(file) {
+/** 将浏览器 File 对象异步读取为 data URL，并响应页面图片准备取消信号。 */
+function readFileAsDataUrl(file, abortSignal) {
   return new Promise(
-    // Promise executor 只桥接 FileReader 事件，不改变文件内容或持久化附件。
+    // Promise executor 只桥接 FileReader 与取消事件，不改变文件内容或持久化附件。
     (resolve, reject) => {
       const reader = new FileReader();
+      let settled = false;
+
+      /** 释放 FileReader 和取消信号监听，避免完成后保留 File 与组件闭包。 */
+      function cleanupReadListeners() {
+        reader.removeEventListener("load", handleLoad);
+        reader.removeEventListener("error", handleReaderError);
+        abortSignal?.removeEventListener("abort", handleSignalAbort);
+      }
+
       /** 返回 FileReader 已完成的 data URL。 */
       function handleLoad() {
+        if (settled) return;
+        settled = true;
+        cleanupReadListeners();
         resolve(String(reader.result));
       }
+
+      /** 将浏览器文件读取错误交给附件流程统一展示。 */
+      function handleReaderError() {
+        if (settled) return;
+        settled = true;
+        cleanupReadListeners();
+        reject(reader.error || new Error("图片读取失败"));
+      }
+
+      /** 中止仍在进行的 FileReader，并使用调用方取消原因拒绝等待。 */
+      function handleSignalAbort() {
+        if (settled) return;
+        settled = true;
+        if (reader.readyState === 1) reader.abort();
+        cleanupReadListeners();
+        reject(abortSignal?.reason || new DOMException("Image read was cancelled", "AbortError"));
+      }
+
       reader.addEventListener("load", handleLoad);
-      reader.addEventListener("error", reject);
-      reader.readAsDataURL(file);
+      reader.addEventListener("error", handleReaderError);
+      if (abortSignal?.aborted) {
+        handleSignalAbort();
+        return;
+      }
+      abortSignal?.addEventListener("abort", handleSignalAbort, { once: true });
+      try {
+        reader.readAsDataURL(file);
+      } catch (error) {
+        if (!settled) {
+          settled = true;
+          cleanupReadListeners();
+          reject(error);
+        }
+      }
     },
   );
+}
+
+/** 将本地图片 data URL 转换为带真实 MIME 的上传 Blob，并传播页面取消信号。 */
+async function dataUrlToImageBlob(value, abortSignal) {
+  const response = await fetch(String(value || ""), abortSignal ? { signal: abortSignal } : undefined);
+  const blob = await response.blob();
+  if (!response.ok || !String(blob.type || "").startsWith("image/")) {
+    throw new Error("源图片无法读取");
+  }
+  return blob;
+}
+
+/** 判断图片准备异常是否来自用户取消，而不是需要展示的读取或上传失败。 */
+function isImagePreparationCancellation(error) {
+  return error?.name === "AbortError" || error?.payload?.code === "image_upload_cancelled";
+}
+
+/** 判断附件是否可以作为当前首期图生图的单张受控源图。 */
+function isEditableSourceAttachment(attachment) {
+  if (attachment?.kind !== "image") return false;
+  if (attachment.assetId) return true;
+  return /^data:image\/(?:png|jpeg|webp);base64,/i.test(String(attachment.url || ""));
+}
+
+/** 判断显式操作是否使用服务端固定图片模型别名。 */
+function isImageModelOperation(operation) {
+  return operation === "image.generate" || operation === "image.edit";
+}
+
+/** 判断引用是否为图片资产来源。 */
+function isImageAssetReference(reference) {
+  return reference?.type === "image_asset";
 }
 
 /** 统计当前受控附件中的图片数量。 */
@@ -2415,6 +3011,7 @@ function ContextPanel({ conversation, manifest, activeRun }) {
   const selected = manifest?.selected || {};
   const tokenPercent = manifest?.budget ? Math.min(100, Math.round((manifest.countedTokens / manifest.budget) * 100)) : 0;
   const latestStatus = activeRun ? activeRun.status : conversation.latestRun?.status || "idle";
+  const activeImage = conversation.workingContext?.activeImage || null;
   return (
     <div className="context-panel">
       <div className="context-heading">
@@ -2451,6 +3048,30 @@ function ContextPanel({ conversation, manifest, activeRun }) {
         </Text>
       </section>
 
+      <section className="context-section">
+        <div className="section-title">
+          <FileImage size={16} />
+          <span>当前工作图片</span>
+          <Tag color={activeImage ? "green" : "default"}>{activeImage ? "可用" : "无"}</Tag>
+        </div>
+        {activeImage ? (
+          <div className="working-image-fact">
+            <Image
+              src={buildImageAssetContentUrl(conversation.id, activeImage.assetId)}
+              alt="当前工作图片"
+              width={64}
+              height={64}
+            />
+            <div>
+              <strong>{imageAssetSourceLabel(activeImage.source)}</strong>
+              <Text type="secondary">消息 #{activeImage.anchorSeq}</Text>
+            </div>
+          </div>
+        ) : (
+          <Text type="secondary">暂无会话图片事实</Text>
+        )}
+      </section>
+
       <section className="context-section memory-section">
         <div className="section-title"><Brain size={16} /><span>结构化记忆</span><Tag>{memoryItems.length}</Tag></div>
         {memoryItems.length === 0 ? (
@@ -2461,6 +3082,17 @@ function ContextPanel({ conversation, manifest, activeRun }) {
       </section>
     </div>
   );
+}
+
+/** 由服务端稳定资源契约生成图片内容 URL，不读取物理存储路径。 */
+function buildImageAssetContentUrl(conversationId, assetId) {
+  return `/api/runtime/conversations/${encodeURIComponent(conversationId)}/image-assets/${encodeURIComponent(assetId)}/content`;
+}
+
+/** 将图片资产来源映射为运行上下文中的简短事实标签。 */
+function imageAssetSourceLabel(source) {
+  const labels = { uploaded: "上传原图", generated: "生成版本", edited: "编辑版本" };
+  return labels[source] || "图片资产";
 }
 
 /** 渲染单个 Context 指标。 */
@@ -2512,6 +3144,7 @@ function runStatusLabel(status) {
     idle: "等待运行",
     starting: "正在创建",
     running: "生成中",
+    reconciling: "确认结果中",
     "tool-running": "查询工具中",
     stopping: "正在停止",
     completed: "已完成",
@@ -2523,7 +3156,7 @@ function runStatusLabel(status) {
 
 /** 把 Runtime 状态映射为 Ant Design Tag 色彩。 */
 function runStatusColor(status) {
-  if (["running", "tool-running", "starting", "stopping"].includes(status)) return "processing";
+  if (["running", "reconciling", "tool-running", "starting", "stopping"].includes(status)) return "processing";
   if (status === "completed") return "green";
   if (status === "cancelled") return "orange";
   if (status === "failed") return "red";

@@ -16,7 +16,7 @@ SQLite 已经是 Conversation、Run、Message 和 ToolResult 的唯一事实源�
 **Non-Goals:**
 
 - 不支持 Token 级续传、模型内部推理恢复或原字节级回答重建。
-- 不恢复图片生成、写工具、运行中工具或结果状态未知的外部副作用。
+- 不恢复图片生成、图片编辑、写工具、运行中工具或结果状态未知的外部副作用。
 - 不实现 Operation 通用日志、lease、fencing、持久 timer、补偿、人工审批或多实例调度。
 - 不用脚本化模型通过率代表真实模型工具选择、回答准确率或生产可用性。
 - 不新增 Runtime Client/Server、通用 Operation Engine、独立场景服务或可发布 npm 包。

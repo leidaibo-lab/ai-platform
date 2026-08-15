@@ -31,6 +31,7 @@ const ALLOW_POLICY_DECISION = Object.freeze({
 
 test("execution policy is versioned, restrictive, and isolates after hooks", testExecutionPolicy);
 test("runtime preserves a committed Run when a custom after hook throws", testRuntimeAfterHookIsolation);
+test("completed Run replay bypasses changed policy and concurrent duplicate execution", testRuntimeReplayBeforePolicy);
 test("operation journal is idempotent and keeps ToolCall projection atomic", testOperationJournal);
 test("SQLite RunLease coordinates owners and rejects stale fencing tokens", testRunLeaseAndFencing);
 
@@ -113,6 +114,92 @@ async function testRuntimeAfterHookIsolation() {
     assert.equal(result.content, "治理测试完成");
     assert.equal(fixture.runtime.getConversation(conversation.id).latestRun.status, "completed");
     assert.equal(afterCalls, 1);
+  } finally {
+    fixture.close();
+  }
+}
+
+/** 验证已提交幂等事实优先于当前策略，并发相同请求也只执行一次策略与模型。 */
+async function testRuntimeReplayBeforePolicy() {
+  let denyNewRuns = false;
+  let beforeCalls = 0;
+  const executionPolicy = {
+    /** 按测试开关允许或拒绝新 Run，并记录真实前置策略调用次数。 */
+    async evaluateBefore() {
+      beforeCalls += 1;
+      return denyNewRuns
+        ? {
+            ...ALLOW_POLICY_DECISION,
+            decision: "deny",
+            reasonCodes: ["maintenance_window"],
+          }
+        : ALLOW_POLICY_DECISION;
+    },
+    /** 当前测试不装配后置策略观察器。 */
+    async observeAfter() {
+      return { attempted: 0, completed: 0, failedHooks: [] };
+    },
+  };
+  const chainTracer = createRecordingChainTracer();
+  const fixture = createRuntimeFixture({ executionPolicy, chainTracer });
+  try {
+    const conversation = fixture.runtime.createConversation({ title: "幂等优先" });
+    const input = {
+      requestId: "policy-replay-request",
+      clientMessageId: "policy-replay-message",
+      message: "验证完成态重放",
+    };
+    const first = await fixture.runtime.runConversation(conversation.id, input);
+    denyNewRuns = true;
+    const replay = await fixture.runtime.runConversation(conversation.id, input);
+
+    assert.equal(first.replayed, false);
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.content, first.content);
+    assert.equal(beforeCalls, 1);
+    assert.equal(fixture.gatewayClient.getCompletionCalls(), 1);
+
+    denyNewRuns = false;
+    const duplicateInput = {
+      requestId: "concurrent-policy-replay-request",
+      clientMessageId: "concurrent-policy-replay-message",
+      message: "验证并发幂等",
+    };
+    const duplicateEventStreams = [[], []];
+    const [concurrentFirst, concurrentSecond] = await Promise.all([
+      fixture.runtime.runConversation(
+        conversation.id,
+        duplicateInput,
+        { eventSink: createCollectingEventSink(duplicateEventStreams[0]) },
+      ),
+      fixture.runtime.runConversation(
+        conversation.id,
+        duplicateInput,
+        { eventSink: createCollectingEventSink(duplicateEventStreams[1]) },
+      ),
+    ]);
+    const duplicateResults = [concurrentFirst, concurrentSecond];
+    const persistedDuplicate = fixture.store.findRunByRequestId(conversation.id, duplicateInput.requestId).run;
+
+    assert.deepEqual(duplicateResults.map(readReplayFlag).sort(), [false, true]);
+    assert.equal(beforeCalls, 2);
+    assert.equal(fixture.gatewayClient.getCompletionCalls(), 2);
+    assert.equal(persistedDuplicate.status, "completed");
+    assert.equal(fixture.runtime.getConversation(conversation.id).messages.length, 4);
+    for (const events of duplicateEventStreams) {
+      assert.deepEqual(events.map(readRunEventType), ["chain-trace.started", "run.started", "run.completed"]);
+      assert.deepEqual([...new Set(events.map(readRunEventChainTraceId))], [persistedDuplicate.chainTraceId]);
+    }
+    const duplicateQueueSpans = chainTracer.queueSpans.filter(
+      // 同一 requestId 的首次执行与并发重放都必须改写为持久化业务 Chain ID。
+      (span) => span.attributes["ai.platform.request_id"] === duplicateInput.requestId,
+    );
+    assert.equal(duplicateQueueSpans.length, 2);
+    assert.equal(duplicateQueueSpans.every(isEndedSpan), true);
+    assert.deepEqual(
+      [...new Set(duplicateQueueSpans.map(readSpanChainTraceId))],
+      [persistedDuplicate.chainTraceId],
+    );
   } finally {
     fixture.close();
   }
@@ -354,8 +441,87 @@ function failAfterObservation() {
   throw new Error("sensitive hook failure");
 }
 
+/** 返回并发结果的幂等重放标记，供稳定排序断言使用。 */
+function readReplayFlag(result) {
+  return result.replayed;
+}
+
+/** 返回 Runtime 事件类型，供有序生命周期断言使用。 */
+function readRunEventType(event) {
+  return event.type;
+}
+
+/** 返回 Runtime 事件的业务 Chain ID。 */
+function readRunEventChainTraceId(event) {
+  return event.chainTraceId;
+}
+
+/** 返回记录 Span 的最终业务 Chain ID。 */
+function readSpanChainTraceId(span) {
+  return span.attributes["ai.platform.chain_trace_id"];
+}
+
+/** 判断手动记录的 Span 已执行结束收口。 */
+function isEndedSpan(span) {
+  return span.ended;
+}
+
+/** 创建只收集不可变 Runtime 事件的测试 Sink。 */
+function createCollectingEventSink(events) {
+  return {
+    /** 按调用顺序保存事件并返回稳定投递报告。 */
+    async publish(event) {
+      events.push(event);
+      return { subscriberCount: 1, deliveredCount: 1, failedCount: 0 };
+    },
+  };
+}
+
+/** 创建只记录手动 queue Span 属性与结束状态的最小 ChainTracer。 */
+function createRecordingChainTracer() {
+  const queueSpans = [];
+  const nullSpan = {
+    /** 测试不记录自动 Span 单属性。 */
+    setAttribute() {},
+    /** 测试不记录自动 Span 多属性。 */
+    setAttributes() {},
+    /** 测试不记录自动 Span 错误。 */
+    recordError() {},
+    /** 自动 Span 生命周期由 withSpan 直接委托。 */
+    end() {},
+  };
+  return {
+    queueSpans,
+    /** 直接执行自动 Span 回调，只保留业务行为。 */
+    withSpan(_name, _attributes, operation) {
+      return operation(nullSpan);
+    },
+    /** 记录 queue Span 可变属性，验证结束前身份修正。 */
+    startSpan(name, attributes) {
+      const span = { name, attributes: { ...attributes }, ended: false };
+      queueSpans.push(span);
+      return {
+        /** 覆盖单个 Span 属性。 */
+        setAttribute(key, value) {
+          span.attributes[key] = value;
+        },
+        /** 合并多个 Span 属性。 */
+        setAttributes(values) {
+          Object.assign(span.attributes, values);
+        },
+        /** 当前测试不需要错误事件。 */
+        recordError() {},
+        /** 标记手动 Span 已结束。 */
+        end() {
+          span.ended = true;
+        },
+      };
+    },
+  };
+}
+
 /** 创建不依赖模型网络的最小 Runtime 装配。 */
-function createRuntimeFixture({ executionPolicy }) {
+function createRuntimeFixture({ executionPolicy, chainTracer }) {
   const gatewayClient = createGovernanceGateway();
   const store = createConversationStore({ databasePath: ":memory:" });
   const coordinator = createConversationCoordinator();
@@ -374,9 +540,12 @@ function createRuntimeFixture({ executionPolicy }) {
     contextPlanner,
     memoryManager,
     executionPolicy,
+    chainTracer,
   });
   return {
     runtime,
+    store,
+    gatewayClient,
     /** 释放内存 SQLite。 */
     close() {
       store.close();
@@ -386,14 +555,20 @@ function createRuntimeFixture({ executionPolicy }) {
 
 /** 创建固定回答的 Runtime 治理测试 Gateway。 */
 function createGovernanceGateway() {
+  let completionCalls = 0;
   return {
     model: "governance-test-model",
+    /** 返回普通生成调用次数，结构化记忆调用不计入当前治理断言。 */
+    getCompletionCalls() {
+      return completionCalls;
+    },
     /** 返回固定 token 计数。 */
     async countTokens() {
       return { tokens: 10, source: "scripted", model: this.model };
     },
     /** 返回固定完成结果。 */
-    async chatCompletions() {
+    async chatCompletions({ outputSchema } = {}) {
+      if (!outputSchema) completionCalls += 1;
       return {
         model: this.model,
         usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },

@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | 渠道与体验层 | Demo、Web、IM、IDE、API 等入口适配；输入输出格式转换 | Agent 编排、工具执行、模型供应商密钥 | `demo/index.html`、`scripts/demo-server.mjs` 的静态页面和 HTTP 接入部分 |
 | 平台控制面 | 租户、用户、应用、Agent 定义、版本发布、配置和运营入口 | 执行单次 Agent 任务、直接调用上游模型 | 尚未实现；未来的大平台属于此区域，不只是更大的 Demo |
-| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、执行策略、结果组装、结果验收、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、结构化记忆、Context Planner、token 水位、GatewayClient、有界只读工具循环、ExecutionPolicy/Hook Port、Operation journal、SQLite RunLease/fencing、受限重启接管和天气 AcceptanceResult |
+| Agent Runtime | 会话、上下文、任务路由、模型调用编排、工具循环、执行策略、结果组装、结果验收、人工确认 | 保存 provider key、实现具体业务连接器、承载管理后台 | 已有持久化会话、幂等 Run、附件约束的智能 operation 路由、结构化记忆、Context Planner、token 水位、GatewayClient、有界只读工具循环、ExecutionPolicy/Hook Port、Operation journal、SQLite RunLease/fencing、受限重启接管、天气 AcceptanceResult 和 C2 图片资产链 |
 | 连接器与知识层 | 工具注册与执行、MCP、业务 API、搜索、网页、文档解析、RAG 和知识权限适配 | 决定完整任务流程、模型路由和模型预算 | 已有只读 Tool Registry 和 Open-Meteo 天气 Connector；MCP、企业业务连接器和知识能力尚未实现 |
 | 模型网关 | OpenAI-compatible API、模型别名、provider 适配、virtual key、路由、fallback、模型预算和限流 | 会话、工具循环、业务流程、文档知识 | 已有 LiteLLM、`chat-default` 和上游 key 收口 |
 | 治理与可观测 | 身份上下文、策略、审计事件、调用追踪、评测、安全和反馈闭环 | 代替各区域执行核心业务 | 已有版本化本地执行策略 Port、默认关闭的 C1 ChainTracer + OTel 旁路、Phoenix + PostgreSQL 选型与部署入口、回归评测和治理契约；外部策略控制面、真实 Runtime Trace、审计与反馈仍未完成 |
@@ -45,7 +45,7 @@ flowchart TB
     subgraph Runtime["Agent Runtime / agent-runtime"]
       RunApi["Run API"]
       Session["会话 / 上下文 / 任务状态"]
-      Orchestrator["任务路由 / 工具循环 / 人工确认"]
+      Orchestrator["智能 operation 路由 / 工具循环 / 人工确认"]
     end
 
     subgraph Connector["连接器与知识层"]
@@ -146,6 +146,7 @@ Agent Runtime
 - Policy Port：`ExecutionPolicy` 只接收脱敏执行上下文并返回版本化决定；前置 Hook 只能收紧，后置 Hook 只观察，策略不访问 Store 或 Connector。
 - Operation Journal：Operation 是外部动作执行事实，ToolCall 是 AI SDK 协议投影；两者由 Store 在同一事务中创建和更新，避免形成第二套隐式状态机。
 - Lease / Fencing：RunLease 保存 owner、expiry 和单调 token；Runtime 负责心跳，Store 负责最终校验，旧 owner 不能在接管后提交 Operation、ToolCall 或 Run 终态。
+- Policy + Structured Classifier：Runtime 先用确定性附件策略收窄 operation 候选，再复用 AI SDK `Output.object` 判断自然语言意图；图片副作用由固定置信度门禁控制，分类模型不能越过策略。
 - Event-driven Observation：治理与可观测通过统一事件旁路采集 trace、audit 和 evaluation 数据，不侵入各区域核心执行逻辑。
 - Compatibility Adapter：拆服务期间保留现有 Demo API 作为兼容 Adapter，逐步把内部调用切到新服务契约，避免页面和后端一次性迁移。
 
@@ -173,10 +174,11 @@ Demo、正式 Web 平台、飞书、IDE 和 API Adapter 都应转换为统一的
 | `userId` | 最终用户或服务身份 |
 | `agentId`、`agentVersion` | 运行的 Agent 定义和不可变版本 |
 | `conversationId` | 会话标识；无会话请求可为空 |
+| `operation` | 普通新请求默认 `auto`；Runtime 保存解析后的真实 operation，显式恢复沿用来源 operation |
 | `input` | 当前文本或结构化输入 |
 | `attachments` | 图片、文档等附件引用 |
 
-渠道层不能把浏览器或 IM 平台特有字段直接渗透到 Runtime 核心结构。
+渠道层不能把浏览器或 IM 平台特有字段直接渗透到 Runtime 核心结构，也不能在 `auto` 请求中指定模型。首版 Runtime 只根据当前附件形成候选；上下文感知路由契约进一步要求从已提交 Message、真实 Run operation 和受控资产派生活动图片，并在有界 `routing-context.v2` 快照内分类。该投影只读取 committed 消息，排除 interrupted 片段并脱敏历史 URL：显式当前图片覆盖历史，无当前附件但有活动图片时可候选对话/生图/编辑，无活动图片时候选对话/生图，远程图片/文档/多图固定对话。只有证据有效且 `confidence >= 0.85` 的合法图片分类才能进入图片分支，其他结果安全回退不继承历史图片的 `conversation.chat`。
 
 ### 平台配置契约
 
@@ -265,7 +267,7 @@ flowchart LR
       ConversationStore["SQLite Conversation Store<br/>Operation Journal / RunLease Facts"]
       ToolRegistry["src/tools<br/>只读 schema / allowlist"]
       WeatherConnector["src/connectors<br/>Open-Meteo 天气 Connector"]
-      GatewayClient["src/gateway<br/>ToolLoopAgent + Core 调用分流"]
+      GatewayClient["src/gateway<br/>AI SDK + Responses Adapter 调用分流"]
       ConfigLoader["src/config<br/>本地配置装配"]
     end
 
@@ -315,7 +317,7 @@ flowchart LR
 | `src/runtime/context-planner.mjs`、`memory-manager.mjs` | Agent Runtime | 上下文策略和结构化记忆保持 Runtime 所有 |
 | `src/storage/conversation-store.mjs` | Agent Runtime 数据面 | 独占 Conversation/Run/Operation/ToolCall/RunLease 等事实；本地 SQLite 可迁移到独立 Runtime 数据库或 durable adapter |
 | `src/tools/`、`src/connectors/` | 连接器与知识层 | 当前承载只读 Registry 和天气 Adapter；出现跨项目复用或独立凭据边界后可拆为 `connector-service` |
-| `src/gateway/gateway-contract.mjs`、`gateway-client.mjs`、`litellm-management-client.mjs` | Runtime 到模型网关的 AI SDK 客户端边界 | 模型生成统一使用 AI SDK；LiteLLM 管理端点保持独立，不承载模型网关服务端策略 |
+| `src/gateway/gateway-contract.mjs`、`gateway-client.mjs`、`responses-image-edit-adapter.mjs`、`litellm-management-client.mjs` | Runtime 到模型网关的统一客户端边界 | 优先使用 AI SDK；Responses Adapter 只补锁定 SDK 的图片编辑协议缺口；LiteLLM 管理端点保持独立 |
 | `config.yaml`、`docker-compose.yml` | 模型网关 | LiteLLM 独立部署和治理 |
 | `openspec/`、调用日志和未来评测 | 治理与可观测 | 按区域建立契约，统一事件模型 |
 
@@ -327,16 +329,19 @@ flowchart LR
 | `GET/POST /api/runtime/conversations` | Demo Server | Agent Runtime 的 Session API |
 | `GET /api/runtime/conversations/{id}` | Demo Server | 会话、消息、结构化记忆、版本和 `latestRun.acceptance` 查询 |
 | `PATCH /api/runtime/conversations/{id}` | Demo Server | 标题与独立归档状态更新，不改变会话生命周期 |
-| `POST /api/runtime/conversations/{id}/runs` | Demo Server | 幂等 Run API |
-| `POST /api/runtime/conversations/{id}/runs/stream` | Demo Server | POST SSE 模型文本增量和真实工具阶段；完成后返回同一 Run 的持久化最终结果 |
+| `POST /api/runtime/conversations/{id}/runs` | Demo Server | 幂等 Run API；普通新请求支持 `auto`，返回并持久化 Runtime 解析后的真实 operation |
+| `POST /api/runtime/conversations/{id}/runs/stream` | Demo Server | POST SSE 模型文本增量、图片资产和真实工具阶段；完成后返回同一 Run 的持久化最终结果 |
 | `POST /api/runtime/conversations/{id}/runs/{runId}/cancel` | Demo Server | 取消当前模型、工具和后续重试，收口为独立 `cancelled` 状态 |
+| `POST /api/runtime/conversations/{id}/run-requests/{requestId}/cancel` | Demo Server | 在 Run 创建前显式取消排队或结构化分类，不持久化伪 Run |
 | `POST /api/runtime/conversations/{id}/close` | Demo Server | 会话结束和最终 checkpoint |
 | `GET /api/runtime/conversations/{id}/events` | Demo Server | SQLite 事件游标驱动的持久化事实 SSE 增量同步 |
 | `POST /v1/chat/completions` | LiteLLM | Runtime 使用的模型网关标准接口；`test-chat.sh` 仅作连通性诊断 |
+| `POST /v1/images/generations` | LiteLLM | GatewayClient 图片生成下游接口 |
+| `POST /v1/responses` | LiteLLM | GatewayClient 对话式图片编辑工具下游接口；2026-08-15 当前配置已完成两轮真实编辑 smoke |
 
 未来拆出服务时，保持 Session/Run 契约不变，将 SQLite Store 替换为独立数据库和事件总线。
 
-当前存在两类不能混用的事件：`RunEventSink` 发布进程内易失生命周期事件，供 POST SSE、Trace 和故障注入 Adapter 实时观察；`conversation_events` 与 Conversation/Run/Message/ToolResult 同事务写入 SQLite，供游标同步和恢复事实读取。Runtime 不引用 SSE 事件名，订阅者失败也不得反向改写工具、模型或 Run 终态。当前 `RunEventSink` 不是持久消息总线、Outbox 或保证送达机制。
+当前存在两类不能混用的事件：`RunEventSink` 发布进程内易失生命周期事件，供 POST SSE 和故障注入等本地 Adapter 实时观察；`conversation_events` 与 Conversation/Run/Message/ToolResult 同事务写入 SQLite，供游标同步和恢复事实读取。Runtime 不引用 SSE 事件名，订阅者失败也不得反向改写工具、模型或 Run 终态。当前 `RunEventSink` 不是 Broker、Outbox、Trace、事实源或保证送达机制，也不得直接挂接无界或远程慢订阅者。
 
 ## 业务主链与模型测试
 
@@ -347,9 +352,10 @@ flowchart LR
 ```text
 Demo / 正式平台 / IM / API Adapter
   -> Agent Runtime
+      -> 附件候选策略 + Output.object 意图分类
       -> Connector / Knowledge
       -> GatewayClient
-      -> AI SDK Core + OpenAI-compatible Provider
+      -> AI SDK Core / Responses 图片编辑 Adapter
       -> Model Gateway
   -> 最终结果或确认状态
 ```
@@ -392,12 +398,14 @@ scripts/test-chat.sh
 - SQLite 持久化多会话、幂等 Run、绝对截止时间、ToolResult、AcceptanceResult、POST SSE 模型文本流和独立的 SSE 多标签页事实同步。
 - 结构化 MemoryDelta、来源追溯、memoryVersion 乐观锁和最终 checkpoint。
 - Context Planner、模型网关 token counter 回退、高低水位和 Context Manifest。
-- AI SDK Core v7 的 `ToolLoopAgent`、`generateText` / `streamText`、`Output.object` 与 OpenAI-compatible Provider 组成唯一 LiteLLM 模型生成客户端；AI SDK 内建重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
+- Runtime 智能默认 operation 路由已从当前附件候选扩展到有界会话上下文：从不可变事实派生活动图片，分类只返回 operation/confidence/useActiveImage/relevantMessageIds，Runtime 校验证据、选择源图并保存真实 operation、实际引用与脱敏 intentDecision；幂等重放和显式恢复不重新分类。Runtime/Store 直接回归、`scenarios/runtime-routing/` 双模式 Runner 和首个真实分类 smoke 已落地；真实样本仅 4 轮，仍需完整 fixture 矩阵和发布规模评测。
+- GatewayClient 以 AI SDK Core v7 的 `ToolLoopAgent`、`generateText` / `streamText`、`generateImage`、`Output.object` 和内部 Responses 图片编辑 Adapter 组成唯一 LiteLLM 模型生成客户端；SDK 与 Adapter 外部自动重试保持关闭，由平台统一重试执行器按 Run 总时限控制模型尝试并持久化证据。
 - 纯文本工具型对话复用 GatewayClient 生命周期内的 `ToolLoopAgent`，通过 `callOptionsSchema`、`prepareCall`、`prepareStep`、`runtimeContext` 和 `toolsContext` 提供最多四步的模型工具编排；Runtime 只在服务端确定性路由命中时开放对应受管工具。工具后模型失败且正文尚未交付时，可从 SQLite ToolResult 做无 ToolSet 总结恢复；Demo Server 重启后也能从 completed 已注册只读 ToolResult 继续原 Run。天气候选经独立策略验收后才交付和完成。Open-Meteo Connector 只负责固定端点天气读取。
 - 版本化 Runtime Scenario Runner、固定行为模型、进程退出故障注入和独立场景验收；确定性链路与真实模型观察分开报告。
 - 版本化 `ExecutionPolicy` Port：已知 Run 与注册只读工具显式允许，未知操作默认拒绝，其他已知副作用默认要求确认；前置 Hook 只能收紧，后置 Hook 异常隔离。
 - 独立 Operation journal：记录操作键、幂等键、effect/risk、策略版本、attempt、外部请求 ID、结果、readback、`unknown` 和稳定错误；ToolCall 保持 AI SDK 投影并与 Operation 同事务更新。
 - SQLite RunLease/fencing：新 Runtime Run 取得并续租 owner；未过期竞争返回 `lease_held`，过期接管递增 token，旧 token 的关键写入被拒绝，Run 终态事务内释放 lease。
+- C2 文生图和多轮单图编辑开发切片：`image.generate` 使用纯文本提示词并经 AI SDK Images API，`image.edit` 使用当前会话的一张受控 `image_asset` 并经 Responses 图片工具；每轮输出可成为下一轮源图，本地 ImageAssetStore 持有二进制，SQLite 保存不可变资产与 Run/Message 来源链。
 - 100 轮用户纠正、实体隔离、待办与来源追溯回归评测。
 - Agent Runtime 及其 GatewayClient、只读 Tool Registry、天气 Connector 和模型网关的模块边界。
 - OpenSpec、文档、回归评测和自动化架构边界检查的最小治理。
@@ -411,6 +419,7 @@ scripts/test-chat.sh
 - 多用户身份映射、共享生产数据库、统一 trace、审计和在线评测反馈闭环。
 - 生产级多实例部署、跨实例取消路由、长任务 Worker、运行中工具 checkpoint 和持久 Timer；当前 lease/fencing 只完成 SQLite 协调基础与确定性接管验证。
 - Sandbox，以及写操作的确认、外部幂等、业务回读、`unknown` 人工处理、补偿和 exactly-once 证明；当前没有写 Connector。
+- 正式对象存储、图片内容审核、恶意文件扫描、资产保留期清理，以及图片理解的受控资产输入；Responses 图片工具当前只有两轮真实编辑 smoke，尚未完成多样本质量、成本和异常矩阵验收。
 
 ## 演进路线
 
