@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-15-runtime-context-aware-operation-routing.md
 import { z } from "zod";
 import {
   DEFAULT_RUN_OPERATION,

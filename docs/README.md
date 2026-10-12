@@ -13,10 +13,13 @@
 - [C1 ChainTrace 运维说明](./c1-chaintrace-operations.md)：保留为触发 TODO 后的 Phoenix + PostgreSQL 启用手册，说明认证、Runtime OTLP 配置、健康检查、备份和升级回滚边界；当前日常启动不执行。
 - [方案选型与复用治理](./solution-selection-governance.md)：约束方案发现、成熟能力复用、`采用 / 适配 / 自研` 决策、存量能力审计和能力完成报告。
 - [方案决策记录](./decisions/README.md)：保存每次能力选择、未采用原因、验证证据、退出路径和重评条件，并提供统一模板。
+- [架构与方案决策存量审计（2026-10-12）](./audits/2026-10-12-architecture-decisions.md)：按最新 ADR Skill 审计 21 份决策，区分契约偏差、历史演进、证据与交接缺口。
+- [决策审计修复验证与证据登记](./audits/2026-10-12-decision-repair-evidence.md)：记录契约同步、18 份有效决策补齐、165 项回归与仍需真实验证的门禁。
 - [编码规范](./coding-standards.md)：函数注释、数据结构、设计模式、设计原则和变更检查要求。
 - [架构图视觉与表达规范](./architecture-diagram-style.md)：统一当前项目架构图的模块框、关联箭头、职责边界、状态标识、路径摘要和 SVG/PNG 资产要求。
 - [上下文管理](./context-management.md)：持久化会话、结构化记忆、Context Planner、高低水位、并发控制和 100 轮评测。
 - [Agent Skills 索引](../.agents/skills/README.md)：本项目 Skill 目录规范、索引和治理要求。
+- [架构与方案决策 Skill](../.agents/skills/docs/architecture-decision/SKILL.md)：架构决策记录的 Agent-first 工作流，以及与选型治理和 OpenSpec 的边界。
 
 ## 与 OpenSpec 的分工
 

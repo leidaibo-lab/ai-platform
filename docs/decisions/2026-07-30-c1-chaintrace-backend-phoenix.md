@@ -110,3 +110,22 @@ C1 已有后端中立的 `ChainTracer`、AI SDK Telemetry 和 OpenTelemetry PoC�
 - 剩余边界：本记录只完成后端决策；生产 TLS、部署、监控、容量和正式密钥仍属于正式接入阶段
 - 文档与契约：本记录、决策索引、stable OpenSpec、README、部署说明和自动化回归均已同步；真实 Runtime Trace 与固定模型四维运行态基线按延期记录的触发条件恢复
 - 重评条件：出现多组织/项目空间、SAML/JIT、跨团队隔离、保留合规变化、容量超出单应用 + PostgreSQL、Phoenix 改变 OTLP 属性语义，或 Langfuse 解决当前查询/许可/固定版本缺口
+
+## 当前实施与验收补充（2026-10-12）
+
+固定 Phoenix 选型有效，生产部署和真实 Trace 仍为触发式 TODO。
+
+### 实施映射
+
+- 受影响入口：`docker-compose.chaintrace.yml`、`src/observability/otel-runtime.mjs`、`docs/c1-chaintrace-operations.md`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:telemetry`，验证默认关闭、标准 OTLP、正文脱敏及 exporter 失败隔离保持。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成正式 Auth/TLS/备份恢复/版本升级回滚与三业务 ID Trace 验收；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

@@ -99,4 +99,23 @@ v7 结果统一使用 `usage`、`stream` 和 `finalStep.response`，不再依赖
 
 后续 `2026-08-13-durable-run-recovery-and-acceptance.md` 没有改变 AI SDK 与平台的所有权边界：AI SDK 继续负责受限 ToolSet 内的工具消息编排和模型生成，Runtime 继续拥有工具是否向当前 Run 开放、ToolResult、恢复资格、AcceptanceResult 和最终交付。当前只有确定性天气路由命中时才传入 `get_weather`；未命中时不再把全部受管工具以 `auto` 暴露给模型。
 
-工具后的结构化无工具总结现在既用于同进程故障，也用于服务重启后的原 Run 恢复，但只覆盖 completed 只读 ToolResult 后的窄稳定点。天气候选还必须通过 A3 领域验收才能完成；终态提交后的渠道投递失败不能反向改写 Run。当前仍没有完整 Agent transcript、运行中工具 checkpoint、多实例 lease/fencing、写操作补偿或通用 Durable Harness。
+工具后的结构化无工具总结现在既用于同进程故障，也用于服务重启后的原 Run 恢复，但只覆盖 completed 只读 ToolResult 后的窄稳定点。天气候选还必须通过 A3 领域验收才能完成；终态提交后的渠道投递失败不能反向改写 Run。该段描述 08-13 恢复切片的边界；同日后续执行治理已增加 SQLite RunLease/fencing 基础。当前仍没有完整 Agent transcript、运行中工具 checkpoint、生产多实例验收、写操作补偿或通用 Durable Harness。
+
+## 当前实施与验收补充（2026-10-12）
+
+当前 SQLite Lease 基础已存在；生产多实例、写补偿与通用 Durable Harness 仍未完成。
+
+### 实施映射
+
+- 受影响入口：`src/gateway/gateway-client.mjs`、`src/tools/weather-tool.mjs`、`src/runtime/memory-manager.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:gateway`，验证ToolLoopAgent 复用与 Core 动态 Output.object 分流、maxRetries=0 和结果字段映射。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成真实模型结构化输出/天气质量与后续大版本兼容矩阵；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

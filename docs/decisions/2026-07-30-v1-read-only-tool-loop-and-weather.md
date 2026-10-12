@@ -59,3 +59,22 @@
 - 出现跨系统复用的多个 Connector 后，再通过 `@ai-sdk/mcp` 的 Streamable HTTP PoC 评估 MCP；不在本仓自研协议。
 - 出现有副作用工具时进入 C6，先补权限、预览、人工确认、业务幂等和结果回读，不复用本次只读默认策略。
 - 出现复杂分支、暂停恢复或跨实例长任务时，再分别重评 LangGraph 与 Temporal。
+
+## 当前实施与验收补充（2026-10-12）
+
+ToolLoopAgent/Core 分流由 07-31 SDK 记录细化；恢复/A3 和 Operation/Lease 由 08-13 记录扩展。
+
+### 实施映射
+
+- 受影响入口：`src/tools/tool-registry.mjs`、`src/tools/weather-tool.mjs`、`src/connectors/open-meteo-weather.mjs`、`src/gateway/gateway-client.mjs`、`src/runtime/chat-runtime.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:tools`，验证只对确定性路由开放 get_weather；四步上限、固定 HTTPS 端点、相同 requestId 不重复 Connector。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成真实天气质量、来源许可与生产可用性；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

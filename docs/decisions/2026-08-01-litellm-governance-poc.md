@@ -73,6 +73,29 @@ PoC 使用 `4100` 端口、独立 Docker volume 与 `config.gateway-governance.y
 ## 验收与完成报告
 
 - 验证证据：LiteLLM `1.89.1` migration 成功；管理 API 建 team/key；零预算拒绝；PostgreSQL 存在 `LiteLLM_SpendLogs` 与 Daily spend 表；真实 `gpt-5.4-mini` 调用的 usage、正数 spend 和 team 预算累计均通过自动断言。
-- 剩余边界：图片计费、许可证、Redis 多副本限流和 provider 账单对账仍待验证。固定本地 Runtime virtual key 接入已由 [`2026-08-02-runtime-virtual-key-mapping.md`](./2026-08-02-runtime-virtual-key-mapping.md) 完成；动态多租户映射仍未实现。项目默认 `gpt-5.6` 仍需单独决定映射到哪个上游变体；本 PoC 不通过偷换默认别名解决该产品决策。
+- 剩余边界：图片计费、许可证、Redis 多副本限流和 provider 账单对账仍待验证。固定本地 Runtime virtual key 接入已由 [`2026-08-02-runtime-virtual-key-mapping.md`](./2026-08-02-runtime-virtual-key-mapping.md) 完成；动态多租户映射仍未实现。原验收时默认模型映射未定；后续模型兼容复评与当前 `config.yaml` 已明确 `gpt-5.6 -> openai/gpt-5.6-sol`，该映射不是本治理 PoC 的选型结论。
 - 文档与契约：PoC 完成后更新本记录与 `docs/decisions/README.md`；只有引入稳定业务身份映射时才更新 OpenSpec。
 - 重评条件：PoC 不通过、团队共享上线、进入多实例或出现虚拟 key 与账单归属不一致。
+
+## 候选检索范围补充（2026-10-12）
+
+原记录比较 LiteLLM 数据库治理、托管网关和 Runtime 自研。轻量可组合路线已由“现有 LiteLLM 管理 API + 平台稳定 Adapter + 独立 PostgreSQL”承担，与已选方案共享核心产品，未另列一个第四产品；现有材料不能证明已穷尽第三方限流/账本组件。只有进入共享/多实例门禁时，才补独立治理组件和具体版本许可证、限流与对账证据；本次不追加无验证的新候选。
+
+## 当前实施与验收补充（2026-10-12）
+
+选型接受只针对隔离 PoC；真实 spend 为历史本地证据，当前模型默认映射由兼容复评明确。
+
+### 实施映射
+
+- 受影响入口：`docker-compose.gateway-governance.yml`、`config.gateway-governance.yaml`、`scripts/test-gateway-governance.mjs`、`scripts/provision-gateway-runtime-key.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:config`，验证Runtime 仅消费受限凭据，不自研第二预算/限流账本。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成固定版本许可、图片计费、Redis 多副本限流与 provider 账单对账；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

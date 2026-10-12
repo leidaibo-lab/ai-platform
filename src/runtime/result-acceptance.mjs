@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-13-durable-run-recovery-and-acceptance.md
 /**
  * @typedef {object} AcceptanceResult
  * @property {string} policy - 稳定验收策略名称。

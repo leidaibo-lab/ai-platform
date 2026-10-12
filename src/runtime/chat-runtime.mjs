@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-13-durable-run-recovery-and-acceptance.md, docs/decisions/2026-08-13-execution-governance-foundation.md, docs/decisions/2026-08-13-runtime-event-port-and-delivery.md
 import { createHash, randomUUID } from "node:crypto";
 import { createNullChainTracer } from "../observability/chain-tracer.mjs";
 import { createResilienceContext } from "../resilience/retry-executor.mjs";

@@ -112,3 +112,22 @@ C1 渠道继续提交会话 Run；渠道显式选择图片操作，或者未来�
 - `/v1/models` 中出现别名只证明路由对当前 key 可见，不证明该别名具备 `chat`、`vision`、`imageGeneration` 或 `imageEditing` 能力。Runtime 必须在模型调用前按 operation 和输入模态校验能力；错配统一返回 `model_capability_mismatch`。
 - 图片模型的 `imageGeneration` / `imageEditing` 声明只描述端点与操作兼容边界，不代表当前上游账号池持续健康。既有证据包括文生图真实 happy path、旧 `/images/edits` 三次无兼容账号、2026-08-02 Responses 图片工具拒绝，以及 2026-08-15 当前配置两轮真实编辑成功；映射或 key 变化后仍需重复 smoke，不能由能力声明直接推断可用。
 - 真实视觉 smoke 只补齐当前 data URL 图片理解主路径；受控 `image_asset` 理解输入、多轮引用、媒体安全、稳定视觉 fixture 和质量基线仍是后续边界。
+
+## 当前实施与验收补充（2026-10-12）
+
+image.understand 是当时的领域规划名，当前真实 Run 用 conversation.chat 的视觉路径；08-15 已支持受限活动 image_asset 视觉继承和续改，完整媒体治理仍未完成。
+
+### 实施映射
+
+- 受影响入口：`src/runtime/chat-runtime.mjs`、`src/storage/conversation-store.mjs`、`src/gateway/gateway-client.mjs`、`src/storage/image-asset-store.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:images`，验证图片创建新不可变资产、幂等不重复调用，实际尺寸以资产元数据为准。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成正式对象存储、内容安全、保留期及真实质量/成本矩阵；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

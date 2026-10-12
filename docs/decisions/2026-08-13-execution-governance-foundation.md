@@ -95,3 +95,22 @@ Lease 采用“保留记录、过期接管、token 单调递增”语义。释�
 - 剩余边界：Sandbox、写操作确认、外部回读、补偿、未知结果人工处理和跨地域多库协调仍未完成。
 - 文档与契约：同步本记录、OpenSpec change、`docs/runtime-reliability-and-acceptance.md`、`docs/ai-structure.md` 和架构边界回归。
 - 重评条件：出现有副作用 Operation、批量/长任务、人工审批、第二个 Runtime 实例的生产部署、独立策略/安全团队或代码执行入口。
+
+## 当前实施与验收补充（2026-10-12）
+
+只证明 SQLite 协调基础；Sandbox 与副作用恢复保持独立门禁，不提升到生产 R4。
+
+### 实施映射
+
+- 受影响入口：`src/runtime/execution-policy.mjs`、`src/runtime/run-lease-coordinator.mjs`、`src/storage/conversation-store.mjs`、`src/runtime/chat-runtime.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:governance`，验证未知操作拒绝、Hook 只能收紧/观察、ToolCall 同事务投影、过期接管和旧 token 拒绝。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成生产多实例部署、跨实例取消、Sandbox、写确认/回读/补偿；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

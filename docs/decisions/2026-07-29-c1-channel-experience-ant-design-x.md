@@ -102,3 +102,22 @@
 - 剩余边界：真正的重试或重新生成仍需要 Runtime 契约，当前恢复入口只创建新草稿；真实上游模型的长回答性能和自动化可访问性审计仍需后续基线；反馈闭环后置；外部信息源引用跟随 C2-C7 对应链路建设；真实阶段事件出现前不展示 ThoughtChain；X SDK 不在当前范围。
 - 文档与契约：同步 `docs/scenario-interaction-chains.md`、`openspec/specs/ai-platform/spec.md` 和实现后的 README 使用说明。
 - 重评条件：出现多个独立 Web 渠道、Ant Design X 无法满足性能或可访问性要求、现有 SSE Adapter 明显阻碍复用，或正式产品不再采用 Ant Design 体系。
+
+## 当前实施与验收补充（2026-10-12）
+
+模型选择/失败反馈由 07-30 同主题记录补充；恢复动作由 I1-I4 决策扩展；auto 和活动图片入口以 08-15 路由记录为准。
+
+### 实施映射
+
+- 受影响入口：`demo/src/App.jsx`、`demo/src/runtime-adapter.js`、`demo/src/conversation-view-model.js`、`demo/src/styles.css`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:demo`，验证渠道状态以 Runtime 事实收口，取消调用独立端点；恢复不复用旧幂等标识。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成真实浏览器桌面/移动和自动化可访问性验证；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-07-29-c1-channel-experience-ant-design-x.md, docs/decisions/2026-07-30-c1-channel-experience-batches-i1-i4.md
 /**
  * @typedef {object} RuntimeAdapterOptions
  * @property {typeof fetch} [fetchImpl] - 可注入的 Fetch Port，测试用 fake 实现替代浏览器网络。

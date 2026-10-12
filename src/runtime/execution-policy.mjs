@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-13-execution-governance-foundation.md
 const POLICY_DECISIONS = new Set(["allow", "deny", "confirmation_required", "defer"]);
 const SIDE_EFFECTS = new Set(["write", "external", "unknown"]);
 const DEFAULT_POLICY_NAME = "execution-policy";

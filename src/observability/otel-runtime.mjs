@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-07-30-c1-chaintrace-backend-phoenix.md, docs/decisions/2026-07-30-c1-chaintrace-runtime-validation-deferral.md
 import { OpenTelemetry } from "@ai-sdk/otel";
 import { trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";

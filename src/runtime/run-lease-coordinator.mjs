@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-13-execution-governance-foundation.md
 import { randomUUID } from "node:crypto";
 
 const DEFAULT_LEASE_TTL_MS = 30000;

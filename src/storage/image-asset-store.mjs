@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-07-31-c2-image-understanding-and-generation-boundary.md
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 

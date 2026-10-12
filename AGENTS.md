@@ -59,6 +59,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `docs/architecture-diagram-style.md`：当前项目架构图的模块、关联、边界、路径摘要和视觉规范；新增或更新架构图时先按这里执行。
 - `.agents/skills/README.md`：Agent Skill 索引和目录治理规则。
 - `.agents/skills/docs/context-memory-evaluation/SKILL.md`：上下文记忆评测场景、指标、脚本和回归治理流程。
+- `.agents/skills/docs/architecture-decision/SKILL.md`：架构与方案决策的 Agent-first 工作流，聚合 ADR 方法、项目选型治理和 OpenSpec 门禁。
 - `openspec/project.md`：项目级区域边界、依赖规则和技术约定。
 - `openspec/specs/ai-platform/spec.md`：稳定能力契约。修改代理行为、Session/Run API、鉴权方式、模型别名、结构化记忆、上下文预算或密钥边界时，需要同步这里。
 

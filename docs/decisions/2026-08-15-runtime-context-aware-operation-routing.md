@@ -137,3 +137,22 @@ Runtime 选择源资产并组装输入后创建 Run。`intentDecision` 保存 sc
 - 剩余边界：真实分类样本只有 4 轮，只能标记 `observation-only`；无关聊天、新图生成、显式旧图覆盖、低置信度、跨会话资产等完整版本化 fixture 矩阵仍待补齐。不能宣称真实模型已稳定识别所有指代，也未提升 C2 的内容安全、质量、成本或生产可靠性等级。
 - 文档与契约：同步 stable OpenSpec、`add-smart-operation-routing` change、场景链和决策索引。
 - 重评条件：真实模型 operation 准确率或证据有效率低于发布阈值、错误图片副作用率不为零、P95 路由延迟/成本不可接受、投影查询成为瓶颈，或 operation 演进为需要持久工作流的复杂图。
+
+## 当前实施与验收补充（2026-10-12）
+
+当前真实 4 样本仍为历史 observation-only，不把确定性回归当作发布准确率。
+
+### 实施映射
+
+- 受影响入口：`src/runtime/run-intent-router.mjs`、`src/storage/conversation-store.mjs`、`src/runtime/chat-runtime.mjs`、`src/evaluation/runtime-routing-scenario-runner.mjs`、`scenarios/runtime-routing/image-context-continuation/case.json`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:routing-scenarios`，验证routing-context.v2 只投影 committed 消息；候选钳制、证据/源图/并发/重放和零错误副作用。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成完整版本化负例 fixture、真实有效分类不少于 30 样本及发布 P95/成本阈值；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

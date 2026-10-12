@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-02-c2-multi-turn-image-editing-responses-path.md
 import { GatewayRequestError } from "./gateway-contract.mjs";
 
 const MAX_IMAGE_RESULT_BYTES = 20 * 1024 * 1024;

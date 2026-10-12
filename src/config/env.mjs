@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-02-runtime-virtual-key-mapping.md
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";

@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-13-execution-governance-foundation.md, docs/decisions/2026-08-15-runtime-context-aware-operation-routing.md
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";

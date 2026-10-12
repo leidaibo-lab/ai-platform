@@ -95,3 +95,22 @@ Runtime 捕获原模型异常后，从 Store 重新查询当前 Run 的 complete
 后续决策 `2026-08-13-durable-run-recovery-and-acceptance.md` 复用了本记录证明过的 completed ToolResult 稳定点，并把范围从“同一进程内无工具总结恢复”扩展到“进程重启后恢复原 Run”。启动扫描仍只接受原截止时间内、全部工具均为 completed 已注册只读调用、无助手消息的窄条件，不恢复运行中工具、图片、写副作用或模型隐藏状态。
 
 同时，天气模型正文不再直接等于完成：Runtime 先根据持久化 ToolResult 生成 `AcceptanceResult`，accepted 后才原子提交助手消息和 `run.completed`，rejected 则不保存候选正文。受管工具也只在 Runtime 确定性路由命中后开放；未命中路由的普通回答保持工具集合关闭和 `acceptance=null`。因此本记录的技术选择仍成立，但“跨进程恢复未实现”属于当时状态，不再代表当前天气切片；当前准确定位为受限 R3/A3，而非通用持久工作流。
+
+## 当前实施与验收补充（2026-10-12）
+
+08-13 恢复/A3 决策和执行治理记录承接本稳定点，后者增加 Lease/fencing，不允许副作用自动恢复。
+
+### 实施映射
+
+- 受影响入口：`src/runtime/chat-runtime.mjs`、`src/storage/conversation-store.mjs`、`src/gateway/gateway-client.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:runtime`，验证completed ToolResult 以结构化消息恢复，不重放 Connector；已交付普通正文后禁止恢复。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成真实天气质量与成熟 durable 引擎触发场景；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

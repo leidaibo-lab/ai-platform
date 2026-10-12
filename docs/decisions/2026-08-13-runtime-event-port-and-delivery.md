@@ -106,3 +106,22 @@
 - 剩余边界：无跨进程发布、无 DeliveryAttempt、无保证送达、无 Token 级恢复；普通 C1 仍为 A0。
 - 文档与契约：同步 `docs/ai-structure.md`、`docs/scenario-interaction-chains.md` 和决策索引；外部 JSON/SSE 行为未改变，因此稳定 OpenSpec 无需改写。
 - 重评条件：出现独立 Runtime 服务、多实例实时消费者、必须重放的生命周期事件、渠道交付 SLO，或多个 Web 产品明确统一 AI SDK UI Message 协议。
+
+## 当前实施与验收补充（2026-10-12）
+
+Observer + Port/Adapter 继续有效；新订阅者不得把远程无界等待挂到同步 Sink。
+
+### 实施映射
+
+- 受影响入口：`src/runtime/run-event-sink.mjs`、`src/runtime/chat-runtime.mjs`、`scripts/demo-server.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:runtime`，验证不可变事件按注册顺序发布，观察失败不改终态；Adapter 映射 SSE，SQLite 独占恢复事实。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成远程慢订阅者、有界交付和持久 Broker 的新场景选型；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

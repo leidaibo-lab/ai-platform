@@ -98,3 +98,22 @@ Runtime 只扫描自身 SQLite 中的 `running` Run。满足条件时，从原�
 - 剩余边界：普通对话没有独立事实验收；图片生成、写操作、多实例与长任务均不具备自动恢复。
 - 文档与契约：同步 README、场景链路、OpenSpec change 和决策索引。
 - 重评条件：出现第二类有副作用 Operation、跨请求暂停、复杂分支、多实例调度、可靠 timer、人工审批或补偿；或出现第二个独立 AI 项目稳定消费场景协议，需要独立版本与兼容承诺。
+
+## 当前实施与验收补充（2026-10-12）
+
+同日执行治理记录扩展 Operation journal/lease/fencing，恢复先取得有效租约；原非目标描述的是首期切片，不代表当前无协调基础。
+
+### 实施映射
+
+- 受影响入口：`src/runtime/chat-runtime.mjs`、`src/runtime/result-acceptance.mjs`、`src/storage/conversation-store.mjs`、`src/evaluation/runtime-scenario-runner.mjs`、`scenarios/runtime/weather-restart-accepted/case.json`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:scenarios`，验证原 Run/截止时间内恢复 completed 只读事实，不重复 Connector；验收拒绝不落正文。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成真实天气 evaluation 和不少于 30 样本的质量基线；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

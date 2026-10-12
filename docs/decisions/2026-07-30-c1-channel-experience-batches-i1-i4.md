@@ -92,3 +92,22 @@
 - 剩余边界：I5 记忆控制/反馈闭环和 I6 产品化能力明确延期。
 - 文档与契约：同步 `README.md`、`docs/decisions/README.md`、`docs/scenario-interaction-chains.md` 和稳定 OpenSpec。
 - 重评条件：出现对话分支需求、多 Web 渠道统一协议、会话规模超过渐进窗口能力，或 Ant Design X/X Markdown 无法满足性能与可访问性目标。
+
+## 当前实施与验收补充（2026-10-12）
+
+I1-I4 基线保留；I5/I6 与生产产品化仍未完成，构建预算另用 npm run demo:check。
+
+### 实施映射
+
+- 受影响入口：`demo/src/App.jsx`、`demo/src/conversation-view-model.js`、`demo/vite.config.mjs`、`scripts/check-demo-build.mjs`、`src/runtime/chat-runtime.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:demo`，验证归档与关闭独立，恢复创建新 Run，已提交消息不可变。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成真实下载落盘、桌面/移动/键盘和长列表浏览器复核；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

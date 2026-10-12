@@ -16,7 +16,7 @@
 
 ### 必须满足
 
-- master key 只用于 provisioning 等模型网关管理操作，不进入普通 Runtime 生成链。
+- 配置 `LITELLM_RUNTIME_KEY` 的环境中，master key 只用于 provisioning 等模型网关管理操作，不进入普通 Runtime 生成链；缺失 Runtime key 的旧本地环境保留下述兼容回退，不代表共享/生产治理完成。
 - Runtime、`/api/gateway/status` 和单次 Run 使用同一 virtual key。
 - 浏览器只接收模型别名，不接收 virtual key、team ID、上游模型名或 provider key。
 - 保留 `LITELLM_MASTER_KEY` 作为现有本地启动的兼容回退，配置了 `LITELLM_RUNTIME_KEY` 时必须优先使用后者。
@@ -82,3 +82,22 @@ Provisioning 脚本使用 master key 调用 LiteLLM 管理 API，输出只包含
 - 剩余边界：动态租户/应用映射、正式密钥存储、轮换、撤销和多实例限流。
 - 文档与契约：同步 README、稳定 OpenSpec 与治理 PoC 记录。
 - 重评条件：进入多人共享、一个 Runtime 服务多个租户或需要无停机 key 轮换。
+
+## 当前实施与验收补充（2026-10-12）
+
+稳定契约已同步优先级和回退；本次不重新 provisioning 或生成真实 spend。
+
+### 实施映射
+
+- 受影响入口：`src/config/env.mjs`、`scripts/provision-gateway-runtime-key.mjs`、`src/gateway/litellm-management-client.mjs`、`scripts/test-runtime-governance.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:config`，验证Runtime key 优先，旧本地缺失回退 master；模型目录/计数/生成同身份且不泄露凭据。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成动态租户、正式密钥管理、轮换撤销与共享限流；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

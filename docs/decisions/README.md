@@ -4,6 +4,10 @@
 
 ## 使用方式
 
+最近一次审计：[2026-10-12 架构与方案决策存量审计](../audits/2026-10-12-architecture-decisions.md)。审计建议不改变历史接受状态；修复前应检查最新演进关系与稳定契约。
+
+修复结果：[验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)。新增决策按增强模板区分实施计划、验收计划和实际结果；旧记录的真实/生产门禁未完成时保留未勾选状态。
+
 1. 从 [`TEMPLATE.md`](./TEMPLATE.md) 复制一份新记录。
 2. 文件名使用 `YYYY-MM-DD-<简短英文主题>.md`。
 3. 正式实现前把状态从“提议”更新为“接受”。
@@ -17,6 +21,7 @@
 | 提议 | 正在调研或验证，不能进入正式实现 |
 | 接受 | 证据和边界已经确认，可以按记录实施 |
 | 拒绝 | 候选或提议不采用，保留原因供后续检索 |
+| 废弃 | 曾经接受但已不再适用，必须注明停用原因和退出路径；有新决策承接时使用“已替代” |
 | 已替代 | 后续决策已经替代本记录，但历史依据仍保留 |
 
 ## 已有记录
@@ -35,6 +40,7 @@
 | 2026-07-31 | [C2 图片理解与生成能力边界](./2026-07-31-c2-image-understanding-and-generation-boundary.md) | 接受 | C1 保持会话入口，C2 统一承载图片理解与生成并复用 `image_asset`，但使用独立操作契约；具体图片模型、存储与审核方案继续通过 PoC 选型 |
 | 2026-07-31 | [ToolResult 持久化总结恢复](./2026-07-31-tool-result-summary-recovery.md) | 接受 | 工具后模型瞬时失败且尚未交付正文时，从 SQLite ToolResult 构造 AI SDK 结构化消息做无工具恢复；不重复 Connector，也不建设工作流引擎 |
 | 2026-07-31 | [AI SDK Core v7 调用边界对齐](./2026-07-31-ai-sdk-core-v7-alignment.md) | 接受 | 工具型对话复用 `ToolLoopAgent` 并按 Run 动态配置；普通调用和动态结构化输出保留 Core 函数路径，同时停止依赖 v7 弃用结果字段 |
+| 2026-07-30 | [C1 会话模型选择与失败反馈](./2026-07-30-c1-model-selection-and-failure-feedback.md) | 接受 | 显式 Run 模型选择、目录与能力交集、安全失败反馈继续有效；普通 auto 输入的模型控件由后续智能路由决策演进 |
 | 2026-07-30 | [V1 只读工具循环与天气 Connector](./2026-07-30-v1-read-only-tool-loop-and-weather.md) | 接受 | 固定 LiteLLM digest；以 Open-Meteo 跑通首个无副作用只读工具，并由后续 Core v7 决策细化 Agent 复用和调用分流边界 |
 | 2026-07-30 | [C1 渠道体验连续批次 I1-I4](./2026-07-30-c1-channel-experience-batches-i1-i4.md) | 接受 | 继续适配 Ant Design X 与现有 Runtime Adapter，连续补齐会话管理、Run 恢复、结果消费和体验质量基线；I5/I6 明确延期 |
 | 2026-07-30 | [C1 ChainTrace 运行态验收延期](./2026-07-30-c1-chaintrace-runtime-validation-deferral.md) | 接受 | 保留默认关闭的技术接入和 Phoenix 选型；正式实例、真实 Runtime Trace 与四维运行态基线转为触发式 TODO |

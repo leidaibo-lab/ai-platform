@@ -2,7 +2,7 @@
 
 ## Purpose
 
-该规范描述 AI 应用基础平台当前 V0.6 集成切片的稳定能力边界：LiteLLM Proxy 在内部模型网关边界提供 OpenAI-compatible 接口，供 Runtime GatewayClient 和模型连通性诊断使用；服务端保存上游密钥，Agent Runtime 持久化会话、原始消息和结构化记忆，Demo Server 提供浏览器交互入口和分层 Runtime API。
+该规范描述 AI 应用基础平台当前 V0.6 会话与上下文基线及 V1 只读工具和执行治理受限切片的稳定能力边界：LiteLLM Proxy 在内部模型网关边界提供 OpenAI-compatible 接口，供 Runtime GatewayClient 和模型连通性诊断使用；服务端保存上游密钥，Agent Runtime 持久化会话、原始消息和结构化记忆，Demo Server 提供浏览器交互入口和分层 Runtime API。
 
 ## Requirements
 
@@ -15,21 +15,21 @@
 - **GIVEN** LiteLLM Proxy 已启动
 - **AND** `.env` 提供了 `LITELLM_MASTER_KEY`、`UPSTREAM_API_BASE` 和对话模型使用的 `UPSTREAM_API_KEY1`
 - **WHEN** Agent Runtime 或模型连通性测试请求 `POST /v1/chat/completions`
-- **AND** 请求使用 `Authorization: Bearer LITELLM_MASTER_KEY`
+- **AND** Runtime 请求 SHALL 使用优先解析的 `LITELLM_RUNTIME_KEY`，仅旧本地配置缺失时 MAY 回退 `LITELLM_MASTER_KEY`；独立模型连通性测试继续使用管理凭据
 - **THEN** 系统 SHALL 将请求转发到配置的上游 OpenAI-compatible API
 - **AND** 系统 SHALL 返回 OpenAI-compatible 响应
 
 #### Scenario: Gateway receives image generations
 
 - **GIVEN** LiteLLM Proxy 已启动且 `.env` 提供了图片模型使用的 `UPSTREAM_API_KEY2`
-- **WHEN** Agent Runtime 经 GatewayClient 请求 `POST /v1/images/generations` 并使用 `LITELLM_MASTER_KEY`
+- **WHEN** Agent Runtime 经 GatewayClient 请求 `POST /v1/images/generations` 并使用按服务端凭据优先级解析的 Runtime key
 - **THEN** LiteLLM SHALL 使用图片别名对应的上游映射和服务端 key 转发请求
 - **AND** Runtime、渠道和浏览器 SHALL NOT 获取 `UPSTREAM_API_KEY2`
 
 #### Scenario: Gateway receives image edits
 
 - **GIVEN** LiteLLM Proxy 已启动且编辑模型别名对应的上游支持 Responses 图片工具
-- **WHEN** Agent Runtime 经 GatewayClient 请求 `POST /v1/responses`，携带一张受控输入图片和 `image_generation.action=edit`，并使用 `LITELLM_MASTER_KEY`
+- **WHEN** Agent Runtime 经 GatewayClient 请求 `POST /v1/responses`，携带一张受控输入图片和 `image_generation.action=edit`，并使用按服务端凭据优先级解析的 Runtime key
 - **THEN** LiteLLM SHALL 使用编辑别名对应的上游映射和服务端 key 转发请求
 - **AND** Runtime、渠道和浏览器 SHALL NOT 获取真实上游 key 或地址
 
@@ -98,16 +98,31 @@
 
 ### Requirement: Server-side secret boundary
 
-系统 SHALL 将模型网关访问凭据和上游真实 key 保持在服务端环境变量中，不得暴露给浏览器、渠道或普通业务客户端。
+系统 SHALL 将模型网关访问凭据和上游真实 key 保持在服务端环境变量中，不得暴露给浏览器、渠道或普通业务客户端；普通 Runtime 优先使用受限凭据，模型网关管理操作使用管理凭据，旧本地配置的回退遵循以下场景。
 
 #### Scenario: Browser uses demo
 
 - **GIVEN** 浏览器打开 Demo 页面
 - **WHEN** 用户发送文本、图片或文档链接
 - **THEN** 浏览器 SHALL 只请求 Demo Server
-- **AND** Demo Server 装配的 Agent Runtime SHALL 通过 GatewayClient 使用服务端的 `LITELLM_MASTER_KEY` 调用 LiteLLM
+- **AND** Demo Server 装配的 Agent Runtime SHALL 通过 GatewayClient 使用服务端优先解析的 Runtime key 调用 LiteLLM，优先选择 `LITELLM_RUNTIME_KEY`，仅旧本地环境缺失时回退 `LITELLM_MASTER_KEY`
 - **AND** 浏览器 SHALL NOT 获取 `LITELLM_MASTER_KEY`
 - **AND** 浏览器 SHALL NOT 获取 `UPSTREAM_API_KEY1` 或 `UPSTREAM_API_KEY2`
+
+#### Scenario: Runtime uses a restricted LiteLLM virtual key
+
+- **GIVEN** 服务端同时配置 `LITELLM_RUNTIME_KEY` 和 LiteLLM 管理凭据
+- **WHEN** Demo Server 装配 GatewayClient
+- **THEN** Runtime SHALL 使用 `LITELLM_RUNTIME_KEY` 完成模型目录、token counter 和模型生成
+- **AND** Runtime SHALL NOT 使用管理凭据执行普通业务模型调用
+- **AND** 浏览器 SHALL NOT 获取 Runtime key、管理凭据、team ID 或上游 provider key
+
+#### Scenario: Legacy local configuration omits the runtime key
+
+- **GIVEN** 本地开发环境未配置 `LITELLM_RUNTIME_KEY`
+- **WHEN** Demo Server 加载现有模型网关配置
+- **THEN** Runtime MAY 回退 `LITELLM_MASTER_KEY` 保持兼容
+- **AND** 该回退 SHALL NOT 被描述为共享或生产环境的治理完成状态
 
 ### Requirement: Model connectivity smoke test
 
@@ -148,6 +163,15 @@ Demo Server SHALL 提供状态检查接口，返回 LiteLLM 连接状态、gatew
 - **AND** `/v1/models` 可见性 SHALL NOT 被解释为模型支持任意输入模态或端点
 - **AND** 状态与能力分组 SHALL 只表示目录可达和静态操作兼容策略，不得表述为上游账号健康或真实生成可用
 
+#### Scenario: Browser reads the runtime key model catalog
+
+- **GIVEN** Runtime 使用只授权部分模型别名的 LiteLLM virtual key
+- **WHEN** 浏览器请求 `GET /api/gateway/status`
+- **THEN** Demo Server SHALL 使用该 Runtime key 请求 LiteLLM `/v1/models`
+- **AND** 响应 `models` SHALL 只包含该 key 可见的平台别名
+- **AND** 后续 Run SHALL 使用同一 key 校验别名并调用模型
+- **AND** 响应 SHALL NOT 包含 virtual key、team ID、上游真实模型或 provider 配置
+
 ### Requirement: Runtime gateway client
 
 Agent Runtime SHALL 只通过稳定 GatewayClient Port 调用 LiteLLM；GatewayClient SHALL 复用 AI SDK Core 与 `@ai-sdk/openai-compatible` 处理其已覆盖的模型协议，并用受控 Adapter 补齐锁定依赖未覆盖的 Responses 图片编辑协议。
@@ -159,7 +183,7 @@ Agent Runtime SHALL 只通过稳定 GatewayClient Port 调用 LiteLLM；GatewayC
 - **THEN** 对话和图片生成 SHALL 使用 `@ai-sdk/openai-compatible` 请求 `LITELLM_BASE_URL/v1`
 - **AND** 图片编辑 SHALL 由 GatewayClient 内部 Responses Adapter 请求同一 `LITELLM_BASE_URL/v1`
 - **AND** SHALL 使用当前 Run 选择的模型别名；未选择时继续使用 `LITELLM_MODEL`
-- **AND** SHALL 继续使用 `LITELLM_MASTER_KEY`
+- **AND** SHALL 使用与模型目录、token counter 相同的 Runtime key；`LITELLM_RUNTIME_KEY` 优先，仅旧本地环境缺失时 MAY 回退 `LITELLM_MASTER_KEY`
 - **AND** SHALL NOT 读取 `UPSTREAM_API_KEY` 或绕过 LiteLLM
 - **AND** SHALL 禁用 SDK 或 Adapter 路径之外的内建自动重试，由平台统一重试执行器拥有唯一模型尝试预算
 - **AND** 默认一次模型生成 SHALL 最多尝试三次，包含首次调用和两次自动重试
@@ -253,6 +277,14 @@ Demo Server SHALL 提供由 Agent Runtime 拥有的会话资源，浏览器不�
 - **AND** 渠道草稿 SHALL NOT 作为 Conversation、Message 或 Run 事实提交给其他客户端
 - **AND** 本地图片 data URL SHALL NOT 写入 session 持久化草稿
 
+#### Scenario: Channel inspects a completed or rejected Run
+
+- **GIVEN** Run 已经过系统结果验收
+- **WHEN** 渠道读取 Run 结果或会话 `latestRun`
+- **THEN** Runtime SHALL 返回可空 `acceptance` 事实
+- **AND** 该事实 SHALL 区分 `accepted` 与 `rejected`，并提供稳定策略、版本、原因码和证据摘要
+- **AND** 普通对话尚未配置独立验收策略时 SHALL 保持 `acceptance=null`，不得伪装为系统已验收
+
 ### Requirement: Conversation run endpoint
 
 Demo Server SHALL 提供 JSON `POST /api/runtime/conversations/{conversationId}/runs` 和 POST SSE `POST /api/runtime/conversations/{conversationId}/runs/stream`，并按请求或解析后的 `operation` 校验模型别名、文本、附件、图片选项和分类型引用。
@@ -343,8 +375,8 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 - **GIVEN** 同一 Run 可能产生多步模型与工具交互
 - **WHEN** Runtime 执行工具循环
 - **THEN** 循环 SHALL 共享 Run 截止时间并最多执行四个模型步骤
-- **AND** 只允许 Tool Registry 中启用的只读工具，不得让模型提交任意 URL 或动态代码
-- **AND** 相同 `requestId` 的已完成 Run 重放 SHALL 返回已持久化工具事实和回答，不得再次调用 Connector
+- **AND** 只允许当前 Run 经确定性路由开放的 Tool Registry 只读工具，不得让模型提交任意 URL 或动态代码
+- **AND** 相同 `requestId` 的已完成 Run 重放 SHALL 返回已持久化工具事实、验收事实和回答，不得再次调用 Connector
 
 #### Scenario: Model fails after tool execution starts
 
@@ -353,10 +385,10 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 - **THEN** Runtime SHALL 在 Connector 执行前越过当前生成尝试的自动重试边界
 - **AND** Runtime SHALL NOT 为该错误重新执行整段模型与工具循环
 - **AND** 已开始的工具调用 SHALL 保持其已持久化的 ToolResult 状态
-- **AND** 如果尚未交付任何正文且 SQLite 中至少存在一个 completed ToolResult，Runtime SHALL 从会话事实源重新读取结果，并发起一个不携带 ToolSet、`toolsContext` 或强制工具路由的总结恢复阶段
+- **AND** 如果需要验收的候选尚未向渠道交付且 SQLite 中至少存在一个 completed ToolResult，Runtime SHALL 从会话事实源重新读取结果，并发起一个不携带 ToolSet、`toolsContext` 或强制工具路由的总结恢复阶段
 - **AND** 恢复消息 SHALL 使用匹配 `toolCallId` 和工具名的 AI SDK 结构化 `tool-call` / `tool-result` ModelMessage，不得通过普通文本 Prompt 冒充工具结果
 - **AND** 恢复阶段 SHALL 共享原 Run 的绝对截止时间、取消信号、模型别名、业务 Trace 和幂等边界，且不得再次执行 Connector
-- **AND** 恢复成功后原 Run SHALL 进入 `completed`，并且 Runtime SHALL 只持久化一条完整助手消息
+- **AND** 恢复成功并通过系统验收后原 Run SHALL 进入 `completed`，并且 Runtime SHALL 只持久化一条完整助手消息
 
 #### Scenario: ToolResult summary recovery cannot complete
 
@@ -365,7 +397,7 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 - **THEN** Runtime SHALL NOT 再次执行 Connector
 - **AND** 非取消失败 SHALL 使原 Run 进入 `failed`，并在 resilience 中分别保留原生成失败和恢复执行证据
 - **AND** 调用方取消 SHALL 继续遵守独立 `cancelled` 状态和部分正文持久化契约
-- **AND** 如果原生成已经交付正文，或不存在 completed ToolResult，Runtime SHALL NOT 自动恢复，Run SHALL 按既有失败语义收口
+- **AND** 如果普通回答已经交付正文，或不存在 completed ToolResult，Runtime SHALL NOT 自动恢复，Run SHALL 按既有失败语义收口
 
 #### Scenario: User explicitly cancels a running generation
 
@@ -430,6 +462,80 @@ Agent Runtime SHALL 通过 GatewayClient 复用 AI SDK `ToolLoopAgent` 执行纯
 
 - **WHEN** `message`、`imageUrls`、`documentUrls` 和 `references` 均为空或缺失
 - **THEN** Demo Server SHALL 返回 `400` 输入错误
+
+#### Scenario: Runtime routes current weather to a governed tool
+
+- **GIVEN** `get_weather` 已在服务端 Tool Registry 中启用
+- **WHEN** 当前输入包含明确地点且属于今天或明天的天气查询
+- **THEN** Runtime SHALL 通过服务端确定性路由只向模型开放 `get_weather`
+- **AND** Runtime SHALL 通过 `ToolLoopAgent.prepareStep` 把首步固定路由到 `get_weather`，ToolResult 回填后的后续步骤仅在该受限工具集合内恢复自动选择
+- **AND** Runtime SHALL 在同一 Run 总截止时间内执行固定目标的 Open-Meteo Connector
+- **AND** Runtime SHALL 持久化 `toolCallId`、工具名、脱敏输入、状态、结构化结果或安全错误、来源和数据时间
+- **AND** Runtime SHALL 将结构化 ToolResult 回填给同一有界生成循环，由模型生成最终候选回答
+- **AND** 实时天气结果 SHALL NOT 自动写入长期结构化记忆
+
+#### Scenario: Input does not match a governed tool route
+
+- **GIVEN** Tool Registry 中存在一个或多个受管工具
+- **WHEN** 当前输入未命中 Runtime 的确定性工具路由
+- **THEN** Runtime SHALL NOT 向模型传入 ToolSet、`toolsContext` 或必需工具名
+- **AND** 模型 SHALL NOT 仅凭 Prompt 或自身声明获得 Connector 执行权限
+- **AND** 普通回答 SHALL 保持 `acceptance=null`，除非另有独立验收策略明确适用
+
+#### Scenario: Weather route produces no required ToolResult
+
+- **GIVEN** 当前输入已命中 `get_weather` 确定性路由
+- **WHEN** 模型返回候选正文但 Run 没有持久化对应的 ToolResult
+- **THEN** Runtime SHALL 记录 rejected AcceptanceResult 并把 Run 收口为 `failed`
+- **AND** Runtime SHALL NOT 把模型对天气或工具执行的声明当作完成证据
+- **AND** Runtime SHALL NOT 持久化或向渠道交付该候选正文
+
+#### Scenario: Runtime restarts after a read-only ToolResult was committed
+
+- **GIVEN** 一个 `conversation.chat` Run 仍为 `running`
+- **AND** Run 已持久化原绝对截止时间、ChainTrace ID 和原用户消息
+- **AND** Run 的全部工具调用都是已完成、已注册的只读工具并具有结构化 ToolResult
+- **AND** Run 尚未持久化助手消息且原截止时间仍有剩余
+- **WHEN** Runtime 进程重新启动并扫描遗留 Run
+- **AND** Runtime 已取得该 Run 的有效 owner/lease/fencing 凭证，未过期的其他 owner lease 不得被抢占
+- **THEN** Runtime SHALL 从 SQLite 重新读取会话事实和 completed ToolResult
+- **AND** Runtime SHALL 使用匹配调用 ID 的结构化工具消息发起无 ToolSet 的最终总结恢复
+- **AND** Runtime SHALL NOT 再次执行 Connector
+- **AND** 恢复 SHALL 继续使用原 Run、requestId、模型别名、ChainTrace ID 和绝对截止时间
+- **AND** 系统验收通过后原 Run SHALL 完成，不得创建第二条用户消息或第二个 Run
+
+#### Scenario: Interrupted Run has no safe recovery point
+
+- **GIVEN** 遗留 Run 是图片生成或图片编辑、写操作、无 completed ToolResult、包含 running/failed/未知工具调用，或原绝对截止时间已经耗尽
+- **WHEN** Runtime 执行启动恢复扫描
+- **THEN** Runtime SHALL NOT 重放模型工具循环、Connector 或图片模型
+- **AND** Runtime SHALL 把 Run 收口为带稳定恢复错误码的 `failed`
+- **AND** 已持久化的用户消息、工具事实和资产事实 SHALL 保持不变
+
+#### Scenario: Weather candidate passes independent acceptance
+
+- **GIVEN** `get_weather` 已返回持久化 `weather.v1` ToolResult
+- **WHEN** 模型返回最终候选正文
+- **THEN** Runtime SHALL 独立检查正文包含匹配的地点、数据时间、来源和至少一个 ToolResult 事实值
+- **AND** 验收规则 SHALL NOT 依赖模型声明自己已经完成
+- **AND** 通过的 AcceptanceResult SHALL 与助手消息和 `run.completed` 在同一事务持久化
+- **AND** AcceptanceResult SHALL 记录策略、版本、状态、原因码和 ToolCall 证据 ID
+
+#### Scenario: Weather candidate fails independent acceptance
+
+- **GIVEN** 天气候选正文缺少地点、数据时间、来源或可绑定的结果事实
+- **WHEN** Runtime 执行天气结果验收
+- **THEN** Runtime SHALL 记录 rejected AcceptanceResult 并把 Run 收口为 `failed`
+- **AND** Runtime SHALL NOT 持久化候选助手消息
+- **AND** 对需要验收的流式 Run，Runtime SHALL NOT 在验收通过前向渠道交付候选正文
+
+#### Scenario: Accepted candidate delivery fails after completion commit
+
+- **GIVEN** AcceptanceResult、助手消息和 `run.completed` 已在同一事务提交
+- **WHEN** 当前渠道在接收验收后的暂存正文时关闭连接或回调失败
+- **THEN** Runtime SHALL NOT 把已完成 Run 改写或误报为执行失败
+- **AND** Runtime SHALL NOT 新增 `run.failed` 终态事件或再次执行 Connector
+- **AND** 渠道 SHALL 能使用原 `requestId` 幂等重放或通过 `latestRun` 读取同一已完成结果
 
 ### Requirement: Runtime smart operation routing
 
@@ -736,3 +842,145 @@ Agent Runtime SHALL 按系统规则、当前输入、active 结构化记忆、�
 - **AND** Phoenix 和 OTLP 凭据 SHALL 只由服务端配置持有，不得暴露给浏览器、渠道或普通业务客户端
 - **AND** 当前单团队权限 SHALL 限于实例级 `admin`、`member` 和 `viewer` 角色
 - **AND** 每次升级 SHALL 先完成可校验备份，并在升级后验证旧 Trace、新 Trace 写入和从升级前数据库恢复的回滚路径
+
+### Requirement: Versioned Runtime scenario evaluation
+系统 SHALL 以 `runtime-scenario.v1` 保存可版本化 Runtime 场景资产，并由同一通用 Runner 分别执行确定性链路回归和真实模型质量评测；场景业务规则 SHALL 归属场景资产或 Acceptance Policy，不得写入通用 Runner。
+
+#### Scenario: One scenario asset supports deterministic and real-model modes
+
+- **GIVEN** 一个场景声明 fixture 版本、Prompt 版本、支持模式、固定生成参数、Run 输入、故障点、工具 fixture、固定模型决策和独立验收器
+- **WHEN** 维护者分别以 `deterministic` 和 `real-model` 运行该场景
+- **THEN** 两种模式 SHALL 复用同一份 Run 输入、ToolResult fixture、故障点和独立验收条件
+- **AND** `deterministic` 模式 SHALL 通过现有 Runtime、GatewayClient 和固定行为模型验证 SQLite、恢复、调用次数与判分链路
+- **AND** 固定行为模型 SHALL 根据当前模型请求中可见的 ToolResult 决策，不得依赖 Runner 隐藏轮次或业务关键词分支
+
+#### Scenario: Real-model mode evaluates only the post-checkpoint answer
+
+- **GIVEN** 场景支持 `real-model` 且调用方显式指定固定模型别名
+- **WHEN** Runner 执行进程故障与重启恢复场景
+- **THEN** setup 阶段 SHALL 使用固定行为模型经现有 Runtime 和 Tool Registry 构造 completed ToolResult 稳定点
+- **AND** evaluation 阶段 SHALL 只通过现有 `GatewayClient -> AI SDK -> LiteLLM -> 上游模型` 生成最终回答
+- **AND** 真实模型超时、鉴权、限流、网关错误或验收失败 SHALL 直接形成失败结果
+- **AND** Runner SHALL NOT 回退固定行为模型或重新执行 Connector 来掩盖真实失败
+
+#### Scenario: Scenario report separates setup and evaluation evidence
+
+- **WHEN** Runner 完成或终止一个场景
+- **THEN** `runtime-scenario-report.v1` SHALL 分开记录 setup 与 evaluation 的请求数量、完成响应数量、失败数量、阶段耗时和 token
+- **AND** 报告 SHALL 记录场景版本、Prompt 版本、固定生成参数、请求模型别名、可空实际模型、延迟、Run 状态和独立验收结果
+- **AND** 实际模型 SHALL 只来自已完成的 chat completion 响应，不得根据请求别名推断
+- **AND** 报告 SHALL NOT 保存 Prompt 正文、回答正文、ToolResult 正文、密钥或 provider 原始响应体
+- **AND** 真实模型已执行样本不足 30 时 SHALL 标记为 `observation-only`，不得作为质量发布基线
+
+### Requirement: 版本化执行策略与 Hook
+Agent Runtime SHALL 为 Run、Tool 和 Operation 执行提供可替换、版本化的执行策略 Port；未知操作 SHALL 默认拒绝。
+
+#### Scenario: 已知会话操作被允许
+
+- **GIVEN** 当前 Run 使用已有的 `conversation.chat` 操作
+- **WHEN** Runtime 执行前置策略评估
+- **THEN** 策略 SHALL 返回 `allow`、稳定 `policyVersion` 和至少一个稳定 reason code
+- **AND** 没有命中工具路由的普通对话 SHALL NOT 被要求额外通过工具策略
+
+#### Scenario: 受限本地图片资产写入被显式允许
+
+- **GIVEN** 当前 Run 已将入口请求解析为 `image.generate` 或 `image.edit`
+- **AND** Runtime 默认策略将这两个既有 C2 operation 显式注册为受限本地资产写入
+- **WHEN** Runtime 执行前置策略评估
+- **THEN** 策略 SHALL 对真实图片 operation 返回 `allow`，不得评估或持久化入口 `auto`
+- **AND** 该显式允许 SHALL NOT 被解释为图片模型可自动重试、启动恢复或通用外部写操作已获授权
+
+#### Scenario: 未知操作被拒绝
+
+- **WHEN** Runtime 评估当前策略定义未注册的操作
+- **THEN** 策略 SHALL 返回 `deny` 和 reason code `operation_unknown`
+- **AND** Runtime SHALL NOT 调用模型、Connector 或外部执行器
+
+#### Scenario: 副作用操作要求确认
+
+- **WHEN** 策略评估 effect 为 `write`、`external` 或 `unknown` 的操作
+- **THEN** 除非有显式规则允许，默认策略 SHALL 返回 `confirmation_required`
+- **AND** Runtime SHALL NOT 将该操作静默降级为只读操作
+
+#### Scenario: 前置 Hook 只能收紧策略
+
+- **GIVEN** 版本化默认策略已经产生执行决定
+- **WHEN** 前置 Hook 返回更宽松的决定或抛出异常
+- **THEN** Runtime SHALL NOT 因 Hook 放宽既有策略约束
+- **AND** 前置 Hook 抛出异常时 SHALL 阻断执行并返回脱敏 reason code，不得调用受阻断操作
+
+#### Scenario: 后置 Hook 失败
+
+- **GIVEN** Operation 或 Run 已经提交执行结果
+- **WHEN** 后置 Hook 抛出异常
+- **THEN** Runtime SHALL 保留已提交的执行状态
+- **AND** Hook 失败 SHALL 只作为隔离的观察证据返回
+
+### Requirement: Operation journal 是外部动作事实
+Conversation Store SHALL 将 Operation journal 与 AI SDK ToolCall 投影分开持久化，并 SHALL 在同一个 SQLite 事务中完成关联 ToolCall/Operation 的状态迁移。
+
+#### Scenario: Operation 幂等规划与启动
+
+- **WHEN** 相同 `conversationId` 和 `idempotencyKey` 被重复提交
+- **THEN** Store SHALL 返回已有 Operation，而不是创建第二个外部动作事实
+- **AND** Operation SHALL 保留首次提交的策略版本和输入证据
+
+#### Scenario: 只读 ToolCall 桥接到 Operation
+
+- **WHEN** Runtime 启动已注册的只读 ToolCall
+- **THEN** Store SHALL 在同一事务中创建一个关联 Operation，保存 `effect=read`、`operationKey`、`idempotencyKey`、策略版本和 attempt 证据
+- **AND** ToolCall SHALL 继续作为当前天气契约公开的 AI SDK 协议与结果投影
+
+#### Scenario: Operation 携带回读证据完成
+
+- **WHEN** 外部执行器返回结果和可选 readback
+- **THEN** Store SHALL 原子地把 Operation 设为 `completed` 并持久化 result/readback 证据
+- **AND** 重复完成同一个 Operation SHALL 保持幂等
+
+#### Scenario: Operation 结果未知
+
+- **WHEN** 执行器无法证明外部副作用是否已经发生
+- **THEN** Store SHALL 将 Operation 设为 `unknown` 并保存稳定 reason code
+- **AND** Runtime SHALL NOT 自动重放该 Operation
+
+### Requirement: RunLease 与 fencing 协调
+Conversation Store SHALL 提供包含 owner、expiry 和单调递增 fencing token 的 RunLease Port；Runtime SHALL 在执行新 Run 前取得 lease，并在关键写入时验证 lease 凭证。
+
+#### Scenario: 一个 owner 取得 lease
+
+- **WHEN** 活跃 Run 不存在未过期 lease
+- **THEN** 第一个 owner SHALL 取得 lease 和 fencing token
+- **AND** lease 仍有效时，第二个 owner SHALL 收到稳定的 `lease_held` 结果
+
+#### Scenario: 过期 lease 被接管
+
+- **WHEN** 当前 lease 已经过期
+- **THEN** 另一个 owner MAY 取得该 Run
+- **AND** 新 fencing token SHALL 大于前一个 token
+
+#### Scenario: 旧 owner 在接管后写入
+
+- **WHEN** 旧 owner 使用先前 fencing token 尝试完成、失败或更新 Operation
+- **THEN** Store SHALL 用稳定 reason code `stale_fencing_token` 拒绝写入
+- **AND** 新 owner 的事实 SHALL 保持不变
+
+#### Scenario: Runtime 丢失 lease
+
+- **WHEN** lease 续租失败或 fencing token 被拒绝
+- **THEN** Runtime SHALL 停止提交新的模型或 Connector 结果
+- **AND** 该 Run SHALL 保持可由后续 owner 分类或恢复
+
+### Requirement: Sandbox 与副作用恢复保持门禁
+平台 SHALL NOT 仅凭 Policy、Operation 或 Lease 基础就宣称通用 Sandbox 或副作用恢复可用。
+
+#### Scenario: 提议代码执行能力
+
+- **WHEN** 后续能力提议执行任意代码、脚本、文件或命令
+- **THEN** 该能力 SHALL 先独立定义进程或容器隔离、网络 allowlist、文件系统、资源限制、密钥可见性和逃逸测试的 Sandbox 策略
+- **AND** 在该决策被接受前，当前只读工具 Runtime SHALL 保持不变
+
+#### Scenario: 提议副作用恢复能力
+
+- **WHEN** 后续能力可以修改外部系统
+- **THEN** 在启用自动恢复前，该能力 SHALL 定义确认、外部幂等、业务 readback、`unknown` 处理和 compensation
+- **AND** 平台 SHALL NOT 仅因存在 Operation 记录就宣称 exactly-once 执行

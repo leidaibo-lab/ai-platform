@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-07-31-ai-sdk-core-v7-alignment.md, docs/decisions/2026-08-02-c2-multi-turn-image-editing-responses-path.md
 import { APICallError, Output, ToolLoopAgent, generateImage, generateText, jsonSchema, stepCountIs, streamText } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { z } from "zod";

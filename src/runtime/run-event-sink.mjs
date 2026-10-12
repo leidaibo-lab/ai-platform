@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-08-13-runtime-event-port-and-delivery.md
 /**
  * @typedef {object} RunEvent
  * @property {string} type - Runtime 生命周期事件类型，不复用渠道协议名称。

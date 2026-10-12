@@ -80,7 +80,7 @@
 
 Runtime 仍只把一条当前会话 `image_asset` 引用交给 GatewayClient。Responses Adapter 将已校验字节编码为请求局部 data URL，使用主线模型平台别名、`tool_choice={type:image_generation}` 和 `store=false` 发起一次 `/v1/responses` 请求，仅读取唯一 completed `image_generation_call.result`。当前中转站对 `max_tool_calls` 的 502 对照证据表明该字段不能进入兼容请求；若未来上游明确支持，需重新执行相同三组协议 smoke 后再评估启用。返回字节继续经过现有格式、大小和尺寸校验后创建新资产。
 
-渠道在成功后把新资产设为当前编辑源。普通后续发送默认提交 `operation=auto`，由 Runtime 把单张受控资产的候选限制为 `conversation.chat | image.edit`，且只有编辑意图 `confidence >= 0.85` 时执行编辑；用户从历史图片选择“继续编辑”仍提交显式 `image.edit`。两种入口都创建普通新 Run，不设置 recovery 字段。刷新或切换会话时只恢复稳定资产，不持久化本地未上传 data URL。智能路由的阈值、回退和持久化边界由 `docs/decisions/2026-08-02-runtime-smart-operation-routing.md` 单独治理。
+渠道在成功后把新资产设为当前编辑源。普通后续发送默认提交 `operation=auto`，由 Runtime 把单张受控资产的候选限制为 `conversation.chat | image.edit`，且只有编辑意图 `confidence >= 0.85` 时执行编辑；用户从历史图片选择“继续编辑”仍提交显式 `image.edit`。两种入口都创建普通新 Run，不设置 recovery 字段。刷新或切换会话时只恢复稳定资产，不持久化本地未上传 data URL。智能路由的阈值、回退和持久化边界现以 [`2026-08-15-runtime-context-aware-operation-routing.md`](./2026-08-15-runtime-context-aware-operation-routing.md) 治理；08-02 首版路由仅保留历史依据。
 
 ## 风险与退出路径
 
@@ -97,3 +97,22 @@ Runtime 仍只把一条当前会话 `image_asset` 引用交给 GatewayClient。R
 - 剩余边界：内容审核、成本、质量与异常矩阵、遮罩、正式对象存储，以及上游映射变更后的重复 smoke。
 - 文档与契约：同步 OpenSpec、README、场景链、AI SDK 对齐和决策索引。
 - 重评条件：LiteLLM 原生/AI SDK openai-compatible 增加等价 Responses Adapter；真实上游持续不兼容；需要 provider 会话续接、遮罩或多图编辑。
+
+## 当前实施与验收补充（2026-10-12）
+
+活动图片、历史证据、刷新和无附件续改以 08-15 最新路由决策为准。
+
+### 实施映射
+
+- 受影响入口：`src/gateway/responses-image-edit-adapter.mjs`、`src/gateway/gateway-client.mjs`、`src/runtime/chat-runtime.mjs`、`src/storage/conversation-store.mjs`。
+- 数据与配置：沿用本记录及后续接受记录的结构、版本和字段约束；领域事实由 Store 拥有，Adapter 只转换或执行，不新增第二事实源。锁定依赖以 `package.json`/lockfile 为准。
+- 维护顺序：先核对本记录的有效范围和最新稳定 OpenSpec，再修改对应入口、执行下列回归、同步文档与索引。当前修复只更新契约、说明和入口注释，不迁移业务数据、不变更 Runtime 行为。
+- 兼容与退出：历史事实和幂等身份保持；未来实质迁移按本记录的退出路径与新决策执行，不把历史验证计划作为当前通过结果。
+
+### 验收清单
+
+- [x] 本地行为：运行 `npm run test:images`，验证强制 action=edit 与 tool_choice、单次尝试、唯一 completed 结果，新资产引用源版本。
+- [x] 结构与契约：运行 `npm run test:architecture` 与 `openspec validate --specs --strict`，核对本文具体边界和最新决策关系。
+- [ ] 后续门禁：完成当前上游三组字段兼容 smoke、真实连续编辑、计费/质量/安全矩阵；未触发或缺少证据时保持待办，不宣称生产能力完成。
+
+以上为可重复执行的计划。本次实际执行日期、命令、结果和历史证据可用性统一记录在 [审计修复验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)，清单状态在执行后更新。历史原验收计数保留。

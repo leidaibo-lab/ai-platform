@@ -1,3 +1,4 @@
+// ADR: docs/decisions/2026-07-30-v1-read-only-tool-loop-and-weather.md
 import { jsonSchema, tool } from "ai";
 import { z } from "zod";
 
