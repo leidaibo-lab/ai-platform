@@ -28,6 +28,8 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-11-02 | [探索与原生应用实践分开组织](./2026-11-02-exploration-and-native-practices.md) | 接受 | 接受两条学习方向及 `practices/` 原生实践集合；比较业务结果与架构取舍，不强制统一 Runtime，不代表采用 Mastra/pi 或完成原生应用 |
+| 2026-10-13 | [pi Agent Runtime 隔离对比](./2026-10-13-pi-agent-isolated-comparison.md) | 提议 | Node 24.19.0 下 46 项隔离验证通过；补齐 durable 重放/事务边界和迁移成本证据，真实模型门禁未执行，暂不整体迁移 |
 | 2026-08-15 | [Runtime 智能操作路由采用会话上下文快照与可验证模型证据](./2026-08-15-runtime-context-aware-operation-routing.md) | 接受 | 从 Message/Run/image_asset 不可变事实派生活动图片，以有界 routing snapshot 驱动结构化分类；Runtime 校验证据、选择源图并持久化脱敏 intentDecision，确定性链路与真实模型识别分开评测 |
 | 2026-08-13 | [Runtime 生命周期事件端口与渠道交付解耦](./2026-08-13-runtime-event-port-and-delivery.md) | 接受 | 以项目自有 `RunEventSink` 发布易失生命周期事件，Demo Server Adapter 映射 SSE；订阅失败不反向污染执行事实，SQLite 事件继续作为可恢复历史 |
 | 2026-08-13 | [Runtime 执行治理基础](./2026-08-13-execution-governance-foundation.md) | 接受 | 以版本化 ExecutionPolicy、Operation journal 和 SQLite RunLease/fencing 建立执行治理边界；写操作确认、业务回读和补偿仍未完成 |

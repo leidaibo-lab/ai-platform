@@ -11,6 +11,14 @@
 - 提交信息遵守 `type(scope): message`。
 - 提交标题和必要说明以中文描述为主，例如 `docs(ai-platform): 补充架构边界与服务拆分说明`。
 
+## 两条学习方向与规则适用范围
+
+- 探索方向使用当前 `src/`、`demo/`、`scripts/` 与 `experiments/`，通过自己的实现理解架构和工程取舍。
+- 应用实践方向集中在 `practices/`，按 Mastra、pi 等项目分别组织。先遵循各项目官方原生架构，独立管理入口、依赖、配置和数据；不要求导入探索主线的 Runtime、Store、GatewayClient 或适配层。
+- 本文件下文的六区域架构、唯一 Runtime 主链、SQLite 事实源、网关出口和存量能力状态约束探索主线，不作为框架原生实践的架构准入条件。通用安全、中文协作、编码、证据和 Git 规范仍适用于全仓库。
+- 方向分工与实践索引见 `practices/README.md`；具体执行遵循 `practices/AGENTS.md`。实践之间共用业务目标和验收问题，不预建统一运行时或框架适配协议。
+- 独立学习实践不等于探索主线采用了该框架。只有计划集成、迁移、共用平台数据或改变探索主线稳定契约时，才进入对应方案决策和 OpenSpec 流程。
+
 ## 项目定位
 
 当前项目总称为“AI 应用基础平台”，定位为面向不同业务场景、按需组合和逐步拆分 AI 能力的基础平台。整体分为渠道与体验层、平台控制面、Agent Runtime、连接器与知识层、模型网关、治理与可观测六个区域；只有模型访问、路由、密钥和模型调用治理属于严格意义上的 AI Gateway。
@@ -21,7 +29,7 @@
 
 区域之间遵守单向依赖：渠道调用 Agent Runtime；Runtime 调用连接器和模型网关；平台控制面发布版本化 Agent、工具和模型策略；治理与可观测通过统一身份上下文和事件结构横切各区域。当前先保持单仓，出现跨项目复用、独立安全边界、独立扩缩容或团队所有权后，再按数据所有权拆成服务。
 
-所有业务模型请求统一经过 Agent Runtime；GatewayClient、其内部 AI SDK/Responses Adapter 和 LiteLLM 只作为 Runtime 下游模型调用链，不得形成与 Runtime 并列的业务入口。
+探索主线的所有业务模型请求统一经过 Agent Runtime；GatewayClient、其内部 AI SDK/Responses Adapter 和 LiteLLM 只作为 Runtime 下游模型调用链，不得形成与 Runtime 并列的业务入口。
 
 全局业务主链：
 
@@ -47,6 +55,8 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 
 ## 文档路由
 
+- `practices/README.md`：应用实践集合、探索与应用的边界、原生实践步骤和架构比较方法。
+- `practices/AGENTS.md`：框架原生实践的执行规则、隔离要求、证据和交付边界。
 - `README.md`：面向使用者的启动、Runtime 配置和模型连通性测试说明。
 - `docs/README.md`：项目文档索引。
 - `docs/ai-structure.md`：六个架构区域、控制面/数据面、依赖规则、数据所有权、服务拆分边界和演进路线。

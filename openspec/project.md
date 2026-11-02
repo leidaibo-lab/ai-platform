@@ -2,6 +2,8 @@
 
 ## Purpose
 
+本仓库分为探索与应用实践两条学习方向。本文和 `specs/ai-platform/spec.md` 约束现有探索主线的稳定能力；`practices/` 保存按目标项目原生方式构建的独立学习应用，遵循其自身运行链和数据所有权，不要求导入探索 Runtime。两者共用学习目标、验收问题和安全规范，不共用强制运行时；实践成果进入探索主线或改变稳定契约时，另行建立变更与决策。详见 [应用实践集合](../practices/README.md)。
+
 项目总称为“AI 应用基础平台”，项目、仓库和目录统一使用 `ai-platform`，面向不同业务场景按需组合渠道、Agent Runtime、连接器、知识、模型网关和治理能力。当前实现使用 LiteLLM Proxy 收口上游 OpenAI-compatible 中转站 key，并通过轻量 Agent Runtime 为 Demo 提供模型能力；shell 脚本直连只用于模型连通性诊断。
 
 项目区域为：
@@ -19,7 +21,7 @@
 
 - LiteLLM Proxy 容器镜像：`ghcr.io/berriai/litellm@sha256:89ccaccfda9083f7693777597ca27f8ffca12045e4fa9277155fb7c5f06e68b2`
 - Docker Compose 本地启动
-- Node.js 原生 HTTP Demo Server 与内置 SQLite 会话存储
+- Node.js 24（最低 `24.0.0`）原生 HTTP Demo Server 与内置 SQLite 会话存储；`.nvmrc` 选择 24 主版本
 - AI SDK Core v7 与 `@ai-sdk/openai-compatible` Runtime 模型网关客户端
 - React + Vite Demo UI
 - Shell 模型连通性诊断（非平台能力入口）
@@ -58,7 +60,7 @@ Demo 浏览器页面不直接调用 LiteLLM 或上游中转站，而是通过 `s
 - 当前落地保持模块化单体和本地 SQLite，不默认引入后台管理或分布式服务。
 - 六个区域同时作为概念、代码和未来服务拆分边界；未实现的区域能力不得写成当前稳定能力。
 - 区域依赖保持为“渠道 -> Agent Runtime -> 连接器/模型网关”；平台控制面只发布版本化配置，治理与可观测通过统一事件和策略横切。
-- 业务模型请求统一经过 Agent Runtime；模型连通性测试脚本不得演进为普通客户端直连入口。
+- 探索主线的业务模型请求统一经过 Agent Runtime；模型连通性测试脚本不得演进为普通客户端直连入口。独立原生实践的运行链按各自项目管理，不复用该诊断脚本作为业务入口。
 - 模型网关不得保存会话、工具结果或业务知识；Agent Runtime 和平台控制面不得持有 provider key；渠道特有字段不得渗透到 Runtime 核心结构。
 - 服务拆分以数据所有权、跨项目复用、独立安全边界、独立扩缩容或团队所有权为触发条件，不按目录数量机械拆分。
 - 每类事实数据只能有一个写入所有者；拆服务前先明确 API、事件和数据迁移边界，禁止多个服务共同写同一张表。
