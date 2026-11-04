@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
 import type { createAgents } from '../agents/index.js';
+import { revisionSourceSchema } from './revision.js';
 
 export const stageSchema = z.enum(['product', 'development', 'testing', 'operations']);
 export type Stage = z.infer<typeof stageSchema>;
@@ -19,6 +20,7 @@ export type Review = z.infer<typeof reviewSchema>;
 export const deliverySchema = z.object({
   brief: z.string().trim().min(1).max(12000),
   mode: z.enum(['fixture', 'live']),
+  revision: revisionSourceSchema.optional(),
   artifacts: z.array(artifactSchema).max(4),
   reviews: z.array(reviewSchema).max(4),
   outcome: z.enum(['in-progress', 'rejected', 'plan-approved']),
@@ -27,7 +29,7 @@ export const pendingSchema = z.object({ role: stageSchema, artifact: artifactSch
 export type PendingReview = z.infer<typeof pendingSchema>;
 export type Delivery = z.infer<typeof deliverySchema>;
 export const stages: readonly Stage[] = ['product', 'development', 'testing', 'operations'];
-export const deliveryInputSchema = deliverySchema.pick({ brief: true });
+export const deliveryInputSchema = deliverySchema.pick({ brief: true, revision: true });
 
 /** 校验本地审批角色和版本，防止旧交接物或错误角色推进下一阶段。 */
 export function validateReview(pending: PendingReview, input: unknown): Review {
@@ -52,9 +54,10 @@ export function createDeliveryWorkflow(agents: ReturnType<typeof createAgents>, 
       // 将已确认内容交给对应原生 Agent，检查非空输出后生成内容版本。
       execute: async ({ inputData }) => {
         if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式继续生成交接物');
-        const result = await stageAgents[stage].generate(JSON.stringify({ brief: inputData.brief, approvedArtifacts: inputData.artifacts }), { maxSteps: stage === 'product' || stage === 'development' ? 3 : 1 });
+        // 已应用的产品稿原样进入新轮次，不在预览后再次调用模型。
+        const result = stage === 'product' && inputData.revision ? { text: inputData.revision.content } : await stageAgents[stage].generate(JSON.stringify({ brief: inputData.brief, approvedArtifacts: inputData.artifacts, ...(inputData.revision ? { confirmedRevision: { decisions: inputData.revision.confirmedDecisions, sourceRunId: inputData.revision.sourceRunId, note: '原始 brief 用于溯源；已确认修订及当前批准交接物是本轮规则依据。' } } : {}) }), { maxSteps: stage === 'product' || stage === 'development' ? 3 : 1 });
         const content = z.string().trim().min(1).max(100000).parse(result.text);
-        const hash = createHash('sha256').update(JSON.stringify({ stage, brief: inputData.brief, upstream: inputData.artifacts, content })).digest('hex');
+        const hash = createHash('sha256').update(JSON.stringify({ stage, brief: inputData.brief, upstream: inputData.artifacts, content, ...(inputData.revision ? { revision: inputData.revision } : {}) })).digest('hex');
         return { ...inputData, artifacts: [...inputData.artifacts, { stage, content, hash, evidence: inputData.mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };
       },
     });

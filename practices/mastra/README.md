@@ -8,6 +8,31 @@
 
 本实践是[应用实践集合](../README.md)的首个可运行条目，使用 Mastra 自己的模型、Agent、Workflow 和 LibSQLStore，不导入探索主线 Runtime、Store、GatewayClient 或实验 Adapter。学习目标是理解原生设计，再比较差异，不是接入或替换探索实现。
 
+## 产品交接物审阅页
+
+2026-11-04：增加面向产品负责人的业务页面：分页 Run 列表、原样 Markdown 正文与下载、原始需求、版本标识、产品审阅记录、确认/拒绝二次确认、只读阅读助手，以及“明确结论 → 修订提案 → 差异预览 → 应用新轮次”。前端采用 Vercel AI SDK React、AI Elements 源码组件与 Streamdown；后端通过 Mastra 原生自定义路由读取快照和恢复流程。范围、接口与选型见[审阅页说明](./review-page.md)，组件来源见[第三方声明](./web/THIRD_PARTY_NOTICES.md)。
+
+后端与前端分别保持一个终端运行；使用 Node.js 24+：
+
+```bash
+cd /Users/Administrator/self-code/ai-platform/practices/mastra
+npm ci --ignore-scripts --no-audit --no-fund
+npm --prefix web ci --ignore-scripts --no-audit --no-fund
+
+# 终端一：若 Studio 已在运行，保持原进程即可，不重复启动。
+# 阅读已有 live Run 时，使用创建时相同的模式和数据目录。
+MASTRA_MODE=live MASTRA_DATA_DIR=.data/live npm run dev
+
+# 终端二：前端只代理本机 API，不加载服务端 .env 或持有模型密钥。
+npm run review:dev
+```
+
+打开 [产品交接物审阅页](http://127.0.0.1:4112/)。先选择一条记录阅读正文，再向右侧助手提问；发现未决问题时，在助手下方填写你已经确认的结论，生成修订提案，查看逐行差异和完整新稿，填写应用人后应用并创建新轮次。需要作出产品决定时，在正文下方填写审阅人和意见，点击确认或拒绝并二次确认。可用 `?run=实际runId&proposal=提案Id` 直接打开记录和提案预览。当前已结束或进入下游的产品稿可以只读查看或另起修订，只有产品暂停点能提交决定；新建流程和后续开发/测试/运维确认继续使用 Studio 或 CLI。
+
+无密钥体验可将后端命令换成 `MASTRA_MODE=fixture MASTRA_DATA_DIR=.data/review-fixture npm run dev`，再用相同模式、目录执行 `npm run delivery -- start '工单标题校验'`。固定样例不会理解新需求，阅读助手也只返回固定文字，页面有明确标签。
+
+`npm run review:build` 进行前端类型检查和打包，`npm run review:preview` 在同一端口预览构建结果，仍需 4111 后端。代理目标和 Studio 链接当前固定为 `127.0.0.1:4111`。审阅人只是本地标签；本切片未接入真实用户认证。只读助手对话仅在当前页面保留，使用服务端配置的模型；live 提问会产生模型调用，但不会修改正文、审阅意见或流程决定。
+
 ## 先运行最小应用
 
 环境要求：Node.js 24+。本次实测 Node `24.19.0`、npm `11.17.0`；安装和 npm 子进程都使用 Node 24，避免只有终端 node 是 24、实际 npm 子进程仍是 20 的情况。
@@ -38,13 +63,17 @@ Studio/API 仅绑定 `127.0.0.1`，是无登录的本地学习入口，不应直
 src/mastra/index.ts              Mastra CLI / Studio 原生导出入口
 src/mastra/app.ts                Agent、Workflow、LibSQLStore 注册
 src/mastra/config.ts             本实践配置与绝对数据库路径
-src/mastra/agents/               最小助手和四个交接助手
+src/mastra/agents/               最小助手、四个交接助手和只读阅读助手
 src/mastra/tools/                无外部副作用的 practiceInfo
 src/mastra/workflows/delivery.ts 原生步骤、暂停、恢复和交接数据 schema
-src/delivery-service.ts          CLI 输入预校验，读取原生快照
+src/delivery-service.ts          CLI/页面共享的交接与恢复服务
+src/review-service.ts            产品文档投影、版本与输入校验
+src/review-routes.ts             Mastra 原生 HTTP Adapter 与 AI SDK 流
+web/                            独立 React/Vite 审阅页，不持有模型密钥
 .agents/skills/                  Codex 与 Mastra Agent 共用的可审查 Skill 来源
 scripts/                        smoke 与人工交接 CLI
 tests/native.test.ts            原生执行及恢复回归
+tests/review.test.ts             页面 API、决定边界与 SDK 多轮流回归
 ```
 
 最小调用由 Studio/API 或脚本进入注册的 Agent，Agent 使用模型并执行 createTool 定义的工具。交接任务由 `createWorkflow().then(...).commit()` 推进，每个生成步骤调用对应 Agent，每个确认步骤使用 suspend/resume。执行快照和恢复由 LibSQLStore 持有，默认文件为本目录 `.data/mastra.db`，不使用探索 SQLite。
@@ -185,6 +214,8 @@ npm start
 
 自动回归实际执行的是本应用的测试，不是 Agent 生成的代码或测试计划。真实模型调用、生成内容质量、完整产研工程闭环和生产验收仍分别需要证据。
 
+2026-11-04 审阅页补充：当前自动回归为 **16/16**，新增页面 API、修订提案持久预览、旧版本/非法决定保留暂停点、同进程并发决定/应用、拒绝历史、旧稿不变、重试幂等及官方 AI SDK transport 两轮流；前后端类型检查、前端打包和隔离副本 Mastra build 通过。浏览器已验证真实文档阅读、真实助手连续问答，以及隔离 fixture 数据中的修订差异、刷新恢复、取消/批准/拒绝交互；未审批用户已有真实 Run。详细证据和未验收边界见[审阅页验收](./review-page.md#2026-11-04-实测结果)。
+
 2026-11-03 真实调用补充：`smoke:live` 返回 `mode: live`、非空终答及一条实际 `practiceInfo` 工具结果；原生 stream 消费完整流后同样观察到终答及一条工具结果。真实标题校验需求生成非空产品文档，交接物为 `model-proposal`，Run `625575bb-f1c9-42d6-bad6-23c46263c1a3` 持久化为 `suspended` / `review-product`，未代替用户确认。完整首阶段快照保存在本地忽略目录 `.data/live/first-live-delivery.json`；不提交密钥、原始网关异常或运行数据库。这些结果补充上面的固定模型证据，不代表完整真实模型质量评测或工程交付通过。
 
 ## 和探索实现相比，先学到什么
@@ -200,7 +231,7 @@ npm start
 
 实践贡献者维护配置、提示词、交接 schema/hash、确认规则、CLI 和回归；Mastra 提供 Agent/工具循环、Workflow 与存储实现。工厂集中装配配置，原生 Pipeline 表达顺序交接；没有自研调度器或统一框架接口。输入校验在边界、生成与审阅分步骤、测试模型在模型边界替换，分别落实 KISS、单一职责和依赖隔离。
 
-下一步先配置真实模型，验证最小 Agent 和一份真实需求的四阶段提案质量；有真实执行需求时再明确代码仓库、隔离环境、CI 证据和权限，逐项扩展。计划集成或迁移探索主线时，另走方案决策和 OpenSpec。
+下一步通过产品审阅页阅读真实需求、检查验收覆盖并人工确认，再在 Studio 继续评估下游提案质量；有真实执行需求时再明确代码仓库、隔离环境、CI 证据和权限，逐项扩展。计划集成或迁移探索主线时，另走方案决策和 OpenSpec。
 
 ## 官方依据
 
@@ -212,5 +243,8 @@ npm start
 - [Suspend and resume](https://mastra.ai/docs/workflows/suspend-and-resume)
 - [Storage](https://mastra.ai/docs/server-db/storage)
 - [源码与许可证](https://github.com/mastra-ai/mastra)
+- [Mastra 与 AI SDK UI](https://mastra.ai/integrations/agentic-ui/ai-sdk-ui)
+- [Mastra AI SDK 集成 API](https://mastra.ai/reference/ai-sdk/overview)
+- [shadcn/ui AI Elements](https://ui.shadcn.com/docs/ai-elements)
 
 官方 Mock 来自锁定包 `@mastra/core/test-utils/llm-mock`，只用于演示和确定性测试。当前不作生产采用或商业分发的许可结论。
