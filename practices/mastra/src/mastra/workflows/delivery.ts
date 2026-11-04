@@ -52,7 +52,7 @@ export function createDeliveryWorkflow(agents: ReturnType<typeof createAgents>, 
       // 将已确认内容交给对应原生 Agent，检查非空输出后生成内容版本。
       execute: async ({ inputData }) => {
         if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式继续生成交接物');
-        const result = await stageAgents[stage].generate(JSON.stringify({ brief: inputData.brief, approvedArtifacts: inputData.artifacts }), { maxSteps: 1 });
+        const result = await stageAgents[stage].generate(JSON.stringify({ brief: inputData.brief, approvedArtifacts: inputData.artifacts }), { maxSteps: stage === 'product' || stage === 'development' ? 3 : 1 });
         const content = z.string().trim().min(1).max(100000).parse(result.text);
         const hash = createHash('sha256').update(JSON.stringify({ stage, brief: inputData.brief, upstream: inputData.artifacts, content })).digest('hex');
         return { ...inputData, artifacts: [...inputData.artifacts, { stage, content, hash, evidence: inputData.mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };

@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 /** 独立实践配置；数据库使用绝对路径，fixture 模式不会访问模型服务。 */
 export interface PracticeConfig {
+  rootDir: string;
   mode: 'fixture' | 'live';
   databaseUrl: string;
   port: number;
@@ -27,5 +28,5 @@ export function readConfig(): PracticeConfig {
   if (mode === 'live' && !apiKey) throw new Error('真实模型尚未配置：请在本实践 .env 设置 OPENAI_API_KEY。');
   const baseUrl = process.env.MASTRA_BASE_URL || undefined;
   if (baseUrl) z.url().parse(baseUrl);
-  return { mode, port, modelId, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  return { rootDir: root, mode, port, modelId, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
 }

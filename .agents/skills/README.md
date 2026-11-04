@@ -26,6 +26,18 @@
 | --- | --- | --- |
 | company-public-skill-governance | `company-public/skill-governance/SKILL.md` | Skill 创建、更新、迁移、目录治理、结构校验和项目文档归属校验 |
 
+### 产品类
+
+| Skill | 入口 | 适用场景 |
+| --- | --- | --- |
+| product-requirements-handoff | `product/requirements-handoff/SKILL.md` | Mastra 产品 Agent 将真实业务需求整理为有范围、规则、验收条件和明确未决项的交接稿 |
+
+### 开发类
+
+| Skill | 入口 | 适用场景 |
+| --- | --- | --- |
+| development-implementation-handoff | `development/implementation-handoff/SKILL.md` | Mastra 开发 Agent 将已确认需求映射为实现方案、变更范围、验证计划和风险，不代表实际代码执行 |
+
 ### 文档与评测类
 
 | Skill | 入口 | 适用场景 |

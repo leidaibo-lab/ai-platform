@@ -2,6 +2,10 @@
 
 2026-11-02：已建立独立可执行应用，跑通原生 Agent、只读工具、Studio/API，以及四阶段交接的暂停、确认、拒绝和跨进程恢复。当前验证使用官方 Mock 模型；真实模型质量、真实代码执行、多人权限和生产部署尚未验证。
 
+2026-11-03 补充：使用本地配置的真实网关与密钥，已通过最小 Agent 的 generate、stream 及实际 `practiceInfo` 工具调用，并生成一份真实需求的产品文档，Workflow 停在 `review-product` 等待人工确认。该结果证明当前配置下的调用与首阶段交接可用；四阶段真实提案质量、真实代码执行、多人权限和生产部署仍未验收。
+
+2026-11-04 补充：产品 Agent 显式挂载 `product-requirements-handoff` Skill；真实 `generate` 的 `toolResults` 观察到一次 `skill` 工具调用。相同需求的第一轮对比发现 Agent 重复询问输入中已明确的 Unicode 码点口径；Skill 已加入“已给定口径不重问”和补充平面／组合字符验收检查。更新后真实 `product-delivery` Workflow 又生成 `model-proposal`，并在产品审阅点 `review-product` 暂停。生成内容保留了已确认码点规则，增加补充平面及组合字符用例，并把空白字符与失败交互留为未决项。该观察证明方法可被实际读取且本次输出出现针对性改进，不代表该 Skill 对其他需求总能被遵循或完整真实模型质量已经验收。
+
 本实践是[应用实践集合](../README.md)的首个可运行条目，使用 Mastra 自己的模型、Agent、Workflow 和 LibSQLStore，不导入探索主线 Runtime、Store、GatewayClient 或实验 Adapter。学习目标是理解原生设计，再比较差异，不是接入或替换探索实现。
 
 ## 先运行最小应用
@@ -20,7 +24,9 @@ npm run dev
 
 `npm run dev` 是前台常驻服务，体验 Studio 时需保持该进程运行；在对应终端按 Ctrl+C 才会停止。smoke、test 和 build 完成后不会持续提供 Studio 服务。若页面出现 “Failed to load studio”，先检查 `http://127.0.0.1:4111/api/agents` 是否可访问；连接被拒绝时重新启动 dev，再刷新页面。
 
-默认 `fixture` 模式，无需密钥，不请求外部模型。打开 `http://localhost:4111`，在 Studio 的 Agents 中选择 `minimal-agent`，输入“调用 practiceInfo，说明本实践范围”。原生工具返回框架名称、学习范围及 `deploymentExecuted: false`，Agent 随后输出终答。generate 和 Studio 使用的 stream 都经过测试。
+如果接口已返回 HTTP 200，但 Studio 仍提示无法连接 `http://127.0.0.1:4111`，将浏览器地址统一为 `http://127.0.0.1:4111`，避免页面使用 `localhost`、连接目标却使用 `127.0.0.1`。2026-11-03 内置浏览器出现过这一现象，统一地址后 Agent 列表恢复，无需重启服务或重填密钥；尚未定位到具体浏览器限制。
+
+默认 `fixture` 模式，无需密钥，不请求外部模型。打开 `http://127.0.0.1:4111`，在 Studio 的 Agents 中选择 `minimal-agent`，输入“调用 practiceInfo，说明本实践范围”。原生工具返回框架名称、学习范围及 `deploymentExecuted: false`，Agent 随后输出终答。generate 和 Studio 使用的 stream 都经过测试。
 
 fixture 替换的只有模型响应，Agent、工具调度、Workflow、暂停恢复和数据库仍是真实 Mastra 实现。最小 Agent 根据真实工具结果是否进入上下文决定后续回复，不通过脚本直接调用工具来假装成功。fixture 的内容和 token 用量均为固定测试数据，不能评价模型智能、成本或质量。
 
@@ -36,6 +42,7 @@ src/mastra/agents/               最小助手和四个交接助手
 src/mastra/tools/                无外部副作用的 practiceInfo
 src/mastra/workflows/delivery.ts 原生步骤、暂停、恢复和交接数据 schema
 src/delivery-service.ts          CLI 输入预校验，读取原生快照
+.agents/skills/                  Codex 与 Mastra Agent 共用的可审查 Skill 来源
 scripts/                        smoke 与人工交接 CLI
 tests/native.test.ts            原生执行及恢复回归
 ```
@@ -43,6 +50,14 @@ tests/native.test.ts            原生执行及恢复回归
 最小调用由 Studio/API 或脚本进入注册的 Agent，Agent 使用模型并执行 createTool 定义的工具。交接任务由 `createWorkflow().then(...).commit()` 推进，每个生成步骤调用对应 Agent，每个确认步骤使用 suspend/resume。执行快照和恢复由 LibSQLStore 持有，默认文件为本目录 `.data/mastra.db`，不使用探索 SQLite。
 
 本切片没有配置 Agent Memory，因此不承诺聊天记忆持久化。持久化验证针对 Workflow 暂停快照及其中的交接物、确认记录，不将注册 storage 等同于所有 Agent 消息自动持久保存。
+
+## 产品角色提示词和 Skill
+
+系统提示词定义产品 Agent 每次执行都必须遵守的角色、事实边界和交付要求，维护在 `src/mastra/agents/index.ts` 的 `instructions.product`。可复用的需求拆解和验收方法维护在仓库 `.agents/skills/product/requirements-handoff/SKILL.md`，应用启动时通过 Mastra `validateSkillContent` 解析成 `createSkill()` 内联 Skill，再以原生 `skills` 配置挂给 Agent。这样文件继续遵守本仓库的两级目录命名，Mastra 也能使用原生 Skill 发现和读取工具。产品 Skill 加载后，模型生成该产品交接物时最多执行三步，以容纳 Skill 工具调用与终答；其他阶段继续使用原来的一步限制。
+
+注册 Skill 不代表模型一定读取或遵循。产品步骤的运行证据应检查真实 `toolResults` 中是否包含 `skill`，再审查最终文档；自动测试同时检查 Agent 是否能列出和读取此 Skill，以及工作流仍在产品确认暂停点。真实模型对比发现用户明确给出的 Unicode 码点规则仍可能被重复询问，因此 Skill 增补了“已明确约束不重新作为未决问题”的方法和对应字符验收要求。扩展其他角色时，按需建立对应 Skill 并只挂载给负责的 Agent，不要把所有角色方法塞入一份共享长提示词。角色说明或 Skill 提供行为指导；必须保证的审批、版本和授权条件仍应由 Workflow 或代码校验，不依靠模型自觉。
+
+开发 Agent 另挂载 `development-implementation-handoff` Skill，负责把已确认规则和验收条件映射到实现行为、变更范围及验证计划，并区分项目事实、假设和待确认项。由于当前交接输入没有仓库源码、开发 Agent 没有代码读写或命令执行工具，它不得编造路径、命令或声称检查通过；输出仍是待开发负责人确认的提案。开发 Skill 加载后，开发步骤最多执行三步，为 Skill 工具调用和最终提案留出空间。此改动提升提案方法，不构成真实代码生成或代码质量验证证据。
 
 ## 再运行产研交接
 
@@ -140,13 +155,13 @@ MASTRA_DATA_DIR=.data/live npm run smoke:live
 
 成功标准为输出 `mode: "live"`、非空模型终答及 `practiceInfo` 的实际工具结果。失败时先核对密钥权限、模型 ID、完整 API 基址和 Chat Completions 工具调用支持，不应将失败包装成样例成功。
 
-通过后，在另一个终端启动真实模式 Studio，保留原有 4111 样例实例：
+通过后，先在原 dev 终端按 Ctrl+C 停止样例服务，再启动真实模式 Studio。同一个项目目录只允许一个 Mastra dev 实例，改变端口也不能绕过该限制；样例数据仍保留在 `.data/mastra.db`，真实实践使用独立的 `.data/live/mastra.db`：
 
 ```bash
-MASTRA_MODE=live MASTRA_PORT=4112 MASTRA_DATA_DIR=.data/live npm run dev
+MASTRA_MODE=live MASTRA_PORT=4111 MASTRA_DATA_DIR=.data/live npm run dev
 ```
 
-打开 `http://localhost:4112`，先在最小助手里验证工具调用，再在 Workflow 中新建一份真实需求。建议用“工单标题去首尾空格后须为 1–80 字符，非法输入提示原因”的小需求，逐阶段检查产品验收条件、代码提案、测试覆盖和部署前提；每次只确认当前交接物。新建 live Run，不恢复旧 fixture Run。当前产出仍是待人工确认的提案，实际修改仓库、执行测试和部署需要后续单独接入执行环境。
+打开 `http://127.0.0.1:4111`，先在最小助手里验证工具调用，再在 Workflow 中新建一份真实需求。建议用“工单标题去首尾空格后须为 1–80 字符，非法输入提示原因”的小需求，逐阶段检查产品验收条件、代码提案、测试覆盖和部署前提；每次只确认当前交接物。新建 live Run，不恢复旧 fixture Run。当前产出仍是待人工确认的提案，实际修改仓库、执行测试和部署需要后续单独接入执行环境。
 
 ## 验证证据
 
@@ -169,6 +184,8 @@ npm start
 - 仓库边界检查：现有架构回归 7/7、OpenSpec strict 1/1 通过；13 份相关 Markdown 的 92 个相对文件引用无缺失，git diff --check 通过。
 
 自动回归实际执行的是本应用的测试，不是 Agent 生成的代码或测试计划。真实模型调用、生成内容质量、完整产研工程闭环和生产验收仍分别需要证据。
+
+2026-11-03 真实调用补充：`smoke:live` 返回 `mode: live`、非空终答及一条实际 `practiceInfo` 工具结果；原生 stream 消费完整流后同样观察到终答及一条工具结果。真实标题校验需求生成非空产品文档，交接物为 `model-proposal`，Run `625575bb-f1c9-42d6-bad6-23c46263c1a3` 持久化为 `suspended` / `review-product`，未代替用户确认。完整首阶段快照保存在本地忽略目录 `.data/live/first-live-delivery.json`；不提交密钥、原始网关异常或运行数据库。这些结果补充上面的固定模型证据，不代表完整真实模型质量评测或工程交付通过。
 
 ## 和探索实现相比，先学到什么
 

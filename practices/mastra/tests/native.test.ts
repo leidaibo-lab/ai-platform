@@ -2,16 +2,19 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { createApplication, type PracticeApplication } from '../src/mastra/app.js';
 import { startDelivery, reviewDelivery, deliveryStatus } from '../src/delivery-service.js';
 import { stages } from '../src/mastra/workflows/delivery.js';
 
+const practiceRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+
 /** 每个测试使用独立原生 LibSQL，执行完关闭连接并删除临时数据。 */
 async function withApplication(check: (app: PracticeApplication) => Promise<void>) {
   const dir = mkdtempSync(resolve(tmpdir(), 'mastra-native-'));
-  const app = createApplication({ mode: 'fixture', databaseUrl: `file:${resolve(dir, 'test.db')}`, port: 4111, modelId: 'openai/gpt-4o-mini' });
+  const app = createApplication({ rootDir: practiceRoot, mode: 'fixture', databaseUrl: `file:${resolve(dir, 'test.db')}`, port: 4111, modelId: 'openai/gpt-4o-mini' });
   try {
     await app.storage.init();
     await check(app);
@@ -35,6 +38,38 @@ test('原生 Agent 真正执行只读工具后返回终答', async () => {
     assert.match(result.text, /fixture/);
     assert.equal(result.toolResults.length, 1);
     assert.deepEqual(result.toolResults[0].payload.result, { framework: 'Mastra', scope: '独立原生应用与产研交接学习', deploymentExecuted: false });
+  });
+});
+
+// 产品角色显式注册 Mastra 原生 Skill，并通过 Agent API 读取工作方法。
+test('产品 Agent 暴露需求交接 Skill 和稳定系统指令', async () => {
+  // 以框架注册结果和完整技能内容验证路径解析及配置，而非只检查源码字符串。
+  await withApplication(async (app) => {
+    const skills = await app.agents.productAgent.listSkills();
+    assert.deepEqual(skills.map(({ name }) => name), ['product-requirements-handoff']);
+    const skill = await app.agents.productAgent.getSkill('product-requirements-handoff');
+    assert.ok(skill);
+    assert.match(skill.instructions, /已确认规则/);
+    assert.match(skill.instructions, /验收条件/);
+    assert.match(skill.instructions, /补充平面/);
+    assert.match(JSON.stringify(await app.agents.productAgent.getInstructions()), /必须调用 product-requirements-handoff Skill/);
+  });
+});
+
+// 开发 Agent 将需求到实现与验证的方法作为原生 Skill 暴露，并明确提案执行边界。
+test('开发 Agent 暴露实现提案 Skill 和证据边界指令', async () => {
+  // 读取注册后的 Skill 正文及系统提示，验证真实应用装配关系。
+  await withApplication(async (app) => {
+    const skills = await app.agents.developmentAgent.listSkills();
+    assert.deepEqual(skills.map(({ name }) => name), ['development-implementation-handoff']);
+    const skill = await app.agents.developmentAgent.getSkill('development-implementation-handoff');
+    assert.ok(skill);
+    assert.match(skill.instructions, /需求\/验收条件 → 实现行为 → 验证方法/);
+    assert.match(skill.instructions, /不得编造文件路径/);
+    assert.match(skill.instructions, /不得伪造命令/);
+    const instructions = JSON.stringify(await app.agents.developmentAgent.getInstructions());
+    assert.match(instructions, /必须调用 development-implementation-handoff Skill/);
+    assert.match(instructions, /禁止声称已修改代码、运行检查或通过质量审查/);
   });
 });
 
@@ -138,7 +173,7 @@ test('原进程退出后从 LibSQL 恢复，模式变化被拒绝', { timeout: 3
     assert.equal(resumedStatus.pending.artifact.hash, started.pending.artifact.hash);
     const reviewed = cli(['review', started.runId, 'product', started.pending.artifact.hash, 'approve', 'local-product', '确认固定样例']);
     assert.equal(reviewed.pending.role, 'development');
-    const app = createApplication({ mode: 'live', databaseUrl: `file:${resolve(dir, 'mastra.db')}`, port: 4111, modelId: 'openai/gpt-4o-mini', apiKey: 'unused-test-value' });
+    const app = createApplication({ rootDir: practiceRoot, mode: 'live', databaseUrl: `file:${resolve(dir, 'mastra.db')}`, port: 4111, modelId: 'openai/gpt-4o-mini', apiKey: 'unused-test-value' });
     try {
       await app.storage.init();
       await assert.rejects(reviewDelivery(app, started.runId, approve(reviewed)), /模式/);
