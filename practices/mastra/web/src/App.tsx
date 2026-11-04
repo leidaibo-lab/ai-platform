@@ -473,7 +473,7 @@ export function App() {
                   <h3>修订来源</h3>
                   <p>
                     由 {document.revision.appliedBy}{' '}
-                    应用，当前新稿需要重新审阅。
+                    应用，明确结论如下。
                   </p>
                   <p>{document.revision.confirmedDecisions}</p>
                   <a

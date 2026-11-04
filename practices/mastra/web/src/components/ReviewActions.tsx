@@ -116,7 +116,7 @@ export function ReviewActions({
       <div className="decision-row">
         <span>
           {busy
-            ? "正在保存决定并执行下一步，请稍候…"
+            ? "正在处理当前操作，请稍候…"
             : "决定将绑定你正在阅读的文档版本"}
         </span>
         <button
