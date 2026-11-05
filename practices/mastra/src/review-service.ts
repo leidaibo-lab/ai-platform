@@ -5,6 +5,7 @@ import {
   type DeliveryContext,
 } from './delivery-service.js';
 import { deliverySchema, type Delivery } from './mastra/workflows/delivery.js';
+import { maxProductReworks, productReworkRunId } from './mastra/workflows/product-contract.js';
 
 /** 页面使用的只读投影；正文/hash 来自快照，审阅资格每次在服务端重新计算。 */
 export interface ProductReviewDocument {
@@ -17,6 +18,10 @@ export interface ProductReviewDocument {
   artifact?: Delivery['artifacts'][number];
   reviews: Delivery['reviews'];
   canReview: boolean;
+  canRework: boolean;
+  productWork?: Delivery['productWork'];
+  productRework?: Omit<NonNullable<Delivery['productRework']>, 'sourceContent'>;
+  reworkRunId?: string;
   revision?: Omit<NonNullable<Delivery['revision']>, 'content'>;
 }
 
@@ -68,6 +73,8 @@ export async function readProductDocument(
   const status = await deliveryStatus(app, runId);
   // 阶段唯一，产品正文取最早生成且始终不变的交接物。
   const artifact = state.artifacts.find((item) => item.stage === 'product');
+  const successorId = state.outcome === 'rework-requested' && artifact ? productReworkRunId(runId, artifact.hash) : undefined;
+  const reworkRunId = successorId && await app.deliveryWorkflow.getWorkflowRunById(successorId) ? successorId : undefined;
   return {
     runId,
     brief: state.brief,
@@ -77,6 +84,13 @@ export async function readProductDocument(
     pendingRole: status.pending?.role,
     artifact,
     reviews: state.reviews,
+    productWork: state.productWork,
+    reworkRunId,
+    productRework: state.productRework
+      ? { sourceRunId: state.productRework.sourceRunId, sourceHash: state.productRework.sourceHash,
+          reviewer: state.productRework.reviewer, feedback: state.productRework.feedback, round: state.productRework.round }
+      : undefined,
+    canRework: snapshot.status === 'suspended' && status.pending?.step === 'review-product' && state.mode === app.config.mode && (state.productRework?.round ?? 0) < maxProductReworks,
     revision: state.revision
       ? {
           sourceRunId: state.revision.sourceRunId,
@@ -96,7 +110,7 @@ export async function readProductDocument(
 export const productDecisionSchema = z
   .object({
     artifactHash: z.string().regex(/^[a-f0-9]{64}$/),
-    decision: z.enum(['approve', 'reject']),
+    decision: z.enum(['approve', 'reject', 'rework']),
     reviewer: z.string().trim().min(1).max(100),
     comment: z.string().trim().min(1).max(2000),
   })
@@ -110,15 +124,25 @@ export async function decideProduct(
 ) {
   const decision = productDecisionSchema.parse(input);
   const current = await readProductDocument(app, runId);
-  if (!current.canReview)
+  if (current.mode !== app.config.mode)
+    throw new ReviewPageError('记录与当前服务模式不同，请使用创建时的模式提交决定。', 409);
+  const retryRework = decision.decision === 'rework' && current.outcome === 'rework-requested';
+  if (!current.canReview && !retryRework)
     throw new ReviewPageError(
       '当前记录已不在可确认的产品阶段，或运行模式不同。请刷新后查看。',
       409,
     );
   if (current.artifact?.hash !== decision.artifactHash)
     throw new ReviewPageError('文档版本已变化，请刷新并重新审阅。', 409);
-  await reviewDelivery(app, runId, { ...decision, role: 'product' });
-  return readProductDocument(app, runId);
+  if (decision.decision === 'rework' && !current.canRework && !retryRework)
+    throw new ReviewPageError('产品返工已达三次上限，请人工整理后另起需求，或批准/终止当前轮次。', 409);
+  if (retryRework) {
+    const saved = current.reviews.at(-1);
+    if (saved?.decision !== decision.decision || saved.reviewer !== decision.reviewer || saved.comment !== decision.comment)
+      throw new ReviewPageError('退回决定已保存，请使用原意见重试或查看后继轮次。', 409);
+  }
+  const next = await reviewDelivery(app, runId, { ...decision, role: 'product' });
+  return readProductDocument(app, next.runId);
 }
 
 /** 助手只接受有限纯文本历史，拒绝系统角色、工具 part 及客户端执行选项。 */
@@ -191,6 +215,7 @@ export async function prepareReadingChat(
     content: document.artifact.content,
     hash: document.artifact.hash,
     reviews: document.reviews,
+    productRework: document.productRework,
     status: document.status,
     outcome: document.outcome,
   });

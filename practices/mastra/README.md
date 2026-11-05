@@ -6,6 +6,8 @@
 
 2026-11-04 补充：产品 Agent 显式挂载 `product-requirements-handoff` Skill；真实 `generate` 的 `toolResults` 观察到一次 `skill` 工具调用。相同需求的第一轮对比发现 Agent 重复询问输入中已明确的 Unicode 码点口径；Skill 已加入“已给定口径不重问”和补充平面／组合字符验收检查。更新后真实 `product-delivery` Workflow 又生成 `model-proposal`，并在产品审阅点 `review-product` 暂停。生成内容保留了已确认码点规则，增加补充平面及组合字符用例，并把空白字符与失败交互留为未决项。该观察证明方法可被实际读取且本次输出出现针对性改进，不代表该 Skill 对其他需求总能被遵循或完整真实模型质量已经验收。
 
+2026-11-06 补充：产品生成展开为总产品、需求梳理、产品闭环、产品写作四个固定 Agent 的原生子 Workflow；每个角色最多 24 步，可使用产品 Skill 和已注册只读工具。增加“退回修改”：保留旧稿和反馈，在独立新轮次重走四角色并重新等待人工验收，最多三次。自动回归 31/31、后端类型检查和前端构建通过；隔离浏览器已验证返工及新旧稿导航。角色产物、来源与人工操作见[产品固定角色子流程](./product-workflow.md)。本次验证控制流与版本边界，真实质量收益待对比。
+
 本实践是[应用实践集合](../README.md)的首个可运行条目，使用 Mastra 自己的模型、Agent、Workflow 和 LibSQLStore，不导入探索主线 Runtime、Store、GatewayClient 或实验 Adapter。学习目标是理解原生设计，再比较差异，不是接入或替换探索实现。
 
 ## 产品交接物审阅页
@@ -69,9 +71,11 @@ Studio/API 仅绑定 `127.0.0.1`，是无登录的本地学习入口，不应直
 src/mastra/index.ts              Mastra CLI / Studio 原生导出入口
 src/mastra/app.ts                Agent、Workflow、LibSQLStore 注册
 src/mastra/config.ts             本实践配置与绝对数据库路径
-src/mastra/agents/               最小助手、四个交接助手和只读阅读助手
+src/mastra/agents/               四个产品角色、三个下游交接助手、最小助手和阅读助手
 src/mastra/tools/                无外部副作用的 practiceInfo
 src/mastra/workflows/delivery.ts 原生步骤、暂停、恢复和交接数据 schema
+src/mastra/workflows/product.ts  固定四角色原生子 Workflow，输出角色产物与最终产品稿
+src/mastra/workflows/product-contract.ts 产品角色证据、返工来源与次数上限
 src/delivery-service.ts          CLI/页面共享的交接与恢复服务
 src/review-service.ts            产品文档投影、版本与输入校验
 src/review-routes.ts             Mastra 原生 HTTP Adapter 与 AI SDK 流
@@ -80,23 +84,28 @@ web/                            独立 React/Vite 审阅页，不持有模型密
 scripts/                        smoke 与人工交接 CLI
 tests/native.test.ts            原生执行及恢复回归
 tests/review.test.ts             页面 API、决定边界与 SDK 多轮流回归
+tests/product.test.ts            四角色、返工上限、故障隔离、进程恢复与旧暂停点兼容
 ```
 
-最小调用由 Studio/API 或脚本进入注册的 Agent，Agent 使用模型并执行 createTool 定义的工具。交接任务由 `createWorkflow().then(...).commit()` 推进，每个生成步骤调用对应 Agent，每个确认步骤使用 suspend/resume。执行快照和恢复由 LibSQLStore 持有，默认文件为本目录 `.data/mastra.db`，不使用探索 SQLite。
+最小调用由 Studio/API 或脚本进入注册的 Agent，Agent 使用模型并执行 createTool 定义的工具。交接任务由 `createWorkflow().then(...).commit()` 推进；产品生成是四角色子 Workflow，其他阶段生成步骤调用对应 Agent，每个确认步骤使用 suspend/resume。执行快照和恢复由 LibSQLStore 持有，默认文件为本目录 `.data/mastra.db`，不使用探索 SQLite。
 
 本切片没有配置 Agent Memory，因此不承诺聊天记忆持久化。持久化验证针对 Workflow 暂停快照及其中的交接物、确认记录，不将注册 storage 等同于所有 Agent 消息自动持久保存。
 
 ## 产品角色提示词和 Skill
 
-系统提示词定义产品 Agent 每次执行都必须遵守的角色、事实边界和交付要求，维护在 `src/mastra/agents/index.ts` 的 `instructions.product`。可复用的需求拆解和验收方法维护在仓库 `.agents/skills/product/requirements-handoff/SKILL.md`，应用启动时通过 Mastra `validateSkillContent` 解析成 `createSkill()` 内联 Skill，再以原生 `skills` 配置挂给 Agent。这样文件继续遵守本仓库的两级目录命名，Mastra 也能使用原生 Skill 发现和读取工具。产品 Agent 同时加载本实践的完整 PM 套件，默认生成、交付和修订共用每次最多24步的有限预算；通过原生工具按需读取方法和参考资料，详见文末。
+角色职责、中文名称与优先方法维护在 [product-roles.ts](./src/mastra/agents/product-roles.ts) 的 `productRoleProfiles`；共同的 Skill 使用要求和事实边界维护在 `src/mastra/agents/index.ts` 的 `instructions.product`、`productBoundaries`。四个角色通过同一工厂挂载完整 113 项 Skill：总产品优先分诊/优先级/机会树，需求梳理优先请求归类/工作故事/访谈提纲，闭环优先测试场景/承重假设挑战/失败预演，写作优先 PRD/用户故事/WWA。优先方法是选择起点，角色仍可从全套选择更合适的方法；启动时检查优先方法是否真实注册。
 
-注册 Skill 不代表模型一定读取或遵循。产品步骤的运行证据应检查真实 `toolResults` 中是否包含 `skill`，再审查最终文档；自动测试同时检查 Agent 是否能列出和读取此 Skill，以及工作流仍在产品确认暂停点。真实模型对比发现用户明确给出的 Unicode 码点规则仍可能被重复询问，因此 Skill 增补了“已明确约束不重新作为未决问题”的方法和对应字符验收要求。扩展其他角色时，按需建立对应 Skill 并只挂载给负责的 Agent，不要把所有角色方法塞入一份共享长提示词。角色说明或 Skill 提供行为指导；必须保证的审批、版本和授权条件仍应由 Workflow 或代码校验，不依靠模型自觉。
+原有 `productAgent` 保留注册名与 ID，承担文档写作和已有修订预览；另注册总产品、需求梳理、产品闭环三个 Agent。需求交接方法仍维护在仓库 `.agents/skills/product/requirements-handoff/SKILL.md`，通过原生 `validateSkillContent` / `createSkill()` 挂给四个角色；完整 PM 套件采用本实践独立管理的 Skill 目录，见文末说明。各角色执行和单写作修订预览共用每次最多 24 步的工具循环预算。角色按需调用 `skill` / `skill_read`，交付前做需求交接检查；中间角色交付各自分析，写作角色汇总完整稿。原文方法的跨角色流程只执行当前职责部分；需要补问的缺口保留给人工确认。应用修订稿时原样使用预览内容。
+
+注册 Skill 不代表模型一定读取或遵循。产品步骤的运行证据应检查真实 `toolResults` 中是否包含 `skill`，再审查最终文档；自动测试分别检查四个角色能列出完整套件、实际读取对应方法与参考原文，以及工作流仍在产品确认暂停点。2026-11-06 角色融合后全套回归 **36/36** 通过，其中新增四项角色工具链与一项四角色 Workflow 集成验证；这是确定性模型驱动的工具与状态证据，尚未验证真实模型选法和内容质量。历史真实模型对比发现用户明确给出的 Unicode 码点规则仍可能被重复询问，因此需求交接 Skill 增补了“已明确约束不重新作为未决问题”的方法和对应字符验收要求。角色只常驻职责与选法指引，方法全文经工具按需读取。角色说明或 Skill 提供行为指导；必须保证的审批、版本和授权条件仍应由 Workflow 或代码校验，不依靠模型自觉。
 
 开发 Agent 另挂载 `development-implementation-handoff` Skill，负责把已确认规则和验收条件映射到实现行为、变更范围及验证计划，并区分项目事实、假设和待确认项。由于当前交接输入没有仓库源码、开发 Agent 没有代码读写或命令执行工具，它不得编造路径、命令或声称检查通过；输出仍是待开发负责人确认的提案。开发 Skill 加载后，开发步骤最多执行三步，为 Skill 工具调用和最终提案留出空间。此改动提升提案方法，不构成真实代码生成或代码质量验证证据。
 
 ## 再运行产研交接
 
 本轮实现的是**交接提案和人工确认**：产品文档 → 产品确认 → 代码提案 → 开发确认 → 测试计划 → 测试确认 → 部署方案 → 运维确认。确认当前交接物后才生成下一份；任一阶段拒绝立即结束本轮。
+
+产品阶段还支持独立的 `rework` 决定：四角色带着原稿与意见产生返工新 Run，停在新的产品人工关口，旧批准不继承。`reject` 继续表示终止，后续开发/测试/运维不支持自动返工。API/CLI 返回新 `runId`，需要改用新 Run 和 hash 继续审阅。
 
 | 阶段 / CLI role | Agent 提供的交接物 | 人工确认责任 | 当前未执行的工程动作 |
 | --- | --- | --- | --- |
@@ -117,6 +126,9 @@ HASH='当前待审交接物的 hash'
 npm run delivery -- status "$RUN_ID"
 npm run delivery -- review "$RUN_ID" product "$HASH" approve local-product '确认当前需求样例'
 
+# 产品稿需要修改时，用 rework 代替 approve；返回新 runId 和待审 hash。
+# npm run delivery -- review "$RUN_ID" product "$HASH" rework local-product '补充失败反馈和对应验收'
+
 # 后续依次使用 development → testing → operations。
 # 每次重新读取当前正文及 hash，再确认，不能复用旧 hash。
 # 例如开发阶段拒绝（先把 HASH 更新为开发交接物的当前 hash）：
@@ -125,12 +137,13 @@ npm run delivery -- review "$RUN_ID" development "$HASH" reject local-developer 
 
 `reviewer` 是本地声明的审阅人标签，示例只是角色模拟。当前没有账号认证、指派、RBAC 或多人权限隔离，不将角色字符串校验称为真实权限验证。
 
-交接物由阶段、需求、全部上游交接物及当前正文的 SHA-256 绑定。确认记录保存角色、hash、approve/reject、审阅人和说明；步骤返回新对象和新数组。评论只留审阅说明，不会修改批准内容；需求或正文有变化时拒绝本轮并发起新 Run。当前没有同一 Run 内编辑、重做、版本分支或自动失效传播。
+交接物由阶段、需求、全部上游交接物及当前正文的 SHA-256 绑定，产品另绑定角色产物及修订/返工来源。确认记录保存角色、hash、approve/reject/rework、审阅人和说明；步骤返回新对象和新数组。批准评论不修改正文；退回意见随新轮次传给四个角色，旧稿保持不变。当前没有同一 Run 内编辑、重做、版本分支或自动失效传播。
 
 终态同时查看框架 status 和业务 `result.outcome`：
 
 - `plan-approved`：四份提案经过本地确认，**没有执行部署**。
 - `rejected`：已拒绝，后续阶段没有生成。本次锁定版本的 bail 通过框架终态结束，不能仅凭框架 success 判断业务通过。
+- `rework-requested`：旧轮次已保存退回意见；后继新 Run 重新等待产品确认，来源稿只读。页面提供前后轮次导航，相同退回请求重试回读同一后继。
 - `failed`：框架或生成步骤失败，不能视为业务批准。
 
 status/review 命令每次都是新进程，通过同一数据库和 `createRun({ runId })` 恢复。CLI 在 resume 前拒绝错误角色、旧 hash、空审阅人、重复确认及模型模式变化，保留原暂停点。直接从 Studio/API 提交非法 resume 仍被步骤校验阻止，但可能使 Run 进入 failed；当前未提供修复失败 Run 的管理流程。

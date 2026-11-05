@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { MastraLanguageModelV2Mock } from '@mastra/core/test-utils/llm-mock';
 import { createAgents } from '../src/mastra/agents/index.js';
 import { loadGovernedSkill, loadProductSkills } from '../src/mastra/agents/skills.js';
+import { productRoleProfiles, type ProductRole } from '../src/mastra/agents/product-roles.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const skillsRoot = resolve(root, '.agents/skills');
@@ -117,6 +118,47 @@ function scriptedModel(plan: { name: string; input: Record<string, unknown>; pre
         controller.close();
       },
     }) }),
+  });
+}
+
+// 各角色通过自己的正式注册实例读取对应方法，避免只验证写作Agent就声称全角色可用。
+for (const role of Object.keys(productRoleProfiles) as ProductRole[]) {
+  // 每个角色独立执行原生生成，方法输出与注册配置一并验证。
+  test(`${productRoleProfiles[role].name} 可发现完整套件并实际读取角色方法与交接检查`, async () => {
+    const registered = agents();
+    const roleAgents = { coordinator: registered.productCoordinatorAgent, clarification: registered.productClarificationAgent, closure: registered.productClosureAgent, writing: registered.productAgent };
+    const agent = roleAgents[role];
+    const profile = productRoleProfiles[role];
+    const listed = await agent.listSkills();
+    const names = new Set(
+      // 检查完整集合而非只检查优先列表，保留角色自主选择其他方法的能力。
+      listed.map((skill) => skill.name),
+    );
+    assert.equal(names.size, 113);
+    for (const name of ['product-requirements-handoff', ...loadProductSkills(skillsRoot).map(
+      // 使用实际套件库存核对角色没有被不小心裁剪。
+      (skill) => skill.name,
+    )]) assert.ok(names.has(name));
+    const instructions = JSON.stringify(await agent.getInstructions());
+    assert.ok(instructions.includes(profile.instructions));
+    for (const name of profile.preferredSkills) {
+      assert.ok(names.has(name));
+      assert.ok(instructions.includes(name));
+    }
+    assert.match(instructions, /只完成当前角色负责的部分/);
+    assert.match(instructions, /不能扩张当前权限/);
+    const selected = profile.preferredSkills[0];
+    const result = await agent.generate('完成当前角色工作（仅验证工具链）', { model: scriptedModel([
+      { name: 'skill', input: { name: selected } },
+      { name: 'skill_read', input: { skillName: selected, path: 'references/upstream.md' } },
+      { name: 'skill', input: { name: 'product-requirements-handoff' } },
+    ]) });
+    assert.equal(result.steps.length, 4);
+    assert.equal(result.toolResults.length, 3);
+    for (const tool of result.toolResults) assert.doesNotMatch(JSON.stringify(tool.payload.result), /not found|Error executing/);
+    const expectedPrefix = readFileSync(resolve(skillsRoot, 'product-pm', selected.slice('product-pm-'.length), 'references/upstream.md'), 'utf8').slice(0, 40);
+    assert.ok(JSON.stringify(result.toolResults[1].payload.result).includes(JSON.stringify(expectedPrefix).slice(1, -1)));
+    assert.match(result.text, /确定性工具回归/);
   });
 }
 

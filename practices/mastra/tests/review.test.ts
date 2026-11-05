@@ -527,3 +527,67 @@ test('历史产品稿修订不继承审批，模式变化与来源混用被拒�
     );
   });
 });
+
+// HTTP 退回返回后继文档，页面可切换阅读；旧稿永远不能以旧 hash 再批准。
+test('产品退回 API 保存反馈、返回新稿并支持相同决定重试', async () => {
+  // 所有决定由正式路由执行，覆盖严格输入与服务端来源绑定。
+  await withReviewApp(async (router, app) => {
+    const first = await startDelivery(app, '页面返工');
+    const path = `/review-api/runs/${first.runId}`;
+    const request = { artifactHash: first.pending!.artifact.hash, decision: 'rework', reviewer: '测试产品', comment: '补充异常路径，保留范围。' };
+    assert.equal((await post(router, `${path}/review`, { ...request, content: '客户端替换旧稿' })).status, 400);
+    const response = await post(router, `${path}/review`, request);
+    assert.equal(response.status, 200);
+    const next = await response.json() as ProductReviewDocument;
+    assert.notEqual(next.runId, first.runId);
+    assert.equal(next.canReview, true);
+    assert.equal(next.pendingRole, 'product');
+    assert.equal(next.productRework?.feedback, request.comment);
+    assert.equal(next.productWork?.entries.length, 4);
+    assert.deepEqual(next.reviews, []);
+    const old = await (await router.request(path)).json() as ProductReviewDocument;
+    assert.equal(old.outcome, 'rework-requested');
+    assert.equal(old.canReview, false);
+    assert.equal(old.artifact?.hash, first.pending!.artifact.hash);
+    assert.equal(old.reworkRunId, next.runId);
+    assert.equal((await (await post(router, `${path}/review`, request)).json()).runId, next.runId);
+    assert.equal((await post(router, `${path}/review`, { ...request, comment: '换一条意见' })).status, 409);
+    assert.equal((await post(router, `${path}/review`, { ...request, decision: 'approve' })).status, 409);
+    app.config.mode = 'live';
+    try {
+      assert.equal((await post(router, `${path}/review`, request)).status, 409);
+    } finally {
+      app.config.mode = 'fixture';
+    }
+    const page = await (await router.request('/review-api/runs')).json();
+    assert.equal(page.total, 2);
+    assert.equal(page.runs.find(
+      // 来源从原生初始快照投影，不能由页面伪造。
+      (run: { runId: string }) => run.runId === next.runId,
+    ).reworkOf, first.runId);
+    const approval = await post(router, `/review-api/runs/${next.runId}/review`, { ...request, artifactHash: next.artifact!.hash, decision: 'approve' });
+    assert.equal((await approval.json()).pendingRole, 'development');
+  });
+});
+
+// 前端禁用只是提示，上限必须由服务在恢复前阻止。
+test('HTTP 返工超过上限返回冲突，仍可人工终止当前版本', async () => {
+  // 走满三次返工，再检查暂停点没有因越界请求而丢失。
+  await withReviewApp(async (router, app) => {
+    const started = await startDelivery(app, 'API 有界返工');
+    let document = await (await router.request(`/review-api/runs/${started.runId}`)).json() as ProductReviewDocument;
+    for (let round = 1; round <= 3; round++) {
+      const response = await post(router, `/review-api/runs/${document.runId}/review`, { artifactHash: document.artifact!.hash, decision: 'rework', reviewer: '测试产品', comment: `第 ${round} 次补充意见` });
+      assert.equal(response.status, 200);
+      document = await response.json() as ProductReviewDocument;
+    }
+    assert.equal(document.canRework, false);
+    const path = `/review-api/runs/${document.runId}/review`;
+    const request = { artifactHash: document.artifact!.hash, decision: 'rework', reviewer: '测试产品', comment: '超过约定次数' };
+    assert.equal((await post(router, path, request)).status, 409);
+    assert.equal((await deliveryStatus(app, document.runId)).pending?.artifact.hash, document.artifact!.hash);
+    const ended = await post(router, path, { ...request, decision: 'reject' });
+    assert.equal(ended.status, 200);
+    assert.equal((await ended.json()).outcome, 'rejected');
+  });
+});

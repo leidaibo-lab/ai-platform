@@ -30,6 +30,7 @@ import {
 import { Markdown } from './components/Markdown';
 import { ReadingAssistant } from './components/ReadingAssistant';
 import { ReviewActions } from './components/ReviewActions';
+import { ProductWork } from './components/ProductWork';
 
 /** 专注产品审阅的业务页面；Workflow 持有事实，React 只管理当前阅读及输入状态。 */
 export function App() {
@@ -131,6 +132,10 @@ export function App() {
   }, [selected]);
   /** 保存完成后直接采用服务端权威状态，区分业务决定与下游生成结果。 */
   function decided(result: ReviewDocument) {
+    if (result.runId !== selected) {
+      revised(result);
+      return;
+    }
     setDocument(result);
     // 决定成功后同步当前列表摘要，不让已结束的记录继续显示等待审阅。
     setList((current) => ({
@@ -258,6 +263,7 @@ export function App() {
                   <FileText size={14} />
                   {briefTitle(run.brief)}
                   {run.revisionOf && <small>修订稿</small>}
+                  {run.reworkOf && <small>返工稿</small>}
                 </span>
                 <span className="run-card-brief">{run.brief}</span>
                 <span className="run-card-meta">
@@ -371,7 +377,7 @@ export function App() {
                     : '固定样例 · fixture'}
                 </span>
                 <code title={document.runId}>
-                  Run {document.runId.replace(/^revision-/, '').slice(0, 8)}
+                  Run {document.runId.replace(/^(revision-|product-rework-)/, '').slice(0, 8)}
                 </code>
                 <button
                   className="text-button"
@@ -446,6 +452,7 @@ export function App() {
                   <span>审阅决定将与此版本绑定</span>
                 </footer>
               </Artifact>
+              <ProductWork document={document} />
               {reviews.length > 0 && (
                 <section className="review-history">
                   <h3>
@@ -460,12 +467,27 @@ export function App() {
                         <span className="evidence-tag">
                           {review.decision === 'approve'
                             ? '已批准产品稿'
-                            : '已拒绝产品稿'}
+                            : review.decision === 'rework' ? '已退回修改' : '已拒绝产品稿'}
                         </span>
                       </div>
                       <p>{review.comment}</p>
                     </div>
                   ))}
+                </section>
+              )}
+              {document.productRework && (
+                <section className="review-history">
+                  <h3>第 {document.productRework.round} 次返工</h3>
+                  <p>{document.productRework.reviewer} 提出的修改意见：</p>
+                  <p>{document.productRework.feedback}</p>
+                  <a className="text-button" href={`/?run=${encodeURIComponent(document.productRework.sourceRunId)}`}>查看修改前的产品稿</a>
+                </section>
+              )}
+              {document.reworkRunId && (
+                <section className="review-history">
+                  <h3>已退回修改</h3>
+                  <p>当前版本和审阅意见已保留，请继续审阅返工后的新稿。</p>
+                  <a className="text-button" href={`/?run=${encodeURIComponent(document.reworkRunId)}`}>查看返工稿</a>
                 </section>
               )}
               {document.revision && (

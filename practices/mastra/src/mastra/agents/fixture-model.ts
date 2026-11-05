@@ -4,6 +4,9 @@ import { MastraLanguageModelV2Mock, createMockModel } from '@mastra/core/test-ut
 const drafts: Record<string, string> = {
   reading: '这是固定样例阅读助手（fixture）。当前文档描述标题长度及空白校验；请重点检查边界、计数口径和异常反馈。此回复未作真实需求推理，也没有修改正文或提交审阅决定。',
   product: '# 产品交接样例（fixture）\n需求：工单标题去首尾空格后为 1–80 字符。\n验收：空白拒绝，长度边界通过，超长拒绝。\n此为固定样例，真实需求须使用 live 模式并人工确认。',
+  'product-coordinator': '# 总产品统筹（fixture）\n本轮按需求梳理、产品闭环、产品写作顺序推进。检查目标、规则缺口与人工反馈；未执行审批。',
+  'product-clarification': '# 需求梳理（fixture）\n用户诉求：工单标题校验。已给定：去首尾空格、1–80 字符。其他未提供的业务选择交人工确认。',
+  'product-closure': '# 产品闭环（fixture）\n正常、空白、长度边界及超长路径分别验收；字符计数与失败反馈按实际输入确认，不自行补造。',
   development: '# 代码提案样例（fixture，未执行）\n```ts\n/** 校验工单标题的长度边界。 */\nexport function validTitle(title: string): boolean {\n  const length = title.trim().length;\n  return length >= 1 && length <= 80;\n}\n```\n开发需审查需求一致性、字符计数口径和错误处理；未创建分支或执行构建。',
   testing: '# 测试计划样例（fixture，未执行）\n需求映射：标题长度→空串、空白、1、80、81 字符；去空格→前后空格。\n尚缺：Unicode 计数口径、接口集成、实际运行报告。\n测试人员确认的是计划覆盖，不能视为测试通过。',
   operations: '# 部署方案样例（fixture，未执行）\n前提：明确代码提交、构建制品、环境与权限。\n步骤：CI 检查→预发部署→健康探测→人工授权后发布。\n回滚：保留上一制品，探测失败立即切回并复验。\n当前无制品、无部署执行，运维确认只针对方案。',
@@ -26,23 +29,43 @@ function minimalResponse(prompt: readonly { role: string }[]) {
 /** 使用官方 Mock 驱动原生 Agent；minimal 强制一次只读工具调用。 */
 export function createFixtureModel(stage: string) {
   // 产品修订固定返回有差异的样例；只验证流程，不模拟理解确认结论。
-  if (stage === 'product') {
+  if (stage === 'product' || stage.startsWith('product-')) {
     /** 普通生成和修订共享固定样例，任务标记只决定是否显示修订段落。 */
     function productText(prompt: unknown) {
-      return drafts.product + (JSON.stringify(prompt).includes('revision-task') ? '\n\n## 修订样例（fixture）\n此为修订流程固定输出；具体结论须由人工检查，不代表模型理解或确认。' : '');
+      const serialized = JSON.stringify(prompt);
+      return drafts[stage] + (serialized.includes('revision-task') ? '\n\n## 修订样例（fixture）\n此为修订流程固定输出；具体结论须由人工检查，不代表模型理解或确认。' : '') + (serialized.includes('sourceContent') ? '\n\n返工样例（fixture）：已进入带来源和反馈的新轮次；此固定文本不代表理解或解决反馈。' : '');
+    }
+    /** 所有固定产品角色真实执行已注册工具，再输出各自样例。 */
+    function productResponse(prompt: readonly { role: string }[]) {
+      const hasResult = prompt.some(
+        // 工具完成事实必须来自原生工具循环，而非测试直接调用。
+        (message) => message.role === 'tool',
+      );
+      return {
+        content: hasResult
+          ? [{ type: 'text' as const, text: productText(prompt) }]
+          : [{ type: 'tool-call' as const, toolCallId: `fixture-${stage}-info`, toolName: 'practiceInfo', input: '{}' }],
+        finishReason: hasResult ? 'stop' as const : 'tool-calls' as const,
+        usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 }, warnings: [],
+      };
     }
     return new MastraLanguageModelV2Mock({
       // 同步入口交给 Mastra 消费固定文本，不访问远程模型。
-      doGenerate: async (options) => ({ content: [{ type: 'text' as const, text: productText(options.prompt) }], finishReason: 'stop' as const, usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 }, warnings: [] }),
+      doGenerate: async (options) => productResponse(options.prompt),
       // 保留产品 Agent 在 Studio 中的原生 stream 能力。
       doStream: async (options) => ({ stream: new ReadableStream({
         // 仅发送固定文本协议；不把测试样例写成真实推理证据。
         start(controller) {
+          const response = productResponse(options.prompt);
           controller.enqueue({ type: 'stream-start', warnings: [] });
-          controller.enqueue({ type: 'text-start', id: 'fixture-product' });
-          controller.enqueue({ type: 'text-delta', id: 'fixture-product', delta: productText(options.prompt) });
-          controller.enqueue({ type: 'text-end', id: 'fixture-product' });
-          controller.enqueue({ type: 'finish', finishReason: 'stop', usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 } });
+          const content = response.content[0];
+          if (content.type === 'tool-call') controller.enqueue(content);
+          else {
+            controller.enqueue({ type: 'text-start', id: 'fixture-product' });
+            controller.enqueue({ type: 'text-delta', id: 'fixture-product', delta: content.text });
+            controller.enqueue({ type: 'text-end', id: 'fixture-product' });
+          }
+          controller.enqueue({ type: 'finish', finishReason: response.finishReason, usage: response.usage });
           controller.close();
         },
       }) }),

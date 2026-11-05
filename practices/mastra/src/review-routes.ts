@@ -74,6 +74,9 @@ export function createReviewRoutes(app: RevisionContext) {
                 parsed?.context?.initialize?.output?.revision?.sourceRunId ??
                 parsed?.value?.context?.initialize?.output?.revision
                   ?.sourceRunId,
+              reworkOf:
+                parsed?.context?.initialize?.output?.productRework?.sourceRunId ??
+                parsed?.value?.context?.initialize?.output?.productRework?.sourceRunId,
               createdAt: run.createdAt,
               updatedAt: run.updatedAt,
             });

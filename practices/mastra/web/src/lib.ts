@@ -12,9 +12,22 @@ export interface ReviewDocument {
   brief: string;
   mode: 'fixture' | 'live';
   status: string;
-  outcome: 'in-progress' | 'rejected' | 'plan-approved';
+  outcome: 'in-progress' | 'rejected' | 'rework-requested' | 'plan-approved';
   pendingRole?: string;
   canReview: boolean;
+  canRework: boolean;
+  reworkRunId?: string;
+  productWork?: {
+    version: 'product-graph.v1';
+    entries: { role: 'coordinator' | 'clarification' | 'closure' | 'writing'; content: string; toolNames: string[]; modelSteps: number }[];
+  };
+  productRework?: {
+    sourceRunId: string;
+    sourceHash: string;
+    reviewer: string;
+    feedback: string;
+    round: number;
+  };
   revision?: {
     sourceRunId: string;
     sourceHash: string;
@@ -31,13 +44,14 @@ export interface ReviewDocument {
   reviews: {
     role: string;
     artifactHash: string;
-    decision: 'approve' | 'reject';
+    decision: 'approve' | 'reject' | 'rework';
     reviewer: string;
     comment: string;
   }[];
 }
 export interface RunSummary {
   revisionOf?: string;
+  reworkOf?: string;
   runId: string;
   brief: string;
   status: string;
@@ -102,6 +116,7 @@ export function formatTime(value: string) {
 /** 将框架状态转成页面状态；业务拒绝优先于框架 success。 */
 export function documentStatus(document: ReviewDocument) {
   if (document.outcome === 'rejected') return '本轮已拒绝';
+  if (document.outcome === 'rework-requested') return '已退回修改';
   if (document.status === 'failed') return '流程执行失败';
   if (document.outcome === 'plan-approved') return '四阶段方案已确认';
   if (document.canReview) return '等待产品确认';

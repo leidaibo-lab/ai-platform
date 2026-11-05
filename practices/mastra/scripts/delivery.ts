@@ -6,7 +6,7 @@ import { deliveryStatus, startDelivery, reviewDelivery } from '../src/delivery-s
 async function main() {
   const [command, target, role, artifactHash, decision, reviewer, comment] = process.argv.slice(2);
   if (!['start', 'status', 'review'].includes(command ?? '') || !target) {
-    throw new Error('usage: delivery start <需求> | status <runId> | review <runId> <role> <hash> <approve|reject> <reviewer> <comment>');
+    throw new Error('usage: delivery start <需求> | status <runId> | review <runId> <role> <hash> <approve|reject|rework> <reviewer> <comment>');
   }
   const app = createApplication(readConfig());
   try {
@@ -23,7 +23,7 @@ async function main() {
 // 只输出已知的本地输入错误；不打印模型响应、请求对象或完整堆栈。
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : '';
-  const allowed = ['usage:', '真实模型尚未配置', '审批角色', '交接物版本', '当前 Run', '找不到'];
+  const allowed = ['usage:', '真实模型尚未配置', '审批角色', '交接物版本', '当前 Run', '找不到', '只有产品', '产品返工'];
   // 仅放行固定本地错误前缀，其他异常使用统一脱敏提示。
   console.error(allowed.some((prefix) => message.startsWith(prefix)) ? message : '交接操作失败，请检查输入或运行 npm test。');
   process.exitCode = 1;

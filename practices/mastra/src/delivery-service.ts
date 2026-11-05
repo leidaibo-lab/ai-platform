@@ -1,6 +1,7 @@
 import type { PracticeConfig } from './mastra/config.js';
 import type { WorkflowRunStatus } from '@mastra/core/workflows';
-import { deliveryInputSchema, deliverySchema, pendingSchema, validateReview, type createDeliveryWorkflow, type Delivery, type PendingReview } from './mastra/workflows/delivery.js';
+import { productReworkRunId } from './mastra/workflows/product-contract.js';
+import { deliveryInputSchema, deliverySchema, pendingSchema, reviewSchema, validateReview, type createDeliveryWorkflow, type Delivery, type PendingReview } from './mastra/workflows/delivery.js';
 
 /** 服务仅依赖原生流程及配置；HTTP Adapter 与 CLI 共享同一校验。 */
 export interface DeliveryContext {
@@ -41,13 +42,45 @@ export async function startDelivery(app: DeliveryContext, brief: string) {
   return deliveryStatus(app, run.runId);
 }
 
+/** 从已保存的退回事实派生后继；固定标识使同一决定的重试只回读已有轮次。 */
+async function continueProductRework(app: DeliveryContext, sourceRunId: string, state: Delivery) {
+  const review = state.reviews.at(-1);
+  const artifact = state.artifacts.find(
+    // 返工只针对本轮唯一的产品交接物。
+    (item) => item.stage === 'product',
+  );
+  if (state.outcome !== 'rework-requested' || review?.decision !== 'rework' || !artifact)
+    throw new Error('找不到已保存的产品退回决定');
+  const runId = productReworkRunId(sourceRunId, artifact.hash);
+  const existing = await app.deliveryWorkflow.getWorkflowRunById(runId);
+  if (existing) return deliveryStatus(app, runId);
+  const inputData = deliveryInputSchema.parse({
+    brief: state.brief,
+    productRework: {
+      sourceRunId, sourceHash: artifact.hash, sourceContent: artifact.content,
+      reviewer: review.reviewer, feedback: review.comment, round: (state.productRework?.round ?? 0) + 1,
+    },
+  });
+  const run = await app.deliveryWorkflow.createRun({ runId });
+  await run.start({ inputData });
+  return deliveryStatus(app, runId);
+}
+
 /** CLI 在恢复前校验，错误审批不会消耗暂停点；仅支持本地串行使用。 */
 export async function reviewDelivery(app: DeliveryContext, runId: string, input: unknown) {
   const status = await deliveryStatus(app, runId);
-  if (status.status !== 'suspended' || !status.pending) throw new Error('当前 Run 没有待审批交接物；请勿重复确认');
   if (status.mode !== app.config.mode) throw new Error('当前 Run 的模型模式与应用配置不同，请使用创建时的模式恢复');
+  // 退回已保存但响应丢失时，仅相同决定可继续创建/回读同一个后继。
+  if (!status.pending && status.result?.outcome === 'rework-requested') {
+    const repeated = reviewSchema.parse(input);
+    if (JSON.stringify(repeated) !== JSON.stringify(status.result.reviews.at(-1)))
+      throw new Error('当前 Run 的退回决定已经保存，不能更换意见或批准旧版本');
+    return continueProductRework(app, runId, status.result);
+  }
+  if (status.status !== 'suspended' || !status.pending) throw new Error('当前 Run 没有待审批交接物；请勿重复确认');
   const resumeData = validateReview(status.pending, input);
   const run = await app.deliveryWorkflow.createRun({ runId });
   await run.resume({ step: status.pending.step, resumeData });
-  return deliveryStatus(app, runId);
+  const next = await deliveryStatus(app, runId);
+  return next.result?.outcome === 'rework-requested' ? continueProductRework(app, runId, next.result) : next;
 }

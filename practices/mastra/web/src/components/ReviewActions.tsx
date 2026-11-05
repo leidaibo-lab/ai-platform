@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
-import { Check, X, LoaderCircle } from "lucide-react";
+import { Check, X, LoaderCircle, RotateCcw } from "lucide-react";
 import { api, type ReviewDocument } from "../lib";
 
 interface ReviewActionsProps {
@@ -20,7 +20,7 @@ export function ReviewActions({
 }: ReviewActionsProps) {
   const [reviewer, setReviewer] = useState("");
   const [comment, setComment] = useState("");
-  const [decision, setDecision] = useState<"approve" | "reject">("approve");
+  const [decision, setDecision] = useState<"approve" | "reject" | "rework">("approve");
   const [error, setError] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
   const canSubmit =
@@ -35,6 +35,11 @@ export function ReviewActions({
     setDecision("reject");
     dialog.current?.showModal();
   }
+  /** 返工保留旧稿和意见，四个固定角色生成新稿后重新等待产品确认。 */
+  function rework() {
+    setDecision("rework");
+    dialog.current?.showModal();
+  }
   /** 取消确认不会写入任何流程事实。 */
   function cancel() {
     dialog.current?.close();
@@ -42,7 +47,7 @@ export function ReviewActions({
   /** 只在用户再次确认后提交；服务端仍重新检查状态和版本。 */
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!canSubmit || !document.artifact) return;
+    if (!canSubmit || !document.artifact || (decision === "rework" && !document.canRework)) return;
     dialog.current?.close();
     setError("");
     onBusy(true);
@@ -121,11 +126,20 @@ export function ReviewActions({
         </span>
         <button
           className="button secondary"
+          onClick={rework}
+          disabled={!canSubmit || !document.canRework}
+          title={document.canRework ? "带审阅意见生成新稿，再次人工验收" : "已达到三次返工上限，可批准或终止本轮"}
+        >
+          <RotateCcw size={15} />
+          退回修改
+        </button>
+        <button
+          className="button secondary"
           onClick={reject}
           disabled={!canSubmit}
         >
           <X size={15} />
-          拒绝本轮
+          拒绝并终止
         </button>
         <button
           className="button primary"
@@ -146,12 +160,14 @@ export function ReviewActions({
           <h2>
             {decision === "approve"
               ? "确认这份产品交接稿？"
-              : "拒绝并结束本轮？"}
+              : decision === "rework" ? "带着审阅意见重新修改？" : "拒绝并结束本轮？"}
           </h2>
           <p>
             {decision === "approve"
               ? "批准当前版本后，流程将调用开发 Agent 生成实现提案。这不表示代码已经实现或通过测试。"
-              : "当前产品稿保持不变，本轮流程结束。审阅意见会保留；需要修订时另建一轮流程。"}
+              : decision === "rework"
+                ? "旧稿和意见会保留。总产品、需求梳理、产品闭环与写作角色将生成新稿，仍需你重新确认后才进入开发。此操作将调用模型。"
+                : "当前产品稿保持不变，本轮流程结束。审阅意见会保留；不会自动修改或进入开发。"}
           </p>
           <div className="dialog-review">
             <strong>{reviewer}</strong>
@@ -162,10 +178,10 @@ export function ReviewActions({
               返回阅读
             </button>
             <button
-              className={`button ${decision === "approve" ? "primary" : "danger"}`}
+              className={`button ${decision === "reject" ? "danger" : "primary"}`}
               disabled={!canSubmit}
             >
-              确定{decision === "approve" ? "批准" : "拒绝"}
+              确定{decision === "approve" ? "批准" : decision === "rework" ? "退回修改" : "拒绝"}
             </button>
           </div>
         </form>

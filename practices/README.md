@@ -20,7 +20,7 @@
 
 | 项目 | 学习目标 | 当前状态 |
 | --- | --- | --- |
-| [Mastra](./mastra/README.md) | 先理解原生应用结构，再验证产研交付场景中的 Agent、流程和人工交接 | 原生 Agent/工具、四阶段提案及恢复已做确定性验证；已增加[产品审阅页](./mastra/review-page.md)，并建立持续复用的[招聘管理工作流验证项目](./mastra/projects/pm-hrm-recruitment/README.md)；真实代码执行与测试交付待验证 |
+| [Mastra](./mastra/README.md) | 先理解原生应用结构，再验证产研交付场景中的 Agent、流程和人工交接 | 原生 Agent/工具、四阶段提案及恢复已做确定性验证；[产品子流程](./mastra/product-workflow.md)固定四个角色，支持人工退回和新稿再审；已有[产品审阅页](./mastra/review-page.md)与[招聘管理验证项目](./mastra/projects/pm-hrm-recruitment/README.md)；真实质量收益和工程执行待验证 |
 | [pi](./pi/README.md) | 按 pi 自身方式理解 Agent、编码任务和执行生命周期；按已验证能力选择实践范围 | 已建立学习入口；尚无本目录的原生应用或运行证据 |
 
 已有 [pi-agent 适配实验](../experiments/pi-agent/README.md) 属于探索方向，回答 pi 能否适配当前 Runtime 的问题。它保留在原处，测试结果不能代替 pi 原生应用或完整产研协作能力的验收。
