@@ -1,6 +1,6 @@
 # Agent Skills Index
 
-本目录是当前项目唯一的 Skill 资产源。所有与 Agent Skill 相关的新增、更新、删除都应收敛在 `.agents/skills/` 下，不再创建 `.cursor/`、`.trae/`、`.qoder/`、`.vscode/` 或根目录 `skills/` 平行目录。
+本目录是探索主线与共用 Skill 的资产源；用户明确指定的 Mastra 产品套件仅放在 `practices/mastra/.agents/skills/`，由本索引登记并沿用相同治理。各作用域内的新增、更新、删除收敛在相应 `.agents/skills/` 下，不再创建 `.cursor/`、`.trae/`、`.qoder/`、`.vscode/` 或根目录 `skills/` 平行目录。
 
 规范源参考：https://gitlab.seakoi.net/seakoi/skills
 
@@ -61,3 +61,9 @@ node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs
 ```
 
 校验内容包括两级目录、`SKILL.md` 是否存在、`name` 与路径是否一致、`metadata.pattern` 是否为主设计模式、`metadata.author` 和 `metadata.version` 是否存在。
+
+## Mastra 独立产品套件
+
+用户指定的实践作用域：[完整索引](../../practices/mastra/.agents/skills/README.md)。资产唯一落点为 `practices/mastra/.agents/skills/product-pm/<技能>/SKILL.md`，name 为 `product-pm-<技能>`，沿用本规范与统一校验；这是根目录规则的显式例外。
+
+套件固定 pm-skills 2.2.0 对应111个入口（69个方法、42个流程），另有1个本地导航。8个shipping迁移入口解析到已锁定的新仓方法；保留原文、MIT、逐文件SHA256和本地映射。产品角色加载套件及既有需求交接；技能方法不增加网络、任意文件/命令、部署或审批能力。

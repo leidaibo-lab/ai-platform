@@ -4,6 +4,8 @@
 
 ## 文档索引
 
+- [Mastra 完整 PM Skills](../practices/mastra/.agents/skills/README.md)：111项上游能力、中文入口、来源锁、MIT、原生加载与维护；[适配决策](./decisions/2026-11-06-mastra-pm-skills.md)。
+
 - [应用实践集合](../practices/README.md)：与探索实现并行，按 Mastra、pi 等项目的原生方式学习应用；共用业务与验收问题，不强制统一运行时。
 - [Mastra 原生最小应用与产研交接](../practices/mastra/README.md)：独立启动、Agent/工具、Studio/API、四阶段提案确认和暂停后跨进程恢复的实测证据；区分固定模型验证与真实工程交付。
 - [探索与原生应用实践分开组织](./decisions/2026-11-02-exploration-and-native-practices.md)：记录两条学习方向、规则作用域、原生比较方法与现有实验归属；不代表接受任何框架迁移。

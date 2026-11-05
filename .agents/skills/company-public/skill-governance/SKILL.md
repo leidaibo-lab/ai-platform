@@ -4,14 +4,14 @@ description: "公司级 Skill 创建与治理规范。用于新增、更新、�
 metadata:
   pattern: "reviewer"
   author: "company-public"
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Skill 治理规范
 
 ## 核心规则
 
-- 所有 Skill 只放在 `.agents/skills/`。
+- 共用 Skill 放在根 `.agents/skills/`。用户指定的 Mastra 产品套件放在 `practices/mastra/.agents/skills/`，这是显式实践作用域例外；其两级目录、中文入口与元数据仍遵守本规范，不另复制到根目录。
 - 目录采用两级结构：`<顶级目录>/<技能目录>/SKILL.md`。
 - `name` 必须等于 `<顶级目录>-<技能目录>`。
 - frontmatter 必须包含 `name`、`description`、`metadata.pattern`、`metadata.author`、`metadata.version`。
@@ -40,7 +40,7 @@ metadata:
 
 ## 校验清单
 
-- `.agents/skills/README.md` 已列出新增或调整的 Skill。
+- 对应作用域的 `.agents/skills/README.md` 已列出新增或调整的 Skill；根索引登记独立实践入口。
 - Skill 路径满足两级结构。
 - `SKILL.md` frontmatter 字段完整。
 - `name` 等于 `<顶级目录>-<技能目录>`。
@@ -58,3 +58,5 @@ node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs
 ```
 
 若脚本失败，先修复结构、frontmatter 或命名问题，再继续处理业务文档或 OpenSpec。
+
+自动校验覆盖根目录与 Mastra 显式实践根；不收集 node_modules、外部 checkout 或其他任意目录。

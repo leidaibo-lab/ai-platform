@@ -3,17 +3,15 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
 const projectRoot = resolve(new URL("../../../../../", import.meta.url).pathname);
-const skillsRoot = join(projectRoot, ".agents", "skills");
+// 仅收集治理根与用户明确指定的独立实践根，不扫描依赖或临时 checkout。
+const skillRoots = [join(projectRoot, ".agents", "skills"), join(projectRoot, "practices/mastra/.agents/skills")];
 const allowedPatterns = new Set(["tool-wrapper", "generator", "reviewer", "inversion", "pipeline"]);
 const issues = [];
 
-if (!existsSync(skillsRoot)) {
-  fail(`Missing skills root: ${relative(projectRoot, skillsRoot)}`);
-}
-
 validateRootShape();
-for (const skillFile of findSkillFiles(skillsRoot)) {
-  validateSkill(skillFile);
+for (const skillsRoot of skillRoots) {
+  if (!existsSync(skillsRoot)) fail(`Missing skills root: ${relative(projectRoot, skillsRoot)}`);
+  for (const skillFile of findSkillFiles(skillsRoot)) validateSkill(skillFile, skillsRoot);
 }
 
 if (issues.length > 0) {
@@ -64,9 +62,10 @@ function findSkillFiles(root) {
  * 校验单个 Skill 的目录层级、名称和必填 frontmatter 元数据。
  *
  * @param {string} skillFile - SKILL.md 文件绝对路径。
+ * @param {string} skillsRoot - 显式治理作用域。
  * @returns {void}
  */
-function validateSkill(skillFile) {
+function validateSkill(skillFile, skillsRoot) {
   const rel = relative(skillsRoot, skillFile);
   const parts = rel.split("/");
   if (parts.length !== 3 || parts[2] !== "SKILL.md") {

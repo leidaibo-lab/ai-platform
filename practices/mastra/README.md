@@ -88,7 +88,7 @@ tests/review.test.ts             页面 API、决定边界与 SDK 多轮流回�
 
 ## 产品角色提示词和 Skill
 
-系统提示词定义产品 Agent 每次执行都必须遵守的角色、事实边界和交付要求，维护在 `src/mastra/agents/index.ts` 的 `instructions.product`。可复用的需求拆解和验收方法维护在仓库 `.agents/skills/product/requirements-handoff/SKILL.md`，应用启动时通过 Mastra `validateSkillContent` 解析成 `createSkill()` 内联 Skill，再以原生 `skills` 配置挂给 Agent。这样文件继续遵守本仓库的两级目录命名，Mastra 也能使用原生 Skill 发现和读取工具。产品 Skill 加载后，模型生成该产品交接物时最多执行三步，以容纳 Skill 工具调用与终答；其他阶段继续使用原来的一步限制。
+系统提示词定义产品 Agent 每次执行都必须遵守的角色、事实边界和交付要求，维护在 `src/mastra/agents/index.ts` 的 `instructions.product`。可复用的需求拆解和验收方法维护在仓库 `.agents/skills/product/requirements-handoff/SKILL.md`，应用启动时通过 Mastra `validateSkillContent` 解析成 `createSkill()` 内联 Skill，再以原生 `skills` 配置挂给 Agent。这样文件继续遵守本仓库的两级目录命名，Mastra 也能使用原生 Skill 发现和读取工具。产品 Agent 同时加载本实践的完整 PM 套件，默认生成、交付和修订共用每次最多24步的有限预算；通过原生工具按需读取方法和参考资料，详见文末。
 
 注册 Skill 不代表模型一定读取或遵循。产品步骤的运行证据应检查真实 `toolResults` 中是否包含 `skill`，再审查最终文档；自动测试同时检查 Agent 是否能列出和读取此 Skill，以及工作流仍在产品确认暂停点。真实模型对比发现用户明确给出的 Unicode 码点规则仍可能被重复询问，因此 Skill 增补了“已明确约束不重新作为未决问题”的方法和对应字符验收要求。扩展其他角色时，按需建立对应 Skill 并只挂载给负责的 Agent，不要把所有角色方法塞入一份共享长提示词。角色说明或 Skill 提供行为指导；必须保证的审批、版本和授权条件仍应由 Workflow 或代码校验，不依靠模型自觉。
 
@@ -254,3 +254,13 @@ npm start
 - [shadcn/ui AI Elements](https://ui.shadcn.com/docs/ai-elements)
 
 官方 Mock 来自锁定包 `@mastra/core/test-utils/llm-mock`，只用于演示和确定性测试。当前不作生产采用或商业分发的许可结论。
+
+## 产品 PM 技能套件
+
+[完整目录与维护说明](.agents/skills/README.md)：全量迁入 phuryn/pm-skills 的69个原子能力与42个流程命令，流程转换为 `product-pm-flow-*` Skill，另增1个本地导航。固定上游版本、许可证、原文与资源散列可在该目录审计，启动不访问上游。
+
+产品角色共用113个原生 Skill（套件112项及原需求交接1项），按任务使用 `skill` 加载中文方法、`skill_read` 读取原文及分支资料、`skill_search` 搜索资源。产品默认、交付子流程和修订共享每次最多24步的有限预算；其他角色维持各自职责。模板与步骤提供方法，不代表获得搜索、SQL、文件、测试执行或发布权限；工作流中的人工确认继续绑定当前正文版本。
+
+验证：在实践根运行 `npm run check`、`npm test`、`npm run smoke`、`npm run build`；仓库根运行 `node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs`。`tests/skills.test.ts` 校验全量库存与散列，并通过原生工具循环验证流程→原子方法→原文→嵌套资源。Mock结果仅证明可加载及控制流，真实产品质量、路由命中和成本需业务材料另验。
+
+选型与作用域：[适配决策](../../docs/decisions/2026-11-06-mastra-pm-skills.md)。

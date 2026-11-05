@@ -68,6 +68,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `docs/coding-standards.md`：函数注释、数据结构、设计模式和设计原则等编码规范。
 - `docs/architecture-diagram-style.md`：当前项目架构图的模块、关联、边界、路径摘要和视觉规范；新增或更新架构图时先按这里执行。
 - `.agents/skills/README.md`：Agent Skill 索引和目录治理规则。
+- `practices/mastra/.agents/skills/README.md`：Mastra 产品套件完整索引、固定上游来源与维护；111个上游入口及1个本地导航，供产品角色原生加载。
 - `.agents/skills/docs/context-memory-evaluation/SKILL.md`：上下文记忆评测场景、指标、脚本和回归治理流程。
 - `.agents/skills/docs/architecture-decision/SKILL.md`：架构与方案决策的 Agent-first 工作流，聚合 ADR 方法、项目选型治理和 OpenSpec 门禁。
 - `.agents/skills/product/requirements-handoff/SKILL.md`：供 Mastra 产品 Agent 显式加载的需求交接生成方法；不替代产品审批或 Workflow 规则。
@@ -105,7 +106,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 
 ## Skill 规则
 
-- 所有 Skill 只放在 `.agents/skills/`。
+- 探索主线与共用 Skill 放在根 `.agents/skills/`；用户明确指定的 Mastra 产品套件独立放在 `practices/mastra/.agents/skills/`，这是实践作用域的唯一例外，沿用相同治理规范，不复制两套。
 - Skill 目录遵守 `https://gitlab.seakoi.net/seakoi/skills` 仓库的指南、要求、原则。
 - 本地目录采用两级结构：`.agents/skills/<顶级目录>/<技能目录>/SKILL.md`。
 - `SKILL.md` 的 `name` 必须等于 `<顶级目录>-<技能目录>`。

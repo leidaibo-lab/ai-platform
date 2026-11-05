@@ -46,7 +46,13 @@ test('产品 Agent 暴露需求交接 Skill 和稳定系统指令', async () => 
   // 以框架注册结果和完整技能内容验证路径解析及配置，而非只检查源码字符串。
   await withApplication(async (app) => {
     const skills = await app.agents.productAgent.listSkills();
-    assert.deepEqual(skills.map(({ name }) => name), ['product-requirements-handoff']);
+    assert.equal(skills.length, 113);
+    // 原有交接检查与整套方法必须同时注册。
+    assert.ok(skills.some(({ name }) => name === 'product-requirements-handoff'));
+    // 原命令转换的流程和原子方法都是原生Skill。
+    assert.ok(skills.some(({ name }) => name === 'product-pm-flow-discover'));
+    // 方法可独立发现，不依赖手动先安装插件。
+    assert.ok(skills.some(({ name }) => name === 'product-pm-create-prd'));
     const skill = await app.agents.productAgent.getSkill('product-requirements-handoff');
     assert.ok(skill);
     assert.match(skill.instructions, /已确认规则/);
