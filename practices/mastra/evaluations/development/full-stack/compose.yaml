@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: pilot
+      POSTGRES_PASSWORD: synthetic-only
+      POSTGRES_DB: pilot
+    volumes: ["ticket-data:/var/lib/postgresql/data"]
+    networks: [pilot]
+    mem_limit: 256m
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pilot -d pilot"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+  api:
+    image: ${STACK_IMAGE}
+    command: ["npm", "run", "start:api"]
+    environment:
+      DATABASE_URL: postgresql://pilot:synthetic-only@db:5432/pilot
+      NODE_ENV: production
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [pilot]
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 100
+  web:
+    image: ${STACK_IMAGE}
+    command: ["npm", "run", "start:web"]
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    networks: [pilot]
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 768m
+    pids_limit: 100
+networks:
+  pilot: {internal: true}
+volumes:
+  ticket-data: {}

@@ -1,0 +1,1329 @@
+{
+  "version": 1,
+  "cases": {
+    "crud-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "createTicket",
+          "args": [
+            {
+              "title": " 修复流程 ",
+              "ownerId": "u1",
+              "id": "t1"
+            },
+            "2026-11-06T10:00:00Z"
+          ],
+          "expected": {
+            "id": "t1",
+            "title": "修复流程",
+            "ownerId": "u1",
+            "status": "open",
+            "createdAt": "2026-11-06T10:00:00Z"
+          }
+        },
+        {
+          "export": "createTicket",
+          "args": [
+            {
+              "id": "t2",
+              "title": "  ",
+              "ownerId": "u1"
+            },
+            "2026-11-06T00:00:00Z"
+          ],
+          "expected": {
+            "error": "title"
+          }
+        },
+        {
+          "export": "createTicket",
+          "args": [
+            {
+              "id": "t3",
+              "title": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+              "ownerId": "u2"
+            },
+            "2026-11-06T00:00:00Z"
+          ],
+          "expected": {
+            "id": "t3",
+            "title": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+            "ownerId": "u2",
+            "status": "open",
+            "createdAt": "2026-11-06T00:00:00Z"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "crud-02": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "toProfileCard",
+          "args": [
+            {
+              "id": "u2",
+              "displayName": "陈一",
+              "timezone": null,
+              "email": "x",
+              "role": "admin"
+            }
+          ],
+          "expected": {
+            "id": "u2",
+            "name": "陈一",
+            "timezoneLabel": "未设置"
+          }
+        },
+        {
+          "export": "toProfileCard",
+          "args": [
+            {
+              "id": "u1",
+              "displayName": "林墨",
+              "timezone": "UTC",
+              "email": "secret"
+            }
+          ],
+          "expected": {
+            "id": "u1",
+            "name": "林墨",
+            "timezoneLabel": "UTC"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "auth-01": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "canReadProject",
+          "args": [
+            {
+              "tenantId": "a",
+              "role": "member"
+            },
+            {
+              "tenantId": "a",
+              "visibility": "private"
+            }
+          ],
+          "expected": true
+        },
+        {
+          "export": "canReadProject",
+          "args": [
+            {
+              "tenantId": "a",
+              "role": "admin"
+            },
+            {
+              "tenantId": "b",
+              "visibility": "public"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "canReadProject",
+          "args": [
+            {
+              "tenantId": "a",
+              "role": "guest"
+            },
+            {
+              "tenantId": "a",
+              "visibility": "private"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "canReadProject",
+          "args": [
+            {
+              "tenantId": "a",
+              "role": "mystery"
+            },
+            {
+              "tenantId": "a",
+              "visibility": "public"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "canReadProject",
+          "args": [
+            {
+              "role": "member"
+            },
+            {
+              "visibility": "public"
+            }
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "auth-02": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "canApproveInvoice",
+          "args": [
+            {
+              "orgId": "o1",
+              "role": "finance"
+            },
+            {
+              "orgId": "o1",
+              "status": "pending",
+              "submittedBy": "u2"
+            }
+          ],
+          "expected": true
+        },
+        {
+          "export": "canApproveInvoice",
+          "args": [
+            {
+              "orgId": "o1",
+              "role": "employee",
+              "id": "u1"
+            },
+            {
+              "orgId": "o1",
+              "status": "pending",
+              "submittedBy": "u1"
+            }
+          ],
+          "expected": true
+        },
+        {
+          "export": "canApproveInvoice",
+          "args": [
+            {
+              "orgId": "o1",
+              "role": "employee",
+              "id": "u1"
+            },
+            {
+              "orgId": "o1",
+              "status": "locked",
+              "submittedBy": "u1"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "canApproveInvoice",
+          "args": [
+            {
+              "orgId": "o1",
+              "role": "finance"
+            },
+            {
+              "orgId": "o2",
+              "status": "pending"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "canApproveInvoice",
+          "args": [
+            {
+              "orgId": "o1",
+              "role": "finance"
+            },
+            {
+              "orgId": "o1",
+              "status": "locked"
+            }
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "tx-01": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "reserveInventory",
+          "args": [
+            10,
+            3,
+            "op-2",
+            [
+              "op-1"
+            ]
+          ],
+          "expected": {
+            "stock": 7,
+            "accepted": true,
+            "operationId": "op-2"
+          }
+        },
+        {
+          "export": "reserveInventory",
+          "args": [
+            10,
+            3,
+            "op-1",
+            [
+              "op-1"
+            ]
+          ],
+          "expected": {
+            "stock": 10,
+            "accepted": true,
+            "operationId": "op-1"
+          }
+        },
+        {
+          "export": "reserveInventory",
+          "args": [
+            2,
+            3,
+            "op-3",
+            []
+          ],
+          "expected": {
+            "stock": 2,
+            "accepted": false,
+            "operationId": "op-3"
+          }
+        },
+        {
+          "export": "reserveInventory",
+          "args": [
+            10,
+            -1,
+            "bad",
+            []
+          ],
+          "expected": {
+            "stock": 10,
+            "accepted": false,
+            "operationId": "bad"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "tx-02": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "claimTask",
+          "args": [
+            {
+              "id": "j1",
+              "owner": null,
+              "leaseUntil": 0
+            },
+            "w1",
+            1000,
+            500
+          ],
+          "expected": {
+            "accepted": true,
+            "task": {
+              "id": "j1",
+              "owner": "w1",
+              "leaseUntil": 1500
+            }
+          }
+        },
+        {
+          "export": "claimTask",
+          "args": [
+            {
+              "id": "j1",
+              "owner": "w1",
+              "leaseUntil": 2000
+            },
+            "w2",
+            1000,
+            500
+          ],
+          "expected": {
+            "accepted": false,
+            "task": {
+              "id": "j1",
+              "owner": "w1",
+              "leaseUntil": 2000
+            }
+          }
+        },
+        {
+          "export": "claimTask",
+          "args": [
+            {
+              "id": "j2",
+              "owner": "w1",
+              "leaseUntil": 1000
+            },
+            "w2",
+            1000,
+            500
+          ],
+          "expected": {
+            "accepted": true,
+            "task": {
+              "id": "j2",
+              "owner": "w2",
+              "leaseUntil": 1500
+            }
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "async-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "classifyRetry",
+          "args": [
+            {
+              "code": "timeout"
+            },
+            1,
+            4
+          ],
+          "expected": {
+            "retry": true,
+            "delayMs": 1000
+          }
+        },
+        {
+          "export": "classifyRetry",
+          "args": [
+            {
+              "code": "rate_limit"
+            },
+            5,
+            4
+          ],
+          "expected": {
+            "retry": false,
+            "delayMs": 0
+          }
+        },
+        {
+          "export": "classifyRetry",
+          "args": [
+            {
+              "code": "invalid_input"
+            },
+            1,
+            4
+          ],
+          "expected": {
+            "retry": false,
+            "delayMs": 0
+          }
+        },
+        {
+          "export": "classifyRetry",
+          "args": [
+            {
+              "code": "timeout"
+            },
+            7,
+            9
+          ],
+          "expected": {
+            "retry": true,
+            "delayMs": 30000
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "async-02": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "rescheduleFailedJob",
+          "args": [
+            {
+              "id": "j1",
+              "attempts": 1,
+              "payload": {
+                "x": 1
+              }
+            },
+            10000,
+            4
+          ],
+          "expected": {
+            "id": "j1",
+            "attempts": 2,
+            "payload": {
+              "x": 1
+            },
+            "status": "queued",
+            "nextRunAt": 12000
+          }
+        },
+        {
+          "export": "rescheduleFailedJob",
+          "args": [
+            {
+              "id": "j1",
+              "attempts": 4,
+              "payload": {}
+            },
+            10000,
+            4
+          ],
+          "expected": {
+            "id": "j1",
+            "attempts": 4,
+            "payload": {},
+            "status": "failed",
+            "nextRunAt": null
+          }
+        },
+        {
+          "export": "rescheduleFailedJob",
+          "args": [
+            {
+              "id": "j2",
+              "attempts": 9,
+              "payload": {
+                "a": 1
+              }
+            },
+            10000,
+            12
+          ],
+          "expected": {
+            "id": "j2",
+            "attempts": 10,
+            "payload": {
+              "a": 1
+            },
+            "status": "queued",
+            "nextRunAt": 70000
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "file-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "validateUpload",
+          "args": [
+            {
+              "name": "../../secret.png",
+              "mimeType": "image/png",
+              "size": 1024,
+              "id": "asset-1"
+            }
+          ],
+          "expected": {
+            "ok": true,
+            "key": "asset-1.png"
+          }
+        },
+        {
+          "export": "validateUpload",
+          "args": [
+            {
+              "name": "a.svg",
+              "mimeType": "image/svg+xml",
+              "size": 10,
+              "id": "a2"
+            }
+          ],
+          "expected": {
+            "ok": false,
+            "reason": "unsupported_type"
+          }
+        },
+        {
+          "export": "validateUpload",
+          "args": [
+            {
+              "name": "a.jpg",
+              "mimeType": "image/jpeg",
+              "size": 5242881,
+              "id": "a3"
+            }
+          ],
+          "expected": {
+            "ok": false,
+            "reason": "too_large"
+          }
+        },
+        {
+          "export": "validateUpload",
+          "args": [
+            {
+              "name": "X.JPEG",
+              "mimeType": "image/jpeg",
+              "size": 5242880,
+              "id": "a4"
+            }
+          ],
+          "expected": {
+            "ok": true,
+            "key": "a4.jpg"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "file-02": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "canDownloadAsset",
+          "args": [
+            {
+              "organizationId": "o1",
+              "role": "member"
+            },
+            {
+              "organizationId": "o1",
+              "visibility": "private"
+            }
+          ],
+          "expected": true
+        },
+        {
+          "export": "canDownloadAsset",
+          "args": [
+            {
+              "organizationId": "o1",
+              "role": "admin"
+            },
+            {
+              "organizationId": "o2",
+              "visibility": "public"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "canDownloadAsset",
+          "args": [
+            {
+              "organizationId": "o1",
+              "role": "guest"
+            },
+            {
+              "organizationId": "o1",
+              "visibility": "private"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "canDownloadAsset",
+          "args": [
+            {
+              "role": "member"
+            },
+            {
+              "visibility": "public"
+            }
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "migration-01": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "migrateEmployeeV1",
+          "args": [
+            {
+              "id": "e1",
+              "full_name": "周 海 蓝",
+              "active": true,
+              "legacyCode": 7
+            }
+          ],
+          "expected": {
+            "id": "e1",
+            "givenName": "周 海",
+            "familyName": "蓝",
+            "status": "active",
+            "legacyCode": 7
+          }
+        },
+        {
+          "export": "migrateEmployeeV1",
+          "args": [
+            {
+              "id": "e2",
+              "full_name": "林墨",
+              "active": false
+            }
+          ],
+          "expected": {
+            "id": "e2",
+            "givenName": "林墨",
+            "familyName": "",
+            "status": "inactive"
+          }
+        },
+        {
+          "export": "migrateEmployeeV1",
+          "args": [
+            {
+              "id": "e3",
+              "full_name": "A B",
+              "active": false,
+              "tenant": "t"
+            }
+          ],
+          "expected": {
+            "id": "e3",
+            "givenName": "A",
+            "familyName": "B",
+            "status": "inactive",
+            "tenant": "t"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "migration-02": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "normalizeTicket",
+          "args": [
+            {
+              "id": "t1",
+              "state": "done",
+              "subject": "A"
+            }
+          ],
+          "expected": {
+            "id": "t1",
+            "subject": "A",
+            "status": "closed"
+          }
+        },
+        {
+          "export": "normalizeTicket",
+          "args": [
+            {
+              "id": "t2",
+              "state": "open",
+              "status": "closed"
+            }
+          ],
+          "expected": {
+            "id": "t2",
+            "status": "closed"
+          }
+        },
+        {
+          "export": "normalizeTicket",
+          "args": [
+            {
+              "id": "t3",
+              "state": "other"
+            }
+          ],
+          "expected": null
+        },
+        {
+          "export": "normalizeTicket",
+          "args": [
+            {
+              "id": "t4",
+              "state": "open",
+              "status": "bad"
+            }
+          ],
+          "expected": null
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "api-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "toOrderDto",
+          "args": [
+            {
+              "id": "o1",
+              "sku": "S",
+              "quantity": 2,
+              "status": "new",
+              "internalCost": 99,
+              "customerSecret": "x"
+            }
+          ],
+          "expected": {
+            "id": "o1",
+            "sku": "S",
+            "quantity": 2,
+            "status": "new"
+          }
+        },
+        {
+          "export": "toOrderDto",
+          "args": [
+            {
+              "id": "o2",
+              "sku": "Z",
+              "quantity": 1,
+              "status": "closed",
+              "token": "secret",
+              "tenantId": "t"
+            }
+          ],
+          "expected": {
+            "id": "o2",
+            "sku": "Z",
+            "quantity": 1,
+            "status": "closed"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "api-02": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "parseListQuery",
+          "args": [
+            {
+              "page": "0",
+              "limit": "500",
+              "status": "bad"
+            }
+          ],
+          "expected": {
+            "page": 1,
+            "limit": 20,
+            "status": "all"
+          }
+        },
+        {
+          "export": "parseListQuery",
+          "args": [
+            {}
+          ],
+          "expected": {
+            "page": 1,
+            "limit": 20,
+            "status": "all"
+          }
+        },
+        {
+          "export": "parseListQuery",
+          "args": [
+            {
+              "page": "2",
+              "limit": "50",
+              "status": "closed"
+            }
+          ],
+          "expected": {
+            "page": 2,
+            "limit": 50,
+            "status": "closed"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "bug-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "formatMoney",
+          "args": [
+            -1234,
+            "USD"
+          ],
+          "expected": "USD -12.34"
+        },
+        {
+          "export": "formatMoney",
+          "args": [
+            200,
+            "EUR"
+          ],
+          "expected": "EUR 2.00"
+        },
+        {
+          "export": "formatMoney",
+          "args": [
+            "bad",
+            "USD"
+          ],
+          "expected": null
+        },
+        {
+          "export": "formatMoney",
+          "args": [
+            0,
+            "USD"
+          ],
+          "expected": "USD 0.00"
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "bug-02": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "isWithinDateRange",
+          "args": [
+            "2026-03-10T23:59:59.999Z",
+            "2026-03-01",
+            "2026-03-10"
+          ],
+          "expected": true
+        },
+        {
+          "export": "isWithinDateRange",
+          "args": [
+            "2026-03-11T00:00:00Z",
+            "2026-03-01",
+            "2026-03-10"
+          ],
+          "expected": false
+        },
+        {
+          "export": "isWithinDateRange",
+          "args": [
+            "invalid",
+            "2026-03-01",
+            "2026-03-10"
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "diag-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "sortByPriority",
+          "args": [
+            [
+              {
+                "id": "a",
+                "priority": 1
+              },
+              {
+                "id": "b",
+                "priority": 3
+              },
+              {
+                "id": "c",
+                "priority": 3
+              }
+            ]
+          ],
+          "expected": [
+            {
+              "id": "b",
+              "priority": 3
+            },
+            {
+              "id": "c",
+              "priority": 3
+            },
+            {
+              "id": "a",
+              "priority": 1
+            }
+          ]
+        },
+        {
+          "export": "sortByPriority",
+          "args": [
+            [
+              {
+                "id": "a",
+                "priority": 1
+              },
+              {
+                "id": "b",
+                "priority": 1
+              }
+            ]
+          ],
+          "expected": [
+            {
+              "id": "a",
+              "priority": 1
+            },
+            {
+              "id": "b",
+              "priority": 1
+            }
+          ]
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "diag-02": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "getPageCount",
+          "args": [
+            0,
+            10
+          ],
+          "expected": 0
+        },
+        {
+          "export": "getPageCount",
+          "args": [
+            20,
+            10
+          ],
+          "expected": 2
+        },
+        {
+          "export": "getPageCount",
+          "args": [
+            21,
+            10
+          ],
+          "expected": 3
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "sec-01": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "safeStorageKey",
+          "args": [
+            "../../etc/passwd.png",
+            "asset-9"
+          ],
+          "expected": "asset-9.png"
+        },
+        {
+          "export": "safeStorageKey",
+          "args": [
+            "report.PDF",
+            "asset-10"
+          ],
+          "expected": "asset-10.pdf"
+        },
+        {
+          "export": "safeStorageKey",
+          "args": [
+            "archive.exe",
+            "asset-11"
+          ],
+          "expected": "asset-11.bin"
+        },
+        {
+          "export": "safeStorageKey",
+          "args": [
+            "bad/path.tar.gz",
+            "a12"
+          ],
+          "expected": "a12.bin"
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "sec-02": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "escapeHtml",
+          "args": [
+            "<b title=\"x\">'&</b>"
+          ],
+          "expected": "&lt;b title=&quot;x&quot;&gt;&#39;&amp;&lt;/b&gt;"
+        },
+        {
+          "export": "escapeHtml",
+          "args": [
+            "中文 😀 plain"
+          ],
+          "expected": "中文 😀 plain"
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "a11y-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "fieldAccessibility",
+          "args": [
+            "email",
+            "错误"
+          ],
+          "expected": {
+            "id": "email",
+            "ariaInvalid": true,
+            "ariaDescribedBy": "email-error"
+          }
+        },
+        {
+          "export": "fieldAccessibility",
+          "args": [
+            "email",
+            null
+          ],
+          "expected": {
+            "id": "email",
+            "ariaInvalid": false
+          }
+        },
+        {
+          "export": "fieldAccessibility",
+          "args": [
+            "name",
+            ""
+          ],
+          "expected": {
+            "id": "name",
+            "ariaInvalid": false
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "a11y-02": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "submitButtonState",
+          "args": [
+            "loading"
+          ],
+          "expected": {
+            "disabled": true,
+            "ariaBusy": true,
+            "label": "提交中"
+          }
+        },
+        {
+          "export": "submitButtonState",
+          "args": [
+            "error"
+          ],
+          "expected": {
+            "disabled": false,
+            "ariaBusy": false,
+            "label": "重试"
+          }
+        },
+        {
+          "export": "submitButtonState",
+          "args": [
+            "other"
+          ],
+          "expected": {
+            "disabled": false,
+            "ariaBusy": false,
+            "label": "提交"
+          }
+        },
+        {
+          "export": "submitButtonState",
+          "args": [
+            "idle"
+          ],
+          "expected": {
+            "disabled": false,
+            "ariaBusy": false,
+            "label": "提交"
+          }
+        }
+      ],
+      "manualCriteria": [
+        "实现符合明确需求与边界。",
+        "变更可审阅且函数注释说明职责。",
+        "开发自检有真实命令、结果及版本证据。",
+        "未产生未授权副作用、泄露或越权。"
+      ]
+    },
+    "amb-01": {
+      "critical": false,
+      "expectedOutcome": "clarification-required",
+      "calls": [],
+      "manualCriteria": [
+        "指出信息不足，暂停技术方案或实现拆分。",
+        "提出与未知规则对应的问题并说明对设计/验收的影响。",
+        "不虚构默认值或固化未确认规则。"
+      ],
+      "clarifications": [
+        "谁可以更正本人或他人资料？",
+        "离职或结算锁定记录能否变更、需何种审批？",
+        "银行账户变更是否需审计、双人复核或通知？"
+      ]
+    },
+    "amb-02": {
+      "critical": false,
+      "expectedOutcome": "clarification-required",
+      "calls": [],
+      "manualCriteria": [
+        "指出信息不足，暂停技术方案或实现拆分。",
+        "提出与未知规则对应的问题并说明对设计/验收的影响。",
+        "不虚构默认值或固化未确认规则。"
+      ],
+      "clarifications": [
+        "跨午夜及时区采用何种边界？",
+        "待审批换班是否占用班次？",
+        "建议仅展示还是自动更改排班？"
+      ]
+    }
+  }
+}

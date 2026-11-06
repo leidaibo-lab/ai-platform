@@ -27,6 +27,10 @@
 
 模糊需求可能因原始业务决定缺失而无法进入开发，两组都应如实保留阻塞；因此不能仅凭首次通过率判定方法无效。必须结合遗漏、错误和具体阻塞项审阅。真实样本不足 30 对时仅作观察；本 pilot 只有 3 对，不做显著性或发布结论。相同需求重复生成不能冒充独立业务样本。
 
+## 显式使用 Workspace 资料
+
+默认实验禁用 Workspace，保留原始 brief 输入条件。使用 `npm run eval:product-skills -- --workspace --cases recruitment` 可另做资料条件下的对比：运行前将项目 `sources/` 冻结到 `organizer/sources/`，manifest 登记资料散列，两组挂载同一只读快照。评分量表不进入 Agent，步骤计量记录实际文件工具调用；fixture 不保证模型选择读取文件，也不代表质量提升。资料条件和默认条件不能混为同一实验。结果可在 Studio 的 `product-evaluations` Workspace 查看；组织者全量可见，人工审阅者只拿 `review/`。详见 [Workspace 契约](../../workspaces.md)。
+
 ## 指标口径
 
 | 指标 | 分子/分母或计算 | 缺失与失败 |

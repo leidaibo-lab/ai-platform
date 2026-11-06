@@ -12,6 +12,7 @@ import type { ProductRole } from './mastra/agents/product-roles.js';
 import type { PracticeConfig } from './mastra/config.js';
 import { createDeliveryWorkflow, deliverySchema } from './mastra/workflows/delivery.js';
 import { startDelivery } from './delivery-service.js';
+import type { AnyWorkspace } from '@mastra/core/workspace';
 
 export const inputsSchema = z.object({
   version: z.string().min(1),
@@ -50,11 +51,12 @@ function token(value: unknown): number | null {
  * 单样本单组使用独立 Store，沿同一正式入口执行到产品人工暂停点，不恢复批准。
  * config.databaseUrl 必须由评测脚本分配，不允许使用既有业务库；异常仅保留固定分类。
  */
-export async function runProductSkillTrial(config: PracticeConfig, variant: Variant, brief: string): Promise<TrialResult> {
+export async function runProductSkillTrial(config: PracticeConfig, variant: Variant, brief: string, workspace: AnyWorkspace | false = false): Promise<TrialResult> {
   const steps: MeasuredStep[] = [];
   const storage = new LibSQLStore({ id: 'product-skill-evaluation', url: config.databaseUrl });
   const agents = createAgents(config, {
     skillsEnabled: variant === 'with-skills',
+    workspace,
     // 原生执行选项保持角色工厂和正式 Workflow 不变，只增加同样的计量与预算。
     execution: (role) => ({
       modelSettings: evaluationModelSettings,

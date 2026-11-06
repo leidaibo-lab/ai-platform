@@ -50,7 +50,7 @@ export function validateReview(pending: PendingReview, input: unknown): Review {
 }
 
 /** 用原生复合 Workflow 和 suspend/resume 表达交接，不实现另一套调度器。 */
-export function createDeliveryWorkflow(agents: ReturnType<typeof createAgents>, mode: Delivery['mode']) {
+export function createDeliveryWorkflow(agents: ReturnType<typeof createAgents>, mode: Delivery['mode'], exportProduct?: (runId: string, state: Delivery) => Promise<unknown>) {
   const stageAgents = { development: agents.developmentAgent, testing: agents.testingAgent, operations: agents.operationsAgent };
   const initialize = createStep({
     id: 'initialize', inputSchema: deliveryInputSchema, outputSchema: deliverySchema,
@@ -77,11 +77,17 @@ export function createDeliveryWorkflow(agents: ReturnType<typeof createAgents>, 
       id: `review-${stage}`, inputSchema: deliverySchema, outputSchema: deliverySchema,
       suspendSchema: pendingSchema, resumeSchema: reviewSchema,
       // 第一次暂停，恢复时核对版本和角色；拒绝不会生成下一阶段。
-      execute: async ({ inputData, resumeData, suspend, bail }) => {
+      execute: async ({ inputData, resumeData, suspend, bail, runId }) => {
         if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式继续审批');
         const artifact = inputData.artifacts.at(-1)!;
         const pending = pendingSchema.parse({ role: stage, artifact, productReworkRound: inputData.productRework?.round ?? 0 });
-        if (!resumeData) return suspend(pending);
+        if (!resumeData) {
+          if (stage === 'product' && exportProduct) {
+            try { await exportProduct(runId, inputData); }
+            catch { console.warn('Workspace 产物导出失败；人工暂停点保留，可使用 workspace export-run 补导出。'); }
+          }
+          return suspend(pending);
+        }
         const review = validateReview(pending, resumeData);
         const next = { ...inputData, reviews: [...inputData.reviews, review] };
         if (review.decision === 'reject') return bail({ ...next, outcome: 'rejected' as const });

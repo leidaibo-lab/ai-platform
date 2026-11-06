@@ -1,0 +1,7 @@
+{
+  "version": "ticket-stack.v1",
+  "requirement": "实现仅供本地合成数据的工单创建/列表切片。POST /api/tickets 接收唯一字段 title，必须是字符串，trim后1到120个UTF-16 code units；空白、超长、非字符串、null、数组、未知字段均400且不写入。成功201返回{id,title,createdAt}，id由Prisma生成UUID，createdAt为ISO字符串。GET /api/tickets 返回200数组，按createdAt DESC再id DESC稳定排序，所有记录来自真实PostgreSQL，重启API/数据库后保留。无鉴权、无租户、无队列、无分页、无生产数据，都是本PoC明确非目标。前端在/显示“工单”、加载/空/错误状态和有label的标题输入，提交后刷新列表，展示服务端错误，提交中禁用按钮，使用React文本节点避免HTML插入。只写批准TS/TSX文件，所有函数与回调均有中文紧邻职责注释。不修改框架装配、schema、迁移、依赖、检查或容器配置。Prisma客户端已由主持生成，Database继承PrismaClient，服务注入Database后使用database.ticket.create/findMany。Controller注入TicketsService，公开create(body:unknown)和list()；Service公开create(title:string)和list()。外部固定容器检查，不调用现有Node ESM自检，不能声称自己已执行Docker或浏览器。",
+  "writablePaths": ["api/tickets.controller.ts", "api/tickets.service.ts", "app/page.tsx"],
+  "publicChecks": ["TypeScript API编译", "Next生产构建与HTTP页面", "Prisma migrate deploy", "真实API创建列表及非法输入", "API/数据库重启持久化"],
+  "browserInteraction": "只有实际启动浏览器并执行交互后才能记通过"
+}

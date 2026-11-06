@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
 import { randomInt, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createAgents } from '../src/mastra/agents/index.js';
 import { PRODUCT_MAX_STEPS } from '../src/mastra/agents/skills.js';
 import { readConfig } from '../src/mastra/config.js';
+import { createRecruitmentWorkspace, recruitmentSourcePath } from '../src/mastra/project-workspaces.js';
 import { evaluationModelSettings, inputsSchema, pricingSchema, reviewSchema, rubricSchema, runProductSkillTrial, sha256, summarize, usage,
   type HumanReview, type TrialEntry, type Variant } from '../src/product-skill-evaluation.js';
 
@@ -66,7 +67,7 @@ function report(directory: string, pricingPath?: string) {
  */
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: { live: { type: 'boolean', default: false }, rounds: { type: 'string', default: '1' },
-    cases: { type: 'string' }, out: { type: 'string' }, report: { type: 'string' }, pricing: { type: 'string' } } });
+    cases: { type: 'string' }, workspace: { type: 'boolean', default: false }, out: { type: 'string' }, report: { type: 'string' }, pricing: { type: 'string' } } });
   if (values.report) {
     const directory = evaluationPath(values.report);
     console.log(JSON.stringify({ directory, ...report(directory, values.pricing) }, null, 2));
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
     (item) => selected.includes(item.id),
   );
   if (new Set(selected).size !== selected.length || cases.length !== selected.length) throw new Error('未知或重复案例');
+  if (values.workspace && (selected.length !== 1 || selected[0] !== 'recruitment')) throw new Error('Workspace 评测仅支持 --cases recruitment');
   for (const item of cases) if (!rubric.cases[item.id]) throw new Error('缺少量表');
   const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
   const directory = evaluationPath(values.out ?? '.data/evaluations/product-skills-' + stamp);
@@ -95,6 +97,15 @@ async function main(): Promise<void> {
   process.env.MASTRA_MODE = values.live ? 'live' : 'fixture';
   process.env.MASTRA_DATA_DIR = resolve(directory, 'configuration');
   const config = readConfig();
+  const sourceSnapshot = resolve(directory, 'organizer/sources');
+  let sourceHashes: Record<string, string> = {};
+  if (values.workspace) {
+    const sources = resolve(root, recruitmentSourcePath);
+    fingerprint(sources); // 复制前拒绝符号链接，不把其他目录带入评测。
+    cpSync(sources, sourceSnapshot, { recursive: true, errorOnExist: true, force: false });
+    sourceHashes = fingerprint(sourceSnapshot);
+  }
+  const workspace = values.workspace ? createRecruitmentWorkspace(root, sourceSnapshot) : false;
   const entries: TrialEntry[] = [];
   let pairIndex = 0;
   for (let round = 1; round <= rounds; round++) {
@@ -105,21 +116,22 @@ async function main(): Promise<void> {
   }
   const prompts: Record<string, unknown> = {};
   for (const variant of ['without-skills', 'with-skills'] as const) {
-    const agents = createAgents(config, { skillsEnabled: variant === 'with-skills' });
+    const agents = createAgents(config, { skillsEnabled: variant === 'with-skills', workspace });
     const instructions: Record<string, unknown> = {};
     for (const [key, agent] of Object.entries(agents)) if (key.startsWith('product')) instructions[key] = await agent.getInstructions();
     prompts[variant] = instructions;
   }
-  const sourceHashes: Record<string, string> = {};
+  const codeHashes: Record<string, string> = {};
   for (const path of ['src/mastra/agents/index.ts', 'src/mastra/agents/product-roles.ts', 'src/mastra/agents/skills.ts',
     'src/mastra/workflows/product.ts', 'src/mastra/workflows/product-contract.ts', 'src/mastra/workflows/delivery.ts',
-    'src/product-skill-evaluation.ts', 'scripts/product-skill-eval.ts', 'package-lock.json']) sourceHashes[path] = sha256(readFileSync(resolve(root, path), 'utf8'));
+    'src/mastra/project-workspaces.ts', 'src/product-skill-evaluation.ts', 'scripts/product-skill-eval.ts', 'package-lock.json']) codeHashes[path] = sha256(readFileSync(resolve(root, path), 'utf8'));
   save(resolve(directory, 'organizer/manifest.json'), {
     createdAt: new Date().toISOString(), mode: config.mode, requestedModel: config.modelId,
     gitRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     modelSettings: evaluationModelSettings, maxStepsPerRole: PRODUCT_MAX_STEPS, concurrency: 1, rounds,
     inputsVersion: inputs.version, inputsHash: sha256(JSON.stringify(inputs)), rubricHash: sha256(JSON.stringify(rubric)), selectedCases: selected,
-    prompts, sourceHashes, skillHashes: { suite: fingerprint(resolve(root, '.agents/skills')),
+    workspace: { enabled: values.workspace, sources: sourceHashes, snapshot: values.workspace ? 'organizer/sources' : null },
+    prompts, sourceHashes: codeHashes, skillHashes: { suite: fingerprint(resolve(root, '.agents/skills')),
       handoff: fingerprint(resolve(root, '../../.agents/skills/product/requirements-handoff')) },
     scope: '完整产品 Skill 包（113项）及调用指引的增量效果，不拆分单项方法贡献',
     blinding: '分组映射隐藏；方法引用可能泄露分组，同一审阅者可能存在学习效应',
@@ -139,13 +151,14 @@ async function main(): Promise<void> {
   writeFileSync(resolve(directory, 'review/README.md'), readFileSync(resolve(assets, 'reviewer-guide.md'), 'utf8'));
   console.log(JSON.stringify({ directory, mode: config.mode, requestedModel: config.modelId, planned: entries.length }));
   for (const entry of entries) {
+    if (values.workspace && JSON.stringify(fingerprint(sourceSnapshot)) !== JSON.stringify(sourceHashes)) throw new Error('Workspace 资料快照被修改');
     const item = cases.find(
       // 不附加历史项目 README 或评审答案。
       (candidate) => candidate.id === entry.caseId,
     )!;
     mkdirSync(resolve(directory, 'organizer', entry.sampleId));
     console.log(JSON.stringify({ sampleId: entry.sampleId, caseId: entry.caseId, variant: entry.variant, status: 'started' }));
-    entry.result = await runProductSkillTrial({ ...config, databaseUrl: 'file:' + resolve(directory, 'organizer', entry.sampleId, 'workflow.db') }, entry.variant, item.brief);
+    entry.result = await runProductSkillTrial({ ...config, databaseUrl: 'file:' + resolve(directory, 'organizer', entry.sampleId, 'workflow.db') }, entry.variant, item.brief, workspace);
     save(resolve(directory, 'organizer/trials.json'), entries);
     const content = '# 原始诉求\n\n' + item.brief + '\n\n---\n\n# 待审产品稿\n\n' + (entry.result.artifact ?? '未生成可审阅稿。人工指标保留 null，由组织者记录系统失败。') + '\n';
     writeFileSync(resolve(directory, 'review/documents', entry.sampleId + '.md'), content);

@@ -1,0 +1,457 @@
+{
+  "version": 3,
+  "cases": [
+    {
+      "id": "crud-01",
+      "category": "crud",
+      "title": "工单创建",
+      "requirement": "实现 createTicket(input,now)。输入域：input是普通对象；id是服务端预生成的非空字符串、ownerId是非空字符串，now是有效ISO时间字符串，均保证有效；title应为字符串。按ECMAScript trim去首尾空白后以Unicode码点计数，1–80码点合法；非字符串、空白结果或超过80码点返回{error:\"title\"}。成功返回{id,title,ownerId,status:\"open\",createdAt:now}，不得自行生成id。域外：其他对象结构、身份和时间错误由调用方校验，不属于本函数验收，不需因缺少这些产品策略阻塞。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现工单创建要求的业务行为。 */\nexport function createTicket(input, now) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.createTicket(...[{\"title\":\" 修复流程 \",\"ownerId\":\"u1\",\"id\":\"t1\"},\"2026-11-06T10:00:00Z\"]);\n  assert.deepEqual(actual, {\"id\":\"t1\",\"title\":\"修复流程\",\"ownerId\":\"u1\",\"status\":\"open\",\"createdAt\":\"2026-11-06T10:00:00Z\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "crud-02",
+      "category": "crud",
+      "title": "资料卡投影",
+      "requirement": "实现 toProfileCard(profile)。输入域：已校验的普通profile对象，id/displayName为非空字符串；timezone可为非空字符串、null、undefined或精确空串。仅返回{id,name,timezoneLabel}，displayName映射name；null/undefined/空串时timezoneLabel为未设置，否则原样显示。忽略所有额外字段，包括email/role。域外：投影不重新验证身份、显示名或时区有效性，不为其他参数类型猜测错误产品行为。",
+      "roles": [
+        "architect",
+        "frontend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现资料卡投影要求的业务行为。 */\nexport function toProfileCard(profile) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.toProfileCard(...[{\"id\":\"u2\",\"displayName\":\"陈一\",\"timezone\":null,\"email\":\"x\",\"role\":\"admin\"}]);\n  assert.deepEqual(actual, {\"id\":\"u2\",\"name\":\"陈一\",\"timezoneLabel\":\"未设置\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "auth-01",
+      "category": "authorization",
+      "title": "租户项目权限",
+      "requirement": "实现 canReadProject(actor,project)。输入域：两个普通对象，tenantId为非空字符串，visibility仅public/private，角色为admin/member/guest。跨租户优先false；同租户admin/member均可读public/private，guest仅可读public。缺tenantId、缺role或未知role一律false，不能让admin绕过租户边界。返回boolean。域外：畸形或缺必要身份字段的对象采用拒绝，不读取外部身份服务。本规则为评测合成授权规则。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现租户项目权限要求的业务行为。 */\nexport function canReadProject(actor, project) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.canReadProject(...[{\"tenantId\":\"a\",\"role\":\"member\"},{\"tenantId\":\"a\",\"visibility\":\"private\"}]);\n  assert.deepEqual(actual, true);\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "auth-02",
+      "category": "authorization",
+      "title": "发票审批权限",
+      "requirement": "实现 canApproveInvoice(actor,invoice)。输入域：普通对象，orgId均为非空字符串；role为finance/employee/readonly，employee.id及invoice.submittedBy为非空员工标识，status为pending/locked。优先拒绝跨组织；同组织finance仅可审批pending；employee仅可审批submittedBy===actor.id且pending；readonly拒绝。返回boolean。域外：缺组织、缺身份字段、缺/未知角色或未知status一律false。以上组合为合成评测规则，不代表真实财务制度已批准。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现发票审批权限要求的业务行为。 */\nexport function canApproveInvoice(actor, invoice) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.canApproveInvoice(...[{\"orgId\":\"o1\",\"role\":\"finance\"},{\"orgId\":\"o1\",\"status\":\"pending\",\"submittedBy\":\"u2\"}]);\n  assert.deepEqual(actual, true);\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "tx-01",
+      "category": "transaction-concurrency",
+      "title": "幂等库存预留",
+      "requirement": "实现 reserveInventory(stock,quantity,operationId,priorOperations)。输入域：stock是非负整数，quantity是整数，operationId是非空字符串，priorOperations是已成功提交操作id的字符串数组。返回新对象{stock,accepted,operationId}且不改数组。处理顺序：quantity非正数先拒绝且stock不变；否则若operationId已存在则表示先前成功，accepted=true且不重复扣库存（不回放历史库存数）；否则库存不足拒绝；其他情况扣减quantity并受理。域外：非整数数量安全拒绝；stock/id/数组类型由调用方验证，不需推导真实数据库并发。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现幂等库存预留要求的业务行为。 */\nexport function reserveInventory(stock, quantity, operationId, priorOperations) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.reserveInventory(...[10,3,\"op-2\",[\"op-1\"]]);\n  assert.deepEqual(actual, {\"stock\":7,\"accepted\":true,\"operationId\":\"op-2\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "tx-02",
+      "category": "transaction-concurrency",
+      "title": "任务租约领取",
+      "requirement": "实现 claimTask(task,workerId,nowMs,leaseMs)。输入域：task是普通对象，含非空id、owner(null或非空字符串)、非负有限leaseUntil；workerId非空，nowMs非负有限，leaseMs正有限。返回{accepted,task}且不修改输入。顺序：同owner允许续租；否则owner=null或leaseUntil<=nowMs允许领取；否则有效他人租约拒绝并返回未改变task。成功owner=workerId、leaseUntil=nowMs+leaseMs。域外：参数已由调用方校验，不要求新增错误产品策略；本切片不宣称真实锁。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现任务租约领取要求的业务行为。 */\nexport function claimTask(task, workerId, nowMs, leaseMs) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.claimTask(...[{\"id\":\"j1\",\"owner\":null,\"leaseUntil\":0},\"w1\",1000,500]);\n  assert.deepEqual(actual, {\"accepted\":true,\"task\":{\"id\":\"j1\",\"owner\":\"w1\",\"leaseUntil\":1500}});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "async-01",
+      "category": "async-retry",
+      "title": "重试分类",
+      "requirement": "实现 classifyRetry(error,attempt,maxAttempts)。输入域：error含字符串code；attempt/maxAttempts是正整数，attempt从1开始。仅code精确为timeout/rate_limit且attempt<maxAttempts时retry=true，delayMs=min(1000*2^(attempt-1),30000)；其他情况retry=false且delayMs=0。先判类别和上限，再计算退避。域外：非法计数安全地不重试；缺失/未知code也不重试，不需映射真实供应商错误。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现重试分类要求的业务行为。 */\nexport function classifyRetry(error, attempt, maxAttempts) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.classifyRetry(...[{\"code\":\"timeout\"},1,4]);\n  assert.deepEqual(actual, {\"retry\":true,\"delayMs\":1000});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "async-02",
+      "category": "async-retry",
+      "title": "任务重排程",
+      "requirement": "实现 rescheduleFailedJob(job,nowMs,maxAttempts)。输入域：job为普通对象，id非空、attempts非负整数、payload存在；nowMs非负有限，maxAttempts正整数。旧attempts>=maxAttempts时保留attempts并设status=failed、nextRunAt=null；否则attempts加1，status=queued，nextRunAt=nowMs+min(1000*2^(旧attempts),60000)。返回新对象，保留id/payload和其他字段。maxAttempts包含首次尝试。域外：记录和计数由调用方校验，不需因未定义无效记录恢复策略阻塞本任务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现任务重排程要求的业务行为。 */\nexport function rescheduleFailedJob(job, nowMs, maxAttempts) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.rescheduleFailedJob(...[{\"id\":\"j1\",\"attempts\":1,\"payload\":{\"x\":1}},10000,4]);\n  assert.deepEqual(actual, {\"id\":\"j1\",\"attempts\":2,\"payload\":{\"x\":1},\"status\":\"queued\",\"nextRunAt\":12000});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "file-01",
+      "category": "file-storage",
+      "title": "上传校验",
+      "requirement": "实现 validateUpload(file)。输入域：file为普通对象，name为任意不可信字符串、mimeType为字符串、size为有限数字；id为已预生成并校验的安全非空资源id。只支持image/png与image/jpeg，校验优先级为MIME类型在先，size范围0..5242880(含边界)在后。类型错误返回{ok:false,reason:\"unsupported_type\"}；size超限或负数返回{ok:false,reason:\"too_large\"}；成功{ok:true,key}。key仅由id和MIME规范扩展组成：PNG为.png，JPEG不论原文件名后缀均为.jpg。name/路径不能进入key。域外：id和结构由调用方验证，不需另定产品规则。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现上传校验要求的业务行为。 */\nexport function validateUpload(file) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.validateUpload(...[{\"name\":\"../../secret.png\",\"mimeType\":\"image/png\",\"size\":1024,\"id\":\"asset-1\"}]);\n  assert.deepEqual(actual, {\"ok\":true,\"key\":\"asset-1.png\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "file-02",
+      "category": "file-storage",
+      "title": "对象下载授权",
+      "requirement": "实现 canDownloadAsset(actor,asset)。输入域：普通对象，organizationId均非空，visibility为public/private，role为admin/member/guest。同组织admin/member可下载public/private，guest仅可下载public；任何跨组织请求优先拒绝，admin不能绕过。返回boolean。域外：缺organizationId、缺/未知角色及畸形身份一律false，不访问对象存储。本规则为合成评测契约。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现对象下载授权要求的业务行为。 */\nexport function canDownloadAsset(actor, asset) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.canDownloadAsset(...[{\"organizationId\":\"o1\",\"role\":\"member\"},{\"organizationId\":\"o1\",\"visibility\":\"private\"}]);\n  assert.deepEqual(actual, true);\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "migration-01",
+      "category": "database-migration",
+      "title": "员工旧结构迁移",
+      "requirement": "实现 migrateEmployeeV1(record)。输入域：普通对象，id非空字符串、full_name为字符串、active为boolean。用最后一个ASCII空格U+0020拆分：之前完整子串givenName，之后familyName；无空格时givenName为原字符串、familyName为空串，不额外trim。true/false映射status为active/inactive。派生givenName/familyName/status覆盖已有同名字段，保留其他非冲突字段，移除full_name/active；返回新对象，不修改输入。域外：不含规定类型的记录交给调用方验证；字段冲突优先级是评测组织者定义的合成迁移规则，不是HR业务批准。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现员工旧结构迁移要求的业务行为。 */\nexport function migrateEmployeeV1(record) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.migrateEmployeeV1(...[{\"id\":\"e1\",\"full_name\":\"周 海 蓝\",\"active\":true,\"legacyCode\":7}]);\n  assert.deepEqual(actual, {\"id\":\"e1\",\"givenName\":\"周 海\",\"familyName\":\"蓝\",\"status\":\"active\",\"legacyCode\":7});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "migration-02",
+      "category": "database-migration",
+      "title": "工单结构兼容",
+      "requirement": "实现 normalizeTicket(record)。输入域：普通记录对象；若自有status字段存在，仅精确open/closed有效，undefined/null/未知值均返回null且不能回落旧state；仅status完全缺失时采用旧state，open映射open、done映射closed，未知/缺失返回null。成功返回新对象，移除state、写规范status并保留其他字段；不修改输入。域外：非对象返回null；不采用原型继承字段作为新status。该优先级为合成兼容契约。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现工单结构兼容要求的业务行为。 */\nexport function normalizeTicket(record) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.normalizeTicket(...[{\"id\":\"t1\",\"state\":\"done\",\"subject\":\"A\"}]);\n  assert.deepEqual(actual, {\"id\":\"t1\",\"subject\":\"A\",\"status\":\"closed\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "api-01",
+      "category": "api-contract",
+      "title": "订单公开DTO",
+      "requirement": "实现 toOrderDto(order)。输入域：已校验订单对象，id/sku/status是字符串、quantity是正整数。显式且仅返回{id,sku,quantity,status}，字段值原样复制；任何额外字段如internalCost/customerSecret/token/tenantId不得进入DTO。域外：请求校验由上游负责，不为其他类型增加业务行为；本函数只做公开字段投影。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现订单公开DTO要求的业务行为。 */\nexport function toOrderDto(order) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.toOrderDto(...[{\"id\":\"o1\",\"sku\":\"S\",\"quantity\":2,\"status\":\"new\",\"internalCost\":99,\"customerSecret\":\"x\"}]);\n  assert.deepEqual(actual, {\"id\":\"o1\",\"sku\":\"S\",\"quantity\":2,\"status\":\"new\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "api-02",
+      "category": "api-contract",
+      "title": "列表查询参数",
+      "requirement": "实现 parseListQuery(params)。输入域：普通查询对象，原始字段按字符串解析，允许缺失。page只接受十进制正整数字符串且解析值为安全整数；缺失/空/非法回落1。limit只接受范围1..100的十进制正整数字符串；缺失/空/非法/超过100回落20而非截断。status仅精确all/open/closed，其他回落all。返回{page,limit,status}，各字段独立回落，不能因一项非法抹掉其他合法项。域外：非字符串查询值视为该字段非法；URL错误展示不在此合成解析契约。",
+      "roles": [
+        "architect",
+        "frontend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现列表查询参数要求的业务行为。 */\nexport function parseListQuery(params) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.parseListQuery(...[{\"page\":\"0\",\"limit\":\"500\",\"status\":\"bad\"}]);\n  assert.deepEqual(actual, {\"page\":1,\"limit\":20,\"status\":\"all\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "bug-01",
+      "category": "existing-bugfix",
+      "title": "金额格式化修复",
+      "requirement": "修复 formatMoney(cents,currency)。输入域：cents为有限整数，单位分且可为负；currency恰为3个大写ASCII字母。返回币种代码、一个ASCII空格和以100分为1单位且固定两位小数的金额，负号位于金额前。域外：无效类型/值返回null，不查ISO币种清单、不换汇、不本地化；以上只校验格式。",
+      "roles": [
+        "architect",
+        "frontend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 修复金额格式化，存量实现错误舍去小数。 */\nexport function formatMoney(cents, currency) { return currency + ' ' + (cents / 100).toFixed(0); }\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.formatMoney(...[-1234,\"USD\"]);\n  assert.deepEqual(actual, \"USD -12.34\");\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "bug-02",
+      "category": "existing-bugfix",
+      "title": "UTC日期闭区间修复",
+      "requirement": "修复 isWithinDateRange(timestamp,startDate,endDate)。输入域：startDate/endDate为有效公历YYYY-MM-DD；timestamp为带Z或显式时区偏移的有效ISO-8601时刻。将时刻换算到UTC，按UTC日期闭区间[startDate,endDate]判断，结束日23:59:59.999Z包含。域外：无效格式、无效日历日期、无时区timestamp或倒置日期范围一律false，不使用宿主本地时区。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 修复结束日期零点造成的范围遗漏。 */\nexport function isWithinDateRange(timestamp, startDate, endDate) { const v=Date.parse(timestamp); return v>=Date.parse(startDate)&&v<=Date.parse(endDate); }\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.isWithinDateRange(...[\"2026-03-10T23:59:59.999Z\",\"2026-03-01\",\"2026-03-10\"]);\n  assert.deepEqual(actual, true);\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "diag-01",
+      "category": "check-diagnosis",
+      "title": "稳定优先级排序",
+      "requirement": "实现 sortByPriority(items)。输入域：items为普通{id,priority}对象数组，id是字符串、priority为有限数字；空数组合法。数值降序排列，相同priority保持原输入相对顺序；返回新数组，不修改输入数组或对象。域外：非法集合/priority由调用方验证，不猜测缺省优先级或恢复策略。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现稳定优先级排序要求的业务行为。 */\nexport function sortByPriority(items) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.sortByPriority(...[[{\"id\":\"a\",\"priority\":1},{\"id\":\"b\",\"priority\":3},{\"id\":\"c\",\"priority\":3}]]);\n  assert.deepEqual(actual, [{\"id\":\"b\",\"priority\":3},{\"id\":\"c\",\"priority\":3},{\"id\":\"a\",\"priority\":1}]);\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "diag-02",
+      "category": "check-diagnosis",
+      "title": "分页数计算",
+      "requirement": "实现 getPageCount(totalItems,pageSize)。输入域：totalItems为非负整数，pageSize为正整数；返回ceil(totalItems/pageSize)，0项返回0。域外：pageSize非整数或<=0抛RangeError；totalItems由调用方校验，不把非法总数默认为0。",
+      "roles": [
+        "architect",
+        "frontend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现分页数计算要求的业务行为。 */\nexport function getPageCount(totalItems, pageSize) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.getPageCount(...[0,10]);\n  assert.deepEqual(actual, 0);\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "sec-01",
+      "category": "input-security",
+      "title": "对象键路径隔离",
+      "requirement": "实现 safeStorageKey(fileName,id)。输入域：fileName为任意不可信路径/文件名字符串；id为已校验安全ASCII资源id，只含字母/数字/_/-且非空。仅观察最后路径段basename中最后一个点后的后缀，忽略路径和文件主体；png/jpg/jpeg/pdf大小写不敏感，小写输出；无/未知后缀统一bin。返回id+\".\"+规范后缀，不把其他用户内容放入key。域外：id校验由调用方负责，不需追加业务策略。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现对象键路径隔离要求的业务行为。 */\nexport function safeStorageKey(fileName, id) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.safeStorageKey(...[\"../../etc/passwd.png\",\"asset-9\"]);\n  assert.deepEqual(actual, \"asset-9.png\");\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "sec-02",
+      "category": "input-security",
+      "title": "HTML文本编码",
+      "requirement": "实现 escapeHtml(text)。输入域：text是字符串。文本节点上下文中& < > 双引号单引号分别编码为&amp; &lt; &gt; &quot; &#39;；先处理原始&，确保生成实体不会二次编码；其他Unicode码点原样保留。域外：非字符串由调用方校验，不猜测转换方式；HTML属性、URL、JavaScript上下文不在本切片。",
+      "roles": [
+        "architect",
+        "frontend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现HTML文本编码要求的业务行为。 */\nexport function escapeHtml(text) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.escapeHtml(...[\"<b title=\\\"x\\\">'&</b>\"]);\n  assert.deepEqual(actual, \"&lt;b title=&quot;x&quot;&gt;&#39;&amp;&lt;/b&gt;\");\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "a11y-01",
+      "category": "frontend-accessibility",
+      "title": "表单错误关联",
+      "requirement": "实现 fieldAccessibility(fieldId,error)。输入域：fieldId为非空字符串；error为非空字符串时有错误，null/undefined/精确空串时无错误，不trim空格。始终返回{id,ariaInvalid}；有错误另加ariaDescribedBy=fieldId+\"-error\"；无错误必须省略该属性，错误文案不返回。域外：其他参数类型由组件调用方校验，不需新增业务决定。",
+      "roles": [
+        "architect",
+        "frontend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现表单错误关联要求的业务行为。 */\nexport function fieldAccessibility(fieldId, error) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.fieldAccessibility(...[\"email\",\"错误\"]);\n  assert.deepEqual(actual, {\"id\":\"email\",\"ariaInvalid\":true,\"ariaDescribedBy\":\"email-error\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "a11y-02",
+      "category": "frontend-accessibility",
+      "title": "异步提交按钮状态",
+      "requirement": "实现 submitButtonState(status)。输入域：status为字符串。loading返回{disabled:true,ariaBusy:true,label:\"提交中\"}；error返回{disabled:false,ariaBusy:false,label:\"重试\"}；idle及未知字符串返回{disabled:false,ariaBusy:false,label:\"提交\"}。始终只有这三个字段。域外：非字符串由组件调用方校验；这是纯展示映射，不自动提交请求或执行重试。",
+      "roles": [
+        "architect",
+        "frontend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现异步提交按钮状态要求的业务行为。 */\nexport function submitButtonState(status) {\n  // 待实现：遵守需求中的校验、权限与边界约束。\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport * as solution from './src/solution.mjs';\n\n/** 在一个已公开正常输入上确认最小业务路径可执行。 */\nasync function publicSmoke() {\n  const actual = await solution.submitButtonState(...[\"loading\"]);\n  assert.deepEqual(actual, {\"disabled\":true,\"ariaBusy\":true,\"label\":\"提交中\"});\n}\n\ntest('public smoke', publicSmoke);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "amb-01",
+      "category": "requirements-ambiguity",
+      "title": "员工资料更正规则未定",
+      "requirement": "HR需更正员工姓名和银行账户；部分员工离职，财务会锁定已结算记录。未定义谁可修改、锁定后能否改、是否审计及通知。列出阻塞决策及对方案/验收影响，不得自行决定。",
+      "roles": [
+        "architect"
+      ],
+      "files": {
+        "architecture/decision.md": "# 技术方案\n\n<!-- 列出阻塞决策；勿替业务方决定。 -->\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import { test } from 'node:test';\n/** 仅确认固定工作流具备可运行检查输入。 */\nfunction provisionedInput() {}\ntest('provisioned input', provisionedInput);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "clarification-required"
+    },
+    {
+      "id": "amb-02",
+      "category": "requirements-ambiguity",
+      "title": "排班冲突规则未定",
+      "requirement": "主管分配班次，冲突时给建议。未定义跨午夜/时区边界、待批换班是否占用、建议能否覆盖现有安排。列出阻塞问题和对数据/验收影响，不得编造默认值。",
+      "roles": [
+        "architect"
+      ],
+      "files": {
+        "architecture/decision.md": "# 技术方案\n\n<!-- 列出阻塞决策；勿替业务方决定。 -->\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import { test } from 'node:test';\n/** 仅确认固定工作流具备可运行检查输入。 */\nfunction provisionedInput() {}\ntest('provisioned input', provisionedInput);\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "clarification-required"
+    }
+  ]
+}

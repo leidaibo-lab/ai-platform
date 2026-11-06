@@ -1,0 +1,148 @@
+/**
+ * TODO：独立审阅发现的恢复/来源门禁回归，按用户要求暂缓修复。
+ * 停用文件为 development-recovery-review.test.ts.todo，默认 npm test/tsc 不加载。
+ * 激活：将本文件重命名为 development-recovery-review.test.ts；修复相关核心后运行：
+ * npm exec -- tsx --test tests/development-recovery-review.test.ts
+ * 当前证据：6项中mode漂移通过，其余5项预期红（架构返工后恢复重放、非法evidence、
+ * 非法hash、modelId漂移、baseUrl漂移）。禁止把停用视为问题已修复。
+ */
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import type { PracticeConfig } from '../src/mastra/config.js';
+import { developmentHash, developmentInputSchema, developmentStateSchema, type DevelopmentInput } from '../src/development/contracts.js';
+import { developmentStatus, openDevelopment, recoverDevelopment, seedDevelopment, type DevelopmentApplication } from '../src/development-service.js';
+import { generateDevelopment } from '../src/development/agents.js';
+import type { DevelopmentGenerator } from '../src/development/recovery.js';
+
+const practiceRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+
+/** 最小真实源码与公开检查用来观察重放，所有运行均为离线fixture。 */
+function input(): DevelopmentInput {
+  const content = '合成任务：固定导出fixtureValue=1。';
+  return developmentInputSchema.parse({ source: { kind: 'evaluation', runId: 'recovery-review-fixture', content, hash: developmentHash(content), evidence: 'evaluation-input' }, maxReworks: 2,
+    project: { id: 'recovery-review-fixture', roles: ['backend'], writablePaths: ['src/solution.mjs'], checkFiles: ['smoke.test.mjs'], files: {
+      'src/solution.mjs': '/** 尚未实现的基线。 */\nexport function fixtureValue() { return 0; }\n',
+      'smoke.test.mjs': 'import {test} from "node:test";\nimport assert from "node:assert/strict";\nimport {fixtureValue} from "./src/solution.mjs";\n/** 检查真实被实现函数。 */\nfunction smoke() { assert.equal(fixtureValue(),1); }\ntest("fixture value",smoke);\n',
+    } } });
+}
+
+/** 每次运行独占原生Store与候选目录，清理不触及正在执行的live批次。 */
+async function fixture(check: (app: DevelopmentApplication, directory: string, config: PracticeConfig) => Promise<void>, generate: DevelopmentGenerator, data = input()): Promise<void> {
+  const parent = mkdtempSync(resolve(tmpdir(), 'development-recovery-review-'));
+  const directory = resolve(parent, 'run');
+  const config: PracticeConfig = { rootDir: practiceRoot, mode: 'fixture', databaseUrl: `file:${resolve(parent, 'unused.db')}`, port: 4111, modelId: 'openai/original-fixture-model', baseUrl: 'http://127.0.0.1/original-fixture' };
+  seedDevelopment(directory, data);
+  const app = openDevelopment(config, directory, true, generate);
+  try { await app.storage.init(); await check(app, directory, config); }
+  finally { await app.execution.close(); await app.storage.close(); rmSync(parent, { recursive: true, force: true }); }
+}
+
+/** 只读取原生当前故障暂停点，不能从历史嵌套文本猜测恢复版本。 */
+async function recovery(app: DevelopmentApplication, runId: string) {
+  const status = await developmentStatus(app, runId);
+  const step = status.steps?.['development-iteration.recover-development'];
+  assert.equal(status.status, 'suspended');
+  assert.ok(step && !Array.isArray(step));
+  assert.equal(step.status, 'suspended');
+  const state = developmentStateSchema.parse(step.payload);
+  assert.ok(state.recovery);
+  return state;
+}
+
+/** 人工接续只使用测试身份标签与当前恢复hash。 */
+function retry(hash: string) { return { hash, decision: 'retry' as const, reviewer: 'fixture-review-owner', comment: '确认离线fixture安全检查点。' }; }
+
+// 新方案获批并完成实现后，自检故障接续不能再次生成方案或重放已完成实现。
+test('架构返工后自检故障恢复只重试自检，不重新规划或实现', async () => {
+  let architectureCalls = 0;
+  let backendCalls = 0;
+  let selfCheckCalls = 0;
+  /** 首个实现回报架构阻塞，新方案实现成功后让自检连续两次超时。 */
+  const generate: DevelopmentGenerator = async (config, role, execution, state, paths, extra) => {
+    if (role === 'architect') architectureCalls++;
+    if (role === 'backend') backendCalls++;
+    if (role === 'self-check' && ++selfCheckCalls <= 2) throw Object.assign(new Error('synthetic-self-check-timeout'), { name: 'TimeoutError' });
+    const entry = await generateDevelopment(config, role, execution, state, paths, extra);
+    if (role === 'backend' && backendCalls === 1) return { ...entry, text: 'ARCHITECTURE_BLOCKER: 缺少已确认接口契约。' };
+    return entry;
+  };
+  // 用角色调用计数和完整状态识别重放，不能只看最终smoke成功。
+  await fixture(async (app) => {
+    const run = await app.workflow.createRun();
+    assert.equal((await run.start({ inputData: app.input })).status, 'suspended');
+    const before = await recovery(app, run.runId);
+    assert.equal(before.recovery!.role, 'self-check');
+    assert.deepEqual(before.completedTasks, ['fixture-task-1']);
+    assert.equal(architectureCalls, 2);
+    assert.equal(backendCalls, 2);
+    assert.equal(selfCheckCalls, 2);
+    assert.equal((await recoverDevelopment(app, run.runId, retry(before.recovery!.hash))).status, 'success');
+    const after = (await developmentStatus(app, run.runId)).result!;
+    assert.equal(after.outcome, 'development-delivered');
+    assert.equal(architectureCalls, 2, '自检接续不得重新生成方案');
+    assert.equal(backendCalls, 2, '自检接续不得重放已完成实现');
+    assert.equal(selfCheckCalls, 3);
+    assert.equal(after.planHash, before.planHash);
+    assert.equal(after.approvedHash, before.approvedHash);
+    assert.equal(after.reviews.length, before.reviews.length);
+  }, generate);
+});
+
+// 自动批准的原始入口与澄清入口必须使用相同的评测来源证据及正文hash约束。
+for (const field of ['evidence', 'hash'] as const) {
+  // 每个非法来源单独执行，使一种拒绝不会掩盖另一种漏洞。
+  test(`评测自动批准入口拒绝错误来源${field}`, async () => {
+    const parent = mkdtempSync(resolve(tmpdir(), 'development-evaluation-source-review-'));
+    const config: PracticeConfig = { rootDir: practiceRoot, mode: 'fixture', databaseUrl: `file:${resolve(parent, 'unused.db')}`, port: 4111, modelId: 'openai/fixture-model' };
+    let app: DevelopmentApplication | undefined;
+    try {
+      const original = input();
+      const source = field === 'evidence' ? { ...original.source, evidence: 'fixture' as const } : { ...original.source, hash: '0'.repeat(64) };
+      const directory = resolve(parent, 'invalid');
+      seedDevelopment(directory, { ...original, source });
+      assert.throws(
+        // 捕获意外创建的应用，测试失败时仍须关闭其独占执行资源。
+        () => { app = openDevelopment(config, directory, true); },
+        /评测.*来源|来源.*评测|hash|哈希|证据/,
+      );
+      // 正确拒绝在执行环境构造前完成，不应创建应用。
+      assert.equal(app, undefined);
+    } finally {
+      if (app) { await app.execution.close(); await app.storage.close(); }
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+}
+
+// 模式、模型身份和端点是执行批准的一部分，换凭据不应顺带允许换模型或端点。
+for (const field of ['mode', 'modelId', 'baseUrl'] as const) {
+  // 各字段独立使用持久化Store和真实暂停点，避免一次拒绝掩盖其他漂移。
+  test(`故障恢复拒绝${field}漂移且保留原暂停点`, async () => {
+    /** 第一次应用只制造架构调用超时，不写文件。 */
+    const timeout: DevelopmentGenerator = async () => { throw Object.assign(new Error('synthetic-timeout'), { name: 'TimeoutError' }); };
+    // 关闭后以不同配置重开同一Store，验证恢复不依赖旧进程内存。
+    await fixture(async (app, directory, config) => {
+      const run = await app.workflow.createRun();
+      assert.equal((await run.start({ inputData: app.input })).status, 'suspended');
+      const before = await recovery(app, run.runId);
+      await app.execution.close(); await app.storage.close();
+      const changed: PracticeConfig = { ...config };
+      if (field === 'mode') changed.mode = 'live';
+      if (field === 'modelId') changed.modelId = 'openai/changed-fixture-model';
+      if (field === 'baseUrl') changed.baseUrl = 'http://127.0.0.1/changed-fixture';
+      const reopened = openDevelopment(changed, directory, true);
+      try {
+        await reopened.storage.init();
+        await assert.rejects(recoverDevelopment(reopened, run.runId, retry(before.recovery!.hash)), /输入|模式|配置|身份|端点|模型/);
+        const after = await recovery(reopened, run.runId);
+        assert.equal(after.recovery!.hash, before.recovery!.hash);
+        assert.equal(after.faults.length, before.faults.length);
+        assert.equal(after.recoveries.length, 0);
+      } finally { await reopened.execution.close(); await reopened.storage.close(); }
+    }, timeout);
+  });
+}

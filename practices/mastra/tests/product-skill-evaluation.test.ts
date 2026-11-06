@@ -136,7 +136,7 @@ test('成对差值不混入未审、失败或模型漂移，也不从计划删�
 
 // 真实输入与人工标准分别加载；招聘样本锁定到原始诉求，不读取含历史答案的项目 README。
 test('需求输入与评分量表分离且招聘原始诉求字节一致', () => {
-  assert.equal(sha256(inputs.cases[0].brief), sha256(readFileSync(resolve(root, 'projects/pm-hrm-recruitment/brief.md'), 'utf8')));
+  assert.equal(sha256(inputs.cases[0].brief), sha256(readFileSync(resolve(root, 'projects/pm-hrm-recruitment/sources/brief.md'), 'utf8')));
   assert.equal(inputs.cases.length, 3);
   for (const item of inputs.cases) {
     assert.ok(rubric.cases[item.id]?.length);

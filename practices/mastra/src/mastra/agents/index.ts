@@ -5,6 +5,8 @@ import { createFixtureModel } from './fixture-model.js';
 import { resolve } from 'node:path';
 import { loadGovernedSkill, loadProductSkills, PRODUCT_MAX_STEPS } from './skills.js';
 import { productRoleProfiles, type ProductRole } from './product-roles.js';
+import type { AnyWorkspace } from '@mastra/core/workspace';
+import { createRecruitmentWorkspace } from '../project-workspaces.js';
 
 const instructions = {
   product: `四个固定产品角色均可使用完整 product-pm 套件。先从当前角色的优先方法中按任务匹配最少必要的 Skill，至少加载一项适合本轮任务的 product-pm 方法；优先列表是选法指引，可以从全套选择更合适的方法。调用原生 skill 加载选定方法，并按其说明用 skill_read 读取完整原文或分支参考；原名查找或任务不明确时读取 product-pm-catalog。复合任务可选 flow- 方法，但只完成当前角色负责的部分，不重跑其他角色或改变 Workflow 路径。不批量展开全部方法。交付前必须调用 product-requirements-handoff Skill，按当前角色职责检查依据、已确认规则、边界和未决项；输出末尾简列本轮实际使用的方法及其用途，未调用的方法不能声称已使用。`,
@@ -22,11 +24,14 @@ const productTask = `每次生成最多 ${PRODUCT_MAX_STEPS} 步，预算不足�
 /** 仅供内部评测装配，不暴露为 HTTP 配置；默认保留正式产品能力。 */
 export interface ProductAgentOptions {
   skillsEnabled?: boolean;
+  workspace?: AnyWorkspace | false;
   execution?: (role: ProductRole) => Pick<AgentExecutionOptionsBase<unknown>, 'modelSettings' | 'onStepFinish'>;
 }
 
 /** 工厂只组合框架原生 Agent；fixture/live 的变化位于模型边界。 */
 export function createAgents(config: PracticeConfig, options: ProductAgentOptions = {}) {
+  const workspace = options.workspace === false ? undefined : options.workspace ?? createRecruitmentWorkspace(config.rootDir);
+  const workspaceInstructions = workspace ? '你可通过已注册的 Workspace 原生文件工具只读业务材料。处理招聘项目时先列目录并读取 brief.md 和相关原始资料，引用实际读取的文件依据；其他业务不要套用招聘资料。Workspace 不包含历史评审或标准答案，缺失资料应明确提出。你不能写文件、执行命令或审批；产物副本由应用导出，不得声称自己已保存。' : '';
   const sharedRoot = resolve(config.rootDir, '../../.agents/skills');
   const productSkills = [loadGovernedSkill(sharedRoot, 'product/requirements-handoff'), ...loadProductSkills(resolve(config.rootDir, '.agents/skills'))];
   const availableProductSkills = new Set(
@@ -49,8 +54,9 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
     const profile = productRoleProfiles[role];
     return new Agent({
       id: role === 'writing' ? 'product-agent' : `product-${role}-agent`, name: profile.name,
-      instructions: `${profile.instructions}${productTask}${options.skillsEnabled === false ? '' : `${instructions.product}当前角色优先方法：${profile.preferredSkills.join('、')}。`}${productBoundaries}`,
+      instructions: `${profile.instructions}${productTask}${options.skillsEnabled === false ? '' : `${instructions.product}当前角色优先方法：${profile.preferredSkills.join('、')}。`}${productBoundaries}${workspaceInstructions}`,
       model: model(role === 'writing' ? 'product' : `product-${role}`),
+      ...(workspace ? { workspace } : {}),
       ...(options.skillsEnabled === false ? {} : { skills: productSkills }),
       tools: { practiceInfo: practiceInfoTool }, defaultOptions: { ...options.execution?.(role), maxSteps: PRODUCT_MAX_STEPS },
     });

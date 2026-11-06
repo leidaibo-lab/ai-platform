@@ -1,0 +1,5 @@
+{
+  "compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","rootDir":".","outDir":"dist","strict":true,"esModuleInterop":true,"skipLibCheck":true,"experimentalDecorators":true,"emitDecoratorMetadata":true},
+  "include":["api/**/*.ts","generated/**/*.ts"],
+  "exclude":["node_modules"]
+}

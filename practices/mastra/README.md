@@ -10,6 +10,10 @@
 
 本实践是[应用实践集合](../README.md)的首个可运行条目，使用 Mastra 自己的模型、Agent、Workflow 和 LibSQLStore，不导入探索主线 Runtime、Store、GatewayClient 或实验 Adapter。学习目标是理解原生设计，再比较差异，不是接入或替换探索实现。
 
+## 项目 Workspace
+
+[Workspace 使用说明](./workspaces.md)：Studio 中提供招聘业务资料、运行产物和评测结果三个只读视图。四个产品角色可实际读取 `sources/` 原始材料；新产品稿自动按 Run/hash 导出，人工确认仍由 Workflow 持有。支持历史稿件补导出和显式启用固定资料快照的配对评测，不提供代码执行或自动质量放行。
+
 ## 产品交接物审阅页
 
 2026-11-04 本机续验：产品阶段最小闭环已跑通；已完成真实模型需求生成、页面两轮问答、修订应用及用户产品确认，开发提案已生成并等待开发确认。交接就绪检查、内容质量和间歇流失败仍待完善。本次环境、验证证据和复评项见[产品阶段检查](./product-stage-review.md)。
@@ -39,7 +43,7 @@ npm run review:dev
 
 ## 持续业务场景项目
 
-为避免每次用彼此无关的临时需求验证单个 Agent，新增了[招聘管理工作流验证项目](./projects/pm-hrm-recruitment/README.md)。它以 `pm-hrm` 招聘模块为稳定场景，从[原始诉求](./projects/pm-hrm-recruitment/brief.md)考查产品 Agent 自主梳理需求和生成产品稿，再推进人工确认及工程交付。2026-11-05 用户已选择首期初筛与邀约切片、预置合成数据及本地模拟角色；当前 Agent 的源资料读取、真实代码执行与测试能力尚未接入。
+为避免每次用彼此无关的临时需求验证单个 Agent，新增了[招聘管理工作流验证项目](./projects/pm-hrm-recruitment/README.md)。它以 `pm-hrm` 招聘模块为稳定场景，从[原始诉求](./projects/pm-hrm-recruitment/sources/brief.md)考查产品 Agent 自主梳理需求和生成产品稿，再推进人工确认及工程交付。2026-11-05 用户已选择首期初筛与邀约切片、预置合成数据及本地模拟角色；当前产品角色已接入只读业务资料；真实代码执行与测试能力尚未接入。
 
 ## 先运行最小应用
 
@@ -116,6 +120,10 @@ tests/product.test.ts            四角色、返工上限、故障隔离、进�
 - [ ] 根据证据决定：原生满足则采用；少量业务断言可补齐则薄适配；关键能力缺失或适配成本过高则按[方案选型治理](../../docs/solution-selection-governance.md)重新比较成熟工具并记录决策，再决定引入依赖或补充实现。责任人为本实践维护者，完成标准是留下版本、验证证据、能力缺口和最终选择。
 
 ## 再运行产研交接
+
+本期只建设产品确认后的开发阶段。独立 [development 入口](./development-workflow-design.md#开发执行入口)使用原生 Workflow 执行架构确认、按文件任务实现、真实开发自检、有界返工和研发交付包；首版为离线 Node ESM 受控切片。[能力评测](./evaluations/development/README.md)覆盖24案例，固定控制流、真实模型行为与人工质量评分分别报告；[2026-11-06 pilot 观察](./evaluations/development/observations-2026-11-06.md)保留48项原始结果、执行器缺陷及能力未准入结论。截图候选技术栈的整栈能力尚未验收。独立测试阶段不在本期范围内。
+
+按用户要求，剩余研发修复与复测已暂停并整理为[续办TODO](./evaluations/development/observations-2026-11-06.md#v3复测中断与续办todo)：先修复已复现的恢复/来源门禁问题，再执行新的完整48项v3计划，最后补全栈Agent产出、浏览器与独立人评。当前v3中断记录和预期失败回归保留；[主持全栈基准v4](./evaluations/development/full-stack/README.md#2026-11-06-主持基准实测)单独登记，不代表Agent能力通过。
 
 本轮实现的是**交接提案和人工确认**：产品文档 → 产品确认 → 代码提案 → 开发确认 → 测试计划 → 测试确认 → 部署方案 → 运维确认。确认当前交接物后才生成下一份；任一阶段拒绝立即结束本轮。
 
