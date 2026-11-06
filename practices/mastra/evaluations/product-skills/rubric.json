@@ -1,0 +1,131 @@
+{
+  "version": "product-skills-rubric.v1",
+  "cases": {
+    "recruitment": [
+      {
+        "id": "R1",
+        "severity": "critical",
+        "criterion": "保留 HR 与用人负责人协作、候选人初筛与邀约跟进的目标，不将产研审批混入候选人业务审批。"
+      },
+      {
+        "id": "R2",
+        "severity": "critical",
+        "criterion": "首期到邀约结果记录为止，不进入面试安排，不擅自扩展候选人全生命周期。"
+      },
+      {
+        "id": "R3",
+        "severity": "major",
+        "criterion": "明确当前处理人和处理结果的可见性目标，并形成对应可检查条件或待确认的具体口径。"
+      },
+      {
+        "id": "R4",
+        "severity": "critical",
+        "criterion": "使用预置合成职位、候选人数据；本地模拟角色与人工审批标签，不建设真实账号认证。"
+      },
+      {
+        "id": "R5",
+        "severity": "critical",
+        "criterion": "未确定的业务角色权限、状态/结果枚举及初筛到邀约条件列为待确认，不自行编造为事实。"
+      },
+      {
+        "id": "R6",
+        "severity": "major",
+        "criterion": "需要持久化、重复提交和失败反馈等实现相关选择时，区分建议与待确认；验收不能同时把未决规则写成确定行为。"
+      },
+      {
+        "id": "R7",
+        "severity": "major",
+        "criterion": "具体澄清问题明确影响和阻塞性，不用泛泛的问题替代业务行为缺口。"
+      },
+      {
+        "id": "R8",
+        "severity": "critical",
+        "criterion": "仅以给定原始诉求为依据，不声称已阅读 pm-hrm 源码、已批准需求或完成开发测试。"
+      }
+    ],
+    "title-validation": [
+      {
+        "id": "T1",
+        "severity": "critical",
+        "criterion": "新建和编辑共同遵守 trim 后校验 1–80 Unicode 码点，含 0、1、80、81 边界。"
+      },
+      {
+        "id": "T2",
+        "severity": "critical",
+        "criterion": "String.trim() 语义准确，不把空白简化成仅 ASCII 空格；中间空白保持。"
+      },
+      {
+        "id": "T3",
+        "severity": "critical",
+        "criterion": "区分 Unicode 码点、UTF-16 code unit 与字形，用非 BMP/组合字符例子形成可检查验收，不做 Unicode 归一化。"
+      },
+      {
+        "id": "T4",
+        "severity": "major",
+        "criterion": "校验失败保留全部字段、说明原因、不提交修改。"
+      },
+      {
+        "id": "T5",
+        "severity": "critical",
+        "criterion": "直接 API 请求和页面遵循相同规则，不能只依赖前端校验。"
+      },
+      {
+        "id": "T6",
+        "severity": "major",
+        "criterion": "标题唯一性与敏感词明确排除。"
+      },
+      {
+        "id": "T7",
+        "severity": "critical",
+        "criterion": "明确最终保存 trim 后的标题，不混淆保留输入字段和成功保存值。"
+      },
+      {
+        "id": "T8",
+        "severity": "critical",
+        "criterion": "历史不合规标题未修改、只编辑其他字段时可保留原标题保存；标题修改后按新规则校验和保存，不扩大历史强制迁移范围。"
+      }
+    ],
+    "meeting-cancellation": [
+      {
+        "id": "M1",
+        "severity": "critical",
+        "criterion": "仅预约创建人能取消，其他普通用户不能通过页面或直接请求越权。"
+      },
+      {
+        "id": "M2",
+        "severity": "critical",
+        "criterion": "成功取消释放对应时段供新预约使用。"
+      },
+      {
+        "id": "M3",
+        "severity": "major",
+        "criterion": "保留原预约与取消记录，列表可区分已取消状态。"
+      },
+      {
+        "id": "M4",
+        "severity": "critical",
+        "criterion": "重复取消不重复记录、不重复释放，不影响后来新预约；给出可检查场景。"
+      },
+      {
+        "id": "M5",
+        "severity": "major",
+        "criterion": "排除管理员代取消、周期预约及批量操作。"
+      },
+      {
+        "id": "M6",
+        "severity": "critical",
+        "criterion": "取消截止时间及时区明确为待确认，不能自定默认值。"
+      },
+      {
+        "id": "M7",
+        "severity": "major",
+        "criterion": "参与人通知明确为待确认，不能默认已启用或免通知。"
+      },
+      {
+        "id": "M8",
+        "severity": "critical",
+        "criterion": "取消/释放失败的业务结果仍待确认，指出一致性风险与选择，不把事务/重试建议冒充已确认行为。"
+      }
+    ]
+  }
+}

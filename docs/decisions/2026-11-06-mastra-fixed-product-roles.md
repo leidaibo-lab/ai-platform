@@ -91,6 +91,8 @@ Node.js 24.22.1 下全套自动回归 **31/31**，包括本方案新增 11 项�
 
 ## 证据与后续演进
 
+质量验收补充采用[产品 Skill 配对评测](../../practices/mastra/evaluations/product-skills/README.md)，沿用原生 Workflow 与 Agent 步骤回调。完整 Skill 包及调用指引为处理变量，输入、四角色职责、路径、模型与预算固定；人工量表不进入模型上下文。未增加依赖、自动 Judge、通用评测引擎或探索主线契约。正式应用默认启用 Skill，内部工厂开关只供实验装配。人评未完成时不生成遗漏率、首次通过率或审阅时间结论；同模型成功配对不足、路由漂移、计量缺失及失败都保留。更多样本、多审阅者或在线平台需求触发重新选型。
+
 - https://mastra.ai/docs/workflows/overview
 - https://mastra.ai/docs/workflows/control-flow
 - https://mastra.ai/docs/agents/overview

@@ -17,7 +17,8 @@
     "delivery": "tsx scripts/delivery.ts",
     "review:dev": "npm --prefix web run dev",
     "review:build": "npm --prefix web run build",
-    "review:preview": "npm --prefix web run preview"
+    "review:preview": "npm --prefix web run preview",
+    "eval:product-skills": "tsx scripts/product-skill-eval.ts"
   },
   "dependencies": {
     "@mastra/ai-sdk": "1.11.3",
