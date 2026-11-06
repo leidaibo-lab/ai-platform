@@ -1,4 +1,5 @@
 import { Mastra } from '@mastra/core';
+import { ConsoleLogger } from '@mastra/core/logger';
 import { LibSQLStore } from '@mastra/libsql';
 import type { PracticeConfig } from './config.js';
 import { createAgents } from './agents/index.js';
@@ -16,7 +17,9 @@ export function createApplicationOptions(config: PracticeConfig) {
   const deliveryWorkflow = createDeliveryWorkflow(agents, config.mode);
   const revisionWorkflow = createRevisionWorkflow(agents, config.mode);
   return {
-    agents, workflows: { deliveryWorkflow, revisionWorkflow }, storage, logger: false as const,
+    agents, workflows: { deliveryWorkflow, revisionWorkflow }, storage,
+    // 复用框架原生日志，向服务进程输出 info/warn/error，便于定位执行失败。
+    logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
     server: { host: '127.0.0.1', port: config.port, apiRoutes: createReviewRoutes({ deliveryWorkflow, revisionWorkflow, config }) },
   };
 }

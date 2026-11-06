@@ -57,6 +57,8 @@ npm run dev
 
 `npm run dev` 是前台常驻服务，体验 Studio 时需保持该进程运行；在对应终端按 Ctrl+C 才会停止。smoke、test 和 build 完成后不会持续提供 Studio 服务。若页面出现 “Failed to load studio”，先检查 `http://127.0.0.1:4111/api/agents` 是否可访问；连接被拒绝时重新启动 dev，再刷新页面。
 
+Studio/API 与交接 CLI 的共享应用装配已启用 Mastra 原生 `ConsoleLogger`，级别为 `info`，输出 info、warn、error 到进程的标准输出/错误。当前后台 Studio 的输出追加到 `.data/live/studio-dev.log`，可用 `tail -f .data/live/studio-dev.log` 实时查看；直接前台运行时在启动终端查看。日志文件由启动方式重定向产生，Logger 本身不负责写文件、轮转或在 Studio 中保存日志。框架错误可能带上游响应和业务输入，对外分享前需脱敏；历史失败不会因开启 Logger 自动补写。独立开发执行与产品 Skill 评测入口仍使用各自装配，不随此配置启用日志。
+
 如果接口已返回 HTTP 200，但 Studio 仍提示无法连接 `http://127.0.0.1:4111`，将浏览器地址统一为 `http://127.0.0.1:4111`，避免页面使用 `localhost`、连接目标却使用 `127.0.0.1`。2026-11-03 内置浏览器出现过这一现象，统一地址后 Agent 列表恢复，无需重启服务或重填密钥；尚未定位到具体浏览器限制。
 
 默认 `fixture` 模式，无需密钥，不请求外部模型。打开 `http://127.0.0.1:4111`，在 Studio 的 Agents 中选择 `minimal-agent`，输入“调用 practiceInfo，说明本实践范围”。原生工具返回框架名称、学习范围及 `deploymentExecuted: false`，Agent 随后输出终答。generate 和 Studio 使用的 stream 都经过测试。
