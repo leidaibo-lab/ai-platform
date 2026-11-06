@@ -61,4 +61,12 @@ Seatbelt 是本地进程约束，不等于容器/VM资源隔离；初版固定30
 
 ## 验收与完成报告
 
+### 2026-11-06 续办修复
+
+维持原生Workflow/Store及文件检查点Adapter方案，不新增调度器或依赖。架构方案生成完成后将route恢复为all，只有新的架构阻塞/自检路由才触发重规划；completedTasks继续负责失败任务接续，避免额外维护平行进度状态。执行身份作为Workflow状态保存并绑定方案及恢复hash，端点归一化后只存摘要；审批、接续和澄清入口共用校验，缺失身份的旧快照不能自动迁移或恢复。
+
+评测入口校验合成证据与规范正文hash，真实产品来源仍从持久化产品批准派生。安全错误模块只从SDK异常读取白名单name/code/status/cause，抛给调用边界的是固定分类且不附原始cause；任务图语义错误使用SyntaxError归类。真实SDK503/连接重置复验发现原生默认error processor额外重试，因此同时设maxRetries=0、maxProcessorRetries=0，只保留已有Adapter的一次检查点重试。99/99实践回归、类型检查及OpenSpec strict通过；新真实模型批次与剩余边界见[续办记录](../../practices/mastra/evaluations/development/continuation-2026-11-06.md)。
+
+数据结构沿用DevelopmentState，新增可空executionIdentity以读取历史结果，非空身份是继续执行的不变量。错误分类为有限枚举；角色返回值、身份校验和外部I/O分离，分别落实单一职责与边界隔离。复用原生路由和completedTasks而非增加恢复调度层，保持KISS；统一来源与身份校验避免审批/接续规则分叉。维护者仍为本实践维护者；出现外部副作用、多实例或升级旧快照迁移需求时重评原决策。
+
 实现与回归已完成，48项旧版真实模型 pilot、修复版完整48项及两例歧义补验均记于[观察报告](../../practices/mastra/evaluations/development/observations-2026-11-06.md)。修复版为24次交付断言通过、18次澄清、6次模型/网络失败，人评0/48，能力未准入；原始存在伪造检查路径的批次不能作为 Agent 能力准入依据。重跑后补充的架构阻塞上下文仅完成确定性回归，未单独验证真实模型收益。

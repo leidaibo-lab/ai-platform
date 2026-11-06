@@ -12,7 +12,7 @@ import {spawn} from 'node:child_process';
 import {parseArgs} from 'node:util';
 import {DevelopmentExecution} from '../src/development-execution.js';
 import {generateDevelopment,parseDevelopmentJson} from '../src/development/agents.js';
-import {architectureSchema,developmentHash,validateArchitecture,type DevelopmentState} from '../src/development/contracts.js';
+import {architectureSchema,developmentExecutionIdentity,developmentHash,validateArchitecture,type DevelopmentState} from '../src/development/contracts.js';
 import {readConfig} from '../src/mastra/config.js';
 
 const root=resolve(fileURLToPath(new URL('..',import.meta.url)));
@@ -48,7 +48,9 @@ function treeHashes(directory:string,prefix=''):Record<string,string> {
 
 /** CLI严格限制新输出目录；reference与agent永不覆盖同一批次。 */
 async function main():Promise<void> {
-  const {values}=parseArgs({options:{source:{type:'string',default:'reference'},live:{type:'boolean',default:false},out:{type:'string'}}});
+  const {values}=parseArgs({options:{source:{type:'string',default:'reference'},live:{type:'boolean',default:false},out:{type:'string'},'docker-context':{type:'string',default:'colima'}}});
+  const dockerContext=values['docker-context']!;
+  if(!/^[a-zA-Z0-9_.-]+$/.test(dockerContext)) throw new Error('Docker context名称不合法');
   if(!['reference','agent'].includes(values.source!)) throw new Error('source仅支持reference或agent');
   if(values.source==='agent'&&!values.live) throw new Error('agent来源必须显式--live');
   const directory=resolve(root,values.out??`.data/evaluations/development-stack-${values.source}-${Date.now()}`);
@@ -63,7 +65,7 @@ async function main():Promise<void> {
   const compose=['compose','--project-name',project,'--file',resolve(assets,'compose.yaml')];
   const commands:unknown[]=[];
   const report:Record<string,unknown>={source:values.source==='agent'?'live-agent-with-host-scaffold':'host-reference',capabilityAdmission:null,humanScore:null,browserInteraction:'not-executed',outcome:'running',cleanup:false};
-  save(resolve(directory,'manifest.json'),{version:'ticket-stack-pilot.v1',createdAt:new Date().toISOString(),source:report.source,inputHash:developmentHash(input),hostScaffold:baseline,toolingHashes:{dockerfile:developmentHash(readFileSync(resolve(assets,'Dockerfile'),'utf8')),compose:developmentHash(readFileSync(resolve(assets,'compose.yaml'),'utf8')),runner:developmentHash(readFileSync(fileURLToPath(import.meta.url),'utf8'))},dockerContext:'colima',project,image:tag,node:process.version,nonGoals:['独立测试阶段','生产部署','多案例能力准入','人工评分']});
+  save(resolve(directory,'manifest.json'),{version:'ticket-stack-pilot.v1',createdAt:new Date().toISOString(),source:report.source,inputHash:developmentHash(input),hostScaffold:baseline,toolingHashes:{dockerfile:developmentHash(readFileSync(resolve(assets,'Dockerfile'),'utf8')),compose:developmentHash(readFileSync(resolve(assets,'compose.yaml'),'utf8')),runner:developmentHash(readFileSync(fileURLToPath(import.meta.url),'utf8'))},dockerContext,project,image:tag,node:process.version,nonGoals:['独立测试阶段','生产部署','多案例能力准入','人工评分']});
   /** 只有组织者可调用固定Docker argv；不传递模型凭据，不挂载宿主目录。 */
   async function docker(label:string,args:string[],timeout=600000):Promise<string> {
     const path=resolve(directory,label+'.log');
@@ -71,7 +73,7 @@ async function main():Promise<void> {
     try {
       // 子进程只执行当前组织者固定的Docker命令。
       output=await new Promise<string>((done,fail)=>{
-        const processHandle=spawn('docker',['--context','colima',...args],{env:{PATH:process.env.PATH,HOME:process.env.HOME,DOCKER_CONFIG:process.env.DOCKER_CONFIG,TMPDIR:process.env.TMPDIR,STACK_IMAGE:tag},stdio:['ignore','pipe','pipe'],timeout});
+        const processHandle=spawn('docker',['--context',dockerContext,...args],{env:{PATH:process.env.PATH,HOME:process.env.HOME,DOCKER_CONFIG:process.env.DOCKER_CONFIG,TMPDIR:process.env.TMPDIR,STACK_IMAGE:tag},stdio:['ignore','pipe','pipe'],timeout});
         let captured='';
         /** 固定构建日志有上限，超限直接终止并判失败。 */
         function record(chunk:Buffer):void { const text=chunk.toString(); appendFileSync(path,text,{mode:0o600}); captured+=text; if(Buffer.byteLength(captured)>4000000) processHandle.kill('SIGKILL'); }
@@ -82,9 +84,10 @@ async function main():Promise<void> {
         processHandle.once('close',(exit)=>{code=exit; if(exit===0) done(captured); else fail(new Error(label+'失败'));});
       });
       return output;
-    } finally { commands.push({label,argv:['docker','--context','colima',...args],exitCode:code,elapsedMs:Date.now()-started}); save(resolve(directory,'commands.json'),commands); }
+    } finally { commands.push({label,argv:['docker','--context',dockerContext,...args],exitCode:code,elapsedMs:Date.now()-started}); save(resolve(directory,'commands.json'),commands); }
   }
   try {
+    report.phase='environment'; await docker('engine',['info','--format','{{.ServerVersion}}'],30000);
     report.phase='generation';
     if(values.source==='reference') {
       for(const path of input.writablePaths) copyFileSync(resolve(assets,'reference',path.split('/').at(-1)!),resolve(candidate,path));
@@ -95,7 +98,7 @@ async function main():Promise<void> {
       try {
         const files:Record<string,string>={};
         for(const path of ['package.json','api/database.ts','api/main.ts','prisma/schema.prisma',...input.writablePaths]) files[path]=readFileSync(resolve(candidate,path),'utf8');
-        let state:DevelopmentState={input:{source:{kind:'evaluation',runId:project,hash:developmentHash(input.requirement),content:input.requirement,evidence:'evaluation-input'},project:{id:'ticket-stack',files,writablePaths:input.writablePaths,checkFiles:[],roles:['backend','frontend']},maxReworks:0},mode:'live',plan:null,planHash:null,planSourceHash:null,approvedHash:null,reviews:[],round:0,route:'all',work:[],checks:[],history:[],outcome:'in-progress',delivery:null,checkpointHash:null,completedTasks:[],faults:[],recovery:null,recoveries:[]};
+        let state:DevelopmentState={input:{source:{kind:'evaluation',runId:project,hash:developmentHash(input.requirement),content:input.requirement,evidence:'evaluation-input'},project:{id:'ticket-stack',files,writablePaths:input.writablePaths,checkFiles:[],roles:['backend','frontend']},maxReworks:0},mode:'live',executionIdentity:developmentExecutionIdentity(config),plan:null,planHash:null,planSourceHash:null,approvedHash:null,reviews:[],round:0,route:'all',work:[],checks:[],history:[],outcome:'in-progress',delivery:null,checkpointHash:null,completedTasks:[],faults:[],recovery:null,recoveries:[]};
         const architecture=await generateDevelopment(config,'architect',execution,state);
         const plan=architectureSchema.parse(parseDevelopmentJson(architecture.text)); validateArchitecture(plan,state.input);
         state={...state,plan,planHash:developmentHash(plan),work:[architecture]};

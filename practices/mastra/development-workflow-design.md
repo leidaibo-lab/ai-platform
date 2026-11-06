@@ -116,7 +116,9 @@
 
 ## 开发执行入口
 
-当前实现了澄清新版本入口、单角色文件快照回滚、单次瞬时重试、原生暂停和一次人工恢复，并以本地fixture验证。真实产品版本来源门禁通过独立回归。此功能仍为试点：独立审阅发现架构返工后的故障接续可能重放已完成任务；evaluation来源hash/evidence和恢复modelId/endpoint未充分绑定；Agent结果错误类别也有丢失。结构错误及架构语义校验的分类仍待修。详情和续办项见[中断复测TODO](./evaluations/development/observations-2026-11-06.md#v3复测中断与续办todo)。在这些问题修复并复测前，不应将故障恢复描述为可用于正式开发；新Run应使用未漂移的原输入和模型配置，所有恢复均需重新检查。
+当前实现了澄清新版本入口、单角色文件快照回滚、单次瞬时重试、原生暂停和一次人工恢复。续办修复已通过99项实践回归：架构返工后清除重规划标记，接续时沿用已完成任务；方案与恢复hash绑定执行身份（mode、modelId、规范化endpoint摘要），模型或端点漂移拒绝且保留暂停点，API key可单独轮转。旧快照没有执行身份时仍可查看，但不得推测身份继续审批/恢复，需新建Run。
+
+评测自动批准同时校验evaluation类型、evaluation-input证据和正文hash，真实产品不能借用合成来源入口。SDK返回finishReason=error时只提取白名单类型/code/status并转为安全分类，原始异常不附加cause；架构结构与任务图语义错误统一归类invalid-output，只调用一次后暂停。Mastra默认错误处理器也会重试，故同时固定SDK maxRetries=0和maxProcessorRetries=0，临时故障只由文件检查点Adapter最多重试一次。真实SDK本地401、503和连接重置已验证分类、HTTP请求次数及日志脱敏。完整实测与待办见[续办记录](./evaluations/development/continuation-2026-11-06.md)；原v3中断批次保留，不回写成绩。当前仍为受控试点，不构成正式开发或整栈准入。
 
 在本实践目录使用 Node.js 24+，创建项目 manifest：`id`、`files`（相对路径到脱敏源码/公开检查内容的映射）、`writablePaths`、`checkFiles`、`roles`（frontend/backend及按需infrastructure）。检查文件必须存在且不可写；当前执行命令仅 Node 语法检查和登记的 node:test。
 

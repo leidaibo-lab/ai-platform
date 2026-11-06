@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { developmentCasesSchema, developmentOracleSchema, runDevelopmentTrial, summarizeDevelopment, type DevelopmentTrial } from '../src/development-evaluation.js';
-import { developmentHash } from '../src/development/contracts.js';
+import { developmentExecutionIdentity, developmentHash } from '../src/development/contracts.js';
 import { readConfig } from '../src/mastra/config.js';
 import { developmentInstructions } from '../src/development/agents.js';
 
@@ -60,8 +60,8 @@ async function main(): Promise<void> {
   for (let round = 1; round <= rounds; round++) for (const item of cases) trials.push({ id: `${item.id}-r${round}`, caseId: item.id, expectedOutcome: item.expectedOutcome, round, mode: config.mode, status: 'not-started', runId: null, elapsedMs: null, failure: null, state: null, hidden: null,
     review: { reviewer: null, dimensions: { traceability: null, architecture: null, correctness: null, evidence: null, securityData: null, reviewability: null }, evidence: {}, hardFailures: [], highDefects: [] } });
   const sourceHashes: Record<string, string> = {};
-  for (const path of ['src/development-evaluation.ts', 'src/development-service.ts', 'src/development-execution.ts', 'src/development/agents.ts', 'src/development/contracts.ts', 'src/development/recovery.ts', 'src/mastra/workflows/development.ts', 'scripts/development-eval.ts', 'package-lock.json']) sourceHashes[path] = developmentHash(readFileSync(resolve(root, path), 'utf8'));
-  save(resolve(directory, 'manifest.json'), { version: 'development-evaluation.v1', createdAt: new Date().toISOString(), mode: config.mode, requestedModel: config.modelId, gitRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), nodeVersion: process.version, selectedCases: ids, rounds, inputHash: developmentHash(inputs), oracleHash: developmentHash(oracle), rubricHash: developmentHash(readFileSync(resolve(assets, 'rubric.json'), 'utf8')), sourceHashes, instructions: developmentInstructions, maxStepsPerRole: 12, maxAutomaticRetriesPerRole: 1, manualRecoveryInBenchmark: false, concurrency, approval: 'evaluation-policy (not human approval)', scope: '离线Node函数切片；不是Next/Nest/PostgreSQL整栈质量结论' });
+  for (const path of ['src/development-evaluation.ts', 'src/development-service.ts', 'src/development-execution.ts', 'src/development/agents.ts', 'src/development/contracts.ts', 'src/development/recovery.ts', 'src/development/errors.ts', 'src/mastra/config.ts', 'src/mastra/workflows/development.ts', 'scripts/development-eval.ts', 'package-lock.json']) sourceHashes[path] = developmentHash(readFileSync(resolve(root, path), 'utf8'));
+  save(resolve(directory, 'manifest.json'), { version: 'development-evaluation.v1', createdAt: new Date().toISOString(), mode: config.mode, requestedModel: config.modelId, executionIdentity: developmentExecutionIdentity(config), gitRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), nodeVersion: process.version, selectedCases: ids, rounds, inputHash: developmentHash(inputs), oracleHash: developmentHash(oracle), rubricHash: developmentHash(readFileSync(resolve(assets, 'rubric.json'), 'utf8')), sourceHashes, instructions: developmentInstructions, maxStepsPerRole: 12, maxAutomaticRetriesPerRole: 1, sdkRetries: 0, processorRetries: 0, manualRecoveryInBenchmark: false, concurrency, approval: 'evaluation-policy (not human approval)', scope: '离线Node函数切片；不是Next/Nest/PostgreSQL整栈质量结论' });
   save(resolve(directory, 'trials.json'), trials);
   console.log(JSON.stringify({ directory, planned: trials.length, mode: config.mode }));
   let nextIndex = 0;

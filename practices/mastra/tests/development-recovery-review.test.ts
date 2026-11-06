@@ -1,11 +1,4 @@
-/**
- * TODO：独立审阅发现的恢复/来源门禁回归，按用户要求暂缓修复。
- * 停用文件为 development-recovery-review.test.ts.todo，默认 npm test/tsc 不加载。
- * 激活：将本文件重命名为 development-recovery-review.test.ts；修复相关核心后运行：
- * npm exec -- tsx --test tests/development-recovery-review.test.ts
- * 当前证据：6项中mode漂移通过，其余5项预期红（架构返工后恢复重放、非法evidence、
- * 非法hash、modelId漂移、baseUrl漂移）。禁止把停用视为问题已修复。
- */
+/** 独立审阅发现的恢复与来源门禁回归，使用真实原生 Workflow 暂停和持久化。 */
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,8 +6,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import type { PracticeConfig } from '../src/mastra/config.js';
-import { developmentHash, developmentInputSchema, developmentStateSchema, type DevelopmentInput } from '../src/development/contracts.js';
-import { developmentStatus, openDevelopment, recoverDevelopment, seedDevelopment, type DevelopmentApplication } from '../src/development-service.js';
+import { developmentExecutionIdentity, developmentHash, developmentInputSchema, developmentStateSchema, type DevelopmentInput } from '../src/development/contracts.js';
+import { developmentStatus, openDevelopment, recoverDevelopment, reviewDevelopment, seedDevelopment, type DevelopmentApplication } from '../src/development-service.js';
 import { generateDevelopment } from '../src/development/agents.js';
 import type { DevelopmentGenerator } from '../src/development/recovery.js';
 
@@ -31,12 +24,12 @@ function input(): DevelopmentInput {
 }
 
 /** 每次运行独占原生Store与候选目录，清理不触及正在执行的live批次。 */
-async function fixture(check: (app: DevelopmentApplication, directory: string, config: PracticeConfig) => Promise<void>, generate: DevelopmentGenerator, data = input()): Promise<void> {
+async function fixture(check: (app: DevelopmentApplication, directory: string, config: PracticeConfig) => Promise<void>, generate: DevelopmentGenerator, data = input(), automatic = true): Promise<void> {
   const parent = mkdtempSync(resolve(tmpdir(), 'development-recovery-review-'));
   const directory = resolve(parent, 'run');
   const config: PracticeConfig = { rootDir: practiceRoot, mode: 'fixture', databaseUrl: `file:${resolve(parent, 'unused.db')}`, port: 4111, modelId: 'openai/original-fixture-model', baseUrl: 'http://127.0.0.1/original-fixture' };
   seedDevelopment(directory, data);
-  const app = openDevelopment(config, directory, true, generate);
+  const app = openDevelopment(config, directory, automatic, generate);
   try { await app.storage.init(); await check(app, directory, config); }
   finally { await app.execution.close(); await app.storage.close(); rmSync(parent, { recursive: true, force: true }); }
 }
@@ -55,6 +48,65 @@ async function recovery(app: DevelopmentApplication, runId: string) {
 
 /** 人工接续只使用测试身份标签与当前恢复hash。 */
 function retry(hash: string) { return { hash, decision: 'retry' as const, reviewer: 'fixture-review-owner', comment: '确认离线fixture安全检查点。' }; }
+
+// URL等价写法不制造漂移，凭据不属于持久化身份。
+test('执行身份归一化端点且不持久化凭据，支持key轮转', () => {
+  const config: PracticeConfig = { rootDir: practiceRoot, mode: 'live', databaseUrl: 'file:unused', port: 4111, modelId: 'openai/model', apiKey: 'synthetic-original-key', baseUrl: 'https://EXAMPLE.com:443/v1/' };
+  const identity = developmentExecutionIdentity(config);
+  assert.deepEqual(identity, developmentExecutionIdentity({ ...config, apiKey: 'synthetic-rotated-key', baseUrl: 'https://example.com/v1' }));
+  assert.notEqual(identity.endpointHash, developmentExecutionIdentity({ ...config, baseUrl: 'https://example.com/other' }).endpointHash);
+  assert.doesNotMatch(JSON.stringify(identity), /synthetic|example\.com|https/);
+});
+
+// 原生暂停状态重开后，单独更换key仍可接续，不会放行模型身份变化。
+test('故障恢复允许凭据轮转且沿用已保存执行身份', async () => {
+  /** 第一次应用只制造网络错误，以便重新打开同一原生暂停点。 */
+  const timeout: DevelopmentGenerator = async () => { throw Object.assign(new Error('synthetic-error'), { code: 'ECONNRESET' }); };
+  // 同一输入/模型/端点重开，仅替换API key。
+  await fixture(async (app, directory, config) => {
+    const run = await app.workflow.createRun();
+    await run.start({ inputData: app.input });
+    const before = await recovery(app, run.runId);
+    await app.execution.close(); await app.storage.close();
+    const reopened = openDevelopment({ ...config, apiKey: 'synthetic-rotated-key' }, directory, true);
+    try {
+      await reopened.storage.init();
+      assert.equal((await recoverDevelopment(reopened, run.runId, retry(before.recovery!.hash))).status, 'success');
+      const state = (await developmentStatus(reopened, run.runId)).result!;
+      assert.equal(state.outcome, 'development-delivered');
+      assert.deepEqual(state.executionIdentity, before.executionIdentity);
+      assert.doesNotMatch(JSON.stringify(state), /synthetic-rotated-key/);
+    } finally { await reopened.execution.close(); await reopened.storage.close(); }
+  }, timeout);
+});
+
+// 身份门禁同样保护人工方案确认，拒绝请求不消耗原生暂停点。
+test('方案审批拒绝模型和端点漂移，原身份可继续确认', async () => {
+  // 持久化后逐个更改身份，再用原配置完成方案确认。
+  await fixture(async (app, directory, config) => {
+    const run = await app.workflow.createRun();
+    await run.start({ inputData: app.input });
+    const before = await developmentStatus(app, run.runId);
+    const pending = before.steps?.['development-iteration.approve-architecture'];
+    assert.ok(pending && !Array.isArray(pending));
+    const state = developmentStateSchema.parse(pending.payload);
+    const approval = { ...retry(state.planHash!), decision: 'approve' };
+    await app.execution.close(); await app.storage.close();
+    for (const change of [{ modelId: 'openai/changed' as const }, { baseUrl: 'https://example.com/changed' }]) {
+      const changed = openDevelopment({ ...config, ...change }, directory);
+      try {
+        await changed.storage.init();
+        await assert.rejects(reviewDevelopment(changed, run.runId, approval), /身份/);
+        assert.equal((await developmentStatus(changed, run.runId)).status, 'suspended');
+      } finally { await changed.execution.close(); await changed.storage.close(); }
+    }
+    const restored = openDevelopment(config, directory);
+    try {
+      await restored.storage.init();
+      assert.equal((await reviewDevelopment(restored, run.runId, approval)).status, 'success');
+    } finally { await restored.execution.close(); await restored.storage.close(); }
+  }, generateDevelopment, input(), false);
+});
 
 // 新方案获批并完成实现后，自检故障接续不能再次生成方案或重放已完成实现。
 test('架构返工后自检故障恢复只重试自检，不重新规划或实现', async () => {

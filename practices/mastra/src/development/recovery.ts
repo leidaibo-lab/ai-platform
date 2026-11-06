@@ -5,26 +5,12 @@ import { generateDevelopment } from './agents.js';
 import { developmentHash, type DevelopmentRole, type DevelopmentState } from './contracts.js';
 
 export type DevelopmentGenerator = typeof generateDevelopment;
-type FaultKind = DevelopmentState['faults'][number]['kind'];
-
-/** 只检查错误类型、状态和 code；从不把原始异常、请求正文或 URL 持久化。 */
-export function classifyDevelopmentError(error: unknown): FaultKind {
-  let current = error;
-  for (let depth = 0; depth < 5 && current && typeof current === 'object'; depth++) {
-    const value = current as { name?: unknown; code?: unknown; statusCode?: unknown; cause?: unknown };
-    if (typeof value.name === 'string' && /timeout|abort/i.test(value.name)) return 'model-timeout';
-    if (typeof value.code === 'string' && /^(ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT)$/.test(value.code)) return 'model-timeout';
-    if (typeof value.code === 'string' && /^(ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|EPIPE|UND_ERR_SOCKET)$/.test(value.code)) return 'model-network';
-    if (typeof value.statusCode === 'number' && (value.statusCode === 429 || value.statusCode >= 500)) return 'model-network';
-    if (typeof value.name === 'string' && /Zod|SyntaxError|NoObjectGenerated|Invalid.*Output|TypeValidation/.test(value.name)) return 'invalid-output';
-    current = value.cause;
-  }
-  return 'model-error';
-}
+import { classifyDevelopmentError } from './errors.js';
+export { classifyDevelopmentError } from './errors.js';
 
 /** 恢复确认绑定当前输入、方案、失败次数和文件检查点，旧确认不能重用。 */
 export function developmentRecoveryHash(state: DevelopmentState, checkpointHash: string): string {
-  return developmentHash({ input: state.input, mode: state.mode, planHash: state.planHash, approvedHash: state.approvedHash, completedTasks: state.completedTasks, faults: state.faults, recoveries: state.recoveries, checkpointHash });
+  return developmentHash({ input: state.input, mode: state.mode, executionIdentity: state.executionIdentity, planHash: state.planHash, approvedHash: state.approvedHash, completedTasks: state.completedTasks, faults: state.faults, recoveries: state.recoveries, checkpointHash });
 }
 
 /** 恢复精确白名单内的部分文件写入；任何额外漂移均失败关闭而非掩盖异常。 */

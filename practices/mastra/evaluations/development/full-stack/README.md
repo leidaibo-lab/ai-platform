@@ -9,13 +9,15 @@
 ```bash
 node --import tsx scripts/development-stack-eval.ts --source reference
 node --import tsx scripts/development-stack-eval.ts --source agent --live
+# 使用本机已存在的其他Docker context时显式指定，不切换全局context。
+node --import tsx scripts/development-stack-eval.ts --source agent --live --docker-context desktop-linux
 ```
 
 每次新建 `.data/evaluations/development-stack-*`；包含初始装配hash、模型角色/原生工具事实、实际命令/退出码/原始日志、代码hash、API断言、重启持久化与清理结果。独立package/lock位于project，不修改Mastra依赖。
 
 默认仅验证API编译、Next生产构建、真实Prisma迁移、创建/列表/非法输入、Next HTTP与API代理、API/数据库重启持久化。没有实际浏览器交互则明确`not-executed`，不能从HTTP响应推断表单可用或可访问性通过。人工分数与能力准入保持null。主持基准通过只证明环境，不冒充Agent通过；Agent单次通过也不是整个技术栈或研发流程准入。
 
-Compose运行网络为internal，只使用合成数据库且没有宿主挂载；Docker构建需要公共依赖下载。退出清理本次项目容器、网络、卷与镜像。脚本始终显式`--context colima`，不切换全局context、不停止Colima。
+Compose运行网络为internal，只使用合成数据库且没有宿主挂载；Docker构建需要公共依赖下载。退出清理本次项目容器、网络、卷与镜像。脚本显式指定Docker context，默认colima，可用`--docker-context`选择本机已有引擎；实际值写入manifest和命令证据。生成前先检查引擎可用性，不切换全局context、不停止引擎。
 
 ## 2026-11-06 主持基准实测
 
@@ -29,10 +31,18 @@ Compose运行网络为internal，只使用合成数据库且没有宿主挂载�
 
 ## 后续TODO
 
-- [ ] 在开发恢复缺口修复及v3完整复测后，与主评测错开的窗口显式运行 `--source agent --live`，新建`development-stack-agent-v1-*`目录；不复用或回写reference结果。
-- [ ] 记录真实架构/前后端角色调用、三个TS文件差异、工具事实、代码hash和固定容器检查；失败保留，不用主持参考实现替换。
+- [x] 在开发恢复缺口修复及v3完整复测后，与主评测错开的窗口显式运行 `--source agent --live`，新建`development-stack-agent-v1-*`目录；不复用或回写reference结果。
+- [x] 记录真实架构/前后端角色调用、三个TS文件差异、工具事实、代码hash和容器构建失败；不使用主持参考实现替换。
+- [ ] 镜像仓库可用后，以保存的同一Agent候选独立补容器构建、迁移、API与持久化验收；agent-v1原报告保持失败。
 - [ ] 单独补真实浏览器表单、加载/错误/空状态与可访问性验证；未运行前继续保持`not-executed`。
 - [ ] 由独立负责人审阅Agent产物；单案例不能给出整栈或完整研发Workflow准入结论。
 - [ ] 如扩大到迁移设计、鉴权、并发或部署，先新建需求与隔离/评测决策；当前主持schema/迁移/装配不能计为模型能力。
 
-按用户要求此处收尾，未启动Agent live。临时容器/卷/网络/候选镜像已清理；主Agent已将Docker context恢复为default并停止本轮启动的Colima。后续运行需显式启动Colima；依赖镜像缓存保留以便接续。
+上述主持基准的历史收尾时未启动Agent live。临时容器/卷/网络/候选镜像已清理；主Agent已将Docker context恢复为default并停止本轮启动的Colima。后续运行需显式启动Colima；依赖镜像缓存保留以便接续。
+
+
+## 2026-11-06 续办agent-v1实测
+
+在完整v3函数切片48项结束后，用Node24.22.1及显式`--docker-context desktop-linux`运行`.data/evaluations/development-stack-agent-v1-2026-11-06/`。真实架构1次、后端2次、前端1次，均返回gpt-6-astra；三次实际writeFile仅修改两个API文件和页面，固定装配hash未变。候选源码hash为`eac8ec99dd81c7b2d163bec56f972579be1eb95c73431d607760135a8b29112d`，差异、模型工具事实、commands与原始日志均保留。
+
+本轮在Docker Hub匿名token TCP连接超时处失败，尚未开始依赖安装或候选编译；`phase=build/outcome=failed/cleanup=true`。迁移、HTTP、重启持久化及浏览器均未执行，无法与host-reference-v4比较功能结果。预取镜像首轮TLS/short-read失败及后台预取终止也完整保存；不把环境失败判作Agent代码错误，不把生成结束判作整栈通过。本次项目容器/网络/卷/候选镜像复核无遗留，全局context和既有引擎未更改。完整统计与续办方式见[续办记录](../continuation-2026-11-06.md)。

@@ -123,7 +123,7 @@ tests/product.test.ts            四角色、返工上限、故障隔离、进�
 
 本期只建设产品确认后的开发阶段。独立 [development 入口](./development-workflow-design.md#开发执行入口)使用原生 Workflow 执行架构确认、按文件任务实现、真实开发自检、有界返工和研发交付包；首版为离线 Node ESM 受控切片。[能力评测](./evaluations/development/README.md)覆盖24案例，固定控制流、真实模型行为与人工质量评分分别报告；[2026-11-06 pilot 观察](./evaluations/development/observations-2026-11-06.md)保留48项原始结果、执行器缺陷及能力未准入结论。截图候选技术栈的整栈能力尚未验收。独立测试阶段不在本期范围内。
 
-按用户要求，剩余研发修复与复测已暂停并整理为[续办TODO](./evaluations/development/observations-2026-11-06.md#v3复测中断与续办todo)：先修复已复现的恢复/来源门禁问题，再执行新的完整48项v3计划，最后补全栈Agent产出、浏览器与独立人评。当前v3中断记录和预期失败回归保留；[主持全栈基准v4](./evaluations/development/full-stack/README.md#2026-11-06-主持基准实测)单独登记，不代表Agent能力通过。
+研发工作已按[续办TODO](./evaluations/development/observations-2026-11-06.md#v3复测中断与续办todo)恢复推进。恢复重放、执行身份、评测来源、错误分类及隐式重试缺口已修复，保留回归已激活，完整实践99/99通过。新v3全量48项为41交付、6澄清、1模型故障；整栈Agent已生成三文件候选，构建受Docker Hub token超时阻塞。完整证据见[续办记录](./evaluations/development/continuation-2026-11-06.md)。原v3中断记录保留；[主持全栈基准v4](./evaluations/development/full-stack/README.md#2026-11-06-主持基准实测)单独登记，不代表Agent能力通过。独立人评和能力准入仍未完成。
 
 本轮实现的是**交接提案和人工确认**：产品文档 → 产品确认 → 代码提案 → 开发确认 → 测试计划 → 测试确认 → 部署方案 → 运维确认。确认当前交接物后才生成下一份；任一阶段拒绝立即结束本轮。
 

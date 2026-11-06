@@ -6,7 +6,7 @@ import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
 import type { PracticeConfig } from '../config.js';
 import type { DevelopmentExecution } from '../../development-execution.js';
-import { architectureSchema, developmentHash, developmentInputSchema, developmentReviewSchema, developmentStateSchema, recoveryReviewSchema, validateArchitecture, type DevelopmentState } from '../../development/contracts.js';
+import { architectureSchema, developmentExecutionIdentity, developmentHash, developmentInputSchema, developmentReviewSchema, developmentStateSchema, recoveryReviewSchema, validateArchitecture, validateDevelopmentIdentity, validateEvaluationSource, type DevelopmentState } from '../../development/contracts.js';
 import { generateDevelopment, parseDevelopmentJson } from '../../development/agents.js';
 import { developmentRecoveryHash, invokeDevelopment, type DevelopmentGenerator } from '../../development/recovery.js';
 
@@ -14,12 +14,16 @@ import { developmentRecoveryHash, invokeDevelopment, type DevelopmentGenerator }
 export function createDevelopmentWorkflow(config: PracticeConfig, execution: DevelopmentExecution, evaluationPolicy = false, generate: DevelopmentGenerator = generateDevelopment) {
   const initialize = createStep({ id: 'initialize-development', inputSchema: developmentInputSchema, outputSchema: developmentStateSchema,
     // 调用者不能伪造已批准方案、检查报告或研发终态。
-    execute: async ({ inputData }) => developmentStateSchema.parse({ input: inputData, mode: config.mode, plan: null, planHash: null, planSourceHash: null, approvedHash: null, reviews: [], round: 0, route: 'all', work: [], checks: [], history: [], outcome: 'in-progress', delivery: null }),
+    execute: async ({ inputData }) => {
+      if (evaluationPolicy) validateEvaluationSource(inputData);
+      return developmentStateSchema.parse({ input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), plan: null, planHash: null, planSourceHash: null, approvedHash: null, reviews: [], round: 0, route: 'all', work: [], checks: [], history: [], outcome: 'in-progress', delivery: null });
+    },
   });
   const architecture = createStep({ id: 'architecture', inputSchema: developmentStateSchema, outputSchema: developmentStateSchema,
     // 方案需要显式JSON和真实任务图，架构分析不授予实现权限。
     execute: async ({ inputData }) => {
       if (inputData.outcome !== 'in-progress' || inputData.recovery || (inputData.plan && inputData.route !== 'architecture')) return inputData;
+      validateDevelopmentIdentity(inputData, config);
       const before = developmentHash(await execution.snapshot());
       const called = await invokeDevelopment(config, 'architect', execution, inputData, [], null, generate,
         // 在受控调用内校验模型结构，失败也保留归类和回滚事实。
@@ -30,14 +34,15 @@ export function createDevelopmentWorkflow(config: PracticeConfig, execution: Dev
       validateArchitecture(plan, inputData.input);
       const planSourceHash = developmentHash(await execution.snapshot());
       if (before !== planSourceHash) throw new Error('方案生成期间源码发生漂移');
-      const planHash = developmentHash({ source: inputData.input.source.hash, project: inputData.input.project, plan, planSourceHash });
-      return { ...state, plan, planHash, planSourceHash, approvedHash: null, completedTasks: [], work: [...state.work, entry], outcome: plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
+      const planHash = developmentHash({ source: inputData.input.source.hash, project: inputData.input.project, executionIdentity: state.executionIdentity, plan, planSourceHash });
+      return { ...state, plan, planHash, planSourceHash, approvedHash: null, route: 'all' as const, completedTasks: [], work: [...state.work, entry], outcome: plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
     },
   });
   const gate = createStep({ id: 'approve-architecture', inputSchema: developmentStateSchema, outputSchema: developmentStateSchema,
     suspendSchema: z.object({ hash: z.string(), plan: architectureSchema }), resumeSchema: developmentReviewSchema,
     // 组织者规则确认仅供隔离评测；正式路径必须暂停，不把用户授权实现误记为审批每份方案。
     execute: async ({ inputData, resumeData, suspend }) => {
+      validateDevelopmentIdentity(inputData, config);
       if (inputData.outcome !== 'in-progress' || inputData.recovery || inputData.approvedHash === inputData.planHash) return inputData;
       if (inputData.mode !== config.mode) throw new Error('开发模式变化');
       if (developmentHash(await execution.snapshot()) !== inputData.planSourceHash) throw new Error('批准前候选源码已变化');
@@ -54,6 +59,7 @@ export function createDevelopmentWorkflow(config: PracticeConfig, execution: Dev
     // 首版按拓扑顺序串行，返工只交给相应责任角色，跨层错误重新生成并批准方案。
     execute: async ({ inputData }) => {
       if (inputData.outcome !== 'in-progress' || inputData.recovery) return inputData;
+      validateDevelopmentIdentity(inputData, config);
       if (!inputData.plan || !inputData.approvedHash || inputData.approvedHash !== inputData.planHash) throw new Error('实现未获得当前方案批准');
       const expectedSource = inputData.checkpointHash ?? (inputData.route === 'architecture' || inputData.round === 0 ? inputData.planSourceHash : inputData.history.at(-1)?.sourceHash);
       if (expectedSource !== developmentHash(await execution.snapshot())) throw new Error('实现前源码与已批准或已检查版本不符');
@@ -74,6 +80,7 @@ export function createDevelopmentWorkflow(config: PracticeConfig, execution: Dev
     // 自检角色无写工具；最终放行依据来自再次固定执行，不相信模型的通过声明。
     execute: async ({ inputData }) => {
       if (inputData.outcome !== 'in-progress' || inputData.recovery) return inputData;
+      validateDevelopmentIdentity(inputData, config);
       if (inputData.route === 'architecture' && inputData.work.at(-1)?.text.includes('ARCHITECTURE_BLOCKER:'))
         return { ...inputData, round: inputData.round + 1, outcome: inputData.round >= inputData.input.maxReworks ? 'rework-exhausted' as const : 'in-progress' as const };
       const before = await execution.snapshot();
@@ -106,6 +113,7 @@ export function createDevelopmentWorkflow(config: PracticeConfig, execution: Dev
     // 只有已捕获、已回滚并持久化的故障可人工接续一次，不重放已完成任务。
     execute: async ({ inputData, resumeData, suspend }) => {
       if (inputData.outcome !== 'in-progress' || !inputData.recovery) return inputData;
+      validateDevelopmentIdentity(inputData, config);
       if (inputData.recoveries.length >= 1) return { ...inputData, outcome: 'manual-attention' as const };
       const checkpointHash = developmentHash(await execution.snapshot());
       if (checkpointHash !== inputData.recovery.checkpointHash || developmentRecoveryHash(inputData, checkpointHash) !== inputData.recovery.hash) throw new Error('恢复检查点发生漂移');

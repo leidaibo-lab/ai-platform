@@ -1,12 +1,12 @@
 /** 原生开发运行装配；业务入口必须验证已保存产品批准，不自动消费未确认提案。 */
 import { Mastra } from '@mastra/core';
 import { LibSQLStore } from '@mastra/libsql';
-import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { PracticeConfig } from './mastra/config.js';
 import { DevelopmentExecution } from './development-execution.js';
 import { createDevelopmentWorkflow } from './mastra/workflows/development.js';
-import { developmentHash, developmentInputSchema, developmentReviewSchema, developmentStateSchema, projectSchema, recoveryReviewSchema, type DevelopmentInput } from './development/contracts.js';
+import { developmentHash, developmentInputSchema, developmentReviewSchema, developmentStateSchema, projectSchema, recoveryReviewSchema, validateDevelopmentIdentity, validateEvaluationSource, type DevelopmentInput } from './development/contracts.js';
 import { deliveryStatus, type DeliveryContext } from './delivery-service.js';
 import { developmentRecoveryHash, type DevelopmentGenerator } from './development/recovery.js';
 
@@ -44,8 +44,12 @@ export function seedDevelopment(directory: string, input: DevelopmentInput): voi
 
 /** 每个目录持有独立原生Store；评测自动批准只能由专用入口显式开启。 */
 export function openDevelopment(config: PracticeConfig, directory: string, evaluationPolicy = false, generate?: DevelopmentGenerator) {
+  if (existsSync(resolve(directory, 'run.json'))) {
+    const saved = JSON.parse(readFileSync(resolve(directory, 'run.json'), 'utf8'));
+    if (saved.version !== undefined && saved.version !== 'development-execution') throw new Error('非v1 Run不能按旧流程恢复');
+  }
   const input = developmentInputSchema.parse(JSON.parse(readFileSync(resolve(directory, 'input.json'), 'utf8')));
-  if (evaluationPolicy && input.source.kind !== 'evaluation') throw new Error('自动批准规则仅允许评测案例');
+  if (evaluationPolicy) validateEvaluationSource(input);
   const execution = new DevelopmentExecution(resolve(directory, 'candidate'), input.project.writablePaths, input.project.checkFiles);
   const workflow = createDevelopmentWorkflow(config, execution, evaluationPolicy, generate);
   const storage = new LibSQLStore({ id: 'development-execution-store', url: `file:${resolve(directory, 'workflow.db')}` });
@@ -70,7 +74,7 @@ export async function reviewDevelopment(app: DevelopmentApplication, runId: stri
   if (!pending || Array.isArray(pending) || pending.status !== 'suspended' || pending.suspendPayload?.hash !== review.hash)
     throw new Error('技术方案版本不匹配');
   const state = developmentStateSchema.parse(pending.payload);
-  if (state.mode !== app.config.mode) throw new Error('开发模式变化');
+  validateDevelopmentIdentity(state, app.config);
   if (developmentHash(app.input) !== developmentHash(state.input)) throw new Error('开发输入或执行配置发生漂移');
   if (state.planSourceHash !== developmentHash(await app.execution.snapshot())) throw new Error('批准前源码发生漂移');
   const run = await app.workflow.createRun({ runId });
@@ -86,6 +90,7 @@ export async function recoverDevelopment(app: DevelopmentApplication, runId: str
   const state = developmentStateSchema.parse(pending.payload);
   if (!state.recovery || state.recovery.hash !== review.hash || pending.suspendPayload?.hash !== review.hash) throw new Error('恢复版本不匹配');
   if (state.mode !== app.config.mode || developmentHash(app.input) !== developmentHash(state.input)) throw new Error('恢复输入或模式发生漂移');
+  validateDevelopmentIdentity(state, app.config);
   const checkpointHash = developmentHash(await app.execution.snapshot());
   if (checkpointHash !== state.recovery.checkpointHash || developmentRecoveryHash(state, checkpointHash) !== review.hash) throw new Error('恢复检查点发生漂移');
   const run = await app.workflow.createRun({ runId });
@@ -104,6 +109,7 @@ export async function clarifyDevelopment(app: DevelopmentApplication, runId: str
   const state = status.result;
   if (status.status !== 'success' || state?.outcome !== 'clarification-required') throw new Error('只有已保存的需求澄清Run可创建后续版本');
   if (state.mode !== app.config.mode || developmentHash(app.input) !== developmentHash(state.input)) throw new Error('澄清输入或模式发生漂移');
+  validateDevelopmentIdentity(state, app.config);
   const candidateHash = developmentHash(await app.execution.snapshot());
   if (candidateHash !== state.planSourceHash) throw new Error('澄清候选源码发生漂移');
   const files: Record<string, string> = {};

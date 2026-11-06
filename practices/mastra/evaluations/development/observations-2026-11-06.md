@@ -53,18 +53,19 @@ npm run eval:development -- --live --rounds 2 --concurrency 4 --out .data/evalua
 
 输入v3见[修订说明](./input-revisions-v3.md)。真实模型48项批次在 `.data/evaluations/development-live-v3-2026-11-06/` 新目录预登记后启动；因独立审阅发现恢复与模型错误分类缺口，维护者主动中断并保存 `interruption.json`、完整manifest、`trials.json` 和每例目录。中断时分布为：16项完成交付、3项模型错误进入恢复暂停、4项执行中断、25项未开始；人工评审0项。所有条目保留，4个运行中条目不得算交付或成功。此批次仅作中断观察，不能作为准入结果，也不能只挑已完成项计成功率。
 
-续办任务：
+续办任务（已恢复推进，实际证据见[续办记录](./continuation-2026-11-06.md)；本节以上历史批次事实保持原样）：
 
-- [ ] 保留当前批次，不修改原始trial。修复恢复后新建48项完整计划及新manifest；不得复用当前16个交付结果充当新批次结果。
-- [ ] 修复Agent返回 `finishReason=error` 时的安全错误分类：只从Mastra结果的 `error` 提取白名单类型/code/status，不把原始错误、请求体或响应正文交给Workflow logger；实际复测网络错误和服务端错误。
-- [ ] 给开发输入持久绑定不含密钥的execution identity（mode、modelId、规范化endpoint摘要）。重开/恢复时身份不匹配则暂停；允许key轮转。
-- [ ] 修复 `route=architecture` 下自检故障接续会重规划并重复已完成实现的问题；恢复精确到失败角色/任务，架构改动时仍须重新批准。
-- [ ] 评测自动批准入口校验evaluation evidence与 `hash === developmentHash(content)`（沿用现有规范化JSON的SHA256实现）；真实产品来源不能走组织者合成批准路径。
-- [ ] 将架构语义校验失败明确分类为 `invalid-output`，与模型/网络错误区分；结构错误不自动循环。
-- [ ] 激活并通过 `tests/development-recovery-review.test.ts.todo` 中的保留回归，再运行完整实践 `npm test`、`npm run check`、OpenSpec strict与diff检查。
-- [ ] 代码/输入冻结后运行v3的24例×2轮真实模型全量批次，完整报告交付、澄清、运行失败、隐藏断言、重复波动及人工待评数。
+- [x] 保留当前批次，不修改原始trial。修复恢复后新建48项完整计划及新manifest；不得复用当前16个交付结果充当新批次结果。
+- [x] 修复Agent返回 `finishReason=error` 时的安全错误分类：只从Mastra结果的 `error` 提取白名单类型/code/status，不把原始错误、请求体或响应正文交给Workflow logger；实际复测网络错误和服务端错误。
+- [x] 给开发输入持久绑定不含密钥的execution identity（mode、modelId、规范化endpoint摘要）。重开/恢复时身份不匹配则暂停；允许key轮转。
+- [x] 修复 `route=architecture` 下自检故障接续会重规划并重复已完成实现的问题；恢复精确到失败角色/任务，架构改动时仍须重新批准。
+- [x] 评测自动批准入口校验evaluation evidence与 `hash === developmentHash(content)`（沿用现有规范化JSON的SHA256实现）；真实产品来源不能走组织者合成批准路径。
+- [x] 将架构语义校验失败明确分类为 `invalid-output`，与模型/网络错误区分；结构错误不自动循环。
+- [x] 激活并通过 `tests/development-recovery-review.test.ts.todo` 中的保留回归，再运行完整实践 `npm test`、`npm run check`、OpenSpec strict与diff检查。
+- [x] 代码/输入冻结后运行v3的24例×2轮真实模型全量批次，完整报告交付、澄清、运行失败、隐藏断言、重复波动及人工待评数：41次交付、6次澄清、1次故障暂停，人评0/48，详见续办记录。
 - [ ] 完成真实产品澄清业务语义审阅；当前fixture只证明来源门禁，不证明新产品文本解决了歧义。所有真实模型案例仍需独立人工评分。
-- [ ] 单独执行全栈 `agent-v1` 试点，与主持基准v4比较；确认构建禁网、容器无宿主挂载、来源hash与实际改动。主持基准成功不算Agent成绩。
+- [x] 单独执行全栈 `agent-v1` 试点，冻结三文件候选及来源hash；构建因Docker Hub token超时未启动编译，已清理。固定隔离配置未变，尚不能与主持基准v4比较运行结果。
+- [ ] 网络恢复后复用同一agent-v1候选补独立容器验收证据；原失败报告不覆盖。
 - [ ] 声称浏览器可用性前运行真实Playwright交互和窄视口检查；当前主持基准明确记录 `browserInteraction=not-executed`。
 
 所有TODO完成前，研发流程仍是受限试点，整栈能力和准入均未判定。

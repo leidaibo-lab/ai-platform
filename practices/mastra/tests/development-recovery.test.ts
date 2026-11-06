@@ -74,6 +74,28 @@ test('无效架构输出记录为结构错误并暂停，未启动实现或自�
   }, generate);
 });
 
+// JSON可解析不代表任务图可执行，语义错误同样只调用一次后暂停。
+test('架构任务图遗漏文件责任归类invalid-output且不自动循环', async () => {
+  let calls = 0;
+  /** 保留合法JSON结构，但故意漏掉第二个文件的责任任务。 */
+  const generate: DevelopmentGenerator = async (config, role, execution, state, paths, extra) => {
+    calls++;
+    const entry = await generateDevelopment(config, role, execution, state, paths, extra);
+    return { ...entry, text: JSON.stringify({ ...JSON.parse(entry.text), tasks: [] }) };
+  };
+  // 无效方案没有批准、实现或检查记录，源文件保持初始值。
+  await fixture(async (app) => {
+    const run = await app.workflow.createRun();
+    assert.equal((await run.start({ inputData: app.input })).status, 'suspended');
+    const { state } = await pending(app, run.runId, 'recover-development');
+    assert.equal(state.recovery?.kind, 'invalid-output');
+    assert.equal(calls, 1);
+    assert.equal(state.reviews.length, 0);
+    assert.equal(state.completedTasks.length, 0);
+    assert.equal(state.checks.length, 0);
+  }, generate);
+});
+
 // 真实文件部分写入后抛网络错误，第二次调用必须看到原始文件。
 test('临时故障先回滚部分写入，再有界自动重试并保留失败证据', async () => {
   let calls = 0;

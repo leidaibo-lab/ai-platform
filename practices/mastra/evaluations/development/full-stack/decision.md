@@ -25,7 +25,7 @@
 
 ## 执行、安全与检查
 
-使用明确的 `docker --context colima`；容器不挂载宿主源码、凭据、Docker socket。候选仅作为构建上下文，依赖安装使用固定lock；下载依赖后的生成/API/Next候选构建使用BuildKit `--network=none`。运行时网络为本试点internal network，仅有临时合成PostgreSQL，不发布宿主端口；固定smoke在web容器内经内部DNS访问API。资源限额、只读根文件系统和tmpfs均由固定Compose设置。公共镜像/npm下载需要网络，候选构建及运行不能访问外网。
+每条命令显式传递Docker context，默认`colima`，可通过`--docker-context`选择已有的本机引擎并写入manifest；不切换全局context。容器不挂载宿主源码、凭据、Docker socket。候选仅作为构建上下文，依赖安装使用固定lock；下载依赖后的生成/API/Next候选构建使用BuildKit `--network=none`。运行时网络为本试点internal network，仅有临时合成PostgreSQL，不发布宿主端口；固定smoke在web容器内经内部DNS访问API。资源限额、只读根文件系统和tmpfs均由固定Compose设置。公共镜像/npm下载需要网络，候选构建及运行不能访问外网。
 
 检查覆盖TypeScript编译、Next生产构建、真实迁移部署、API create/list、非法输入、API及数据库重启后的同一数据持久化、Next HTTP页面响应。浏览器交互如未运行则单独记为未执行。每次保存代码hash、实际命令/退出码/日志与来源。运行结束只删除本次project容器、internal network和临时卷；保留Colima VM及全局Docker context，恢复由根Agent统筹。
 
@@ -41,6 +41,6 @@
 
 ## 执行状态
 
-执行结果写入各次 `.data/evaluations/development-stack-*` 的manifest、report与原始日志。2026-11-06 主持基准v4已完整通过禁网构建、真实迁移、API公开检查、Next HTTP/代理和重启持久化，详见[实测与待办](./README.md#2026-11-06-主持基准实测)。该证据只属于host-reference；真实模型产出、浏览器交互、人评与能力准入均未完成。
+执行结果写入各次 `.data/evaluations/development-stack-*` 的manifest、report与原始日志。2026-11-06 主持基准v4已完整通过禁网构建、真实迁移、API公开检查、Next HTTP/代理和重启持久化，详见[实测与待办](./README.md#2026-11-06-主持基准实测)。该证据只属于host-reference。续办agent-v1已完成真实模型三文件生成，但因Docker Hub token超时未启动候选编译；浏览器、人评与能力准入均未完成。
 
-用户要求剩余工作转TODO后续继续，因此停止扩展且不启动live。后续agent-v1只实现三个白名单TS文件，独立目录登记来源，继续固定外部容器检查；不将主持schema、迁移、环境装配计为Agent完成。Colima与全局context由主Agent统一恢复，不由此试点停止VM。
+原暂停轮次的容器与临时资源已清理；本次用户要求继续后恢复推进，进展见[续办记录](../continuation-2026-11-06.md)。agent-v1仍只实现三个白名单TS文件，独立目录登记来源并运行固定外部容器检查；不将主持schema、迁移、环境装配计为Agent完成。本机采用已运行的desktop-linux引擎，脚本先检查引擎可用性，不停止引擎或更改全局context。
