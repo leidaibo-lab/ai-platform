@@ -1,5 +1,11 @@
 # 项目文档
 
+- [HRM 产物归档与数据流转](../practices/mastra/artifact-dataflow.md)：项目/迭代/Run 关联、阶段版本、查看与下载；[PNG](./assets/mastra-hrm-artifact-dataflow.png) / [SVG](./assets/mastra-hrm-artifact-dataflow.svg)，[决策](./decisions/2026-11-07-hrm-asset-catalog.md)。
+
+- [HRM 仓库资产归属](./decisions/2026-11-07-hrm-repository-assets.md)：产品、测试、发布投影归 hrm，业务资料从 product/sources 读取；代码目标已定，Git 回库/全栈执行另行接线。
+
+- [Mastra 完整产研流程](../practices/mastra/unified-workflow.md)：Studio 唯一入口，产品到动态团队、前后端并行/受限委派、评审、独立测试/缺陷回归、外部发布回执/健康与回滚、最终交付；[生命周期决策](./decisions/2026-11-07-mastra-full-delivery-lifecycle.md)，[统一团队选型](./decisions/2026-11-07-mastra-unified-development-team.md)。下文旧双流程与图保留为历史设计。
+
 这个目录承接项目结构、架构说明和运维边界。`AGENTS.md` 只保留 AI 协作入口和路由，详细说明放在这里。
 
 ## 文档索引
@@ -11,6 +17,7 @@
 - [Mastra 原生最小应用与产研交接](../practices/mastra/README.md)：独立启动、Agent/工具、Studio/API、四阶段提案确认和暂停后跨进程恢复的实测证据；区分固定模型验证与真实工程交付。
 - [Mastra 产品固定角色子流程](../practices/mastra/product-workflow.md)：四个产品 Agent 的职责、人工批准、返工来源与版本契约；真实质量收益另行验证。
 - [Mastra 研发阶段工作流](../practices/mastra/development-workflow-design.md)：技术方案确认、受限实现、开发自检、返工和研发交付；[24案例评测](../practices/mastra/evaluations/development/README.md)区分离线执行、真实模型和人工量表，[首轮 pilot 观察](../practices/mastra/evaluations/development/observations-2026-11-06.md)记录原始结果、发现的问题与未准入结论；[续办记录](../practices/mastra/evaluations/development/continuation-2026-11-06.md)记录恢复修复、新v3完整48项结果、全栈Agent候选与环境阻塞，测试阶段独立建设。
+- [Mastra BMAD 工作流融合设计](../practices/mastra/bmad-workflow-integration.md)：已接入产品批准后的显式交接、任务包、就绪裁决、独立评审、有界返工和研发交付门；旧流程保持原版本；[运行图 PNG](./assets/mastra-bmad-workflow-v2.png) / [SVG](./assets/mastra-bmad-workflow-v2.svg)；[选型记录](./decisions/2026-11-06-mastra-bmad-method-integration.md)。
 - [Mastra 产品 Skill 配对评测](../practices/mastra/evaluations/product-skills/README.md)：固定模型、角色、流程和输入，切换 Skill；记录用量与耗时，人工填写遗漏、首次通过和审阅时间。
 - [探索与原生应用实践分开组织](./decisions/2026-11-02-exploration-and-native-practices.md)：记录两条学习方向、规则作用域、原生比较方法与现有实验归属；不代表接受任何框架迁移。
 - [AI 应用基础平台架构说明](./ai-structure.md)：六个架构区域、控制面/数据面、当前代码映射、可插拔契约、数据所有权、独立服务拆分蓝图，以及 V0-V4 实施对比。

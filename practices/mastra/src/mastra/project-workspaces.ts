@@ -6,6 +6,7 @@ import type { Mastra } from '@mastra/core';
 import { LocalFilesystem, Workspace, WORKSPACE_TOOLS } from '@mastra/core/workspace';
 import type { PracticeConfig } from './config.js';
 import type { Delivery } from './workflows/delivery.js';
+import { validateHrmRepository } from '../delivery/repository-assets.js';
 
 /**
  * 工厂/薄适配器：框架拥有文件访问，实践仅定义材料边界和可重建产物。
@@ -40,6 +41,10 @@ export function registerProjectWorkspaceViews(mastra: Mastra, config: PracticeCo
     { id: 'recruitment-artifacts', name: '招聘实践 · 运行产物（只读副本）', directory: artifactDirectory(config) },
     { id: 'product-evaluations', name: '产品评测 · 结果与人工审阅（组织者只读）', directory: resolve(config.rootDir, '.data/evaluations') },
   ];
+  if (config.hrmRepositoryRoot) {
+    const repository = validateHrmRepository(config.hrmRepositoryRoot);
+    for (const area of ['product', 'testSet', 'deploy']) views.push({ id: `hrm-${area.toLowerCase()}`, name: `HRM · ${area}（只读交付资产）`, directory: resolve(repository, area) });
+  }
   for (const view of views) {
     mkdirSync(view.directory, { recursive: true });
     mastra.addWorkspace(new Workspace({

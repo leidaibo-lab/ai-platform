@@ -1,12 +1,30 @@
+import { createAssetRoutes } from '../delivery/asset-routes.js';
 import { Mastra } from '@mastra/core';
 import { ConsoleLogger } from '@mastra/core/logger';
 import { LibSQLStore } from '@mastra/libsql';
 import type { PracticeConfig } from './config.js';
 import { createAgents } from './agents/index.js';
+import { createProductDeliveryV2 } from './workflows/product-delivery-v2.js';
 import { createDeliveryWorkflow } from './workflows/delivery.js';
 import { createRevisionWorkflow } from './workflows/revision.js';
 import { createReviewRoutes } from '../review-routes.js';
-import { exportProductArtifacts, registerProjectWorkspaceViews } from './project-workspaces.js';
+import { createRecruitmentWorkspace, exportProductArtifacts, registerProjectWorkspaceViews } from './project-workspaces.js';
+import { validateHrmRepository } from '../delivery/repository-assets.js';
+import { join } from 'node:path';
+import { createProductDevelopmentWorkflow } from './workflows/product-development.js';
+
+/** Studio 只公开完整产研流程；旧 CLI 工厂保留用于历史运行读取。 */
+export function createStudioApplicationOptions(config: PracticeConfig) {
+  const repository = config.hrmRepositoryRoot ? validateHrmRepository(config.hrmRepositoryRoot) : undefined;
+  const agents = createAgents(config, repository ? { workspace: createRecruitmentWorkspace(config.rootDir, join(repository, 'product/sources')) } : {});
+  return {
+    agents: { productCoordinatorAgent: agents.productCoordinatorAgent, productClarificationAgent: agents.productClarificationAgent, productClosureAgent: agents.productClosureAgent, productAgent: agents.productAgent, testingAgent: agents.testingAgent, operationsAgent: agents.operationsAgent },
+    workflows: { productDevelopmentWorkflow: createProductDevelopmentWorkflow(agents, config) },
+    storage: new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl }),
+    logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
+    server: { host: '127.0.0.1', port: config.port, apiRoutes: createAssetRoutes(config) },
+  };
+}
 
 /**
  * 装配独立 Mastra 应用；工厂允许测试替换数据库，状态仍归原生 Store 所有。
@@ -19,9 +37,10 @@ export function createApplicationOptions(config: PracticeConfig) {
     // 仅导出草稿副本，审批权与恢复点继续归原生 Workflow。
     (runId, state) => exportProductArtifacts(config, runId, state),
   );
+  const productDeliveryV2 = createProductDeliveryV2(agents, config.mode);
   const revisionWorkflow = createRevisionWorkflow(agents, config.mode);
   return {
-    agents, workflows: { deliveryWorkflow, revisionWorkflow }, storage,
+    agents, workflows: { deliveryWorkflow, productDeliveryV2, revisionWorkflow }, storage,
     // 复用框架原生日志，向服务进程输出 info/warn/error，便于定位执行失败。
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
     server: { host: '127.0.0.1', port: config.port, apiRoutes: createReviewRoutes({ deliveryWorkflow, revisionWorkflow, config }) },
@@ -33,6 +52,6 @@ export function createApplication(config: PracticeConfig) {
   const options = createApplicationOptions(config);
   const mastra = new Mastra(options);
   registerProjectWorkspaceViews(mastra, config);
-  return { mastra, storage: options.storage, agents: options.agents, deliveryWorkflow: options.workflows.deliveryWorkflow, revisionWorkflow: options.workflows.revisionWorkflow, config };
+  return { mastra, storage: options.storage, agents: options.agents, deliveryWorkflow: options.workflows.deliveryWorkflow, productDeliveryV2: options.workflows.productDeliveryV2, revisionWorkflow: options.workflows.revisionWorkflow, config };
 }
 export type PracticeApplication = ReturnType<typeof createApplication>;

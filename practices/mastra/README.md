@@ -1,5 +1,9 @@
 # Mastra 原生应用实践
 
+**产物入口**：[HRM 产物归档与数据流转](./artifact-dataflow.md)。本地页面 `http://127.0.0.1:4111/delivery-assets` 提供项目/迭代/Run 关联、阶段版本预览及下载；新 Run 可填写 `iterationId`。审批仍在原生 Studio。
+
+**当前入口（2026-11-07）**：Studio 收敛为一条[完整产研流程](./unified-workflow.md)：四产品角色 → 产品审批 → 项目范围确认 → 上下文/方案/动态组队/就绪/方案审批 → 前后端按依赖并行与受限委派 → 自检/独立评审/研发交付 → 独立测试/缺陷修复回归 → 发布审批/外部执行回执/健康检查/回滚 → 最终交付。部署当前等待人工回填外部平台结果，未接入自动 CI/CD。打开 `http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph`。旧入口已移出 Studio；下文按日期保留的旧链与页面说明属于历史兼容，旧审阅页 API 不在新 Studio 服务中注册。本轮按用户要求未运行测试，仅检查类型、dev 编译和只读流程图 API；完整业务执行未验收。
+
 2026-11-02：已建立独立可执行应用，跑通原生 Agent、只读工具、Studio/API，以及四阶段交接的暂停、确认、拒绝和跨进程恢复。当前验证使用官方 Mock 模型；真实模型质量、真实代码执行、多人权限和生产部署尚未验证。
 
 2026-11-03 补充：使用本地配置的真实网关与密钥，已通过最小 Agent 的 generate、stream 及实际 `practiceInfo` 工具调用，并生成一份真实需求的产品文档，Workflow 停在 `review-product` 等待人工确认。该结果证明当前配置下的调用与首阶段交接可用；四阶段真实提案质量、真实代码执行、多人权限和生产部署仍未验收。
@@ -9,6 +13,18 @@
 2026-11-06 补充：产品生成展开为总产品、需求梳理、产品闭环、产品写作四个固定 Agent 的原生子 Workflow；每个角色最多 24 步，可使用产品 Skill 和已注册只读工具。增加“退回修改”：保留旧稿和反馈，在独立新轮次重走四角色并重新等待人工验收，最多三次。自动回归 31/31、后端类型检查和前端构建通过；隔离浏览器已验证返工及新旧稿导航。角色产物、来源与人工操作见[产品固定角色子流程](./product-workflow.md)。本次验证控制流与版本边界，真实质量收益待对比。
 
 本实践是[应用实践集合](../README.md)的首个可运行条目，使用 Mastra 自己的模型、Agent、Workflow 和 LibSQLStore，不导入探索主线 Runtime、Store、GatewayClient 或实验 Adapter。学习目标是理解原生设计，再比较差异，不是接入或替换探索实现。
+
+业务交付资源统一落在 `leidaibo-lab/hrm`：`product/`、`testSet/`、`deploy/`；Studio 从 `product/sources/` 只读获取材料，宿主归档各阶段文本/JSON。代码目标仍为 HRM，但 Git 回库及 pnpm 整仓执行尚待适配；[具体约定](./unified-workflow.md#hrm-资产落地与资料来源2026-11-07)。
+
+## 产品到研发执行
+
+Studio 当前统一入口及暂停恢复格式见[完整产研流程](./unified-workflow.md)。下面独立产品/开发 CLI 为旧版本兼容，不是当前 Studio 主路径。
+
+[融合设计](./bmad-workflow-integration.md)已接入版本化运行入口：`npm run product:delivery -- start '<需求>'` 创建 `product-delivery-v2`；按待审 hash 执行 `npm run product:delivery -- review <runId> <hash> approve <reviewer> '<意见>'` 后，产品 Run 停在 `product-approved-for-development`，不再生成开发/测试/运维提案。旧 `npm run delivery` 继续原四阶段提案链。
+
+启动开发：`npm run development -- start --dir .data/development/<id> --product <productRunId> --manifest <项目manifest>`，manifest 路径相对实践根。技术方案确认、故障接续和发现裁决分别使用 `review`、`recover`、`resolve` 子命令；完整命令及裁决 JSON 见[运行说明](./bmad-workflow-integration.md#运行命令)。`status` 显示当前阶段、任务和证据。产品到开发由显式 CLI 启动，不承诺跨两个 LibSQL Store 原子提交或 exactly-once。
+
+v2 包含上下文、任务级验收与检查引用、结构/语义就绪、人工方案批准、受限实现、固定检查、独立只读评审、逐项裁决和确定性交付门。`development-delivery.v2` 只在最后门通过时生成；固定 fixture 证明原生控制流和工具执行，真实业务质量另评。[选型记录](../../docs/decisions/2026-11-06-mastra-bmad-method-integration.md)保留 BMAD 6.12.0 来源锁、采用理由与剩余边界。
 
 ## 项目 Workspace
 
@@ -79,9 +95,12 @@ src/mastra/app.ts                Agent、Workflow、LibSQLStore 注册
 src/mastra/config.ts             本实践配置与绝对数据库路径
 src/mastra/agents/               四个产品角色、三个下游交接助手、最小助手和阅读助手
 src/mastra/tools/                无外部副作用的 practiceInfo
-src/mastra/workflows/delivery.ts 原生步骤、暂停、恢复和交接数据 schema
+src/mastra/workflows/delivery.ts 旧提案链步骤、暂停、恢复和交接数据 schema
 src/mastra/workflows/product.ts  固定四角色原生子 Workflow，输出角色产物与最终产品稿
 src/mastra/workflows/product-contract.ts 产品角色证据、返工来源与次数上限
+src/mastra/workflows/product-delivery-v2.ts 产品批准后结束的执行交接入口
+src/mastra/workflows/development-v2.ts 任务包、就绪、批准、实现、评审及交付门
+src/development-v2-service.ts    v2来源、版本、裁决和恢复服务
 src/delivery-service.ts          CLI/页面共享的交接与恢复服务
 src/review-service.ts            产品文档投影、版本与输入校验
 src/review-routes.ts             Mastra 原生 HTTP Adapter 与 AI SDK 流

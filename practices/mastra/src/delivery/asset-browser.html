@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HRM · 产物归档</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#182b45;background:#f4f7fb}*{box-sizing:border-box}body{margin:0}main{max-width:1480px;margin:auto;padding:28px}h1{margin:0;font-size:26px}p{line-height:1.7;color:#53657c}a{color:#165ab7}header{display:flex;justify-content:space-between;gap:20px;align-items:center}button,.action{padding:10px 14px;border:1px solid #bcc9db;border-radius:6px;background:white;color:#174b90;cursor:pointer;text-decoration:none;font:inherit}nav{display:flex;gap:12px;flex-wrap:wrap;background:white;border:1px solid #d8e1ed;border-radius:8px;padding:18px;margin:20px 0}label{display:grid;gap:6px;font-size:13px;color:#526276}select{min-width:180px;max-width:330px;padding:10px;border:1px solid #bcc9db;border-radius:4px;background:white;color:#182b45}#status{min-height:28px;color:#526276}.grid{display:grid;grid-template-columns:420px 1fr;gap:18px}.panel{background:white;border:1px solid #d8e1ed;border-radius:8px;padding:18px;min-width:0}.asset{width:100%;text-align:left;display:block;margin:10px 0;padding:14px}.asset.active{border:2px solid #2563ba;background:#f1f6ff}.asset strong,.asset small{display:block;overflow-wrap:anywhere}.asset small{margin-top:7px;color:#5d6e85}#list{max-height:75vh;overflow:auto}#files{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}#meta{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.8;color:#526276}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fb;border:1px solid #e1e7f0;padding:18px;border-radius:5px;max-height:65vh;overflow:auto;line-height:1.6;font-size:13px}#download{display:none}.notice{border-left:3px solid #188978;padding-left:14px}@media(max-width:900px){main{padding:18px}.grid{grid-template-columns:1fr}header{align-items:flex-start}select{min-width:130px;max-width:100%}}
+</style></head><body><main><header><div><h1>HRM · 产物归档</h1><p>项目 → 迭代 → Run → 阶段 → 文件版本</p></div><a class="action" href="/workflows/productDevelopmentWorkflow/graph">返回 Workflow</a></header>
+<p class="notice">此页只读展示仓库中的交付副本。流程、暂停、审批和恢复事实由 Mastra 保存。下载内容经过文件散列校验，业务批准请回到原生 Run 查看。</p>
+<nav><label>项目<select id="project"><option>hrm</option></select></label><label>迭代<select id="iteration"></select></label><label>Run<select id="run"></select></label><label>阶段<select id="stage"></select></label><button id="refresh">刷新</button><a id="bundle" class="action">下载筛选结果 · JSON 包</a></nav>
+<div id="status" role="status">正在读取归档清单…</div><div class="grid"><section class="panel"><h2>阶段版本</h2><div id="list"></div></section><section class="panel"><h2 id="title">选择产物版本</h2><div id="meta"></div><a id="studio" hidden>查看 Mastra Run</a><div id="files"></div><a id="download">下载当前文件</a><pre id="preview">归档后可在这里查看产品文档、研发交接、测试用例、报告和发布记录。</pre></section></div></main>
+<script>
+let catalog={runs:[],assets:[]};let selectedId='';let previewRequest=0;
+/** 固定页面控件查找。 */
+function el(id){return document.getElementById(id)}
+/** 安全构造选项，所有业务正文都作为纯文本。 */
+function options(id,values,first){const select=el(id);const saved=select.value;select.replaceChildren();for(const value of ['',...new Set(values)]){const option=document.createElement('option');option.value=value;option.textContent=value||first;select.append(option)}if([...select.options].some(
+// 保留仍存在的筛选项。
+(option)=>option.value===saved))select.value=saved}
+/** 展示文件时重新通过 API 校验完整性，切换版本后丢弃过期响应。 */
+async function preview(asset,name){const request=++previewRequest;el('preview').textContent='正在校验并读取…';el('download').style.display='none';const params=new URLSearchParams({id:asset.id,name});try{const response=await fetch('/delivery-assets/file?'+params);if(!response.ok)throw new Error((await response.json()).error);const content=await response.text();if(request!==previewRequest)return;el('preview').textContent=content;el('download').href='/delivery-assets/file?'+params+'&download=1';el('download').textContent='下载 '+name;el('download').style.display='inline'}catch(error){if(request===previewRequest)el('preview').textContent=error.message}}
+/** 单个不可变版本的关联与文件清单。 */
+function show(asset){selectedId=asset.id;previewRequest++;const m=asset.manifest;el('title').textContent=m.stage+' · '+m.event;el('meta').textContent='项目：hrm\n迭代：'+(m.correlation?.iterationId||'未关联历史')+'\nRun：'+m.runId+'\n归档时间：'+(m.createdAt||'旧版未记录')+'\n模式：'+m.mode+'\n内容版本：'+m.projectionHash+'\n位置：'+asset.path+'\n审批信息仅为导出时投影';el('studio').hidden=false;el('studio').href='/workflows/productDevelopmentWorkflow/runs/'+encodeURIComponent(m.runId);el('files').replaceChildren();for(const name of Object.keys(m.files)){const button=document.createElement('button');button.textContent=name;
+// 每个按钮绑定当前清单文件名。
+button.onclick=()=>preview(asset,name);el('files').append(button)}const names=Object.keys(m.files);if(names.length)preview(asset,names[0]);else{el('preview').textContent='此版本没有文件';el('download').style.display='none'}for(const button of el('list').children)button.classList.toggle('active',button.dataset.id===asset.id)}
+/** 依据迭代、Run 与阶段筛选；未关联历史只在全部迭代中展示。 */
+function render(){const iteration=el('iteration').value;const relatedRuns=catalog.runs.filter(
+// 没有产物的初始化 Run 也展示。
+(run)=>!iteration||run.correlation.iterationId===iteration).map(
+// 只展示关联标识。
+(run)=>run.correlation.runId);const related=catalog.assets.filter(
+// 不对历史版本补造迭代归属。
+(asset)=>!iteration||asset.manifest.correlation?.iterationId===iteration);options('run',[...relatedRuns,...related.map(
+// 旧版 Run 仍可通过标识查阅。
+(asset)=>asset.manifest.runId)],'全部 Run');const run=el('run').value;const byRun=related.filter(
+// Run 筛选独立于阶段。
+(asset)=>!run||asset.manifest.runId===run);options('stage',byRun.map(
+// 阶段来自实际完成清单。
+(asset)=>asset.manifest.stage),'全部阶段');const stage=el('stage').value;const assets=byRun.filter(
+// 筛选后仍保留同阶段的所有历史版本。
+(asset)=>!stage||asset.manifest.stage===stage).sort(
+// 创建时间降序；旧版本无时间排在后面，不假称最新。
+(a,b)=>(b.manifest.createdAt||'').localeCompare(a.manifest.createdAt||''));el('list').replaceChildren();el('status').textContent='已登记 '+catalog.runs.length+' 个 Run · 当前 '+assets.length+' 个阶段版本。pending 为暂停前快照，completed 为节点输出；两者均不等于审批通过。';for(const asset of assets){const button=document.createElement('button');button.className='asset';button.dataset.id=asset.id;const title=document.createElement('strong');title.textContent=asset.manifest.stage+' · '+asset.manifest.event;button.append(title);for(const text of [asset.manifest.correlation?.iterationId||'未关联历史',asset.manifest.runId,asset.manifest.mode+' · '+(asset.manifest.createdAt||'旧版未记录时间'),asset.manifest.projectionHash.slice(0,16)]){const small=document.createElement('small');small.textContent=text;button.append(small)}
+// 点击只切换查看版本，不恢复或批准 Run。
+button.onclick=()=>show(asset);el('list').append(button)}const params=new URLSearchParams({projectId:'hrm'});if(iteration)params.set('iterationId',iteration);if(run)params.set('runId',run);if(stage)params.set('stage',stage);el('bundle').href='/delivery-assets/bundle?'+params;const selected=assets.find(
+// 刷新保留仍然可见的版本。
+(asset)=>asset.id===selectedId)||assets[0];if(selected)show(selected);else{previewRequest++;el('title').textContent='暂无归档产物';el('meta').textContent='新 Run 启动时登记迭代；各角色节点完成或暂停后自动归档。现有历史 Run 不会自动迁移。';el('files').replaceChildren();el('studio').hidden=true;el('download').style.display='none';el('preview').textContent='此筛选下还没有已完成的归档清单。'}}
+/** 刷新真实目录；错误时禁用旧目录交互，避免误看缓存。 */
+async function refresh(){el('status').textContent='正在读取归档清单…';try{const response=await fetch('/delivery-assets/catalog');const data=await response.json();if(!response.ok)throw new Error(data.error);catalog=data;options('iteration',catalog.runs.map(
+// 只列明确登记的迭代。
+(run)=>run.correlation.iterationId),'全部迭代（含未关联历史）');render()}catch(error){catalog={runs:[],assets:[]};render();el('status').textContent=error.message}}
+for(const id of ['iteration','run','stage'])el(id).onchange=render;el('refresh').onclick=refresh;refresh();
+</script></body></html>

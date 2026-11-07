@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1660" height="1480" viewBox="0 0 1660 1480"><defs><style>text{font-family:"PingFang SC","Microsoft YaHei",Arial,sans-serif;fill:#26384d}.title{font-size:34px;font-weight:700}.heading{font-size:24px;font-weight:600}.body{font-size:21px}.note{font-size:19px;fill:#52657b}.label{font-size:18px;fill:#245ca5}.teal{fill:#137e76}.purple{fill:#7751a8}</style><marker id="blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#2d64ad"/></marker><marker id="purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#8562b1"/></marker></defs><rect width="1660" height="1480" fill="white"/>
+<text x="40" y="54" class="title">Artifact Data Flow · HRM 产研产物归档与查看</text>
+<text x="40" y="92" class="note">当前实现接线（2026-11-07）｜流程和审批事实归 Mastra；仓库保存可重建交付投影</text>
+<rect x="40" y="130" width="440" height="150" rx="6" fill="#fffaf1" stroke="#a46b20" stroke-width="2"/>
+<text x="60" y="166" class="heading">① 资料来源 · hrm/product/sources</text>
+<text x="60" y="205" class="body">brief.md + manifest.json</text>
+<text x="60" y="235" class="body">产品角色只读；参考资料须显式登记</text>
+<text x="60" y="265" class="body">受限：尚未逐 Run 冻结读取快照</text>
+<rect x="530" y="130" width="450" height="150" rx="6" fill="#ffffff" stroke="#2d64ad" stroke-width="2"/>
+<text x="550" y="166" class="heading">② 启动一个根 Run</text>
+<text x="550" y="205" class="body">输入：brief + iterationId</text>
+<text x="550" y="235" class="body">项目固定 hrm；默认 unassigned</text>
+<text x="550" y="265" class="body">历史缺少关联 → 保留未关联历史</text>
+<rect x="1030" y="130" width="590" height="150" rx="6" fill="#f5fcfa" stroke="#17897d" stroke-width="2"/>
+<text x="1050" y="166" class="heading">③ 关联记录 · hrm/product/catalog</text>
+<text x="1050" y="205" class="body">项目 → 迭代 → 根 Run（不可变绑定）</text>
+<text x="1050" y="235" class="body">correlation 随产品 / 开发 / 测试 / 发布传递</text>
+<text x="1050" y="265" class="body">projectId · iterationId · runId · workflowId</text>
+<path d="M260 280V350" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="277" y="325" class="label">只读资料</text>
+<path d="M750 280V350" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="766" y="325" class="label">初始化并登记关联</text>
+<path d="M1325 280V350" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="1341" y="325" class="label">嵌套流程继承根 Run</text>
+<rect x="40" y="350" width="1580" height="300" rx="6" fill="#f9fbfe" stroke="#577ba5" stroke-width="2"/>
+<text x="62" y="387" class="heading">④ Mastra 原生 Workflow · 一个根 Run 串联角色子流程</text>
+<rect x="65" y="420" width="340" height="185" rx="6" fill="#ffffff" stroke="#2d64ad" stroke-width="2"/>
+<text x="85" y="456" class="heading">产品角色</text>
+<text x="85" y="495" class="body">总产品 → 梳理 → 闭环 → 写作</text>
+<text x="85" y="525" class="body">产品稿 / 角色输出 / 审阅副本</text>
+<text x="85" y="555" class="body">人工确认 → 项目范围确认</text>
+<rect x="465" y="420" width="340" height="185" rx="6" fill="#ffffff" stroke="#2d64ad" stroke-width="2"/>
+<text x="485" y="456" class="heading">开发团队</text>
+<text x="485" y="495" class="body">上下文 → 方案 → 团队 → 批准</text>
+<text x="485" y="525" class="body">并行实现 / 委派 / 自检 / 评审</text>
+<text x="485" y="555" class="body">产出：计划、版本与交接元数据</text>
+<rect x="865" y="420" width="340" height="185" rx="6" fill="#ffffff" stroke="#2d64ad" stroke-width="2"/>
+<text x="885" y="456" class="heading">独立测试</text>
+<text x="885" y="495" class="body">计划 → 用例确认 → 执行 → 放行</text>
+<text x="885" y="525" class="body">用例 / 结果 / 缺陷 / 回归历史</text>
+<text x="885" y="555" class="body">缺陷回原开发团队继续修复</text>
+<rect x="1265" y="420" width="330" height="185" rx="6" fill="#ffffff" stroke="#2d64ad" stroke-width="2"/>
+<text x="1285" y="456" class="heading">发布与最终交付</text>
+<text x="1285" y="495" class="body">方案 → 批准 → 外部回执</text>
+<text x="1285" y="525" class="body">发布 / 健康 / 回滚记录</text>
+<text x="1285" y="555" class="body">受限：外部执行人工回填</text>
+<path d="M405 510H465" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="411" y="497" class="label">批准</text>
+<path d="M805 510H865" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="811" y="497" class="label">交付</text>
+<path d="M1205 510H1265" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="1218" y="497" class="label">放行</text>
+<text x="67" y="633" class="note">每个角色节点完成、原生暂停前自动导出；开发成员合并后归档团队状态与委派记录</text>
+<rect x="40" y="730" width="440" height="230" rx="6" fill="#f5fcfa" stroke="#17897d" stroke-width="2"/>
+<text x="60" y="766" class="heading">⑤ Mastra LibSQLStore · 事实源</text>
+<text x="60" y="805" class="body">保存步骤状态、暂停与恢复点</text>
+<text x="60" y="835" class="body">保存审批决定及版本绑定</text>
+<text x="60" y="865" class="body">审批仍通过 Studio 原生 Run 操作</text>
+<text x="60" y="895" class="body">仓库导出失败：节点明确失败</text>
+<text x="60" y="925" class="body">受限：Store 与文件无跨介质事务</text>
+<rect x="550" y="730" width="450" height="230" rx="6" fill="#ffffff" stroke="#2d64ad" stroke-width="2"/>
+<text x="570" y="766" class="heading">⑥ 薄归档 Adapter · 交付投影</text>
+<text x="570" y="805" class="body">按阶段选择业务字段</text>
+<text x="570" y="835" class="body">阶段 + 内容散列 → 不可变版本</text>
+<text x="570" y="865" class="body">文件 SHA256；manifest 最后落盘</text>
+<text x="570" y="895" class="body">同版本重导出复用，冲突拒绝覆盖</text>
+<text x="570" y="925" class="body">不会导出配置、凭据或运行数据库</text>
+<rect x="1070" y="730" width="550" height="230" rx="6" fill="#f5fcfa" stroke="#17897d" stroke-width="2"/>
+<text x="1090" y="766" class="heading">⑦ HRM 本地工作树 · 统一落地</text>
+<text x="1090" y="805" class="body">product/runs：产品与研发交接</text>
+<text x="1090" y="835" class="body">testSet/runs：计划 / 用例 / 报告 / 缺陷</text>
+<text x="1090" y="865" class="body">deploy/runs：方案 / 回执 / 发布记录</text>
+<text x="1090" y="895" class="body">每个目录：根 Run / 阶段 / 内容散列</text>
+<text x="1090" y="925" class="body">manifest：关联 + 时间 + 文件 SHA256</text>
+<path d="M260 650V730" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="278" y="694" class="label">提交流程与审批事实</text>
+<path d="M775 650V730" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="795" y="694" class="label">节点输出 / 暂停前快照</text>
+<path d="M1000 840H1070" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="1009" y="825" class="label">落盘</text>
+<rect x="550" y="1040" width="1070" height="170" rx="6" fill="#ffffff" stroke="#2d64ad" stroke-width="2"/>
+<text x="570" y="1076" class="heading">⑧ 只读产物目录 · /delivery-assets</text>
+<text x="570" y="1115" class="body">从三个 runs 目录的完成 manifest 按需重建清单（无第二个数据库）</text>
+<text x="570" y="1145" class="body">按迭代 / Run / 阶段查看历史版本；正文按文本预览；下载前校验文件 SHA256</text>
+<text x="570" y="1175" class="body">单文件下载 + 含 manifest 的 JSON 交付包；点击链接回到 Studio 核对 Run 事实</text>
+<path d="M1340 960V1040" fill="none" stroke="#2d64ad" stroke-width="2.5" marker-end="url(#blue)"/>
+<text x="1360" y="1007" class="label">扫描完成清单 / 校验文件</text>
+<path d="M550 1120H260V960" fill="none" stroke="#8562b1" stroke-width="2.5" stroke-dasharray="8 6" marker-end="url(#purple)"/>
+<text x="54" y="1082" class="note purple">回看原生 Run 与审批事实</text>
+<rect x="40" y="1245" width="1580" height="90" rx="6" fill="#fffaf1" stroke="#b37c31" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="60" y="1278" class="heading">TODO · 代码与真实发布的连接仍需单独建设</text>
+<text x="60" y="1313" class="body">候选代码 → HRM commit/PR · pnpm 全栈执行 · CI 制品与源码绑定 · 自动发布/回滚 · 资料冻结 · 历史迁移</text>
+<text x="40" y="1380" class="note">业务路径：资料 / 需求 → 项目与迭代绑定 → 产品 → 开发 → 测试 → 发布 → 最终交付</text>
+<text x="40" y="1415" class="note">归档路径：角色节点 → 归档 Adapter → HRM 分阶段版本清单 → 只读目录 → 预览 / 下载 / 原生 Run 追溯</text>
+<text x="40" y="1450" class="note">证据边界：类型与只读 API 核对完成；按要求未运行测试或业务 Run，自动归档全链路与恢复仍待实际验收</text>
+</svg>

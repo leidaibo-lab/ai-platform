@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/bmad-code-org/BMAD-METHOD",
+  "version": "6.12.0",
+  "commit": "05bfbd46d00766ec88eb9b42e76be2c575d64d7b",
+  "distribution": "https://registry.npmjs.org/bmad-method/-/bmad-method-6.12.0.tgz",
+  "distributionSha256": "ac05c93f0b3c4256bb4072e6e1ff181eaad6cc0a64a27a63893bfb2b0b64aed2",
+  "verification": "所列源文件与固定 commit raw 字节逐一一致；不把移动分支或 tag 对象当 commit。",
+  "sources": [
+    {
+      "upstreamPath": "src/bmm-skills/plan/bmad-sprint-planning/references/readiness-gate.md",
+      "localPath": "references/upstream.md",
+      "sha256": "7d58ea61fafe3c1d8218203abc7512e322ca384c78d9e71829df55dfabe1245b"
+    }
+  ],
+  "licenseSha256": "0aa79baf6328b4a1e694ce10a12ffc36d7666554da128dff0e8fcda0fc536a66",
+  "adaptation": "只借鉴所列检查维度；原文内其他跳转、脚本、配置、状态文件、审批、委派均不执行，不导入其执行依赖。"
+}

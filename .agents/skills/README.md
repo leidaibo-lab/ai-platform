@@ -38,6 +38,13 @@
 | --- | --- | --- |
 | development-implementation-handoff | `development/implementation-handoff/SKILL.md` | Mastra 开发 Agent 将已确认需求映射为实现方案、变更范围、验证计划和风险，不代表实际代码执行 |
 
+| development-bmad-context | `development/bmad-context/SKILL.md` | 核实项目规则与上下文来源 |
+| development-bmad-task-handoff | `development/bmad-task-handoff/SKILL.md` | 批准意图到任务、验收和检查引用 |
+| development-bmad-readiness | `development/bmad-readiness/SKILL.md` | 独立只读开工就绪检查 |
+| development-bmad-code-review | `development/bmad-code-review/SKILL.md` | 实际源码与检查证据的独立只读评审 |
+
+BMAD 适配固定发布包 6.12.0 的 `gitHead` commit `05bfbd46d00766ec88eb9b42e76be2c575d64d7b`；逐文件原文与该 commit 核对。各目录保留 MIT、来源锁和宿主适配边界，不执行上游脚本/状态/委派约定。
+
 ### 文档与评测类
 
 | Skill | 入口 | 适用场景 |

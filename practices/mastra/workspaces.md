@@ -1,5 +1,7 @@
 # 招聘项目 Workspace
 
+2026-11-07 当前 Studio 补充：产品资料改为已授权 `hrm/product/sources/`，新增 `hrm-product/hrm-testset/hrm-deploy` 三个只读产物视图；宿主按 Run/阶段/hash 归档产品、研发交接、测试和发布记录。下文旧目录/导出命令适用于历史 CLI 与评测，未迁移旧 Run。来源与边界见[统一流程](./unified-workflow.md#hrm-资产落地与资料来源2026-11-07)。
+
 本实践使用 Mastra 原生 Workspace，目录是底层存储，Studio 是查看入口。业务源码留在 `src/` 和 `web/`，不移入资料区。
 
 ## 内容与权限契约

@@ -12,6 +12,8 @@ export interface PracticeConfig {
   modelId: `openai/${string}`;
   apiKey?: string;
   baseUrl?: string;
+  /** Studio 显式绑定的业务仓库；旧 CLI/评测未设置时保持原材料边界。 */
+  hrmRepositoryRoot?: string;
 }
 
 /** 从实践根目录加载独立配置；不查找上级 .env，不输出凭据。 */

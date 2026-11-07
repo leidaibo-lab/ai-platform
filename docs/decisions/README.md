@@ -4,6 +4,14 @@
 
 ## 使用方式
 
+[HRM 项目、迭代、Run 与统一产物目录](./2026-11-07-hrm-asset-catalog.md)：接受；原生步骤装饰与只读目录/下载，Mastra 保留流程审批事实。
+
+最新实践选型：[HRM 单仓资产与资料来源](./2026-11-07-hrm-repository-assets.md)，用户指定 product/testSet/deploy，薄归档 Adapter 与来源 Workspace，代码回库及全栈执行仍待接入。
+
+生命周期选型：[Mastra 完整产研生命周期](./2026-11-07-mastra-full-delivery-lifecycle.md)，恢复测试、部署和最终交付，采用原生嵌套/暂停与人工外部回执；
+
+团队选型：[Mastra 完整产研与动态团队](./2026-11-07-mastra-unified-development-team.md)，Studio 单入口，采用原生嵌套、foreach 并行及受限委派；本轮按要求未运行测试。[BMAD 方法适配](./2026-11-06-mastra-bmad-method-integration.md)继续提供方法来源；真实质量和净收益仍需独立评测。
+
 开发执行切片：[采用 Mastra 原生工作流与受限代码执行](./2026-11-06-mastra-development-execution.md)，接受；独立于旧提案链，能力结论以实测和人评为准。
 
 最近一次审计：[2026-10-12 架构与方案决策存量审计](../audits/2026-10-12-architecture-decisions.md)。审计建议不改变历史接受状态；修复前应检查最新演进关系与稳定契约。
@@ -30,6 +38,8 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-11-07 | [HRM 产物关联与目录](./2026-11-07-hrm-asset-catalog.md) | 接受 | 关联项目/迭代/根 Run，节点自动导出，清单按需重建，预览下载；业务 Run 验收待执行 |
+| 2026-11-06 | [在 Mastra 产研流程中适配 BMAD 方法资产](./2026-11-06-mastra-bmad-method-integration.md) | 接受 | 已接入 v2 产品交接、上下文/任务/就绪、人工批准、实现/检查/评审及交付门；原生离线回归通过，真实质量净收益待验 |
 | 2026-11-06 | [为招聘实践采用 Mastra 原生 Workspace](./2026-11-06-mastra-project-workspaces.md) | 接受 | 业务材料只读、运行产物可重建、量表与 Agent 隔离，显式资料评测固定快照 |
 | 2026-11-06 | [在 Mastra 产品 Agent 中适配整套 pm-skills](./2026-11-06-mastra-pm-skills.md) | 接受 | 全量111项入口与中文治理适配、来源锁及原生按需读取；真实模型质量另验 |
 | 2026-11-06 | [在 Mastra 产品阶段采用固定角色子流程](./2026-11-06-mastra-fixed-product-roles.md) | 接受 | 原生子 Workflow 组合四个固定产品 Agent，人工批准后进入开发；退回产生可追溯新轮次，真实质量收益待验证 |

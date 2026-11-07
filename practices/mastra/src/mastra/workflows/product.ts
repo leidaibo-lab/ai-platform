@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createStep, createWorkflow } from '@mastra/core/workflows';
+import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { PRODUCT_MAX_STEPS } from '../agents/skills.js';
 import type { createAgents } from '../agents/index.js';
@@ -15,6 +15,10 @@ export function createProductWorkflow(
   agents: ReturnType<typeof createAgents>,
   mode: Delivery['mode'],
   schema: typeof deliverySchema,
+  // 仅对步骤附加产物投影，不改变产品角色的执行和批准契约。
+  bind: <T extends Step<any, any, any, any, any, any>>(step: T) => T =
+    // 旧入口不登记业务仓库时保持步骤不变。
+    (step) => step,
 ) {
   const roleAgents = {
     coordinator: agents.productCoordinatorAgent,
@@ -68,9 +72,9 @@ export function createProductWorkflow(
     },
   });
   return createWorkflow({ id: 'draft-product', inputSchema: schema, outputSchema: schema })
-    .then(roleStep('coordinator'))
-    .then(roleStep('clarification'))
-    .then(roleStep('closure'))
-    .then(roleStep('writing'))
-    .then(publish).commit();
+    .then(bind(roleStep('coordinator')))
+    .then(bind(roleStep('clarification')))
+    .then(bind(roleStep('closure')))
+    .then(bind(roleStep('writing')))
+    .then(bind(publish)).commit();
 }

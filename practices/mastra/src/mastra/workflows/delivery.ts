@@ -5,6 +5,7 @@ import type { createAgents } from '../agents/index.js';
 import { revisionSourceSchema } from './revision.js';
 import { maxProductReworks, productReworkSchema, productWorkSchema } from './product-contract.js';
 import { createProductWorkflow } from './product.js';
+import { correlationSchema } from '../../delivery/asset-identity.js';
 
 export const stageSchema = z.enum(['product', 'development', 'testing', 'operations']);
 export type Stage = z.infer<typeof stageSchema>;
@@ -20,6 +21,7 @@ export const reviewSchema = z.object({
 export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
+  correlation: correlationSchema.optional(),
   brief: z.string().trim().min(1).max(12000),
   mode: z.enum(['fixture', 'live']),
   revision: revisionSourceSchema.optional(),
