@@ -22,7 +22,7 @@ export async function assertCandidate(state: Lifecycle, execution: ReturnType<ty
 }
 
 /** 人工确认的用例必须覆盖批准需求，自动用例只能引用已登记检查。 */
-function validateCases(state: Lifecycle, review: z.infer<typeof planApprovalSchema>): void {
+export function validateCases(state: Lifecycle, review: z.infer<typeof planApprovalSchema>): void {
   const ids = new Set<string>();
   const requirements = new Set(state.development.requirements.map(
     // 原文锚点用于结构追溯，语义覆盖由测试负责人确认。
@@ -44,6 +44,36 @@ function validateCases(state: Lifecycle, review: z.infer<typeof planApprovalSche
     // 不允许批准遗漏需求的用例包。
     (item) => item.requirementRefs.includes(ref),
   )) throw new Error('测试用例未覆盖全部产品引用');
+}
+
+/** 在 HTTP 恢复前与节点内共用质量校验，非法结果不消耗暂停点。 */
+export function validateQualityReview(state: Lifecycle, resumeData: z.infer<typeof qualityReviewSchema>) {
+  const manual = state.quality.approval!.cases.filter(
+    // 机器用例不能用人工回执覆盖或改成通过。
+    (item) => item.method === 'manual',
+  );
+  if (new Set(resumeData.manualResults.map(
+    // 每个用例仅接受一次结果。
+    (item) => item.caseId,
+  )).size !== resumeData.manualResults.length || resumeData.manualResults.some(
+    // 多余及非人工用例结果一律拒绝。
+    (item) => !manual.some(
+      // 结果必须来自当前批准用例包。
+      (testCase) => testCase.id === item.caseId,
+    ),
+  )) throw new Error('人工测试结果范围错误或重复');
+  const results = [...state.quality.results, ...resumeData.manualResults.map(
+    // 人工结果独立标注，不伪装成沙箱进程证据。
+    (item) => ({ ...item, authority: 'local-human-report' as const }),
+  )];
+  const refs = [...evidenceRefs(state.development)];
+  validateAssessment({ verdict: resumeData.findings.length ? 'FAIL' : 'PASS', findings: resumeData.findings, coverageRefs: refs, unchecked: [], resolutions: [] }, state.development);
+  if (resumeData.decision === 'pass' && (resumeData.findings.length || results.length !== state.quality.approval!.cases.length || results.some(
+    // 被阻塞或失败的用例不能由质量负责人直接盖成通过。
+    (item) => item.status !== 'passed',
+  ) || !checksPassedV2({ ...state.development, checks: state.quality.checks }))) throw new Error('测试未全部通过或存在缺陷，不能放行发布');
+  if (resumeData.decision === 'rework' && !resumeData.findings.length) throw new Error('退回开发须提供具体缺陷与责任路由');
+  return results;
 }
 
 /** 保留单独测试职责；原生循环处理测试退回后的开发继续与回归。 */
@@ -128,31 +158,7 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
       if (hash !== state.quality.reportHash) throw new Error('测试报告绑定漂移');
       if (!resumeData) return suspend({ hash, quality: state.quality });
       if (resumeData.hash !== hash) throw new Error('测试结果审批版本不匹配');
-      const manual = state.quality.approval!.cases.filter(
-        // 机器用例不能用人工回执覆盖或改成通过。
-        (item) => item.method === 'manual',
-      );
-      if (new Set(resumeData.manualResults.map(
-        // 每个用例仅接受一次结果。
-        (item) => item.caseId,
-      )).size !== resumeData.manualResults.length || resumeData.manualResults.some(
-        // 多余及非人工用例结果一律拒绝。
-        (item) => !manual.some(
-          // 结果必须来自当前批准用例包。
-          (testCase) => testCase.id === item.caseId,
-        ),
-      )) throw new Error('人工测试结果范围错误或重复');
-      const results = [...state.quality.results, ...resumeData.manualResults.map(
-        // 人工结果独立标注，不伪装成沙箱进程证据。
-        (item) => ({ ...item, authority: 'local-human-report' as const }),
-      )];
-      const refs = [...evidenceRefs(state.development)];
-      validateAssessment({ verdict: resumeData.findings.length ? 'FAIL' : 'PASS', findings: resumeData.findings, coverageRefs: refs, unchecked: [], resolutions: [] }, state.development);
-      if (resumeData.decision === 'pass' && (resumeData.findings.length || results.length !== state.quality.approval!.cases.length || results.some(
-        // 被阻塞或失败的用例不能由质量负责人直接盖成通过。
-        (item) => item.status !== 'passed',
-      ) || !checksPassedV2({ ...state.development, checks: state.quality.checks }))) throw new Error('测试未全部通过或存在缺陷，不能放行发布');
-      if (resumeData.decision === 'rework' && !resumeData.findings.length) throw new Error('退回开发须提供具体缺陷与责任路由');
+      const results = validateQualityReview(state, resumeData);
       const quality = { ...state.quality, results, review: resumeData, status: resumeData.decision === 'pass' ? 'passed' as const : resumeData.decision === 'rework' ? 'rework' as const : 'blocked' as const };
       const next = { ...state, quality, outcome: resumeData.decision === 'stop' ? 'blocked' as const : state.outcome };
       return { ...next, quality: { ...quality, reportHash: qualityHash(next) } };

@@ -9,7 +9,7 @@
 | 探索 | 通过自己的实现理解会话、上下文、执行、恢复和治理的设计取舍 | 当前 `src/`、`demo/`、`scripts/` 与 `experiments/`；保留现有 Runtime 主链 |
 | 应用实践 | 按成熟项目的原生架构完成应用，理解它们与探索实现的差异、收益和代价 | [应用实践集合](./practices/README.md)；按 Mastra、pi 等项目分别组织，独立运行 |
 
-应用实践共用业务问题、验收问题和证据记录方式，不要求接入探索主线的 Runtime、Store 或 GatewayClient。先理解原生方案，再基于证据比较；是否集成或迁移是后续独立决策。[Mastra 原生应用](./practices/mastra/README.md)已跑通最小 Agent、Studio、四阶段提案确认，以及[固定四产品角色与人工返工](./practices/mastra/product-workflow.md)的确定性验证；真实质量收益与工程执行尚未验收。pi 仍为学习入口。
+应用实践共用业务问题、验收问题和证据记录方式，不要求接入探索主线的 Runtime、Store 或 GatewayClient。先理解原生方案，再基于证据比较；是否集成或迁移是后续独立决策。[Mastra 原生应用](./practices/mastra/README.md)已形成产品、动态团队开发、独立测试和发布回执的[完整产研主链](./practices/mastra/unified-workflow.md)，由[工作台](./practices/mastra/guided-intake.md)承接人工关口；真实业务全链路、代码回库与自动 CI/CD 尚未验收。pi 仍为学习入口。
 
 以下项目架构、当前能力和快速开始描述的是**探索主线**。
 

@@ -1,0 +1,138 @@
+import { useEffect, useState } from 'react';
+import { WorkflowGateForm, type WorkflowGate } from './WorkflowGate';
+import { Markdown } from './components/Markdown';
+import './intake.css';
+interface Question { id: string; title: string; reason: string; required: boolean; kind: 'single' | 'multiple' | 'text'; options: { id: string; label: string }[]; recommendation: string }
+interface Answer { questionId: string; selected: string[]; custom: string }
+interface Document { outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+/** 从实际关口映射业务阶段，避免进入开发后仍高亮需求输入。 */
+function intakeStage(document?: Document): number {
+  if (document?.product) return 1;
+  if (document?.gate) return ['confirm-project-scope', 'approve-architecture', 'resolve-readiness', 'resolve-findings', 'recover-development'].includes(document.gate.key) ? 2 : 3;
+  return document?.outcome ? 3 : 0;
+}
+/** 同源业务 API，不自动重试写操作或把推荐项变为答案。 */
+async function request<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`/intake-api/runs${path}`, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error ?? '请求失败');
+  return data;
+}
+/** 主流程需求入口；只有未提交表单属于 React，所有已确认内容来自快照。 */
+export function IntakeApp() {
+  const [id, setId] = useState(new URLSearchParams(location.search).get('run') ?? '');
+  const [document, setDocument] = useState<Document>();
+  const [runs, setRuns] = useState<Document[]>([]);
+  const [brief, setBrief] = useState('');
+  const [iterationId, setIterationId] = useState('unassigned');
+  const [answers, setAnswers] = useState<Record<string, Answer>>({});
+  const [reviewer, setReviewer] = useState('');
+  const [supplement, setSupplement] = useState('');
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [approving, setApproving] = useState(false);
+  /** 深链接与所选 Run 一致，刷新恢复当前人工节点。 */
+  function choose(value: string) {
+    setId(value); setDocument(undefined); setAnswers({}); setSupplement(''); setComment(''); setError(''); setApproving(false);
+    const url = new URL(location.href); value ? url.searchParams.set('run', value) : url.searchParams.delete('run'); history.replaceState(null, '', url);
+  }
+  /** 回读不重发用户决定，网络失败保留表单。 */
+  async function refresh(value = id) {
+    try {
+      if (value) {
+        const next = await request<Document>(`/${value}`);
+        if (next.intake?.hash !== document?.intake?.hash || next.product?.artifact.hash !== document?.product?.artifact.hash) { setAnswers({}); setSupplement(''); setApproving(false); setComment(''); }
+        setDocument(next);
+      }
+      setRuns((await request<{ runs: Document[] }>('')).runs);
+    } catch (reason) { setError((reason as Error).message); }
+  }
+  // 切换记录时丢弃旧响应，不让其他 Run 覆盖当前表单。
+  useEffect(() => {
+    if (busy) return;
+    let active = true;
+    /** 载入当前页面状态。 */
+    async function load() {
+      try {
+        const list = await request<{ runs: Document[] }>('');
+        const current = id ? await request<Document>(`/${id}`) : undefined;
+        if (active) { setRuns(list.runs); setDocument(current); }
+      } catch (reason) { if (active) setError((reason as Error).message); }
+    }
+    void load();
+    // 页面切换后忽略迟到响应。
+    return () => { active = false; };
+  }, [id]);
+  /** 创建前固定 UUID，即使响应丢失仍可按地址找回同一流程。 */
+  async function start() {
+    const runId = crypto.randomUUID(); choose(runId); setBusy(true); setError('');
+    try { const next = await request<Document>('', { runId, brief, iterationId }); setDocument(next); setRuns([next, ...runs]); }
+    catch (reason) { setError(`${(reason as Error).message} 可点击刷新读取本次流程。`); }
+    finally { setBusy(false); }
+  }
+  /** 仅在版本变化后清空回答，失败时保留当前输入用于检查。 */
+  async function submit(body: unknown) {
+    setBusy(true); setError('');
+    try {
+      const next = await request<Document>(`/${id}/respond`, body);
+      setDocument(next); window.scrollTo({ top: 0, behavior: 'smooth' }); setRuns(runs.map(/** 当前 Run 状态随已保存响应同步。 */run => run.runId === next.runId ? next : run)); setAnswers({}); setSupplement(''); setApproving(false);
+    } catch (reason) { setError((reason as Error).message); }
+    finally { setBusy(false); }
+  }
+  /** 更新一个问题的显式选择，用户可以用补充文本覆盖或说明。 */
+  function update(q: Question, selected: string[], custom: string) {
+    setAnswers({ ...answers, [q.id]: { questionId: q.id, selected, custom } });
+  }
+  const intake = document?.intake;
+  const questions = intake?.plan.questions ?? [];
+  const complete = questions.every(/** 必答必须显式选择或填写，不读取推荐作为默认。 */q => !q.required || !!answers[q.id]?.selected.length || !!answers[q.id]?.custom.trim());
+  /** 业务问题与当前 hash 一起提交，服务端重复执行相同校验。 */
+  function respond(action: 'refine' | 'finalize') {
+    void submit({ hash: intake!.hash, action, reviewer, answers: Object.values(answers), supplement });
+  }
+  /** 产品批准与业务回答分开提交，继续停在项目范围授权。 */
+  function review(decision: 'approve' | 'reject') {
+    void submit({ role: 'product', artifactHash: document!.product!.artifact.hash, decision, reviewer, comment });
+  }
+  return <div className="intake-shell">
+    <aside className="intake-sidebar"><a className="intake-brand" href="/">◈ 产研工作台</a><p>从想法到可执行需求</p>
+      <button disabled={busy} onClick={/** 新建需求只重置本地页面。 */() => choose('')}>＋ 新需求</button>
+      <h3>最近的主流程</h3>{runs.map(/** 历史列表只选择，不恢复审批。 */run => <button className={id === run.runId ? 'selected' : ''} key={run.runId} disabled={busy} onClick={/** 打开保存的 Run。 */() => choose(run.runId)}>{run.brief.slice(0, 32) || run.runId}<small>{run.step === 'review-product' ? '等待产品确认' : run.step === 'guided-requirements' ? '等待需求回答' : run.step === 'confirm-project-scope' ? '等待项目授权' : run.status === 'failed' ? '生成失败' : run.gate ? `待办：${run.gate.title}` : run.status === 'success' ? '本轮已结束' : '流程记录'}</small></button>)}
+      <small>所有确认在此工作台完成</small>
+    </aside>
+    <main className="intake-main"><header><span>产研交付 · 业务流程</span><button disabled={busy} onClick={/** 刷新只回读事实。 */() => void refresh()}>刷新状态</button></header>
+      <div className="intake-progress"><span className={intakeStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={intakeStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={intakeStage(document) === 2 ? 'active' : ''}>03 开发授权与实施</span><span className={intakeStage(document) === 3 ? 'active' : ''}>04 测试与发布</span></div>
+      {error && <div role="alert" className="intake-error">{error}</div>}
+      {busy && <p role="status">正在处理，请勿重复提交。完成后会自动展示下一步…</p>}
+      {!id ? <section className="intake-card"><div className="intake-eyebrow">先描述问题，让方案逐步清晰</div><h1>你想解决什么问题？</h1><p>说明使用者、当前困难和期望结果。我们会先给出方案建议，再请你确认关键选择。</p>
+        <label>需求描述<textarea value={brief} maxLength={12000} rows={8} placeholder="例如：招聘同事希望统一处理候选人初筛和面试邀约，目前靠表格记录，容易遗漏跟进…" onChange={/** 保留原始输入。 */e => setBrief(e.target.value)} /></label>
+        <label>迭代标识<input value={iterationId} maxLength={100} onChange={/** 标识显式绑定本次主流程。 */e => setIterationId(e.target.value)} /></label>
+        <button className="primary" disabled={busy || !brief.trim() || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)} onClick={start}>分析需求，形成初步方案 →</button>
+      </section> : <>
+        <section className="intake-context"><small>原始需求 · {document?.mode === 'fixture' ? '固定样例，不理解业务输入' : document?.mode === 'live' ? '真实模型提案，待人工审核' : '正在载入'}</small><p>{document?.brief || brief}</p><code>{id}</code></section>
+        {intake && <><section className="intake-card"><div className="intake-eyebrow">第 {intake.round} / 4 轮 · 方案建议</div><h1>先对齐方向，再完善需求</h1><Markdown>{intake.plan.summary}</Markdown>{intake.plan.assumptions.length > 0 && <div className="intake-assumptions"><strong>当前假设 · 尚未作为事实确认</strong>{intake.plan.assumptions.map(/** 假设与方案明确区分。 */(item, index) => <p key={index}>{item}</p>)}</div>}</section>
+          <section className="intake-card">{intake.history.length > 0 && <details><summary>查看已提交的确认记录（{intake.history.length} 轮）</summary>{intake.history.map(/** 回答原样回读，选择标签来自对应历史方案。 */(entry, index) => <div className="intake-assumptions" key={index}><strong>第 {index + 1} 轮 · {entry.response.reviewer}</strong>{entry.response.answers.map(/** 用本轮选项解释已确认答案。 */answer => { const q = entry.plan.questions.find(/** 按历史 ID 查找问题。 */item => item.id === answer.questionId); return <p key={answer.questionId}>{q?.title}：{answer.selected.map(/** 展示历史选项标签。 */id => q?.options.find(/** 按 ID 关联标签。 */option => option.id === id)?.label ?? id).join('、')} {answer.custom}</p>; })}{entry.response.supplement && <p>补充：{entry.response.supplement}</p>}</div>)}</details>}<h2>需要你确认的选择</h2><p>推荐供参考。你可以选择其他方案，或填写自己的答案。</p>
+          {questions.length === 0 && <p>当前没有新增关键问题。你仍可补充要求，或生成完整产品稿。</p>}
+          {questions.map(/** 每个业务问题独立绑定稳定 ID。 */q => {
+            const a = answers[q.id] ?? { questionId: q.id, selected: [], custom: '' };
+            return <fieldset key={q.id}><legend>{q.title} <small>{q.required ? '必须确认' : '可选补充'}</small></legend><p>{q.reason}</p><div className="intake-recommendation">建议：{q.recommendation}</div>
+              {q.options.map(/** 选项不预选，点击才形成用户输入。 */option => <label className="intake-option" key={option.id}><input type={q.kind === 'multiple' ? 'checkbox' : 'radio'} name={q.id} checked={a.selected.includes(option.id)} onChange={/** 多选按 ID 去重，单选替换前值。 */e => update(q, q.kind === 'multiple' ? (e.target.checked ? [...a.selected, option.id] : a.selected.filter(/** 移除取消项。 */item => item !== option.id)) : [option.id], a.custom)} />{option.label}</label>)}
+              <label>{q.kind === 'text' ? '你的回答' : '其他方案或补充说明'}<textarea rows={2} maxLength={4000} value={a.custom} onChange={/** 自由文本作为显式答案。 */e => update(q, a.selected, e.target.value)} /></label>
+            </fieldset>;
+          })}
+          <label>其他补充<textarea value={supplement} maxLength={4000} onChange={/** 补充与当前问题回答一并保存。 */e => setSupplement(e.target.value)} /></label>
+          <label>确认人（本地标签）<input value={reviewer} maxLength={100} onChange={/** 标签不暗示认证身份。 */e => setReviewer(e.target.value)} /></label>
+          <div className="intake-actions"><button disabled={busy || !complete || !reviewer.trim() || intake.round >= 4} onClick={/** 回答后重新形成方案，仍须确认。 */() => respond('refine')}>回答并完善方案</button><button className="primary" disabled={busy || !complete || !reviewer.trim()} onClick={/** 显式结束澄清，进入完整稿生成。 */() => respond('finalize')}>按当前回答生成完整产品稿 →</button></div>
+          {!complete && <small>请先回答所有“必须确认”的问题。</small>}
+          </section></>}
+        {document?.product && <section className="intake-card"><div className="intake-eyebrow">完整产品稿 · 待确认</div><h1>审核这份产品需求</h1><Markdown>{document.product.artifact.content}</Markdown><details><summary>版本标识</summary><code>{document.product.artifact.hash}</code></details>
+          <label>审阅人<input value={reviewer} maxLength={100} onChange={/** 产品审阅单独记录操作者。 */e => setReviewer(e.target.value)} /></label><label>审阅意见<textarea value={comment} maxLength={2000} onChange={/** 明确记录产品决定依据。 */e => setComment(e.target.value)} /></label>
+          {approving ? <div className="intake-assumptions"><p>确认当前版本后，本页将展示项目文件与可写范围授权。实施前仍需确认开发方案。</p><button className="primary" disabled={busy} onClick={/** 二次确认只批准当前 hash。 */() => review('approve')}>确认产品版本并继续</button><button disabled={busy} onClick={/** 取消不推进。 */() => setApproving(false)}>取消</button></div> : <div className="intake-actions"><button disabled={busy || !reviewer.trim() || !comment.trim()} onClick={/** 终止只作用当前产品轮次。 */() => review('reject')}>拒绝并结束</button><button className="primary" disabled={busy || !reviewer.trim() || !comment.trim()} onClick={/** 先展示下一步影响。 */() => setApproving(true)}>确认产品稿 →</button></div>}
+        </section>}
+        {document?.gate && <WorkflowGateForm key={document.gate.gateHash} gate={document.gate} busy={busy} submit={submit} />}
+        {document && !intake && !document.product && !document.gate && <section className="intake-card"><h2>{document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{document.status === 'failed' ? '已保存的记录仍可查看。请核对当前结果后另起需求，避免重复提交已完成的确认。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>}
+      </>}
+    </main>
+  </div>;
+}

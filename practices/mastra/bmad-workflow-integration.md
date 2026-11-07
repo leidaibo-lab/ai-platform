@@ -1,5 +1,7 @@
 # BMAD 方法与 Mastra 工作流融合设计
 
+> 文档范围：旧双 Workflow 与 CLI 交接的版本记录。当前操作使用[产研工作台](./guided-intake.md)，当前主链与返工边界见[完整产研流程](./unified-workflow.md)。本文历史计数不表示当前测试总数。
+
 **2026-11-07 演进**：Studio 已替换为一条[完整产研流程](./unified-workflow.md)，产品批准后在同一 Run 确认项目并继续动态团队开发。原生 `foreach` 按依赖波次并行，任务负责人通过受限 `delegateTask` 委派。下文双 Workflow、CLI 交接与串行实现是 11 月 6 日版本记录；旧入口不再注册到 Studio。新边界见[统一团队决策](../../docs/decisions/2026-11-07-mastra-unified-development-team.md)。本轮不运行测试。
 
 2026-11-06，状态：**v2 已接入受限运行，真实质量收益待验**。用户明确要求修改运行流程后，已实现两个版本化 Workflow；原生离线回归与真实业务质量分开。选型与剩余边界见[融合决策](../../docs/decisions/2026-11-06-mastra-bmad-method-integration.md)。

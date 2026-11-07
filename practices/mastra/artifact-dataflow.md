@@ -2,7 +2,7 @@
 
 2026-11-07：接通完整产研 Workflow 的项目、迭代、根 Run 与分阶段产物。采用现有 Mastra 原生步骤和 API route，适配不可变文件清单；不新增依赖、服务或审批库。选型及未采用方案见[决策记录](../../docs/decisions/2026-11-07-hrm-asset-catalog.md)。
 
-本地查看入口：<http://127.0.0.1:4111/delivery-assets>。同一个 Studio 服务提供页面与接口；先启动本实践 `npm run dev`。页面按项目、迭代、Run、阶段筛选，可查看阶段历史版本、预览纯文本、下载单文件或含清单的 JSON 包。页面不会审批或恢复流程，链接回 Studio 原生 Run 查看流程事实。当前历史 Run 尚未迁移，因此初始空态是真实状态。
+本地查看入口：<http://127.0.0.1:4111/delivery-assets>。同一个 Studio 服务提供页面与接口；先启动本实践 `npm run dev`。页面按项目、迭代、Run、阶段筛选，可查看阶段历史版本、预览纯文本、下载单文件或含清单的 JSON 包。本产物查看页只读；人工决定在[产研工作台](http://127.0.0.1:4112/)提交，也可链接回 Studio 原生 Run 调试流程事实。当前历史 Run 尚未迁移，因此初始空态是真实状态。
 
 ![HRM 产物数据流转](../../docs/assets/mastra-hrm-artifact-dataflow.png)
 

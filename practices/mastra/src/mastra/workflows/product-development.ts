@@ -1,6 +1,7 @@
 /** 单个原生 Run 串联产品、动态开发团队、独立测试和外部发布回执。
  * ADR: docs/decisions/2026-11-07-mastra-full-delivery-lifecycle.md
  */
+import { createIntakeWorkflow } from '../../intake/workflow.js';
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -24,7 +25,7 @@ import { assetIdSchema, correlationSchema } from '../../delivery/asset-identity.
 import { registerAssetRun } from '../../delivery/asset-catalog.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 
-const inputSchema = z.object({ iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
+const inputSchema = z.object({ guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
 const scopeReviewSchema = z.object({ project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 
 /** 将每个 Run 的候选目录与输入绑定，步骤结束即关闭执行环境。 */
@@ -54,7 +55,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     execute: async ({ inputData, runId }) => {
       const correlation = correlationSchema.parse({ projectId: 'hrm', iterationId: inputData.iterationId, runId, workflowId: 'productDevelopmentWorkflow' });
       if (config.hrmRepositoryRoot) registerAssetRun(config.hrmRepositoryRoot, correlation, inputData.brief);
-      return { brief: inputData.brief, correlation, mode: config.mode, artifacts: [], reviews: [], outcome: 'in-progress' as const };
+      return { intake: { enabled: !!inputData.guidedIntake, ready: false, round: 0, history: [] }, brief: inputData.brief, correlation, mode: config.mode, artifacts: [], reviews: [], outcome: 'in-progress' as const };
     },
   });
   const review = createStep({ id: 'review-product', description: '人工确认产品需求与验收边界', inputSchema: deliverySchema, outputSchema: deliverySchema, suspendSchema: pendingSchema, resumeSchema: reviewSchema,
@@ -105,7 +106,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     },
   });
   return createWorkflow({ id: 'product-development', description: '完整产研：产品 → 开发（动态团队、并行、受限委派）→ 测试（缺陷修复与回归）→ 部署（审批、外部回执、健康检查与回滚）→ 最终交付', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
-    .then(withRepositoryAssets(initialize, config)).then(createProductWorkflow(agents, config.mode, deliverySchema,
+    .then(withRepositoryAssets(initialize, config)).then(createIntakeWorkflow(agents, config.mode)).then(createProductWorkflow(agents, config.mode, deliverySchema,
       // 每个产品职责形成独立可追溯版本，保持原生子流程结构。
       (step) => withRepositoryAssets(step, config),
     )).then(withRepositoryAssets(review, config)).then(withRepositoryAssets(scope, config)).then(development).then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, execution, generate)).then(createDeploymentWorkflow(agents, config, execution)).then(withRepositoryAssets(execution.bind(finish), config)).commit();

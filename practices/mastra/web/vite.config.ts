@@ -7,11 +7,13 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
+      "/intake-api": { target: "http://127.0.0.1:4111", changeOrigin: true },
       "/review-api": { target: "http://127.0.0.1:4111", changeOrigin: true },
     },
   },
   preview: {
     proxy: {
+      "/intake-api": { target: "http://127.0.0.1:4111", changeOrigin: true },
       "/review-api": { target: "http://127.0.0.1:4111", changeOrigin: true },
     },
   },

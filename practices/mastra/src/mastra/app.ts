@@ -1,3 +1,4 @@
+import { createIntakeRoutes } from '../intake/routes.js';
 import { createAssetRoutes } from '../delivery/asset-routes.js';
 import { Mastra } from '@mastra/core';
 import { createDevelopmentNodeWorkflows } from '../evaluation/development-nodes.js';
@@ -19,13 +20,14 @@ import { createProductDevelopmentWorkflow } from './workflows/product-developmen
 export function createStudioApplicationOptions(config: PracticeConfig) {
   const repository = config.hrmRepositoryRoot ? validateHrmRepository(config.hrmRepositoryRoot) : undefined;
   const agents = createAgents(config, repository ? { workspace: createRecruitmentWorkspace(config.rootDir, join(repository, 'product/sources')) } : {});
+  const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config);
   return {
     agents: { productCoordinatorAgent: agents.productCoordinatorAgent, productClarificationAgent: agents.productClarificationAgent, productClosureAgent: agents.productClosureAgent, productAgent: agents.productAgent, testingAgent: agents.testingAgent, operationsAgent: agents.operationsAgent },
     scorers: createNodeScorers(config),
-    workflows: { productDevelopmentWorkflow: createProductDevelopmentWorkflow(agents, config), ...createDevelopmentNodeWorkflows(config) },
+    workflows: { productDevelopmentWorkflow, ...createDevelopmentNodeWorkflows(config) },
     storage: new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl }),
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
-    server: { host: '127.0.0.1', port: config.port, apiRoutes: createAssetRoutes(config) },
+    server: { host: '127.0.0.1', port: config.port, apiRoutes: [...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode)] },
   };
 }
 

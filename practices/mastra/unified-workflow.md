@@ -2,10 +2,13 @@
 
 2026-11-07 起，Studio业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）；另注册六个具名开发独立评测Workflow，仅在隔离候选中考核单个角色。旧提案链、独立产品交接及修订入口从 Studio 移除；历史源文件与数据库保留，旧 CLI 仅作兼容。
 
-启动 `npm run dev`，打开 `http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph`。首次输入 `{ "iterationId": "recruitment-001", "brief": "你的需求" }`；迭代未指定时默认 `unassigned`。图中的 Workflow 可展开查看产品、开发、测试与部署子步骤。主链保持一个 Run，各角色在自己的子流程内扩展。
+日常操作按 [README](./README.md#启动)启动后端与前端，打开[产研工作台](http://127.0.0.1:4112/)；所有人工关口可在工作台完成。以下 Studio 图和 Resume JSON 供技术调试及契约查阅。
+
+启动后端 `npm run dev`，打开 `http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph`。首次输入 `{ "iterationId": "recruitment-001", "brief": "你的需求" }`；迭代未指定时默认 `unassigned`。图中的 Workflow 可展开查看产品、开发、测试与部署子步骤。主链保持一个 Run，各角色在自己的子流程内扩展。
 
 ```text
 原始需求
+  → guidedIntake=true 时：方案摘要 → 关键问题确认 → 回答后修订（最多四轮）
   → 总产品 → 需求梳理 → 产品闭环 → 产品写作
   → review-product：人工确认产品版本
   → confirm-project-scope：确认文件快照、可写范围和角色
@@ -130,10 +133,6 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 
 终态 `delivery-confirmed` 表示基于已收集证据确认交付，不表示远程机器独立验证；fixture 模式仅产生 `fixture-completed`。其他终态包括 `blocked/rework-exhausted/rejected/rolled-back/manual-attention`。产品审批前的拒绝/退回仍保留原产品状态结构。新图使用新 Run；旧 Run 不承诺跨版本透明续跑。
 
-## 本轮验证
-
-按用户要求未新增或运行测试，未发起真实模型业务 Run。仅完成 TypeScript 类型检查、运行中的 dev 编译及只读 API 图数据核对；API 只注册一个 Workflow，主链包含 testing、deployment 与最终交付。浏览器控制当前不可用，未进行图形界面交互验收。历史测试计数不证明本轮团队、缺陷修复或发布执行成功。真实模型、业务测试覆盖、远程发布/回滚与跨实例恢复未验收。
-
 采用锁定版本的原生 Workflow 嵌套与 `foreach concurrency`，未采用 Agent network 自由路由或自建通用调度引擎；原因、维护责任、退出及重评条件见[决策记录](../../docs/decisions/2026-11-07-mastra-unified-development-team.md)。
 
 测试与部署的选型、人工回执边界和重评条件见[完整产研生命周期决策](../../docs/decisions/2026-11-07-mastra-full-delivery-lifecycle.md)。
@@ -148,24 +147,20 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 | 测试计划、用例、结果、缺陷与历史 | `testSet/runs/<runId>/<stage>/<hash>/` |
 | 发布方案、范围、发布/健康/回滚回执、最终状态 | `deploy/runs/<runId>/<stage>/<hash>/` |
 
-宿主在角色关口暂停前/返回后导出，manifest 最后落盘，同版本不覆盖。导出失败节点显式失败，不能绕过失败宣称已归档；尚需真实 Run 验收失败后补归档和恢复。文件是交付投影，审批与恢复继续以原生 Store 为准。Studio 另提供 `hrm-product/hrm-testset/hrm-deploy` 三个只读文件视图。
+宿主在角色关口暂停前/返回后导出，manifest 最后落盘，同版本不覆盖。导出失败节点显式失败，不能绕过失败宣称已归档；尚需真实 Run 验收失败后补归档和恢复。文件是交付投影，审批与恢复继续以原生 Store 为准。后端另提供 `hrm-product/hrm-testset/hrm-deploy` 三个只读文件视图。
 
 来源清单为 `hrm/product/sources/manifest.json`，目前复制原始 brief 并登记出处/散列，pm-hrm 仅登记参考尚未加载。当前用户确认和本 Run 批准需求决定范围。`sources-observed-at-export.json` 只是归档时来源清单，不能证明生成时工具实际读取；逐 Run 冻结及工具引用仍是待办。
 
-本轮仅静态检查及只读 API 装配核对，没有运行测试/业务 Run/部署，也没有提交或推送 HRM。代码回库、全栈执行、CI/制品、历史 Run 补导出和恢复等剩余项见 `hrm/docs/delivery-assets.md` 与[资产决策](../../docs/decisions/2026-11-07-hrm-repository-assets.md)。
+代码回库、全栈执行、CI/制品、历史 Run 补导出和恢复等剩余项见 `hrm/docs/delivery-assets.md` 与[资产决策](../../docs/decisions/2026-11-07-hrm-repository-assets.md)。
 
 ## 产物归档与查看（2026-11-07）
 
-已将项目、迭代和根 Run 关联贯穿产品、开发、测试与发布；所有角色阶段的完成/暂停关口归档不可变文本投影。统一查看入口为 `http://127.0.0.1:4111/delivery-assets`，提供筛选、历史版本、纯文本预览、单文件和 JSON 包下载；原生 Studio 继续拥有审批和恢复。结构、接口、归档时机、实际限制与 SVG/PNG 数据流转图见[详细说明](./artifact-dataflow.md)。历史 Run 无关联时保留未关联状态，不自动归入本次迭代；本轮未运行测试或业务 Run。
+已将项目、迭代和根 Run 关联贯穿产品、开发、测试与发布；所有角色阶段的完成/暂停关口归档不可变文本投影。统一查看入口为 `http://127.0.0.1:4111/delivery-assets`，提供筛选、历史版本、纯文本预览、单文件和 JSON 包下载；工作台提交人工决定，原生 Workflow 与 Store 继续拥有审批事实和恢复。结构、接口、归档时机、实际限制与 SVG/PNG 数据流转图见[详细说明](./artifact-dataflow.md)。历史 Run 无关联时保留未关联状态，不自动归入本次迭代。
 
 
-## 2026-11-07 能力检测补充
+## 验证与历史证据
 
-新版可靠性回归已补齐，14项新增、全实践136/136通过，并修复QA报告因字段顺序规范化产生的假漂移。覆盖主链、跨Store暂停恢复、真实并行/依赖、成员失败隔离、委派越权、测试返工和发布/回滚门禁。真实模型业务切片独立记录，不能以回归计数宣称质量通过。命令、证据与边界见[能力检测记录](./evaluations/reliability/2026-11-07.md)。
-
-
-架构诊断续验：v2故障/恢复载荷新增可选脱敏diagnostic，真实冻结输入定位`context-ref-unknown`。补充分组引用与字段规则后，同一输入架构复测通过；全实践139/139回归通过。此结果仅覆盖架构阶段，完整业务交付尚未通过，详见上述检测记录。
-
+可靠性回归、架构续验与真实业务阶段结果见[检测记录](./evaluations/reliability/2026-11-07.md)；前端及 HTTP 关口验证见[工作台契约](./guided-intake.md)。固定模式通过不代表真实模型质量或实际部署通过，完整业务交付尚未验收。历次计数和阶段观察保存在[整理前快照](./unified-workflow-history-2026-11-07.md)，不作为当前测试总数。
 
 ## Agent 资源归属核对
 
@@ -177,9 +172,6 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 
 ## 原生评测面板
 
-产品角色、独立测试与部署方案已接入Mastra原生Datasets、Scorers和Experiments。运行`npm run eval:native:seed`导入，`npm run eval:native -- --run`追加实验；在Studio的Datasets/Experiments查看结果和对比。首批6组18例，动态开发节点尚未全部接入。用例版本、质量判定、live/fixture与验证边界见[原生节点评测](./evaluations/native/README.md)。
+原生 Datasets、Scorers、Experiments 的用例与命令见[原生节点评测](./evaluations/native/README.md)、[开发独立节点评测](./evaluations/native/development-nodes/README.md)及[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)。角色评测不代表动态团队、业务审批或发布路径已验收。
 
-
-固定流程已补[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)：三例真实评审/返工专项中两例通过，修复例因复评报告校验失败保持暂停，未放宽交付门。详见[实测记录](./evaluations/native/review-rework/observations-2026-11-07.md)。
-
-六类开发上下文、架构、就绪、实现、自检、代码评审的独立原生数据集与执行目标已补齐，每类3例；用例、命令与验收边界见[开发独立节点评测](./evaluations/native/development-nodes/README.md)。业务审批、动态团队与发布路径不因此自动通过。
+前端需求澄清、完整稿及全部后续人工关口见[工作台契约](./guided-intake.md)；直接使用 Studio 原始输入默认跳过澄清。
