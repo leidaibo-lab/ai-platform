@@ -13,7 +13,7 @@ import { seedDevelopment } from '../../development-service.js';
 import { developmentHash, projectSchema } from '../../development/contracts.js';
 import { inputV2Schema, stateV2Schema, type InputV2 } from '../../development/v2/contracts.js';
 import { createExecutionScope } from '../../development/v2/execution-scope.js';
-import { generateV2 } from '../../development/v2/agents.js';
+import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from './delivery.js';
 import { createProductWorkflow } from './product.js';
 import { createDevelopmentWorkflowV2 } from './development-v2.js';
@@ -48,7 +48,7 @@ function executionResolver(config: PracticeConfig) {
 }
 
 /** 采用 Workflow 嵌套和 foreach；人工批准保持为原生 suspend/resume。 */
-export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig) {
+export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2) {
   const initialize = createStep({ id: 'initialize-product-development', description: '从原始需求启动完整产研流程', inputSchema, outputSchema: deliverySchema,
     // 不接受客户端伪造产品稿、批准或模式。
     execute: async ({ inputData, runId }) => {
@@ -87,7 +87,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     },
   });
   const execution = createExecutionScope(executionResolver(config));
-  const development = createDevelopmentWorkflowV2(config, execution.port, false, generateV2, { id: 'development-team', team: true, bind: execution.bind });
+  const development = createDevelopmentWorkflowV2(config, execution.port, false, generate, { id: 'development-team', team: true, bind: execution.bind });
   const lifecycle = createStep({ id: 'initialize-delivery-lifecycle', description: '研发交付进入独立测试和发布主链', inputSchema: stateV2Schema, outputSchema: lifecycleSchema,
     // 新生命周期保存各轮角色证据，原开发状态及累计预算保持不变。
     execute: async ({ inputData, getInitData }) => lifecycleSchema.parse({ version: 'delivery-lifecycle.v1', brief: getInitData<z.infer<typeof inputSchema>>().brief, development: inputData, quality: emptyQuality(), qualityHistory: [], developmentHistory: [], release: { plan: null, qualityHash: null, approval: null, hash: null, receipt: null, health: null, rollback: null, authority: 'local-human-report' }, outcome: inputData.outcome === 'development-delivered' ? 'in-progress' : inputData.outcome === 'rework-exhausted' ? 'rework-exhausted' : 'blocked', limitations: ['自动测试仅执行项目授权的登记套件，语义覆盖由测试负责人确认，人工用例结果单独标记。', '部署、健康及回滚由外部平台执行并人工回填；当前未接入自动 CI/CD 或认证身份。'] }),
@@ -108,5 +108,5 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     .then(withRepositoryAssets(initialize, config)).then(createProductWorkflow(agents, config.mode, deliverySchema,
       // 每个产品职责形成独立可追溯版本，保持原生子流程结构。
       (step) => withRepositoryAssets(step, config),
-    )).then(withRepositoryAssets(review, config)).then(withRepositoryAssets(scope, config)).then(development).then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, execution)).then(createDeploymentWorkflow(agents, config, execution)).then(withRepositoryAssets(execution.bind(finish), config)).commit();
+    )).then(withRepositoryAssets(review, config)).then(withRepositoryAssets(scope, config)).then(development).then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, execution, generate)).then(createDeploymentWorkflow(agents, config, execution)).then(withRepositoryAssets(execution.bind(finish), config)).commit();
 }

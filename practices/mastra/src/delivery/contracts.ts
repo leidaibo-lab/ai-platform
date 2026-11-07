@@ -23,7 +23,9 @@ export type Lifecycle = z.infer<typeof lifecycleSchema>;
 
 /** QA 审阅绑定计划、用例批准、源码及真实检查，不能重用旧版本通过记录。 */
 export function qualityHash(state: Lifecycle): string {
-  return developmentHash({ sourceHash: state.quality.sourceHash, plan: state.quality.plan, approval: state.quality.approval, checks: state.quality.checks, results: state.quality.results, review: state.quality.review });
+  // 与原生步骤持久化使用同一 schema 字段顺序，避免对象构造顺序造成假漂移。
+  const quality = qualityStateSchema.parse(state.quality);
+  return developmentHash({ sourceHash: quality.sourceHash, plan: quality.plan, approval: quality.approval, checks: quality.checks, results: quality.results, review: quality.review });
 }
 
 /** 发布绑定测试通过记录、源码与整个发布范围；外部回执只能匹配此版本。 */

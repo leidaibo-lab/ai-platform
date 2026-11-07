@@ -327,6 +327,6 @@ export function createDevelopmentWorkflowV2(config: PracticeConfig, execution: E
 }
 
 /** 测试退回时从原开发状态继续，不丢失任务、评审、源码和预算。 */
-export function createDevelopmentContinuationV2(config: PracticeConfig, execution: ExecutionPort, options: DevelopmentWorkflowOptions = {}) {
-  return createDevelopmentFlowsV2(config, execution, false, generateV2, options).continuation;
+export function createDevelopmentContinuationV2(config: PracticeConfig, execution: ExecutionPort, options: DevelopmentWorkflowOptions = {}, generate: GeneratorV2 = generateV2) {
+  return createDevelopmentFlowsV2(config, execution, false, generate, options).continuation;
 }

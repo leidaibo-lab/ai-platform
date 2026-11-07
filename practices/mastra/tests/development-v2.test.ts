@@ -468,3 +468,29 @@ test('v2只读评审角色只注册必要方法且原生skill_read拒绝越界',
     assert.equal(await app.execution.readFile('src/solution.mjs'), initial);
   }, undefined, false);
 });
+
+// 不记录模型正文、任意错误或SDK请求，只持久化固定约束代码。
+for (const mismatch of [{ field: 'verificationRefs', code: 'check-ref-unregistered' }, { field: 'contextRefs', code: 'context-ref-unknown' }]) {
+// 两种引用域错误都必须持久化诊断并保持失败关闭。
+test(`v2架构诊断持久化且脱敏：${mismatch.code}`, async () => {
+  /** 仍真实读取方法，随后注入一个未登记检查引用。 */
+  const generate: GeneratorV2 = async (...args) => {
+    const entry = await generateV2(...args);
+    if (args[2] !== 'architect') return entry;
+    const plan = JSON.parse(entry.text); plan.tasks[0][mismatch.field] = ['secret-injected-check'];
+    return { ...entry, text: JSON.stringify(plan) };
+  };
+  await fixture(
+    /** 从原生持久快照核对脱敏诊断，不信任内存错误对象。 */
+    async (app) => {
+      const run = await app.workflow.createRun(); assert.equal((await run.start({ inputData: app.input })).status, 'suspended');
+      const state = await pending(app, run.runId, 'recover-development');
+      assert.deepEqual(state.faults[0].diagnostic, { stage: 'constraint', code: mismatch.code });
+      assert.deepEqual(state.recovery?.diagnostic, state.faults[0].diagnostic);
+      assert.ok(!JSON.stringify(state.faults).includes('secret-injected-check'));
+      assert.equal(state.work.some(/** 失败方案不能形成有效方案证据。 */(entry) => entry.role === 'architect'), false);
+    }, generate,
+  );
+});
+
+}

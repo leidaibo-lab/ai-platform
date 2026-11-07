@@ -22,7 +22,8 @@
     "review:build": "npm --prefix web run build",
     "review:preview": "npm --prefix web run preview",
     "eval:product-skills": "tsx scripts/product-skill-eval.ts",
-    "product:delivery": "tsx scripts/product-delivery.ts"
+    "product:delivery": "tsx scripts/product-delivery.ts",
+    "eval:unified": "tsx scripts/unified-eval.ts"
   },
   "dependencies": {
     "@mastra/ai-sdk": "1.11.3",

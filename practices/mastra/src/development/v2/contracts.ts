@@ -1,5 +1,6 @@
 /** v2 独立契约：不可变证据快照由原生 Workflow 持有，不迁移 v1 状态。 */
 import { z } from 'zod';
+import { outputDiagnosticSchema } from './output-diagnostic.js';
 import { correlationSchema } from '../../delivery/asset-identity.js';
 import { architectureSchema, commandEvidenceSchema, developmentInputSchema, developmentReviewSchema, executionIdentitySchema, recoveryReviewSchema, validateArchitecture, developmentHash } from '../contracts.js';
 
@@ -44,8 +45,8 @@ export const stateV2Schema = z.object({
   checkpointHash: hash, completedTasks: z.array(z.string()), round: z.number().int().nonnegative(), route: z.enum(['all', 'frontend', 'backend', 'infrastructure', 'architecture', 'human']),
   calls: z.number().int().nonnegative(), maxCalls: z.literal(72),
   work: z.array(z.object({ role: roleV2Schema, round: z.number(), text: z.string(), tools: z.array(z.string()), steps: z.number(), modelId: z.string().nullable(), inputTokens: z.number().nullable(), outputTokens: z.number().nullable() })),
-  faults: z.array(z.object({ sequence: z.number(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error']), attempt: z.number(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
-  recovery: z.object({ hash, checkpointHash: hash, phase: phaseSchema, role: roleV2Schema, kind: z.string(), taskId: z.string().nullable() }).nullable(), recoveries: z.array(recoveryReviewSchema),
+  faults: z.array(z.object({ sequence: z.number(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error']), attempt: z.number(), diagnostic: outputDiagnosticSchema.optional(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
+  recovery: z.object({ hash, checkpointHash: hash, phase: phaseSchema, role: roleV2Schema, kind: z.string(), diagnostic: outputDiagnosticSchema.optional(), taskId: z.string().nullable() }).nullable(), recoveries: z.array(recoveryReviewSchema),
   checks: z.array(commandEvidenceSchema), checkedSourceHash: hash.nullable(), gates: z.array(gateDecisionSchema),
   outcome: z.enum(['in-progress', 'clarification-required', 'rejected', 'rework-exhausted', 'manual-attention', 'development-delivered']),
   delivery: z.object({ version: z.literal('development-delivery.v2'), productHash: hash, planHash: hash, approvalHash: hash, contextHash: hash, methodBundleHash: hash, readinessHash: hash, reviewHash: hash, sourceHash: hash, files: z.record(z.string(), z.string()), checks: z.array(commandEvidenceSchema), resolutions: z.array(resolutionSchema.extend({ reportHash: hash, authority: z.enum(['reviewer', 'local-human-label']) })), limitations: z.array(z.string()) }).nullable(),

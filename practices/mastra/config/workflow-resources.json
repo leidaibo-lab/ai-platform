@@ -1,0 +1,313 @@
+{
+  "version": "workflow-resources.inventory.v1",
+  "purpose": "Mastra完整产研资源衔接与归属审计清单",
+  "usage": {
+    "kind": "review-only",
+    "runtimeLoaded": false,
+    "authority": "代码、Zod契约及原生Workflow事实优先；本文件不是第二份运行配置或审批库",
+    "pathsRelativeTo": "practices/mastra",
+    "secrets": "仅由既有readConfig读取环境；此清单不保存密钥或真实配置值"
+  },
+  "workflow": {
+    "registration": "productDevelopmentWorkflow",
+    "internalId": "product-development",
+    "factory": "src/mastra/workflows/product-development.ts#createProductDevelopmentWorkflow"
+  },
+  "assessment": {
+    "singleFactOwnership": "mostly-enforced-within-run",
+    "agentDecoupling": "partial",
+    "centralRuntimeResourceConfiguration": "not-implemented",
+    "productionGuarantee": false
+  },
+  "resources": [
+    {
+      "id": "run-facts",
+      "owner": "Mastra Workflow / LibSQLStore",
+      "contract": "src/mastra/app.ts",
+      "producer": "all-workflows",
+      "gates": [
+        "native-workflow-steps"
+      ],
+      "consumers": [
+        "native-status-and-suspend-resume"
+      ],
+      "versionBinding": "runId",
+      "authority": "authoritative"
+    },
+    {
+      "id": "approved-product",
+      "owner": "product-workflow",
+      "contract": "src/mastra/workflows/delivery.ts#deliverySchema",
+      "producer": "product-writing",
+      "gates": [
+        "review-product"
+      ],
+      "consumers": [
+        "confirm-project-scope",
+        "prepare-context",
+        "architecture",
+        "testing",
+        "deployment"
+      ],
+      "versionBinding": "artifact.hash",
+      "authority": "authoritative-within-run"
+    },
+    {
+      "id": "project-scope",
+      "owner": "scope-approval",
+      "contract": "src/development/v2/contracts.ts#inputV2Schema",
+      "producer": "confirm-project-scope",
+      "gates": [
+        "scope-reviewer"
+      ],
+      "consumers": [
+        "development-team",
+        "testing",
+        "deployment"
+      ],
+      "versionBinding": "scopeApproval.productHash + approvalHashV2",
+      "authority": "authoritative-within-run"
+    },
+    {
+      "id": "requirements",
+      "owner": "development-workflow",
+      "contract": "src/development/v2/contracts.ts#stateV2Schema",
+      "producer": "initialize-development",
+      "gates": [],
+      "consumers": [
+        "architecture",
+        "readiness",
+        "reviewer",
+        "testing"
+      ],
+      "versionBinding": "input.source.hash + requirement.id/hash",
+      "authority": "derived-from-approved-product"
+    },
+    {
+      "id": "project-context",
+      "owner": "development-workflow",
+      "contract": "src/development/v2/contracts.ts#contextV2Schema",
+      "producer": "prepare-context",
+      "gates": [],
+      "consumers": [
+        "architecture",
+        "readiness",
+        "implementation",
+        "reviewer"
+      ],
+      "versionBinding": "productHash + baselineHash + methodBundleHash + files",
+      "authority": "versioned-snapshot"
+    },
+    {
+      "id": "plan-and-task-packages",
+      "owner": "development-workflow",
+      "contract": "src/development/v2/contracts.ts#planV2Schema",
+      "producer": "architecture",
+      "gates": [
+        "approve-architecture"
+      ],
+      "consumers": [
+        "assemble-agent-team",
+        "execute-agent-team",
+        "reviewer",
+        "testing"
+      ],
+      "versionBinding": "planHash + approvalHashV2",
+      "authority": "versioned-snapshot"
+    },
+    {
+      "id": "team-and-delegations",
+      "owner": "development-workflow",
+      "contract": "src/development/v2/contracts.ts#teamSchema",
+      "producer": "assemble-agent-team",
+      "gates": [
+        "approve-architecture"
+      ],
+      "consumers": [
+        "execute-agent-team"
+      ],
+      "versionBinding": "approvalHashV2 + planHash",
+      "authority": "derived-and-approved"
+    },
+    {
+      "id": "candidate-code",
+      "owner": "execution-adapter",
+      "contract": "src/development/v2/execution-scope.ts#ExecutionPort",
+      "producer": "authorized-team-member",
+      "gates": [],
+      "consumers": [
+        "development-self-check",
+        "reviewer",
+        "testing",
+        "deployment"
+      ],
+      "versionBinding": "checkpointHash + delivery.sourceHash",
+      "authority": "run-scoped-candidate"
+    },
+    {
+      "id": "development-evidence",
+      "owner": "development-workflow",
+      "contract": "src/development/v2/contracts.ts#stateV2Schema",
+      "producer": "development-self-check/review-code",
+      "gates": [
+        "assess-delivery"
+      ],
+      "consumers": [
+        "testing",
+        "deployment"
+      ],
+      "versionBinding": "checkedSourceHash + planHash + reviewHash",
+      "authority": "workflow-evidence"
+    },
+    {
+      "id": "quality-evidence",
+      "owner": "testing-workflow",
+      "contract": "src/delivery/contracts.ts#qualityStateSchema",
+      "producer": "execute-tests",
+      "gates": [
+        "review-test-results"
+      ],
+      "consumers": [
+        "deployment",
+        "confirm-final-delivery"
+      ],
+      "versionBinding": "qualityHash + quality.sourceHash",
+      "authority": "workflow-evidence"
+    },
+    {
+      "id": "release-evidence",
+      "owner": "deployment-workflow",
+      "contract": "src/delivery/contracts.ts#releaseStateSchema",
+      "producer": "external-receipt",
+      "gates": [
+        "approve-release-scope"
+      ],
+      "consumers": [
+        "verify-release-health",
+        "rollback",
+        "confirm-final-delivery"
+      ],
+      "versionBinding": "releaseHash + artifactDigest + deploymentReceiptHash",
+      "authority": "local-human-report"
+    },
+    {
+      "id": "method-assets",
+      "owner": "governed-skill-files",
+      "contract": "src/development/v2/method-lock.json",
+      "producer": "skill-maintainer",
+      "gates": [],
+      "consumers": [
+        "context",
+        "architect",
+        "readiness",
+        "reviewer"
+      ],
+      "versionBinding": "methodBundleHash",
+      "authority": "locked-files"
+    },
+    {
+      "id": "repository-assets",
+      "owner": "workflow-export-adapter",
+      "contract": "src/delivery/repository-assets.ts",
+      "producer": "workflow-stage-export",
+      "gates": [],
+      "consumers": [
+        "asset-browser",
+        "download"
+      ],
+      "versionBinding": "manifest + file-byte-hashes",
+      "authority": "projection-only"
+    }
+  ],
+  "configurationOwners": {
+    "environment": "src/mastra/config.ts#readConfig",
+    "productRoles": "src/mastra/agents/product-roles.ts#productRoleProfiles",
+    "productSkillInventory": "src/mastra/agents/skills.ts#loadProductSkills",
+    "developmentMethods": "src/development/v2/methods.ts#loadDevelopmentMethods",
+    "developmentRolesAndTools": "src/development/v2/agents.ts#createAgentV2",
+    "developmentBudgets": "src/development/v2/contracts.ts#stateV2Schema",
+    "teamLimits": "src/development/v2/team.ts#assembleTeam",
+    "registeredChecks": "src/development/v2/contracts.ts#registeredChecks",
+    "referenceDomains": "src/development/v2/contracts.ts#validatePlanV2"
+  },
+  "gaps": [
+    {
+      "id": "shared-state-coupling",
+      "status": "open",
+      "evidence": [
+        "src/development/v2/agents.ts",
+        "src/delivery/testing.ts",
+        "src/delivery/deployment.ts"
+      ],
+      "detail": "各阶段仍消费StateV2/Lifecycle或较大的上游快照；尚未形成逐角色最小输入DTO。"
+    },
+    {
+      "id": "distributed-configuration",
+      "status": "open",
+      "evidence": [
+        "src/mastra/agents/product-roles.ts",
+        "src/development/v2/agents.ts",
+        "src/development/v2/team.ts",
+        "src/development/v2/contracts.ts"
+      ],
+      "detail": "角色、权限、预算、引用规则与限制分散于代码；尚无统一加载、交叉校验并绑定Run的资源配置。"
+    },
+    {
+      "id": "source-freezing",
+      "status": "open",
+      "evidence": [
+        "artifact-dataflow.md"
+      ],
+      "detail": "HRM来源清单是导出时观测，尚未逐Run冻结并校验生成时实际读取。"
+    },
+    {
+      "id": "project-identity",
+      "status": "open",
+      "evidence": [
+        "src/delivery/asset-identity.ts",
+        "artifact-dataflow.md"
+      ],
+      "detail": "资产项目固定hrm，执行project.id另有含义；当前有明确区分，但不是可配置的多项目身份模型。"
+    },
+    {
+      "id": "external-evidence",
+      "status": "limited",
+      "evidence": [
+        "src/delivery/deployment.ts"
+      ],
+      "detail": "发布/健康/回滚由本地人工回填；不等于认证身份或CI机器证明。"
+    }
+  ],
+  "nextRuntimeDesign": {
+    "status": "defined-not-implemented",
+    "principle": "先保留Mastra原生工厂和Workflow，将确需配置的资源声明逐项接入；不引入通用调度器",
+    "requiredBeforeActivation": [
+      "明确配置与代码的唯一归属，生成值不反向成为第二事实源",
+      "对资源ID、生产消费关系、角色权限子集与引用域做装配校验",
+      "运行启动时冻结配置版本及hash，审批和恢复校验同一版本",
+      "按职责投影最小输入；不通过配置开放任意命令、路径、角色或审批能力"
+    ],
+    "definition": "config/runtime-resource-contract.md",
+    "example": "config/workflow.runtime.example.json",
+    "decision": "../../docs/decisions/2026-11-07-mastra-resource-contract.md"
+  },
+  "evidenceFileHashes": {
+    "artifact-dataflow.md": "ec78b899493306ff436f44f00b765e550f41fb6a36f1aae77028ef9fe7bef9aa",
+    "src/delivery/asset-identity.ts": "781786dee3aed93becb08c8f2381531349414f96223d060a458f2305e0bd5c3e",
+    "src/delivery/contracts.ts": "f8ec1b469c2a312b5f91d63267163093e99441efd68938dc80d2ac61c22ca8fc",
+    "src/delivery/deployment.ts": "a79daea118cd55d4bbeb5c2f2d64590e44296c0a251225fd41a390619ba21a94",
+    "src/delivery/repository-assets.ts": "42468a4b00072ab68e83ad5f64311d3ab748cf7b7fcf2d414221df7365fe02d5",
+    "src/delivery/testing.ts": "ab7a2831a33286ae2861fc591f6a47c0c8328e0f7d73f76e2236f4693085e384",
+    "src/development/v2/agents.ts": "848893c69c3587ec894945dc1f5ce17d37dfc0639aa32233e10e4021d52e325f",
+    "src/development/v2/contracts.ts": "4b7ac4f4ca9d680cc39ae8f07a0c59e53f62f77c916e495fce9f74cf3cc84570",
+    "src/development/v2/execution-scope.ts": "4356c09ae90e813922a4772d46f170a22dce6e87cf08825d6494697e5571aaea",
+    "src/development/v2/method-lock.json": "0cda61f5dfef9d30e16acc48ec7863da3338a4d1744f5f14770bc11a7a772090",
+    "src/development/v2/methods.ts": "a90b8b16b4466d791476279a0d2708460c5acccf11c5f5b280b308d61ba6500c",
+    "src/development/v2/team.ts": "f4f166b27c9fd765e63025f7a578868187bb65cf218577166828000e80de6b81",
+    "src/mastra/agents/product-roles.ts": "165ea86ae17f8ef03b63993afa046c9e720c8371c0547e82477799c0470a733d",
+    "src/mastra/agents/skills.ts": "229aad7ec3270f85257d31bea3d31607c33de852b8e0f69fa0a65549333e0455",
+    "src/mastra/app.ts": "0201cf09af7bb2f788b700d9ba6aa7da6c3884d357401847feac9ba8d88eb5f4",
+    "src/mastra/config.ts": "17c412d9210c9a69b851a672826f8e63a0e81a83dc34c36fbf3a8562565fb1d1",
+    "src/mastra/workflows/delivery.ts": "52fc4965446348dd7ba344ade9badc9b08d4f472bd7a91bc254b3e9ca9592f66"
+  }
+}

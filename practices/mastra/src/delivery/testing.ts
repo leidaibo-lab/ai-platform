@@ -11,6 +11,7 @@ import { evidenceRefs, stateV2Schema } from '../development/v2/contracts.js';
 import { checksPassedV2, reportV2, validateAssessment, validateIdentityV2 } from '../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
 import { createDevelopmentContinuationV2, reworkDevelopmentV2 } from '../mastra/workflows/development-v2.js';
+import { generateV2, type GeneratorV2 } from '../development/v2/agents.js';
 import { emptyQuality, lifecycleSchema, planApprovalSchema, qualityHash, qualityReviewSchema, type Lifecycle } from './contracts.js';
 import { withRepositoryAssets } from './repository-assets.js';
 
@@ -46,7 +47,7 @@ function validateCases(state: Lifecycle, review: z.infer<typeof planApprovalSche
 }
 
 /** 保留单独测试职责；原生循环处理测试退回后的开发继续与回归。 */
-export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, scope: ReturnType<typeof createExecutionScope>) {
+export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, scope: ReturnType<typeof createExecutionScope>, generate: GeneratorV2 = generateV2) {
   const methods = loadDevelopmentMethods(config.rootDir);
   /** 每个有作用节点检查模式、方法与当前候选，不沿用过期测试证据。 */
   async function guard(state: Lifecycle): Promise<void> {
@@ -57,7 +58,7 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
     // 只选择保存的开发状态，修复不重新创建运行目录或预算。
     execute: async ({ inputData }) => inputData.development,
   });
-  const continued = createDevelopmentContinuationV2(config, scope.port, { id: 'qa-defect-repair', team: true, bind: scope.bind });
+  const continued = createDevelopmentContinuationV2(config, scope.port, { id: 'qa-defect-repair', team: true, bind: scope.bind }, generate);
   const attach = createStep({ id: 'collect-development-for-testing', inputSchema: stateV2Schema, outputSchema: lifecycleSchema,
     // 原生循环初始数据保存本轮测试/历史，开发只更新其负责的状态。
     execute: async ({ inputData, getInitData }) => {

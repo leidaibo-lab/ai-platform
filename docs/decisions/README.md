@@ -4,6 +4,8 @@
 
 ## 使用方式
 
+[Mastra资源声明、Run冻结与最小角色契约](./2026-11-07-mastra-resource-contract.md)：提议；接入定义、配置示例与RC01–RC14验收已形成，运行时实现待完成。
+
 [HRM 项目、迭代、Run 与统一产物目录](./2026-11-07-hrm-asset-catalog.md)：接受；原生步骤装饰与只读目录/下载，Mastra 保留流程审批事实。
 
 最新实践选型：[HRM 单仓资产与资料来源](./2026-11-07-hrm-repository-assets.md)，用户指定 product/testSet/deploy，薄归档 Adapter 与来源 Workspace，代码回库及全栈执行仍待接入。

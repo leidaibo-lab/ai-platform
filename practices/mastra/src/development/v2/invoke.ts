@@ -1,4 +1,5 @@
 /** v2单角色受控调用：精确回滚、独立故障预算与失败阶段持久化。 */
+import { diagnoseOutput } from './output-diagnostic.js';
 import type { PracticeConfig } from '../../mastra/config.js';
 import type { ExecutionPort } from './execution-scope.js';
 import { developmentHash } from '../contracts.js';
@@ -29,10 +30,11 @@ export async function invokeV2(config: PracticeConfig, execution: ExecutionPort,
       for (const [path, content] of Object.entries(contents)) await execution.writeFile(path, content);
       if (developmentHash(await execution.snapshot()) !== developmentHash(before)) throw new Error('v2失败检查点无法完整恢复');
       const kind = error instanceof SyntaxError || (error instanceof Error && (error as Error & { code?: string }).code === 'INVALID_OUTPUT') ? 'invalid-output' as const : classifyDevelopmentError(error);
+      const diagnostic = kind === 'invalid-output' ? diagnoseOutput(error) : undefined;
       const taskId = extra && typeof extra === 'object' && 'id' in extra && typeof extra.id === 'string' ? extra.id : null;
-      state = { ...state, faults: [...state.faults, { sequence: state.faults.length + 1, phase: state.phase, role, taskId, kind, attempt, checkpointHash: state.checkpointHash, partialSourceHash, restored: true }] };
+      state = { ...state, faults: [...state.faults, { sequence: state.faults.length + 1, phase: state.phase, role, taskId, kind, attempt, ...(diagnostic ? { diagnostic } : {}), checkpointHash: state.checkpointHash, partialSourceHash, restored: true }] };
       if (attempt === 1 && ['model-timeout', 'model-network'].includes(kind)) continue;
-      return { state: { ...state, recovery: { hash: recoveryHashV2(state), checkpointHash: state.checkpointHash, phase: state.phase, role, taskId, kind } }, entry: null };
+      return { state: { ...state, recovery: { hash: recoveryHashV2(state), checkpointHash: state.checkpointHash, phase: state.phase, role, taskId, kind, ...(diagnostic ? { diagnostic } : {}) } }, entry: null };
     }
   }
   throw new Error('v2有界调用没有返回');
