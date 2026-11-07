@@ -75,6 +75,8 @@ test('OS 沙箱隔离外部内容、凭据环境、联网和运行时写入', as
   await withCandidate(async (execution, root, parent) => {
     const secret = resolve(parent, '.env');
     writeFileSync(secret, 'SYNTHETIC_SECRET=fixture');
+    const unrelatedLibrary = resolve(parent, 'unrelated.dylib');
+    writeFileSync(unrelatedLibrary, 'synthetic unrelated library');
     const source = [
       'import assert from "node:assert/strict";',
       'import {readFileSync,writeFileSync,readdirSync} from "node:fs";',
@@ -86,6 +88,9 @@ test('OS 沙箱隔离外部内容、凭据环境、联网和运行时写入', as
       '/** 不允许检查进程改写代码或公共测试。 */',
       'assert.throws(() => writeFileSync("smoke.test.mjs", "process.exit(0)"));',
       'assert.throws(() => writeFileSync("src/injected.mjs", "process.exit(0)"));',
+      '/** 允许Node依赖不等于允许读取任意动态库文件。 */',
+      `assert.throws(() => readFileSync(${JSON.stringify(unrelatedLibrary)}));`,
+      'assert.equal(process.env.OPENSSL_CONF, "/dev/null");',
       'assert.equal(process.env.OPENAI_API_KEY, undefined);',
       'assert.equal(process.env.CODEX_HOME, undefined);',
       '/** 联网失败来自 OS 拒绝，测试不向任何远程服务发送请求。 */',

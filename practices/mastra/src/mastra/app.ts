@@ -1,5 +1,7 @@
 import { createAssetRoutes } from '../delivery/asset-routes.js';
 import { Mastra } from '@mastra/core';
+import { createDevelopmentNodeWorkflows } from '../evaluation/development-nodes.js';
+import { createNodeScorers } from '../evaluation/scorers.js';
 import { ConsoleLogger } from '@mastra/core/logger';
 import { LibSQLStore } from '@mastra/libsql';
 import type { PracticeConfig } from './config.js';
@@ -13,13 +15,14 @@ import { validateHrmRepository } from '../delivery/repository-assets.js';
 import { join } from 'node:path';
 import { createProductDevelopmentWorkflow } from './workflows/product-development.js';
 
-/** Studio 只公开完整产研流程；旧 CLI 工厂保留用于历史运行读取。 */
+/** Studio公开完整产研业务流程及具名独立评测Workflow；旧CLI保留用于历史读取。 */
 export function createStudioApplicationOptions(config: PracticeConfig) {
   const repository = config.hrmRepositoryRoot ? validateHrmRepository(config.hrmRepositoryRoot) : undefined;
   const agents = createAgents(config, repository ? { workspace: createRecruitmentWorkspace(config.rootDir, join(repository, 'product/sources')) } : {});
   return {
     agents: { productCoordinatorAgent: agents.productCoordinatorAgent, productClarificationAgent: agents.productClarificationAgent, productClosureAgent: agents.productClosureAgent, productAgent: agents.productAgent, testingAgent: agents.testingAgent, operationsAgent: agents.operationsAgent },
-    workflows: { productDevelopmentWorkflow: createProductDevelopmentWorkflow(agents, config) },
+    scorers: createNodeScorers(config),
+    workflows: { productDevelopmentWorkflow: createProductDevelopmentWorkflow(agents, config), ...createDevelopmentNodeWorkflows(config) },
     storage: new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl }),
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
     server: { host: '127.0.0.1', port: config.port, apiRoutes: createAssetRoutes(config) },

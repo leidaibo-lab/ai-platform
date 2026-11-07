@@ -1,6 +1,6 @@
 # 完整产研流程
 
-2026-11-07 起，Studio 只注册 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）。旧提案链、独立产品交接及修订入口从 Studio 移除；历史源文件与数据库保留，旧 CLI 仅作兼容。
+2026-11-07 起，Studio业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）；另注册六个具名开发独立评测Workflow，仅在隔离候选中考核单个角色。旧提案链、独立产品交接及修订入口从 Studio 移除；历史源文件与数据库保留，旧 CLI 仅作兼容。
 
 启动 `npm run dev`，打开 `http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph`。首次输入 `{ "iterationId": "recruitment-001", "brief": "你的需求" }`；迭代未指定时默认 `unassigned`。图中的 Workflow 可展开查看产品、开发、测试与部署子步骤。主链保持一个 Run，各角色在自己的子流程内扩展。
 
@@ -173,3 +173,13 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 
 
 资源接入的具体定义已形成：[配置/冻结/最小输入契约](./config/runtime-resource-contract.md)与[JSON示例](./config/workflow.runtime.example.json)。本轮仅定义新版本与迁移规则，当前Workflow仍按现有实现运行；不能把配置示例或审计清单当作已生效能力。
+
+
+## 原生评测面板
+
+产品角色、独立测试与部署方案已接入Mastra原生Datasets、Scorers和Experiments。运行`npm run eval:native:seed`导入，`npm run eval:native -- --run`追加实验；在Studio的Datasets/Experiments查看结果和对比。首批6组18例，动态开发节点尚未全部接入。用例版本、质量判定、live/fixture与验证边界见[原生节点评测](./evaluations/native/README.md)。
+
+
+固定流程已补[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)：三例真实评审/返工专项中两例通过，修复例因复评报告校验失败保持暂停，未放宽交付门。详见[实测记录](./evaluations/native/review-rework/observations-2026-11-07.md)。
+
+六类开发上下文、架构、就绪、实现、自检、代码评审的独立原生数据集与执行目标已补齐，每类3例；用例、命令与验收边界见[开发独立节点评测](./evaluations/native/development-nodes/README.md)。业务审批、动态团队与发布路径不因此自动通过。

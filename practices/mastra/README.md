@@ -318,3 +318,13 @@ npm start
 验证：在实践根运行 `npm run check`、`npm test`、`npm run smoke`、`npm run build`；仓库根运行 `node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs`。`tests/skills.test.ts` 校验全量库存与散列，并通过原生工具循环验证流程→原子方法→原文→嵌套资源。Mock结果仅证明可加载及控制流，真实产品质量、路由命中和成本需业务材料另验。
 
 选型与作用域：[适配决策](../../docs/decisions/2026-11-06-mastra-pm-skills.md)。
+
+
+## 原生评测面板
+
+产品角色、独立测试与部署方案已接入Mastra原生Datasets、Scorers和Experiments。运行`npm run eval:native:seed`导入，`npm run eval:native -- --run`追加实验；在Studio的Datasets/Experiments查看结果和对比。首批6组18例，动态开发节点尚未全部接入。用例版本、质量判定、live/fixture与验证边界见[原生节点评测](./evaluations/native/README.md)。
+
+
+固定流程已补[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)：三例真实评审/返工专项中两例通过，修复例因复评报告校验失败保持暂停，未放宽交付门。详见[实测记录](./evaluations/native/review-rework/observations-2026-11-07.md)。
+
+六类开发角色的独立原生Dataset/Workflow已补齐，共18例，支持在Studio中单独运行和查看评分；实现/自检使用实际代码与进程检查，方案/评审校验结构、引用、缺陷与阻断。见[开发独立节点评测](./evaluations/native/development-nodes/README.md)。

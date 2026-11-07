@@ -6,7 +6,9 @@
 
 - [HRM 仓库资产归属](./decisions/2026-11-07-hrm-repository-assets.md)：产品、测试、发布投影归 hrm，业务资料从 product/sources 读取；代码目标已定，Git 回库/全栈执行另行接线。
 
-- [Mastra 完整产研流程](../practices/mastra/unified-workflow.md)：Studio 唯一入口，产品到动态团队、前后端并行/受限委派、评审、独立测试/缺陷回归、外部发布回执/健康与回滚、最终交付；[生命周期决策](./decisions/2026-11-07-mastra-full-delivery-lifecycle.md)，[统一团队选型](./decisions/2026-11-07-mastra-unified-development-team.md)。下文旧双流程与图保留为历史设计。
+- [Mastra 完整产研流程](../practices/mastra/unified-workflow.md)：Studio业务唯一入口，产品到动态团队、前后端并行/受限委派、评审、独立测试/缺陷回归、外部发布回执/健康与回滚、最终交付；[生命周期决策](./decisions/2026-11-07-mastra-full-delivery-lifecycle.md)，[统一团队选型](./decisions/2026-11-07-mastra-unified-development-team.md)。下文旧双流程与图保留为历史设计。
+
+- [Mastra六类开发独立节点评测](../practices/mastra/evaluations/native/development-nodes/README.md)：上下文、架构、就绪、实现、自检、代码评审的18例冻结数据集，原生Workflow/Experiment及真实代码证据。
 
 这个目录承接项目结构、架构说明和运维边界。`AGENTS.md` 只保留 AI 协作入口和路由，详细说明放在这里。
 

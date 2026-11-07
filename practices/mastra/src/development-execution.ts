@@ -3,6 +3,7 @@
  * 不可信代码仅在禁网、只读候选目录的 OS 沙箱中执行，检查命令由宿主固定。
  * ADR: docs/decisions/2026-11-06-mastra-development-execution.md
  */
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,11 +46,15 @@ function boundedTimeout(value: number | undefined, fallback: number, name: strin
 function literal(value: string): string { return JSON.stringify(value); }
 
 /** 构建 deny 优先的 macOS 策略；仅读取运行系统、Node 和当前候选目录。 */
-function seatbeltPolicy(root: string, temporary: string, nodeDirectory: string): string {
+function seatbeltPolicy(root: string, temporary: string, nodeDirectory: string, libraries: string[]): string {
   const readable = ['/usr', '/System', '/bin', '/sbin', '/dev', '/private/var/select', nodeDirectory, root, temporary];
   const excluded = readable.map(
     // allow-read 后补充排除式 deny，避免 macOS 对单独 allow-subpath 的兼容限制。
     (path) => `(require-not (subpath ${literal(path)}))`,
+  ).join(' ');
+  const libraryExclusions = libraries.map(
+    // 只排除精确库文件，不开放包目录或Homebrew安装根目录。
+    (path) => `(require-not (literal ${literal(path)}))`,
   ).join(' ');
   return [
     '(version 1)', '(deny default)', '(allow process-exec)', '(allow process-fork)',
@@ -57,13 +62,60 @@ function seatbeltPolicy(root: string, temporary: string, nodeDirectory: string):
     '(allow mach-lookup (global-name "com.apple.logd") (global-name "com.apple.system.logger"))',
     '(allow sysctl-read)', '(allow ipc-posix-shm)', '(allow ipc-posix-sem)',
     '(allow file-read*)',
-    `(deny file-read-data (require-all ${excluded} (require-not (literal "/"))))`,
-    `(deny file-read-xattr (require-all ${excluded} (require-not (literal "/"))))`,
+    `(deny file-read-data (require-all ${excluded} ${libraryExclusions} (require-not (literal "/"))))`,
+    `(deny file-read-xattr (require-all ${excluded} ${libraryExclusions} (require-not (literal "/"))))`,
     '(deny file-read* (regex #"(^|/)\\.env($|[./])"))',
     `(allow file-write* (subpath ${literal(temporary)}))`,
     '(allow file-write* (literal "/dev/null"))', '(allow file-ioctl (literal "/dev/null"))',
     '(deny network*)',
   ].join('\n');
+}
+
+/**
+ * 从宿主Node的Mach-O加载命令解析传递依赖，仅返回现存的真实库文件。
+ * 系统共享缓存已在策略内；rpath仅按Mach-O声明解析，不执行候选程序、不读取诊断报告或环境。
+ */
+function nodeLibraries(node: string): string[] {
+  const pending = [node];
+  const visited = new Set<string>();
+  const libraries = new Set<string>();
+  while (pending.length) {
+    const file = pending.pop()!;
+    if (visited.has(file)) continue;
+    if (visited.size >= 256) throw new Error('Node动态库依赖超出解析上限');
+    visited.add(file);
+    const output = execFileSync('/usr/bin/otool', ['-L', file], { encoding: 'utf8', timeout: 5000, maxBuffer: 262144 });
+    // dylib的首项是自身LC_ID_DYLIB，不是待解析的加载依赖。
+    for (const line of output.split('\n').slice(file === node ? 1 : 2)) {
+      const match = line.match(/^\s+(.+) \(compatibility version /);
+      if (!match) continue;
+      let path = match[1];
+      if (path.startsWith('@loader_path/')) path = resolve(dirname(file), path.slice('@loader_path/'.length));
+      if (path.startsWith('@executable_path/')) path = resolve(dirname(node), path.slice('@executable_path/'.length));
+      if (path.startsWith('@rpath/')) {
+        const commands = execFileSync('/usr/bin/otool', ['-l', file], { encoding: 'utf8', timeout: 5000, maxBuffer: 1048576 });
+        const candidates: string[] = [];
+        for (const entry of commands.matchAll(/cmd LC_RPATH\n\s+cmdsize \d+\n\s+path (.+) \(offset \d+\)/g)) {
+          let base = entry[1];
+          if (base.startsWith('@loader_path/')) base = resolve(dirname(file), base.slice('@loader_path/'.length));
+          if (base.startsWith('@executable_path/')) base = resolve(dirname(node), base.slice('@executable_path/'.length));
+          if (isAbsolute(base)) candidates.push(resolve(base, path.slice('@rpath/'.length)));
+        }
+        const found = candidates.find(
+          // 只选择加载命令声明且实际存在的候选，不扫描宿主目录。
+          (candidate) => existsSync(candidate),
+        );
+        if (!found) throw new Error('Node动态库rpath无法解析');
+        path = found;
+      }
+      if (!isAbsolute(path)) throw new Error('Node动态库含未支持的加载路径');
+      if (path.startsWith('/usr/') || path.startsWith('/System/')) continue;
+      path = realpathSync(path);
+      if (!lstatSync(path).isFile()) throw new Error('Node动态库不是普通文件');
+      libraries.add(path); pending.push(path);
+    }
+  }
+  return [...libraries].sort();
 }
 
 /** Linux 仅绑定系统运行库、Node 与只读候选；不共享宿主网络或临时目录。 */
@@ -116,6 +168,7 @@ export class DevelopmentExecution {
     const detected = LocalSandbox.detectIsolation();
     if (!detected.available || (detected.backend !== 'seatbelt' && detected.backend !== 'bwrap')) throw new Error('研发执行需要可用 OS 隔离后端，拒绝无隔离执行');
     this.isolation = detected.backend;
+    const libraries = this.isolation === 'seatbelt' ? nodeLibraries(realpathSync(process.execPath)) : [];
     this.resources = realpathSync(mkdtempSync(resolve(tmpdir(), 'mastra-development-execution-')));
     const temporary = resolve(this.resources, 'tmp');
     mkdirSync(temporary);
@@ -123,13 +176,13 @@ export class DevelopmentExecution {
     const nativeSandbox: NativeSandboxConfig = { allowNetwork: false, readOnly: true };
     if (this.isolation === 'seatbelt') {
       const profile = resolve(this.resources, 'strict.sb');
-      writeFileSync(profile, seatbeltPolicy(this.root, temporary, nodeDirectory), { mode: 0o600 });
+      writeFileSync(profile, seatbeltPolicy(this.root, temporary, nodeDirectory, libraries), { mode: 0o600 });
       nativeSandbox.seatbeltProfilePath = profile;
     } else nativeSandbox.bwrapArgs = bubblewrapPolicy(this.root, temporary, nodeDirectory);
     this.filesystem = new LocalFilesystem({ basePath: this.root, contained: true });
     this.sandbox = new LocalSandbox({
       workingDirectory: this.root, isolation: this.isolation, nativeSandbox, timeout: this.commandTimeoutMs,
-      env: { PATH: `${nodeDirectory}:/usr/bin:/bin`, TMPDIR: temporary, NODE_ENV: 'test' },
+      env: { PATH: `${nodeDirectory}:/usr/bin:/bin`, TMPDIR: temporary, NODE_ENV: 'test', OPENSSL_CONF: '/dev/null' },
     });
   }
 

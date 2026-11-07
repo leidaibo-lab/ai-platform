@@ -1,0 +1,8 @@
+{
+  "version": "fixed-review-rework.v1",
+  "cases": [
+    {"scenario":"clean","expected":"干净代码无业务缺陷，零返工交付，独立隐藏断言通过"},
+    {"scenario":"repair","expected":"评审发现UTF-16长度误当Unicode码点，归属backend，真实返工后复查原发现并通过隐藏断言"},
+    {"scenario":"exhausted","expected":"每轮受控注入同一缺陷，一次返工耗尽后停止，不能交付，隐藏断言仍失败"}
+  ]
+}

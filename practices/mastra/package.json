@@ -7,7 +7,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "MASTRA_TELEMETRY_DISABLED=1 mastra dev",
+    "dev": "MASTRA_AUTO_DETECT_URL=true MASTRA_TELEMETRY_DISABLED=1 mastra dev",
     "build": "MASTRA_TELEMETRY_DISABLED=1 mastra build",
     "start": "node .mastra/output/index.mjs",
     "check": "tsc --noEmit",
@@ -23,7 +23,14 @@
     "review:preview": "npm --prefix web run preview",
     "eval:product-skills": "tsx scripts/product-skill-eval.ts",
     "product:delivery": "tsx scripts/product-delivery.ts",
-    "eval:unified": "tsx scripts/unified-eval.ts"
+    "eval:unified": "tsx scripts/unified-eval.ts",
+    "eval:native": "tsx scripts/native-eval.ts",
+    "eval:native:seed": "tsx scripts/native-eval.ts --seed",
+    "eval:fixed:import": "tsx scripts/import-fixed-baseline.ts",
+    "eval:native:rescore": "tsx scripts/rescore-native-baseline.ts",
+    "eval:review-rework": "tsx scripts/review-rework-eval.ts",
+    "eval:development-nodes": "tsx scripts/development-node-eval.ts",
+    "eval:development-nodes:seed": "tsx scripts/development-node-eval.ts --seed"
   },
   "dependencies": {
     "@mastra/ai-sdk": "1.11.3",
