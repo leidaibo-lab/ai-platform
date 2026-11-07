@@ -1,0 +1,5 @@
+{
+  "version": "self-check-native-contract.v2",
+  "reportProtocol": "native-summary-route",
+  "instruction": "按正式自检职责调用runChecks，依据本轮实际结果仅输出JSON {summary,route}。不得添加JSON前后的解说，不修改代码或检查。"
+}

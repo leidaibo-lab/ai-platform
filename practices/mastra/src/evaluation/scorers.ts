@@ -69,8 +69,9 @@ export function createNodeScorers(config: PracticeConfig): Record<string, Mastra
     .generateReason(({ run }) => JSON.stringify(inspectCoverage(run.output, run.groundTruth)));
   const baseline = createBaselineScorer();
   const development = createDevelopmentNodeScorer();
+  const developmentV2 = createDevelopmentNodeScorer('v2');
   const review = createReviewReworkScorer();
-  if (config.mode === 'fixture') return { [coverage.id]: coverage, [baseline.id]: baseline, [review.id]: review, [development.id]: development };
+  if (config.mode === 'fixture') return { [coverage.id]: coverage, [baseline.id]: baseline, [review.id]: review, [development.id]: development, [developmentV2.id]: developmentV2 };
   /** v1保留历史定义；v2将实际工具执行摘要一起提供给裁判。 */
   function rubric(withEvidence: boolean) {
   return createScorer({ id: withEvidence ? 'node-quality-rubric-v2' : 'node-quality-rubric-v1', name: withEvidence ? '节点语义质量 v2（含工具证据）' : '节点语义质量 v1', description: '逐条检查冻结验收标准，评分不替代审批。',
@@ -99,5 +100,5 @@ export function createNodeScorers(config: PracticeConfig): Record<string, Mastra
   }
   const legacy = rubric(false);
   const current = rubric(true);
-  return { [coverage.id]: coverage, [legacy.id]: legacy, [current.id]: current, [baseline.id]: baseline, [review.id]: review, [development.id]: development };
+  return { [coverage.id]: coverage, [legacy.id]: legacy, [current.id]: current, [baseline.id]: baseline, [review.id]: review, [development.id]: development, [developmentV2.id]: developmentV2 };
 }

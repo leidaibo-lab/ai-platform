@@ -6,7 +6,7 @@
 
 ## 用例与目标
 
-[cases.v1.json](./cases.v1.json)共18例，每类3例。所有上游数据为明确标记的合成冻结输入，单次只调用当前角色。标准`expected`不发送给被测Agent；模型只看到该角色的真实输入文件、需求、固定计划及允许引用。
+[cases.v1.json](./cases.v1.json)共18例，每类3例。自检另由[self-check-protocol.v2.json](./self-check-protocol.v2.json)版本化约束正式报告协议，其他五类保持v1。所有上游数据为明确标记的合成冻结输入，单次只调用当前角色。标准`expected`不发送给被测Agent；模型只看到该角色的真实输入文件、需求、固定计划及允许引用。
 
 | 数据集 | Studio Workflow目标 | 三类用例 | 主要判据 |
 | --- | --- | --- | --- |
@@ -14,7 +14,7 @@
 | 开发架构 | developmentArchitectureEvaluation | 完整需求、缺失规则、冲突规则 | 正式方案校验器、任务/依赖/引用、计数契约、正确阻断 |
 | 开发就绪 | developmentReadinessEvaluation | 可开工、业务口径缺失、契约冲突 | 正式评估校验器、无误报、具体发现/正确归属/阻断严重度 |
 | 开发实现 | developmentImplementationEvaluation | 从占位实现、Unicode修复、类型修复 | 实际写入、固定检查、独立目录3类业务断言、输入与文件边界 |
-| 开发自检 | developmentSelfCheckEvaluation | 通过、行为失败、语法失败 | 必须真实调用runChecks；报告状态及失败ID与实际结果一致 |
+| 开发自检 | developmentSelfCheckEvaluation | 通过、行为失败、语法失败 | 必须真实调用runChecks；正式summary/route报告、实际检查状态及归属一致 |
 | 开发代码评审 | developmentReviewEvaluation | 正确代码、Unicode缺陷、类型缺陷 | schema/引用覆盖、禁止改源码、缺陷发现、backend归属与高/阻断严重度 |
 
 代码评审的缺陷案例使用可通过的普通smoke，以验证能否从源码发现普通检查之外的缺陷；正确代码案例提供完整登记检查，避免把已知能力缺口混成业务缺陷。自检不能拿宿主独立复跑冒充自己执行：两类检查证据分别保存。
@@ -45,7 +45,7 @@ Studio默认模式来自实践原有配置。要在面板直接执行live用例�
 
 共享原生`development-node-evidence-v1`评分器从原始节点产物重新判定，任一硬条件不满足为0，reason列出问题，不能以其他项均值抵消代码失败。实验completed只代表结束，必须另查评分；故障、格式错误和越界尝试也保留。
 
-实现的独立oracle固定类型、空白、长度与Unicode三个具名测试组，必须有完整执行计数、实际进程和宿主退出码及无截断/超时证据。自检在评测协议中额外要求输出`status/failedCheckIds` JSON；不改变正式自检Agent的工具权限或业务流程。
+实现的独立oracle固定类型、空白、长度与Unicode三个具名测试组，必须有完整执行计数、实际进程和宿主退出码及无截断/超时证据。自检v2沿用正式Agent的`summary/route` JSON协议，并核对模型工具检查与宿主复跑的一致性；JSON前添加解释会被正式parseDevelopmentJson拒绝。v1曾额外要求status/failedCheckIds，与正式系统指令冲突，已保留其数据集、分数及实验作为历史，不能把这些0分直接当成能力缺陷。自检v2使用独立资产散列与development-node-evidence-v2，旧输入不能悄悄换协议；工具权限和业务流程没有改变。
 
 结构与引用校验复用正式`validatePlanV2/validateAssessment`。缺陷/阻断的类别、归属、严重度及预登记词项组成确定性检查，但关键词不是完整语义证明。上下文来源合法不等于所有规则均事实正确；架构中包含Unicode不等于完整方案合理；最终仍需人工语义抽查。首批案例不是完整业务域、全栈代码能力或生产准入。
 
@@ -58,4 +58,8 @@ Studio默认模式来自实践原有配置。要在面板直接执行live用例�
 - 六组18例fixture原生Experiment完成，结果及评分已持久化；fixture不代表能力通过。
 - 专项19项测试通过：六类合成正确答案的真实I/O校验、错误引用、漏检/误放行、错误归属、源码篡改、未执行检查、空oracle、用例/模式漂移及六类原生Workflow执行/幂等导入。
 - Studio原生API已读取六个Workflow、Dataset绑定及评分器；图形界面未做目视验收。
-- 真实模型首轮与全量回归结束后另记结果；不预填通过结论。
+- 自检v2调整后的完整回归166/166通过；类型检查曾通过，最终工作区受并行guidedIntake修改产生两处缺参错误，具体状态见下方报告。
+- 原生面板实验启动API也完成3例fixture运行，结果及评分可读取；图形界面未目视验收。
+- 真实模型结果、历史协议差异及待修缺陷见[2026-11-07开发独立节点报告](./results-2026-11-07.md)。
+
+自检单组复验：`npm run eval:development-nodes -- --live --run --role=self-check`。这是按新协议执行的新实验；不是在原实验中改分。新旧分数应分别查看。

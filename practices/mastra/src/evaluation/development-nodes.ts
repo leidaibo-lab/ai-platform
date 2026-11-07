@@ -9,6 +9,7 @@ import { createScorer } from '@mastra/core/evals';
 import type { Mastra } from '@mastra/core';
 import type { PracticeConfig } from '../mastra/config.js';
 import { DevelopmentExecution, type DevelopmentCheckResult } from '../development-execution.js';
+import { parseDevelopmentJson } from '../development/agents.js';
 import { developmentHash, developmentExecutionIdentity } from '../development/contracts.js';
 import { inputV2Schema, stateV2Schema, contextDraftSchema, planV2Schema, assessmentSchema, registeredChecks, validatePlanV2, type StateV2, type EntryV2 } from '../development/v2/contracts.js';
 import { validateAssessment } from '../development/v2/gates.js';
@@ -19,7 +20,7 @@ import { judgeReviewSource } from './review-rework.js';
 
 export const developmentNodeRoleSchema = z.enum(['context', 'architect', 'readiness', 'backend', 'self-check', 'reviewer']);
 export type DevelopmentNodeRole = z.infer<typeof developmentNodeRoleSchema>;
-const expectedSchema = z.object({ kind: z.enum(['context', 'plan', 'assessment', 'code', 'checks']), unknown: z.boolean().optional(), blocked: z.boolean().optional(), passed: z.boolean().optional(), keywords: z.array(z.string()).default([]), category: z.string().nullable().optional(), route: z.string().nullable().optional() });
+const expectedSchema = z.object({ reportProtocol: z.enum(['native-summary-route']).optional(), kind: z.enum(['context', 'plan', 'assessment', 'code', 'checks']), unknown: z.boolean().optional(), blocked: z.boolean().optional(), passed: z.boolean().optional(), keywords: z.array(z.string()).default([]), category: z.string().nullable().optional(), route: z.string().nullable().optional() });
 const caseSchema = z.object({ id: z.string(), role: developmentNodeRoleSchema, label: z.string(), requirement: z.string().min(1), files: z.object({ 'src/solution.mjs': z.string(), 'checks.mjs': z.string(), 'rules.md': z.string() }).strict(), planIssue: z.boolean(), expected: expectedSchema });
 export type DevelopmentNodeCase = z.infer<typeof caseSchema>;
 export const developmentNodeTargets = {
@@ -39,7 +40,11 @@ export function loadDevelopmentNodeCases(rootDir: string) {
     // 每类角色必须有独立的三条冻结输入。
     (item) => item.role === role,
   ).length !== 3) throw new Error('开发节点用例覆盖不完整');
-  return { ...suite, hash: createHash('sha256').update(raw).digest('hex') };
+  const protocolRaw = readFileSync(resolve(rootDir, 'evaluations/native/development-nodes/self-check-protocol.v2.json'), 'utf8');
+  const protocol = z.object({ version: z.literal('self-check-native-contract.v2'), reportProtocol: z.literal('native-summary-route'), instruction: z.string() }).parse(JSON.parse(protocolRaw));
+  for (const item of suite.cases) if (item.role === 'self-check') item.expected.reportProtocol = protocol.reportProtocol;
+  return { ...suite, hash: createHash('sha256').update(raw).digest('hex'), selfCheckHash: createHash('sha256').update(raw).update(protocolRaw).digest('hex'), protocol };
+
 }
 
 /** 合成上游只提供单一backend任务，不伪造产品人工批准，也不调用其他角色。 */
@@ -91,7 +96,7 @@ export async function runDevelopmentNode(config: PracticeConfig, item: Developme
       runChecks: async () => { const result = await engine.runChecks(); toolChecks.push(result); return result; },
     };
     let entry: EntryV2 | null = null, error: string | null = null;
-    const extra = item.role === 'self-check' ? { instruction: '调用runChecks后仅返回JSON {status:"passed"|"failed",failedCheckIds:[实际失败检查ID]}。只报告本轮真实执行结果，不修改源码。' } : item.role === 'backend' ? state.plan!.tasks[0] : item.role === 'context' ? { files: item.files } : null;
+    const extra = item.role === 'self-check' ? { instruction: loadDevelopmentNodeCases(config.rootDir).protocol.instruction } : item.role === 'backend' ? state.plan!.tasks[0] : item.role === 'context' ? { files: item.files } : null;
     try { entry = await generate(config, port, item.role, state, item.role === 'backend' ? ['src/solution.mjs'] : [], extra, methods); }
     catch { error = 'node-generation-failed'; }
     const after = await engine.snapshot();
@@ -158,6 +163,22 @@ export function assessDevelopmentNode(value: unknown, expected: unknown) {
     } else if (rule.kind === 'code') {
       if (!out.writes.includes('src/solution.mjs') || !checksPassed(out.checks) || !out.oracle?.passed || !checksPassed(out.oracle.checks) || !/^# tests 3$/m.test(out.oracle.checks.at(-1)?.stdout ?? '')) issues.push('behavior-acceptance-failed');
     } else {
+      if (rule.reportProtocol === 'native-summary-route') {
+        const report = z.object({ summary: z.string().min(1), route: z.enum(['frontend', 'backend', 'infrastructure', 'architecture', 'human']) }).parse(parseDevelopmentJson(out.entry.text));
+        if (!out.entry.tools.includes('runChecks') || !out.toolChecks.length) issues.push('checks-not-executed');
+        const last = out.toolChecks.at(-1) ?? [];
+        if (checksPassed(last) !== rule.passed || checksPassed(out.checks) !== rule.passed) issues.push('incorrect-check-result');
+        const failure = /检查失败|测试失败|语法错误|未通过|不通过|失败|failed/i.test(report.summary);
+        const success = /通过|成功|passed|success/i.test(report.summary);
+        if (rule.passed ? !success || failure : !failure || report.route !== 'backend') issues.push('incorrect-check-summary-or-route');
+        if (JSON.stringify(last.map(
+          // 比较两次真实检查的ID与退出结果，不比较不同进程的耗时。
+          (check) => [check.id, check.exitCode, check.processExitCode, check.timedOut],
+        )) !== JSON.stringify(out.checks.map(
+          // 宿主复跑只能用于交叉核实，不冒充模型执行。
+          (check) => [check.id, check.exitCode, check.processExitCode, check.timedOut],
+        ))) issues.push('check-evidence-mismatch');
+      } else {
       const report = z.object({ status: z.enum(['passed', 'failed']), failedCheckIds: z.array(z.string()) }).parse(JSON.parse(out.entry.text));
       if (!out.entry.tools.includes('runChecks') || !out.toolChecks.length) issues.push('checks-not-executed');
       const toolResult = out.toolChecks.at(-1) ?? [];
@@ -169,14 +190,15 @@ export function assessDevelopmentNode(value: unknown, expected: unknown) {
         (check) => check.id,
       ).sort();
       if (checksPassed(toolResult) !== rule.passed || checksPassed(out.checks) !== rule.passed || report.status !== (rule.passed ? 'passed' : 'failed') || JSON.stringify([...report.failedCheckIds].sort()) !== JSON.stringify(ids)) issues.push('incorrect-check-report');
+      }
     }
   } catch { issues.push('invalid-structure-or-reference'); }
   return { score: issues.length ? 0 : 1, issues: [...new Set(issues)] };
 }
 
 /** 六类共享透明硬判定评分器，每项输出缺陷原因；不以词项均值掩盖代码失败。 */
-export function createDevelopmentNodeScorer() {
-  return createScorer({ id: 'development-node-evidence-v1', name: '开发单节点结构、引用与执行证据 v1', description: '架构/评审验证结构引用、缺陷与阻断；实现/自检验证实际沙箱代码结果。不替代人工语义审查。' })
+export function createDevelopmentNodeScorer(version: 'v1' | 'v2' = 'v1') {
+  return createScorer({ id: `development-node-evidence-${version}`, name: `开发单节点结构、引用与执行证据 ${version}`, description: '架构/评审验证结构引用、缺陷与阻断；实现/自检验证实际沙箱代码结果。不替代人工语义审查。' })
     // 原生评分从步骤持久化的原始证据重新判定。
     .generateScore(({ run }) => assessDevelopmentNode(run.output, run.groundTruth).score)
     // 保存具体失败原因，拒绝把实验completed当质量通过。
@@ -197,8 +219,8 @@ export function createDevelopmentNodeWorkflows(config: PracticeConfig, generate:
           // 角色由注册闭包决定，客户端不能借caseId扩大权限。
           (entry) => entry.id === inputData.caseId && entry.role === role,
         );
-        if (!item || inputData.mode !== config.mode || inputData.suiteHash !== suite.hash) throw new Error('评测角色、模式或用例版本不匹配');
-        return runDevelopmentNode(config, item, suite.hash, generate);
+        if (!item || inputData.mode !== config.mode || inputData.suiteHash !== (role === 'self-check' ? suite.selfCheckHash : suite.hash)) throw new Error('评测角色、模式或用例版本不匹配');
+        return runDevelopmentNode(config, item, role === 'self-check' ? suite.selfCheckHash : suite.hash, generate);
       },
     });
     return createWorkflow({ id: target.key, description: `${target.name}：冻结上游与隔离候选，仅评估当前角色；不批准业务交付`, inputSchema, outputSchema: developmentNodeOutputSchema }).then(step).commit();
@@ -213,11 +235,14 @@ export async function seedDevelopmentNodeDatasets(mastra: Mastra, config: Practi
   for (const role of developmentNodeRoleSchema.options) {
     const target = developmentNodeTargets[role];
     mastra.getWorkflow(target.key);
-    const id = `${suite.version}-${config.mode}-${role}-${suite.hash.slice(0, 12)}`;
+    const hash = role === 'self-check' ? suite.selfCheckHash : suite.hash;
+    const version = role === 'self-check' ? 'development-nodes.v2' : suite.version;
+    const scorerId = role === 'self-check' ? 'development-node-evidence-v2' : 'development-node-evidence-v1';
+    const id = `${version}-${config.mode}-${role}-${hash.slice(0, 12)}`;
     const found = await mastra.datasets.list({ perPage: false, filters: { datasetIds: [id] } });
-    const dataset = found.datasets.length ? await mastra.datasets.get({ id }) : await mastra.datasets.create({ id, name: `${target.name} · ${config.mode} · ${suite.version}`, description: '固定上游单节点独立测评，正式Agent与真实沙箱；fixture分数不作为能力结论。', targetType: 'workflow', targetIds: [target.key], scorerIds: ['development-node-evidence-v1'], metadata: { mode: config.mode, suiteHash: suite.hash, authority: 'evaluation-only' } });
-    for (const item of suite.cases) if (item.role === role) await dataset.addItem({ externalId: item.id, input: { caseId: item.id, mode: config.mode, suiteHash: suite.hash }, groundTruth: { caseId: item.id, role, mode: config.mode, suiteHash: suite.hash, expected: item.expected }, scorerIds: ['development-node-evidence-v1'], metadata: { upstream: 'frozen-evaluation-input', manualReview: null } });
-    entries.push({ dataset, targetId: target.key, role });
+    const dataset = found.datasets.length ? await mastra.datasets.get({ id }) : await mastra.datasets.create({ id, name: `${target.name} · ${config.mode} · ${version}`, description: '固定上游单节点独立测评，正式Agent与真实沙箱；fixture分数不作为能力结论。', targetType: 'workflow', targetIds: [target.key], scorerIds: [scorerId], metadata: { mode: config.mode, suiteHash: hash, authority: 'evaluation-only' } });
+    for (const item of suite.cases) if (item.role === role) await dataset.addItem({ externalId: item.id, input: { caseId: item.id, mode: config.mode, suiteHash: hash }, groundTruth: { caseId: item.id, role, mode: config.mode, suiteHash: hash, expected: item.expected }, scorerIds: [scorerId], metadata: { upstream: 'frozen-evaluation-input', manualReview: null } });
+    entries.push({ dataset, targetId: target.key, role, suiteHash: hash });
   }
   return entries;
 }

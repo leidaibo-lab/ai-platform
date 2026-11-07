@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const args = process.argv.slice(2);
-for (const arg of args) if (!['--seed', '--run', '--live', '--strict'].includes(arg)) throw new Error(`未知参数：${arg}`);
+for (const arg of args) if (!['--seed', '--run', '--live', '--strict', '--role=self-check'].includes(arg)) throw new Error(`未知参数：${arg}`);
 if (args.includes('--live')) process.env.MASTRA_MODE = 'live';
 const config = readConfig();
 if (args.includes('--strict') && (!args.includes('--run') || config.mode !== 'live')) throw new Error('--strict需要--run和live模式，fixture不能作为能力准入');
@@ -22,9 +22,10 @@ try {
   for (const path of ['src/evaluation/development-nodes.ts', 'src/evaluation/review-rework.ts', 'src/development/v2/agents.ts', 'src/development/v2/contracts.ts', 'src/development/v2/gates.ts', 'src/development-execution.ts', 'package-lock.json']) sourceHashes[path] = createHash('sha256').update(readFileSync(resolve(config.rootDir, path))).digest('hex');
   const metadata = { mode: config.mode, modelId: config.mode === 'live' ? config.modelId : 'fixture', suiteHash: loadDevelopmentNodeCases(config.rootDir).hash, methodBundleHash: loadDevelopmentMethods(config.rootDir).hash, sourceHashes, revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: config.rootDir, encoding: 'utf8' }).trim(), dirty: !!execFileSync('git', ['status', '--porcelain'], { cwd: config.rootDir, encoding: 'utf8' }).trim(), authority: 'evaluation-only', manualReview: null };
   for (const entry of datasets) {
+    if (args.includes('--role=self-check') && entry.role !== 'self-check') continue;
     console.log(JSON.stringify({ datasetId: entry.dataset.id, targetId: entry.targetId, mode: config.mode }));
     if (!args.includes('--run')) continue;
-    const result = await entry.dataset.startExperiment({ targetType: 'workflow', targetId: entry.targetId, name: `${config.mode} · ${entry.role} · 独立开发节点 · ${new Date().toISOString()}`, maxConcurrency: 3, metadata });
+    const result = await entry.dataset.startExperiment({ targetType: 'workflow', targetId: entry.targetId, name: `${config.mode} · ${entry.role} · 独立开发节点 · ${new Date().toISOString()}`, maxConcurrency: 3, metadata: { ...metadata, assetHash: metadata.suiteHash, suiteHash: entry.suiteHash } });
     const scores = result.results.map(
       // 输出有限结果；完整上下文、源码、检查及失败原因由原生Store持有。
       (item) => ({ input: item.input, scores: item.scores.map(
