@@ -2,7 +2,7 @@
 import type { createProductDevelopmentWorkflow } from '../mastra/workflows/product-development.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from '../mastra/workflows/delivery.js';
 import { describeRecovery } from './recovery.js';
-import { describeGate, validateGate } from './gates.js';
+import { describeGate, validateGate, describeDevelopmentProgress } from './gates.js';
 import { intakeSchema, validateAnswers } from './contracts.js';
 /** 仅公开本地业务输入校验，不透出模型或文件系统异常。 */
 export class GateInputError extends Error {}
@@ -26,7 +26,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
     if (approved?.success) gate.evidence = { ...gate.evidence, approvedProduct: approved.data.artifacts.at(-1)?.content };
   }
   const retry = describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
-  return { retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  return { progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown) {

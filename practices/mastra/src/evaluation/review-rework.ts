@@ -75,8 +75,8 @@ export async function runReviewTrial(config: PracticeConfig, directory: string, 
     let state = status.result ?? null;
     if (!state) {
       const snapshot = await app.workflow.getWorkflowRunById(run.runId);
-      const pending = snapshot?.steps?.['development-iteration-v2.recover-development'];
-      if (pending && !Array.isArray(pending)) { const parsed = stateV2Schema.safeParse(pending.payload); if (parsed.success) state = parsed.data; }
+      const pending = Object.values(snapshot?.steps ?? {}).find(/** 兼容旧恢复节点与当前故障阶段原生暂停。 */value => !Array.isArray(value) && value.status === 'suspended' && (value.suspendPayload?.recoveryState || value.suspendPayload?.kind));
+      if (pending && !Array.isArray(pending)) { const parsed = stateV2Schema.safeParse(pending.suspendPayload?.recoveryState ?? pending.payload); if (parsed.success) state = parsed.data; }
     }
     const source = await app.execution.readFile('src/solution.mjs');
     const final = await judgeReviewSource(resolve(directory, 'final-oracle'), source);

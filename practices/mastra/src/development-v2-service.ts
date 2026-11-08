@@ -69,9 +69,9 @@ export async function developmentStatusV2(app: ApplicationV2, runId: string) {
 /** 所有人工resume共用相同的身份、输入和源码绑定检查。 */
 async function pendingV2(app: ApplicationV2, runId: string, step: string): Promise<StateV2> {
   const status = await developmentStatusV2(app, runId);
-  const pending = status.steps?.[`development-iteration-v2.${step}`];
+  const pending = status.steps?.[`development-iteration-v2.${step}`] ?? (step === 'recover-development' ? Object.values(status.steps ?? {}).find(/** 新图故障在原阶段暂停，恢复状态由原生暂停载荷持有。 */value => !Array.isArray(value) && value.status === 'suspended' && value.suspendPayload?.recoveryState) : undefined);
   if (status.status !== 'suspended' || !pending || Array.isArray(pending) || pending.status !== 'suspended') throw new Error('v2没有对应待审暂停点');
-  const state = stateV2Schema.parse(pending.payload);
+  const state = stateV2Schema.parse(pending.suspendPayload?.recoveryState ?? pending.payload);
   validateIdentityV2(state, app.config, app.methodsHash);
   if (developmentHash(state.input) !== developmentHash(app.input)) throw new Error('v2开发输入发生漂移');
   if (state.checkpointHash !== developmentHash(await app.execution.snapshot())) throw new Error('v2源码检查点漂移');
@@ -94,7 +94,10 @@ export async function recoverDevelopmentV2(app: ApplicationV2, runId: string, in
   const state = await pendingV2(app, runId, 'recover-development');
   if (!state.recovery || state.recovery.hash !== review.hash || recoveryHashV2(state) !== review.hash) throw new Error('v2恢复版本不匹配');
   const run = await app.workflow.createRun({ runId });
-  return run.resume({ step: ['development-iteration-v2', 'recover-development'], resumeData: review });
+  const status = await developmentStatusV2(app, runId);
+  const path = Object.entries(status.steps ?? {}).find(/** 恢复当前实际暂停点，不让调用方指定任意阶段。 */([, value]) => !Array.isArray(value) && value.status === 'suspended' && (value.suspendPayload?.recoveryState || value.suspendPayload?.hash === review.hash))?.[0];
+  if (!path) throw new Error('v2故障暂停点已变化');
+  return run.resume({ step: path.split('.'), resumeData: review });
 }
 
 /** 澄清创建新输入/Run；只继承候选与来源关系，不复制旧批准或重置旧Run。 */

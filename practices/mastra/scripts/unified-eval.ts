@@ -22,7 +22,7 @@ function save() { writeFileSync(resolve(directory, 'report.json'), JSON.stringif
 try {
   await options.storage.init(); const workflow = options.workflows.productDevelopmentWorkflow; const run = await workflow.createRun(record.runId ? {runId: record.runId} : undefined); record.runId = run.runId; save();
   const last = record.stages.at(-1);
-  if (process.argv[2] && (last?.step !== 'recover-development' || record.recoveryAttempted)) throw new Error('没有可安全接续的首次故障');
+  if (process.argv[2] && (last?.step !== 'recover-development' && !last?.payload?.recoveryState || record.recoveryAttempted)) throw new Error('没有可安全接续的首次故障');
   if (process.argv[2]) { record.recoveryAttempted = true; save(); }
   let result: any = process.argv[2]
     ? await run.resume({ step: ['development-team', ...last.payload.__workflow_meta.path], resumeData: { ...actor, hash: last.payload.hash, decision: 'retry' } })

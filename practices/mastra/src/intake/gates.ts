@@ -20,6 +20,21 @@ const definitions: Record<string, { title: string; description: string; schema: 
   'execute-rollback-externally': { title: '填写回滚执行回执', description: '在外部平台完成回滚后填写真实回执；无法恢复时明确标为需要人工处理。', schema: rollbackReceiptSchema },
 };
 export type GatePayload = Record<string, any>;
+const phaseNames: Record<string, string> = { 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
+const faultReasons: Record<string, string> = { 'model-timeout': '模型未在规定时间内完成响应', 'model-network': '与模型服务的连接未能完成', 'invalid-output': '模型返回的内容未通过结构或引用校验', 'model-error': '模型调用未成功' };
+/** 从持久化故障分类生成用户指引；不暴露模型原始错误、源码或内部恢复状态。 */
+function recoveryGuidance(payload: GatePayload) {
+  const phase = phaseNames[payload.phase] ?? '开发阶段';
+  const reason = faultReasons[payload.kind] ?? '该阶段执行未完成';
+  const after: Record<string, string> = { 'prepare-context': '分析完成后继续生成技术方案，方案仍需确认后才实施。', architecture: '方案生成后仍需确认，才会开始实施。', 'assess-readiness': '检查完成后继续展示待决问题或方案批准。', implement: '只重新派发未完成任务，已成功任务不重做；实现完成后进入开发自检。', 'development-self-check': '重新执行自检分析和固定检查，通过后进入独立代码评审。', 'review-code': '只重新执行评审，不重做已完成的实现；评审问题仍按流程处理。' };
+  return { title: `${phase}未完成`, phase, reason,
+    description: `${reason}，流程已暂停，等待你决定是否重试。`,
+    preserved: '已确认的产品需求、项目配置和成功任务检查点已保留，无需重新填写。',
+    next: `建议先重试${phase}。${after[payload.phase] ?? '重新调用该阶段所需的模型，成功后才继续。'}`,
+    retryLabel: `重试${phase}`, stopLabel: '停止本轮流程',
+    stopImpact: '停止后保留已有记录，本轮不再自动推进。',
+    limit: '本轮允许一次人工重试；再次失败将停止并显示错误，不会无限重试。' };
+}
 /** 服务端生成只读绑定值，不让用户手工抄写版本与发布标识。 */
 export function gateInitial(key: string, payload: GatePayload) {
   const fixed: Record<string, unknown> = {};
@@ -31,7 +46,9 @@ export function gateInitial(key: string, payload: GatePayload) {
 }
 /** 只投影白名单关口和当前实际材料，未知暂停点保持不可操作。 */
 export function describeGate(path: string, payload: GatePayload) {
-  const key = path.split('.').at(-1)!;
+  const nativeKey = path.split('.').at(-1)!;
+  const stageRecovery = payload.recoveryState && stateV2Schema.safeParse(payload.recoveryState).success;
+  const key = stageRecovery ? 'recover-development' : nativeKey;
   const definition = definitions[key];
   if (!definition) return undefined;
   const schema = z.toJSONSchema(definition.schema, { unrepresentable: 'any' });
@@ -50,7 +67,9 @@ export function describeGate(path: string, payload: GatePayload) {
   if (key === 'approve-test-cases') initial.cases = (payload.requirements ?? []).map(/** 只预填引用与空用例，不替人决定预期或映射。 */(item: GatePayload, index: number) => ({ id: `case-${index + 1}`, requirementRefs: [item.id], expected: '', method: '', checkRefs: [] }));
   if (key === 'review-test-results') initial.manualResults = (payload.quality?.approval?.cases ?? []).filter(/** 机器结果不能被人工填报覆盖。 */(item: GatePayload) => item.method === 'manual').map(/** 结果与证据保持空白，必须实际填报。 */(item: GatePayload) => ({ caseId: item.id, status: '', evidence: '' }));
   if (key === 'verify-release-health') initial.checks = (payload.requiredChecks ?? []).map(/** 检查清单是已批准事实，实际结果不预选。 */(item: GatePayload) => ({ id: item.id, status: '', evidence: '', observedAt: '' }));
-  return { initial, key, title: definition.title, description: definition.description, gateHash: developmentHash({ path, payload }), evidence: payload, fixed, schema };
+  const recoveryInfo = key === 'recover-development' ? recoveryGuidance(payload) : undefined;
+  const { recoveryState: _privateState, ...publicEvidence } = payload;
+  return { initial, key, title: recoveryInfo?.title ?? definition.title, description: recoveryInfo?.description ?? definition.description, recoveryInfo, gateHash: developmentHash({ path, payload }), evidence: publicEvidence, fixed, schema };
 }
 /** 输入结构与所有绑定值在恢复前核对，拒绝过期和跨关口请求。 */
 export function validateGate(path: string, payload: GatePayload, input: unknown, savedState?: unknown) {
@@ -67,7 +86,7 @@ export function validateGate(path: string, payload: GatePayload, input: unknown,
     if (actual.size !== data.checks.length || actual.size !== payload.requiredChecks.length || payload.requiredChecks.some(/** 每个批准检查必须回填。 */(check: GatePayload) => !actual.has(check.id))) throw new Error('健康结果必须覆盖批准清单');
   }
   if (['approve-architecture', 'resolve-readiness', 'resolve-findings', 'recover-development'].includes(gate.key)) {
-    const state = stateV2Schema.parse(savedState);
+    const state = stateV2Schema.parse(payload.recoveryState ?? savedState);
     if (gate.key === 'approve-architecture') { assertApprovalV2(state); if (data.hash !== approvalHashV2(state)) throw new Error('方案版本发生漂移'); }
     if (gate.key === 'resolve-readiness' || gate.key === 'resolve-findings') { if (data.hash !== findingsHashV2(state)) throw new Error('报告版本发生漂移'); applyFindingsReview(state, findingsReviewSchema.parse(data)); }
     if (gate.key === 'recover-development' && data.hash !== recoveryHashV2(state)) throw new Error('恢复版本发生漂移');
@@ -78,4 +97,16 @@ export function validateGate(path: string, payload: GatePayload, input: unknown,
     if (gate.key === 'review-test-results') validateQualityReview(state, qualityReviewSchema.parse(data));
   }
   return data;
+}
+
+/** 运行/终止反馈仅从原生叶节点投影，不根据 HTTP 成功或本地计时推断业务成功。 */
+export function describeDevelopmentProgress(status: string, steps: Record<string, any>) {
+  if (!['running', 'failed'].includes(status)) return undefined;
+  const entry = Object.entries(steps).find(/** 容器不是业务阶段，优先匹配具体开发步骤。 */([path, value]) => !Array.isArray(value) && path.split('.').at(-1)! in phaseNames && value.status === status);
+  if (!entry) return undefined;
+  const phase = phaseNames[entry[0].split('.').at(-1)!];
+  const exhausted = typeof entry[1].error?.message === 'string' && entry[1].error.message.includes('预算已耗尽');
+  return { phase, title: status === 'running' ? `正在进行${phase}` : `${phase}执行失败`,
+    detail: status === 'running' ? '正在处理该阶段，后续阶段尚未执行。完成或需要你处理时会自动更新。' : exhausted ? '该阶段再次执行未完成，重试或调用预算已耗尽。流程已停止，检查点保留，后续阶段未放行。' : '该阶段发生无法自动恢复的错误，流程已停止。已确认信息和检查点保留，后续阶段未放行。',
+    next: status === 'running' ? '请等待，无需重复提交；页面正在自动同步后台状态。' : '请核对模型服务和该阶段的技术错误。若本页没有重试入口，表示当前恢复预算已耗尽或不满足恢复条件。' };
 }

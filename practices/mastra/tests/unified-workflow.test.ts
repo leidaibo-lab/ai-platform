@@ -92,6 +92,7 @@ for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-s
     const execution = new DevelopmentExecution(resolve(directory, 'candidate'), project.writablePaths, project.checkFiles);
     const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(parent, 'workflow.db')}` };
     const children: string[] = [];
+    let recovering = false;
     let arrivals = 0; let release!: () => void;
     const barrier = new Promise<void>(/** 两个父任务均进入才允许继续，以证明真实重叠执行。 */(done) => { release = done; });
     let barrierTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -102,7 +103,7 @@ for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-s
         if (++arrivals === 2) release();
         await Promise.race([barrier, new Promise<void>(/** 串行退化应有界失败，不能挂住整套回归。 */(_, reject) => { barrierTimeout = setTimeout(/** 超时仅作为并行断言失败。 */() => reject(new Error('parallel barrier timeout')), 3000); })]);
       }
-      if (runtime?.delegate && paths.includes('src/b.mjs') && scenario === 'failed-member') throw new SyntaxError('controlled-member-failure');
+      if (runtime?.delegate && paths.includes('src/b.mjs') && scenario === 'failed-member' && !recovering) throw new SyntaxError('controlled-member-failure');
       if (runtime?.delegate && scenario === 'delegation-scope') await runtime.delegate({ role: 'backend', goal: '越权注入', paths: ['outside.mjs'] });
       if (runtime && !runtime.delegate) {
         if (scenario === 'dependency' && paths.includes('src/b.mjs')) assert.match(await args[1].readFile('src/a.mjs'), /fixtureValue/);
@@ -119,8 +120,14 @@ for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-s
       if (scenario === 'parallel') { assert.equal(arrivals, 2); assert.equal(result.status, 'success'); assert.equal(result.result.outcome, 'development-delivered'); }
       else if (scenario === 'dependency') { assert.equal(result.status, 'success'); assert.equal(result.result.outcome, 'development-delivered'); assert.deepEqual(children, ['src/a.mjs', 'src/b.mjs']); }
       else {
-        const pending = paused(result); assert.equal(pending.path.at(-1), 'recover-development');
-        if (scenario === 'failed-member') { assert.match(await execution.readFile('src/a.mjs'), /fixtureValue/); assert.equal(await execution.readFile('src/b.mjs'), project.files['src/b.mjs']); }
+        const pending = paused(result); assert.equal(pending.path.at(-1), 'execute-agent-team');
+        if (scenario === 'failed-member') {
+          assert.match(await execution.readFile('src/a.mjs'), /fixtureValue/); assert.equal(await execution.readFile('src/b.mjs'), project.files['src/b.mjs']);
+          recovering = true;
+          const resumed: any = await run.resume({ step: pending.path, resumeData: { ...actor, hash: pending.payload.hash, decision: 'retry' } });
+          assert.equal(resumed.status, 'success'); assert.equal(resumed.result.outcome, 'development-delivered');
+          assert.equal(children.filter(/** 成功分支不应在人工重试中重新派发。 */path => path === 'src/a.mjs').length, 1);
+        }
         else { assert.equal(await execution.readFile('src/a.mjs'), project.files['src/a.mjs']); assert.deepEqual(children, []); }
       }
     } finally { if (barrierTimeout) clearTimeout(barrierTimeout); await execution.close(); await storage.close(); rmSync(parent, { recursive: true, force: true }); }

@@ -1,5 +1,7 @@
 # 项目文档
 
+- [开发阶段状态与故障引导](./decisions/2026-11-08-mastra-stage-state-flow.md)：当前阶段、故障原因、保留检查点和下一步操作；未执行业务节点不再空跑为完成，原阶段暂停恢复。
+
 - [HRM 全栈验证与开发自主规划](./decisions/2026-11-08-mastra-hrm-execution.md)：用户确认关联项目，Agent 提出具体文件与团队；已实测 Docker 中类型检查、构建及页面/API/临时数据库连通。[使用说明](../practices/mastra/README.md)。
 
 - [Mastra资源配置接入规范](../practices/mastra/config/runtime-resource-contract.md)：单一配置归属、加载交叉校验、Run冻结/恢复、逐角色最小输入与版本迁移；定义稿，未接入运行时。

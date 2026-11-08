@@ -296,18 +296,79 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     execute: async ({ inputData, resumeData, suspend }) => {
       if (inputData.outcome !== 'in-progress' || !inputData.recovery) return inputData;
       await guard(inputData);
-      if (inputData.recoveries.length >= 1 || inputData.calls >= inputData.maxCalls) return { ...inputData, outcome: 'manual-attention' as const };
+      if (inputData.recoveries.length >= 1 || inputData.calls >= inputData.maxCalls) throw new Error('开发恢复预算已耗尽，请核对失败阶段后处理');
       if (inputData.recovery.hash !== recoveryHashV2(inputData)) throw new Error('v2恢复绑定漂移');
       if (!resumeData) return suspend(inputData.recovery);
       if (resumeData.hash !== inputData.recovery.hash) throw new Error('v2恢复版本不匹配');
       return { ...inputData, recoveries: [...inputData.recoveries, resumeData], recovery: null, outcome: resumeData.decision === 'stop' ? 'manual-attention' as const : 'in-progress' as const };
     },
   });
+  /** ADR: docs/decisions/2026-11-08-mastra-stage-state-flow.md
+   * 模型故障就地暂停，保存失败后的预算/检查点；未完成阶段不能正常返回冒充完成。
+   */
+  function recoverable<T extends Step<any, any, any, any, any, any>>(step: T): T {
+    if (options.legacySequential) return step;
+    const execute = step.execute;
+    step.resumeSchema = recoveryReviewSchema;
+    step.suspendSchema = z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), recoveryState: stateV2Schema });
+    // suspendData 来自原生持久化，不接收客户端替代源码或失败状态。
+    step.execute = async (context) => {
+      let state: StateV2 = context.inputData;
+      if (context.suspendData?.recoveryState) {
+        state = stateV2Schema.parse(context.suspendData.recoveryState);
+        await guard(state);
+        const decision = recoveryReviewSchema.parse(context.resumeData);
+        if (!state.recovery || decision.hash !== state.recovery.hash || decision.hash !== recoveryHashV2(state)) throw new Error('恢复版本发生漂移');
+        if (state.recoveries.length >= 1 || state.calls >= state.maxCalls) throw new Error('开发恢复预算已耗尽，请检查模型服务后另行处理');
+        state = { ...state, recoveries: [...state.recoveries, decision], recovery: null };
+        if (decision.decision === 'stop') return { ...state, outcome: 'manual-attention' as const };
+      }
+      if (state.calls >= state.maxCalls) throw new Error('开发模型调用预算已耗尽');
+      // 人工决定恢复的是业务检查点；团队子流程需开始下一波次，不能恢复一个已完成的旧子Run。
+      const result = await execute.call(step, { ...context, inputData: state, resumeData: undefined, suspendData: undefined, resume: undefined, restart: false });
+      if (result && result.recovery) {
+        if (result.recoveries.length >= 1 || result.calls >= result.maxCalls) throw new Error(`开发阶段 ${result.phase} 再次未完成（${result.recovery.kind}），人工恢复预算已耗尽`);
+        return context.suspend({ ...result.recovery, recoveryState: result });
+      }
+      return result;
+    };
+    return step;
+  }
   const teamExecution = options.team ? createTeamExecution(config, execution, methods, generate, bind) : null;
-  const iteration = createWorkflow({ id: options.id ? `${options.id}-iteration` : 'development-iteration-v2', inputSchema: stateV2Schema, outputSchema: stateV2Schema })
-    .then(bind(context)).then(bind(architecture)).then(bind(assemble)).then(bind(readiness)).then(bind(resolveReadiness)).then(bind(approve))
-    .then(teamExecution ?? bind(implement))
-    .then(bind(selfCheck)).then(bind(review)).then(bind(delivery)).then(bind(resolveFindings)).then(bind(recovery)).commit();
+  const definition = createWorkflow({ id: options.id ? `${options.id}-iteration` : 'development-iteration-v2', inputSchema: stateV2Schema, outputSchema: stateV2Schema });
+  let flow: any = definition;
+  let prior: string | undefined;
+  /** 原生条件分支跳过非当前业务阶段；映射仅传递状态，不冒充业务步骤已执行。 */
+  function append(step: Step<any, any, any, any, any, any>, phase?: StateV2['phase']) {
+    const previous = prior;
+    const mapId = `state-after-${step.id}`;
+    flow = flow.branch([[/** 故障优先于正常阶段，旧恢复记录仍可接续。 */async ({ inputData }: { inputData: StateV2 }) => phase ? active(inputData, phase) : inputData.outcome === 'in-progress' && !!inputData.recovery, step]])
+      .map(/** 未选择分支时沿用上一份原生状态，不执行该业务阶段。 */async ({ inputData, getInitData, getStepResult }: any) => {
+        const values = Object.values(inputData).filter(/** 只有执行过的分支有输出。 */value => value !== undefined);
+        if (values.length > 1) throw new Error('开发流程命中多个阶段');
+        return stateV2Schema.parse(values[0] ?? (previous ? getStepResult(previous) : getInitData()));
+      }, { id: mapId, description: '传递阶段状态；未选择的业务节点不执行' });
+    prior = mapId;
+  }
+  if (options.legacySequential) {
+    // 仅供历史图迁移回归，正式入口不使用无条件业务步骤。
+    flow = definition.then(bind(context)).then(bind(architecture)).then(bind(assemble)).then(bind(readiness)).then(bind(resolveReadiness)).then(bind(approve))
+      .then(teamExecution ?? bind(implement)).then(bind(selfCheck)).then(bind(review)).then(bind(delivery)).then(bind(resolveFindings)).then(bind(recovery));
+  } else {
+    append(bind(recoverable(context)), 'prepare-context');
+    append(bind(recoverable(architecture)), 'architecture');
+    append(bind(assemble), 'assemble-team');
+    append(bind(recoverable(readiness)), 'assess-readiness');
+    append(bind(resolveReadiness), 'resolve-readiness');
+    append(bind(approve), 'approve-architecture');
+    append(teamExecution ? bind(recoverable(teamExecution)) : bind(recoverable(implement)), 'implement');
+    append(bind(recoverable(selfCheck)), 'development-self-check');
+    append(bind(recoverable(review)), 'review-code');
+    append(bind(delivery), 'assess-delivery');
+    append(bind(resolveFindings), 'resolve-findings');
+    append(bind(recovery));
+  }
+  const iteration = flow.commit() as Step<string, any, StateV2, StateV2, any, any>;
   const workflow = createWorkflow({ id: options.id ?? 'development-execution-v2', description: '开发：上下文、架构、动态团队、并行实现、自检评审与研发交付', inputSchema: inputV2Schema, outputSchema: stateV2Schema }).then(bind(initialize)).dountil(iteration,
     // 原生循环只在有界返工或已确认故障接续后继续。
     async ({ inputData }) => inputData.outcome !== 'in-progress',
@@ -323,6 +384,8 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
 export interface DevelopmentWorkflowOptions {
   id?: string;
   team?: boolean;
+  /** 历史线性图兼容回归专用，正式入口不启用。 */
+  legacySequential?: boolean;
   bind?: <T extends Step<any, any, any, any, any, any>>(step: T) => T;
 }
 

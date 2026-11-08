@@ -37,8 +37,8 @@ async function fixture(check: (app: ApplicationV2, directory: string, config: Pr
 /** 从指定原生暂停点取当前状态，不递归搜索历史hash。 */
 async function pending(app: ApplicationV2, runId: string, name: string): Promise<StateV2> {
   const status = await developmentStatusV2(app, runId); assert.equal(status.status, 'suspended');
-  const step = status.steps?.[`development-iteration-v2.${name}`]; assert.ok(step && !Array.isArray(step));
-  return stateV2Schema.parse(step.payload);
+  const step = status.steps?.[`development-iteration-v2.${name}`] ?? (name === 'recover-development' ? Object.values(status.steps ?? {}).find(/** 原阶段暂停替代尾部恢复空操作。 */value => !Array.isArray(value) && value.status === 'suspended' && value.suspendPayload?.recoveryState) : undefined); assert.ok(step && !Array.isArray(step));
+  return stateV2Schema.parse(step.suspendPayload?.recoveryState ?? step.payload);
 }
 /** 本地标签只模拟方案批准，不作为账号认证。 */
 function approval(hash: string) { return { hash, decision: 'approve', reviewer: 'fixture-owner', comment: '确认当前离线包' }; }
@@ -278,8 +278,9 @@ test('v2故障接续预算耗尽不会无限循环或直接交付', async () => 
     const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
     const state = await pending(app, run.runId, 'recover-development');
     await recoverDevelopmentV2(app, run.runId, retry(state.recovery!.hash));
-    const result = (await developmentStatusV2(app, run.runId)).result!;
-    assert.equal(result.outcome, 'manual-attention'); assert.equal(result.calls, 4); assert.equal(result.delivery, null);
+    const result = await developmentStatusV2(app, run.runId);
+    assert.equal(result.status, 'failed'); assert.equal(result.result, null);
+    const failed = result.steps?.['development-iteration-v2.prepare-context']; assert.ok(failed && !Array.isArray(failed)); assert.equal(failed.status, 'failed');
   }, generate);
 });
 
