@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { MastraTimeoutError } from '@mastra/core/loop';
+import { describeDevelopmentProgress } from '../src/intake/gates.js';
 import { developmentHash } from '../src/development/contracts.js';
 import { findingsHashV2, inputV2Schema, stateV2Schema, type StateV2 } from '../src/development/v2/contracts.js';
 import { createAgentV2, generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
@@ -122,10 +124,10 @@ for (const failure of ['unknown-check', 'readiness-fail', 'reviewer-malformed', 
 // reviewer故障只能恢复review-code，不能重做写入或自检。
 test('v2评审网络故障关闭重开后只重试评审，不重放已完成实现', async () => {
   let writes = 0; let reviews = 0;
-  /** 前两次reviewer调用网络错误，其他角色真实运行原生fixture。 */
+  /** 前五次reviewer调用网络错误，其他角色真实运行原生fixture。 */
   const generate: GeneratorV2 = async (...args) => {
     if (args[2] === 'backend') writes++;
-    if (args[2] === 'reviewer' && ++reviews <= 2) throw Object.assign(new Error('fixture-network'), { code: 'ECONNRESET' });
+    if (args[2] === 'reviewer' && ++reviews <= 5) throw Object.assign(new Error('fixture-network'), { code: 'ECONNRESET' });
     return generateV2(...args);
   };
   await fixture(
@@ -138,7 +140,7 @@ test('v2评审网络故障关闭重开后只重试评审，不重放已完成实
     try {
       await next.storage.init(); await assert.rejects(recoverDevelopmentV2(next, run.runId, retry('0'.repeat(64))), /版本/);
       assert.equal((await recoverDevelopmentV2(next, run.runId, retry(state.recovery!.hash))).status, 'success');
-      assert.equal((await developmentStatusV2(next, run.runId)).result?.outcome, 'development-delivered'); assert.equal(writes, 1); assert.equal(reviews, 3);
+      assert.equal((await developmentStatusV2(next, run.runId)).result?.outcome, 'development-delivered'); assert.equal(writes, 1); assert.equal(reviews, 6);
     } finally { await next.execution.close(); await next.storage.close(); }
   }, generate);
 });
@@ -268,19 +270,38 @@ for (const severity of ['low', 'high'] as const) {
   });
 }
 
-// 持续故障接续一次后终止，预算不因失败阶段重新进入而重置。
-test('v2故障接续预算耗尽不会无限循环或直接交付', async () => {
+// 每轮临时故障有界尝试，但可以多轮人工继续；累计消费不重置。
+test('v2连续超时多轮暂停，重开后保留诊断和累计预算，不终止需求', async () => {
   /** 只读角色持续超时，不写候选文件。 */
-  const generate: GeneratorV2 = async () => { throw Object.assign(new Error('fixture-timeout'), { name: 'MastraTimeoutError' }); };
-  await fixture(
-    // 在独占执行目录和原生存储内验证本例的运行边界。
-    async (app) => {
+  const generate: GeneratorV2 = async () => { throw Object.assign(new MastraTimeoutError({ timeoutType: 'step', timeoutMs: 600000 }), { request: 'synthetic-private-request' }); };
+  await fixture(/** 同Store重新装配后继续当前阶段。 */async (app, directory, config) => {
     const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
-    const state = await pending(app, run.runId, 'recover-development');
+    let state = await pending(app, run.runId, 'recover-development'); assert.equal(state.calls, 5);
     await recoverDevelopmentV2(app, run.runId, retry(state.recovery!.hash));
-    const result = await developmentStatusV2(app, run.runId);
-    assert.equal(result.status, 'failed'); assert.equal(result.result, null);
-    const failed = result.steps?.['development-iteration-v2.prepare-context']; assert.ok(failed && !Array.isArray(failed)); assert.equal(failed.status, 'failed');
+    await app.execution.close(); await app.storage.close();
+    const reopened = openDevelopmentV2(config, directory, true, generate);
+    try {
+      state = await pending(reopened, run.runId, 'recover-development'); assert.equal(state.calls, 10); assert.equal(state.faults.length, 10);
+      for (const fault of state.faults) { assert.equal(fault.modelCall!.failure.source, 'mastra-step'); assert.equal(fault.modelCall!.failure.triggerLimitMs, 600000); assert.ok(fault.modelCall!.durationMs >= 0); }
+      assert.doesNotMatch(JSON.stringify(state.faults), /synthetic-private-request/);
+      await recoverDevelopmentV2(reopened, run.runId, retry(state.recovery!.hash));
+      state = await pending(reopened, run.runId, 'recover-development'); assert.equal(state.calls, 15); assert.equal(state.recoveries.length, 2); assert.equal(state.delivery, null);
+    } finally { await reopened.execution.close(); await reopened.storage.close(); }
+  }, generate);
+});
+
+test('v2调用额度用完转追加确认，非法追加不消耗暂停点，累计计数不清零', async () => {
+  /** 让所有角色在开始业务前持续超时，验证额度边界。 */
+  const generate: GeneratorV2 = async () => { throw new MastraTimeoutError({ timeoutType: 'step', timeoutMs: 600000 }); };
+  await fixture(/** 多轮原生resume直到72次额度，然后显式追加。 */async (app) => {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    let state = await pending(app, run.runId, 'recover-development');
+    for (let round = 0; round < 20 && state.recovery!.kind !== 'call-budget'; round++) { await recoverDevelopmentV2(app, run.runId, retry(state.recovery!.hash)); state = await pending(app, run.runId, 'recover-development'); }
+    assert.equal(state.calls, 72); assert.equal(state.recovery!.kind, 'call-budget');
+    await assert.rejects(recoverDevelopmentV2(app, run.runId, retry(state.recovery!.hash)), /追加/);
+    assert.equal((await pending(app, run.runId, 'recover-development')).calls, 72);
+    await recoverDevelopmentV2(app, run.runId, { ...retry(state.recovery!.hash), additionalCalls: 72 });
+    state = await pending(app, run.runId, 'recover-development'); assert.equal(state.maxCalls, 144); assert.equal(state.calls, 77); assert.equal(state.delivery, null);
   }, generate);
 });
 
@@ -326,10 +347,10 @@ test('v2架构阻塞重新生成绑定包并拒绝旧批准', async () => {
 // 就绪语义调用重开后停在原阶段，不重跑已完成上下文/架构。
 test('v2就绪故障恢复只接续就绪且拒绝执行身份漂移', async () => {
   const calls: Record<string, number> = {};
-  /** 就绪前两次失败，其他调用按实际原生模型与工具执行。 */
+  /** 就绪前五次失败，其他调用按实际原生模型与工具执行。 */
   const generate: GeneratorV2 = async (...args) => {
     const role = args[2]; calls[role] = (calls[role] ?? 0) + 1;
-    if (role === 'readiness' && calls[role] <= 2) throw Object.assign(new Error('fixture-network'), { code: 'ECONNRESET' });
+    if (role === 'readiness' && calls[role] <= 5) throw Object.assign(new Error('fixture-network'), { code: 'ECONNRESET' });
     return generateV2(...args);
   };
   await fixture(
@@ -344,7 +365,7 @@ test('v2就绪故障恢复只接续就绪且拒绝执行身份漂移', async () 
     const next = openDevelopmentV2(config, directory, true, generate);
     try {
       await next.storage.init(); await recoverDevelopmentV2(next, run.runId, retry(state.recovery!.hash));
-      assert.equal((await developmentStatusV2(next, run.runId)).result?.outcome, 'development-delivered'); assert.equal(calls.context, 1); assert.equal(calls.architect, 1); assert.equal(calls.readiness, 3);
+      assert.equal((await developmentStatusV2(next, run.runId)).result?.outcome, 'development-delivered'); assert.equal(calls.context, 1); assert.equal(calls.architect, 1); assert.equal(calls.readiness, 6);
     } finally { await next.execution.close(); await next.storage.close(); }
   }, generate);
 });

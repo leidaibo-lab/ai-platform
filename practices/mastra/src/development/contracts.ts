@@ -1,7 +1,7 @@
 /** 开发阶段独立版本契约；流程状态归 Mastra Store，不与旧提案交接混用。 */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import type { PracticeConfig } from '../mastra/config.js';
+import { resolveModelId, type PracticeConfig } from '../mastra/config.js';
 
 export const developmentRoleSchema = z.enum(['architect', 'frontend', 'backend', 'infrastructure', 'self-check']);
 export type DevelopmentRole = z.infer<typeof developmentRoleSchema>;
@@ -17,7 +17,7 @@ export const projectSchema = z.object({
   writableRoots: z.array(safePathSchema).max(4).optional(),
   files: z.record(safePathSchema, z.string().max(100000)),
   writablePaths: z.array(safePathSchema).min(1).max(40),
-  checkFiles: z.array(safePathSchema).min(1).max(20),
+  checkFiles: z.array(safePathSchema).min(1).max(200),
   roles: z.array(z.enum(['frontend', 'backend', 'infrastructure'])).min(1).max(3),
 }).superRefine(
   // 公开检查必须已存在且不在写入白名单内；角色和文件集合不能含重复项。
@@ -50,7 +50,7 @@ export const architectureSchema = z.object({
 export type Architecture = z.infer<typeof architectureSchema>;
 export const developmentReviewSchema = z.object({ hash: z.string().length(64), decision: z.enum(['approve', 'reject']), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) });
 export const commandEvidenceSchema = z.object({ id: z.string(), command: z.string(), exitCode: z.number().nullable(), processExitCode: z.number().optional(), stdout: z.string(), stderr: z.string(), durationMs: z.number().nonnegative(), timedOut: z.boolean().optional(), stdoutTruncated: z.boolean().optional(), stderrTruncated: z.boolean().optional() });
-export const recoveryReviewSchema = z.object({ hash: z.string().length(64), decision: z.enum(['retry', 'stop']), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) });
+export const recoveryReviewSchema = z.object({ hash: z.string().length(64), decision: z.enum(['retry', 'stop']), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), additionalCalls: z.number().int().min(1).max(72).optional() });
 export const developmentFaultSchema = z.object({ sequence: z.number().int().positive(), role: developmentRoleSchema, taskId: z.string().nullable(), round: z.number(), attempt: z.number().int().positive(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error']), partialSourceHash: z.string().length(64), checkpointHash: z.string().length(64), restored: z.literal(true), usage: z.literal('unknown') });
 /** 持久化模型执行身份；端点只存 SHA256，凭据不属于批准内容。旧快照缺失时禁止恢复。 */
 export const executionIdentitySchema = z.object({ mode: z.enum(['fixture', 'live']), modelId: z.string().min(1), endpointHash: z.string().length(64) });
@@ -86,7 +86,7 @@ export function developmentExecutionIdentity(config: PracticeConfig): z.infer<ty
   endpoint.hash = '';
   endpoint.pathname = endpoint.pathname.replace(/\/+$/, '');
   endpoint.searchParams.sort();
-  return { mode: config.mode, modelId: config.modelId, endpointHash: developmentHash(endpoint.toString()) };
+  return { mode: config.mode, modelId: resolveModelId(config, 'development'), endpointHash: developmentHash(endpoint.toString()) };
 }
 
 /** 审批、调用与故障接续共用同一身份校验；旧快照不得猜测原模型身份。 */

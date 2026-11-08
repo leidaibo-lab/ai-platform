@@ -50,3 +50,7 @@
 ## 本轮实际证据
 
 2026-11-07：npm run check 通过；两个仓库 git diff --check 通过；原始 brief 的 SHA256 与 HRM 来源清单一致。运行中的 dev API 仍只注册 productDevelopmentWorkflow，主链未改变；/api/workspaces 返回 hrm-product、hrm-testset、hrm-deploy 以及只读 recruitment-sources，均无 Sandbox。当前为装配和静态检查，没有运行测试、模型业务 Run、实际发布或新业务资产归档验收；没有提交、推送或迁移历史 Run。归档失败会中止对应步骤，失败后恢复与补导出尚待验证。
+
+## 2026-11-08 演进
+
+[远端交接决策](./2026-11-08-mastra-remote-handoff.md)部分替代“不自动提交、推送”的旧限制；审批事实仍由 Mastra Store 拥有。

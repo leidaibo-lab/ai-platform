@@ -9,6 +9,7 @@ import { DevelopmentExecution } from './development-execution.js';
 import { developmentHash, recoveryReviewSchema, validateEvaluationSource } from './development/contracts.js';
 import { createDevelopmentWorkflowV2 } from './mastra/workflows/development-v2.js';
 import { approvalV2Schema, findingsHashV2, findingsReviewSchema, inputV2Schema, productWorkflowIdSchema, recoveryHashV2, stateV2Schema, type StateV2 } from './development/v2/contracts.js';
+import { applyRecoveryDecision } from './development/v2/recovery-policy.js';
 import { applyFindingsReview, assertApprovalV2, validateIdentityV2 } from './development/v2/gates.js';
 import { loadDevelopmentMethods } from './development/v2/methods.js';
 import type { GeneratorV2 } from './development/v2/agents.js';
@@ -93,6 +94,7 @@ export async function recoverDevelopmentV2(app: ApplicationV2, runId: string, in
   const review = recoveryReviewSchema.parse(input);
   const state = await pendingV2(app, runId, 'recover-development');
   if (!state.recovery || state.recovery.hash !== review.hash || recoveryHashV2(state) !== review.hash) throw new Error('v2恢复版本不匹配');
+  applyRecoveryDecision(state, review);
   const run = await app.workflow.createRun({ runId });
   const status = await developmentStatusV2(app, runId);
   const path = Object.entries(status.steps ?? {}).find(/** 恢复当前实际暂停点，不让调用方指定任意阶段。 */([, value]) => !Array.isArray(value) && value.status === 'suspended' && (value.suspendPayload?.recoveryState || value.suspendPayload?.hash === review.hash))?.[0];

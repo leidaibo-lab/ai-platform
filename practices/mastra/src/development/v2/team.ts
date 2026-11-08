@@ -13,6 +13,7 @@ import { seedDevelopment } from '../../development-service.js';
 import { developmentHash } from '../contracts.js';
 import { generateV2, type GeneratorV2, type MemberRuntime } from './agents.js';
 import { delegationSchema, recoveryHashV2, stateV2Schema, taskPackageSchema, type StateV2 } from './contracts.js';
+import { pauseForCallBudget } from './recovery-policy.js';
 import { assertApprovalV2, unresolvedV2, validateIdentityV2 } from './gates.js';
 import { invokeV2 } from './invoke.js';
 import type { ExecutionPort } from './execution-scope.js';
@@ -130,7 +131,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
       );
       if (!remaining.length) return noop;
       const capacity = Math.min(state.team.maxParallel, Math.floor((state.maxCalls - state.calls) / 8));
-      if (capacity < 1) return [{ state: { ...state, outcome: 'manual-attention' as const }, task: null, files: {}, budget: 0 }];
+      if (capacity < 1) return [{ state: pauseForCallBudget(state, 'backend'), task: null, files: {}, budget: 0 }];
       const ready = remaining.filter(
         // 架构声明的依赖全部完成后才进入下一波次。
         (task) => task.dependsOn.every(
@@ -195,7 +196,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
           // 故障恢复沿用原任务责任和当前合并源码检查点。
           (item) => item.id === failed.taskId,
         )!;
-        return { ...next, recovery: { hash: recoveryHashV2(next), checkpointHash: next.checkpointHash, phase: next.phase, role: task.role, taskId: task.id, kind: failed.faults.at(-1)?.kind ?? 'model-error', ...(failed.faults.at(-1)?.diagnostic ? { diagnostic: failed.faults.at(-1)!.diagnostic } : {}) } };
+        return { ...next, recovery: { hash: recoveryHashV2(next), checkpointHash: next.checkpointHash, phase: next.phase, role: task.role, taskId: task.id, kind: failed.faults.at(-1)?.kind ?? 'model-error', modelCall: failed.faults.at(-1)?.modelCall, ...(failed.faults.at(-1)?.diagnostic ? { diagnostic: failed.faults.at(-1)!.diagnostic } : {}) } };
       }
       if (results.some(
         // 任一实现成员遇到契约阻塞即重规划，不能继续自检交付。

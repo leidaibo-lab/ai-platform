@@ -10,6 +10,7 @@ import { approvalHashV2, approvalV2Schema, assessmentSchema, contextDraftSchema,
 import { applyFindingsReview, assertApprovalV2, checksPassedV2, reportV2, unresolvedV2, validateAssessment, validateIdentityV2, validateReviewResolutions } from '../../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../../development/v2/methods.js';
 import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
+import { applyRecoveryDecision, pauseForCallBudget } from '../../development/v2/recovery-policy.js';
 import { invokeV2 } from '../../development/v2/invoke.js';
 import { assembleTeam, createTeamExecution } from '../../development/v2/team.js';
 import type { ExecutionPort } from '../../development/v2/execution-scope.js';
@@ -69,7 +70,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         (item) => item.text.trim().length > 0,
       );
       if (requirements.length > 300) throw new Error('v2产品原文超过试点锚点预算');
-      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', calls: 0, maxCalls: 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
+      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
     },
   });
   const context = createStep({ id: 'prepare-context', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
@@ -291,16 +292,15 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     },
   });
   const recovery = createStep({ id: 'recover-development', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
-    suspendSchema: z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable() }), resumeSchema: recoveryReviewSchema,
-    // 只允许一次人工接续，保持原失败phase和任务完成集。
+    suspendSchema: z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall }), resumeSchema: recoveryReviewSchema,
+    // 连续重试阈值只决定暂停；人工可多轮继续，不清零累计调用。
     execute: async ({ inputData, resumeData, suspend }) => {
       if (inputData.outcome !== 'in-progress' || !inputData.recovery) return inputData;
       await guard(inputData);
-      if (inputData.recoveries.length >= 1 || inputData.calls >= inputData.maxCalls) throw new Error('开发恢复预算已耗尽，请核对失败阶段后处理');
       if (inputData.recovery.hash !== recoveryHashV2(inputData)) throw new Error('v2恢复绑定漂移');
       if (!resumeData) return suspend(inputData.recovery);
       if (resumeData.hash !== inputData.recovery.hash) throw new Error('v2恢复版本不匹配');
-      return { ...inputData, recoveries: [...inputData.recoveries, resumeData], recovery: null, outcome: resumeData.decision === 'stop' ? 'manual-attention' as const : 'in-progress' as const };
+      return applyRecoveryDecision(inputData, resumeData);
     },
   });
   /** ADR: docs/decisions/2026-11-08-mastra-stage-state-flow.md
@@ -310,7 +310,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     if (options.legacySequential) return step;
     const execute = step.execute;
     step.resumeSchema = recoveryReviewSchema;
-    step.suspendSchema = z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), recoveryState: stateV2Schema });
+    step.suspendSchema = z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall, recoveryState: stateV2Schema });
     // suspendData 来自原生持久化，不接收客户端替代源码或失败状态。
     step.execute = async (context) => {
       let state: StateV2 = context.inputData;
@@ -319,15 +319,17 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         await guard(state);
         const decision = recoveryReviewSchema.parse(context.resumeData);
         if (!state.recovery || decision.hash !== state.recovery.hash || decision.hash !== recoveryHashV2(state)) throw new Error('恢复版本发生漂移');
-        if (state.recoveries.length >= 1 || state.calls >= state.maxCalls) throw new Error('开发恢复预算已耗尽，请检查模型服务后另行处理');
-        state = { ...state, recoveries: [...state.recoveries, decision], recovery: null };
-        if (decision.decision === 'stop') return { ...state, outcome: 'manual-attention' as const };
+        state = applyRecoveryDecision(state, decision);
+        if (state.outcome !== 'in-progress') return state;
       }
-      if (state.calls >= state.maxCalls) throw new Error('开发模型调用预算已耗尽');
+      if (state.calls >= state.maxCalls) {
+        const role = state.recovery?.role ?? (step.id === 'architecture' ? 'architect' : step.id === 'prepare-context' ? 'context' : step.id === 'assess-readiness' ? 'readiness' : step.id === 'review-code' ? 'reviewer' : step.id === 'development-self-check' ? 'self-check' : 'backend');
+        const paused = pauseForCallBudget(state, role);
+        return context.suspend({ ...paused.recovery, recoveryState: paused });
+      }
       // 人工决定恢复的是业务检查点；团队子流程需开始下一波次，不能恢复一个已完成的旧子Run。
       const result = await execute.call(step, { ...context, inputData: state, resumeData: undefined, suspendData: undefined, resume: undefined, restart: false });
       if (result && result.recovery) {
-        if (result.recoveries.length >= 1 || result.calls >= result.maxCalls) throw new Error(`开发阶段 ${result.phase} 再次未完成（${result.recovery.kind}），人工恢复预算已耗尽`);
         return context.suspend({ ...result.recovery, recoveryState: result });
       }
       return result;

@@ -1,3 +1,4 @@
+import { remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 import { intakeSchema } from '../../intake/contracts.js';
 import { createHash } from 'node:crypto';
 import { createStep, createWorkflow } from '@mastra/core/workflows';
@@ -23,6 +24,7 @@ export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
   intake: intakeSchema.optional(),
+  repositoryHandoff: remoteHandoffSchema.optional(),
   correlation: correlationSchema.optional(),
   brief: z.string().trim().min(1).max(12000),
   mode: z.enum(['fixture', 'live']),

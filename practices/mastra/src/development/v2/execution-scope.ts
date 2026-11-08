@@ -1,3 +1,4 @@
+import { developmentHash } from '../contracts.js';
 /** 按原生步骤装配执行环境，避免共享 Workflow 闭包绑定到某一个 Run。 */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Step } from '@mastra/core/workflows';
@@ -19,7 +20,7 @@ function executionInput(value: unknown): InputV2 {
 }
 
 /** 原生步骤装饰器，仅在执行期持有 Adapter，每步结束即关闭临时沙箱。 */
-export function createExecutionScope(resolve: ExecutionResolver) {
+export function createExecutionScope(resolve: ExecutionResolver, captureCandidate = false) {
   const local = new AsyncLocalStorage<DevelopmentExecution>();
   /** 所有 I/O 必须发生在本步骤的环境作用域内。 */
   function current() { const execution = local.getStore(); if (!execution) throw new Error('开发执行缺少步骤作用域'); return execution; }
@@ -42,7 +43,18 @@ export function createExecutionScope(resolve: ExecutionResolver) {
       try {
         return await local.run(execution,
           // 让异步工具链继承当前步骤环境，隔离同时运行的其他 Run。
-          () => execute(context),
+          async () => {
+            const result = await execute(context);
+            if (captureCandidate && result && typeof result === 'object' && 'version' in result && result.version === 'development-state.v2') {
+              const hashes = await execution.snapshot();
+              if (developmentHash(hashes) !== result.checkpointHash) throw new Error('归档候选源码检查点漂移');
+              const files: Record<string, string> = {};
+              for (const path of Object.keys(hashes)) files[path] = await execution.readFile(path);
+              if (developmentHash(await execution.snapshot()) !== result.checkpointHash) throw new Error('读取归档源码期间检查点漂移');
+              return { ...result, repositoryCandidate: files };
+            }
+            return result;
+          },
         );
       } finally { await execution.close(); }
     };

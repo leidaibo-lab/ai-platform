@@ -1,4 +1,12 @@
+import { repositorySyncPauseSchema } from '../delivery/remote-handoff.js';
 /** 主流程业务投影与命令；存储、调度及恢复继续归 Mastra。 */
+import { blockerCycleSchema, developmentBlockers } from './blocker-contracts.js';
+import { executionResolver } from '../mastra/workflows/product-development.js';
+import type { PracticeConfig } from '../mastra/config.js';
+import { stateV2Schema } from '../development/v2/contracts.js';
+import { developmentHash } from '../development/contracts.js';
+import { loadDevelopmentMethods } from '../development/v2/methods.js';
+import { validateIdentityV2 } from '../development/v2/gates.js';
 import type { createProductDevelopmentWorkflow } from '../mastra/workflows/product-development.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from '../mastra/workflows/delivery.js';
 import { describeRecovery } from './recovery.js';
@@ -17,6 +25,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const path = suspended?.[0];
   const step = path?.split('.')[0];
   const payload = suspended && !Array.isArray(suspended[1]) ? suspended[1].suspendPayload : undefined;
+  const sync = repositorySyncPauseSchema.safeParse(payload);
   const intake = intakeSchema.safeParse(payload);
   const review = pendingSchema.safeParse(payload);
   const gate = path && payload ? describeGate(path, payload) : undefined;
@@ -26,15 +35,53 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
     if (approved?.success) gate.evidence = { ...gate.evidence, approvedProduct: approved.data.artifacts.at(-1)?.content };
   }
   const retry = describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
-  return { progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  const development = stateV2Schema.safeParse((snapshot.result as { development?: unknown } | undefined)?.development);
+  const blockers = development.success ? developmentBlockers(development.data) : [];
+  const blockage = development.success && development.data.outcome === 'clarification-required' && development.data.plan && blockers.length ? { phase: '技术方案生成', title: '技术方案已生成，开工条件未齐', summary: development.data.plan.summary, blockers, taskCount: development.data.plan.tasks.length, productContent: development.data.input.source.content } : undefined;
+  const clarify = snapshot.status === 'success' && blockage && development.success && development.data.completedTasks.length === 0 && !development.data.approvedHash ? { hash: developmentHash({ runId, development: development.data, outcome: (snapshot.result as any).outcome }), title: '补齐业务选择并修订产品稿' } : undefined;
+  return { clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
-export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown) {
+export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
   const current = await readIntake(workflow, runId);
+  if (current.status === 'success' && current.clarify && current.mode === mode) {
+    if (!config || !input || typeof input !== 'object' || !('clarifyHash' in input) || input.clarifyHash !== current.clarify.hash) throw new GateInputError('澄清入口版本已变化，请刷新');
+    const snapshot = await workflow.getWorkflowRunById(runId);
+    const state = stateV2Schema.parse((snapshot!.result as any).development);
+    validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+    const execution = executionResolver(config)(state.input);
+    try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('源码检查点已变化，请先核对'); } finally { await execution.close(); }
+    const run = await workflow.createRun({ runId });
+    await run.timeTravel({ step: 'open-development-clarification', inputData: state });
+    return readIntake(workflow, runId);
+  }
   if (current.status === 'failed' && current.retry && current.mode === mode) {
     if (!input || typeof input !== 'object' || !('retryHash' in input) || input.retryHash !== current.retry.hash) throw new GateInputError('恢复版本已变化，请刷新');
+    let checkpointInput: unknown;
+    if ('kind' in current.retry && current.retry.kind === 'development-architecture') {
+      if (!config) throw new GateInputError('架构恢复缺少服务端执行配置');
+      const snapshot = await workflow.getWorkflowRunById(runId);
+      const entry = snapshot?.steps?.[current.retry.checkpointStep];
+      if (!entry || Array.isArray(entry)) throw new GateInputError('架构检查点已变化');
+      const state = stateV2Schema.parse(entry.payload);
+      checkpointInput = state;
+      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+      const execution = executionResolver(config)(state.input);
+      try { if (state.checkpointHash !== developmentHash(await execution.snapshot())) throw new GateInputError('源码检查点已变化，请先核对'); }
+      finally { await execution.close(); }
+    }
+    if ('kind' in current.retry && current.retry.kind === 'blocker-generation') {
+      if (!config) throw new GateInputError('澄清恢复缺少服务端执行配置');
+      const snapshot = await workflow.getWorkflowRunById(runId); const entry = snapshot?.steps?.[current.retry.step];
+      if (!entry || Array.isArray(entry)) throw new GateInputError('澄清检查点已变化');
+      const state = blockerCycleSchema.parse(entry.payload).development;
+      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+      const execution = executionResolver(config)(state.input);
+      try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('澄清期间源码检查点已变化'); } finally { await execution.close(); }
+    }
     const run = await workflow.createRun({ runId });
-    await run.timeTravel({ step: current.retry.step.split('.') });
+    // 从原生循环容器恢复，但输入是已保存的architecture状态；不依赖本轮未选中的前序分支，也不重做context。
+    await run.timeTravel({ step: current.retry.step.split('.'), ...(checkpointInput ? { inputData: checkpointInput } : {}) });
     return readIntake(workflow, runId);
   }
   if (current.status !== 'suspended' || current.mode !== mode) throw new Error('状态或模型模式已变化，请刷新');
@@ -51,6 +98,13 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
     const snapshot = await workflow.getWorkflowRunById(runId);
     const entry = Object.entries(snapshot!.steps ?? {}).find(/** 重新读取实际暂停路径，客户端不可替换。 */([, value]) => !Array.isArray(value) && value.status === 'suspended');
     if (!entry || Array.isArray(entry[1])) throw new Error('暂停点已变化');
+    if (['confirm-blocker-answers', 'review-revised-product'].includes(current.gate.key)) {
+      if (!config) throw new GateInputError('澄清提交缺少服务端配置');
+      const state = blockerCycleSchema.parse(entry[1].payload).development;
+      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+      const execution = executionResolver(config)(state.input);
+      try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('澄清期间源码检查点已变化'); } finally { await execution.close(); }
+    }
     try { resumeData = validateGate(entry[0], entry[1].suspendPayload, input, entry[1].payload); }
     catch (error) { if (error instanceof Error && error.name !== 'ZodError') throw new GateInputError(error.message); throw error; }
     step = entry[0].split('.');

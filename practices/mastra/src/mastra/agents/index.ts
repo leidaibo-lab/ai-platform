@@ -1,5 +1,5 @@
 import { Agent, type AgentExecutionOptionsBase } from '@mastra/core/agent';
-import type { PracticeConfig } from '../config.js';
+import { resolveModelId, type PracticeConfig } from '../config.js';
 import { practiceInfoTool } from '../tools/practice-info.js';
 import { createFixtureModel } from './fixture-model.js';
 import { resolve } from 'node:path';
@@ -47,7 +47,7 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
   /** 为各 Agent 选择官方测试模型或原生 OpenAI-compatible 模型配置。 */
   function model(stage: string) {
     if (config.mode === 'fixture') return createFixtureModel(stage);
-    return { id: config.modelId, apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
+    return { id: resolveModelId(config, stage === 'product' || stage.startsWith('product-') ? 'product' : stage === 'development' ? 'development' : undefined), apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
   }
   /** 固定产品角色共用套件，按当前职责选择方法；不创建动态下级角色。 */
   function productRole(role: ProductRole) {

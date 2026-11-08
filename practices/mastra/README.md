@@ -13,6 +13,12 @@
 - [产物归档与数据流转](./artifact-dataflow.md)：项目/迭代/Run 关联、历史版本及下载；[产物查看页](http://127.0.0.1:4111/delivery-assets)只读。
 - [Studio 流程图](http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph)：技术调试与流程检查；日常人工确认可在工作台完成。
 
+开发角色的单模型步骤时限为10分钟，每次 Agent 执行总时限为30分钟（`development-timeout.v3`），不把整个开发阶段或人工等待限制为30分钟。临时模型故障每轮最多5次尝试（含首次），退避后仍失败则原阶段暂停，可多轮人工继续；累计调用额度用完后明确追加，计数不清零。每次失败保存来源、实际触发时限、耗时、UTC时间与调用序号。历史未采集的细项不补猜；已有失败架构节点通过检查点/身份校验后可受控恢复，不跳过方案批准。
+
+## 角色资料交接
+
+绑定 HRM 仓库的 live 主流程在角色交付时自动提交并推送 `codex/workflow/<根RunId>`，成功回执绑定 commit 与文件散列。推送失败在工作台暂停，可仅重试同步而不重新生成；fixture 不推送真实远端。Agent 默认接收任务和资料目录，按需分段读取固定版本原文，并对每步消息执行预算检查。历史审批与恢复快照仍兼容保留。详见[远端交接说明](./artifact-dataflow.md#2026-11-08远端交接与按需上下文)。
+
 ## 启动
 
 使用 Node.js 24+，在本实践目录安装依赖。后端与前端分别保持一个终端运行；同一项目目录只启动一个 Mastra dev 实例。
@@ -39,7 +45,7 @@ npm run review:dev
 | --- | --- |
 | `MASTRA_MODE` | `fixture`；显式设置 `live` 才调用远程模型 |
 | `OPENAI_API_KEY` | live 必填 |
-| `MASTRA_MODEL` | `openai/gpt-4o-mini`；改为账号实际可用的模型 ID |
+| `MASTRA_MODEL` | `openai/gpt-5.6-sol`；未匹配角色的默认模型 |
 | `MASTRA_BASE_URL` | 可选 OpenAI-compatible API 基址 |
 | `MASTRA_PORT` | `4111`；修改后需同步前端代理 |
 | `MASTRA_DATA_DIR` | `.data`，相对本实践根目录，也可为绝对路径 |
@@ -89,3 +95,9 @@ Mastra 提供 Agent、工具循环、Workflow 与存储；本实践维护业务 
 旧四阶段提案链、独立产品/开发 CLI 和旧审阅页的启动、测试计数及阶段观察移至[历史记录](./README-history-2026-11-07.md)。这些资料用于追溯旧 Run，不作为当前操作步骤。
 
 [旧审阅页](./review-page.md)、[独立开发设计](./development-workflow-design.md)和[BMAD 双流程设计](./bmad-workflow-integration.md)保留版本边界；当前操作统一以上文工作台与完整产研流程为准。
+
+### 按角色配置模型
+
+复用 Mastra 原生 Agent 的 model 配置，产品四角色使用 `MASTRA_PRODUCT_MODEL`（默认 `openai/gpt-6-luna`），开发提案及开发 v1/v2 全部角色（含评审和受限委派）使用 `MASTRA_DEVELOPMENT_MODEL`（默认 `openai/gpt-5.6-luna`）。其他角色和评测裁判使用 `MASTRA_MODEL`（默认 `openai/gpt-5.6-sol`）。环境变量优先于上述内置默认值；角色变量显式设为空字符串时回退默认模型。配置共用原有端点和凭据，fixture 继续使用模拟模型。
+
+重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。现有 `.env` 若已设置 `MASTRA_MODEL`，需将该项调整为 `openai/gpt-5.6-sol` 才使用本次指定默认值；本次未读取或修改真实凭据文件。模型可用性与真实质量仍需上游验证。

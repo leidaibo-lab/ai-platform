@@ -46,9 +46,9 @@
   → confirm-final-delivery：汇总同版本证据，确认交付
 ```
 
-产品、项目范围和方案在同一个原生 Run 中暂停与恢复。产品退回修改保存 `rework-requested` 终态，带反馈重新发起需求。开发模型故障保留失败任务和已合并的成功任务，提供一次人工接续；不承诺强杀或跨实例的原子恢复。
+产品、项目范围和方案在同一个原生 Run 中暂停与恢复。产品退回修改保存 `rework-requested` 终态，带反馈重新发起需求。开发模型故障保留失败任务和已合并的成功任务，连续故障后原阶段暂停，可多轮人工继续；不承诺强杀或跨实例的原子恢复。
 
-开发阶段使用原生条件分支：只有当前阶段执行，未执行节点不会因空返回而完成。可恢复模型故障在原阶段暂停，页面解释阶段、原因和具体重试动作；历史 `recover-development` 暂停点保留兼容。重试预算耗尽为真实 failed，用户选择停止则保存阻塞终态；开发未交付时不启动测试/发布。图中 `state-after-*` 为状态传递节点，其完成不代表相邻业务阶段已完成。[状态决策](../../docs/decisions/2026-11-08-mastra-stage-state-flow.md)。
+开发阶段使用原生条件分支：只有当前阶段执行，未执行节点不会因空返回而完成。可恢复模型故障在原阶段暂停，页面解释阶段、原因和具体重试动作；历史 `recover-development` 暂停点保留兼容。连续自动尝试或调用额度耗尽会暂停等待恢复/追加额度，用户选择停止则保存阻塞终态；开发未交付时不启动测试/发布。图中 `state-after-*` 为状态传递节点，其完成不代表相邻业务阶段已完成。[状态决策](../../docs/decisions/2026-11-08-mastra-stage-state-flow.md)。
 
 ## 项目范围确认
 
@@ -77,7 +77,7 @@ HRM 执行档为 `hrm-pnpm-docker-v1`，`planning=agent`。检查登记为 `proj
 }
 ```
 
-示例只说明格式，不是实际业务验收。业务代码目标为 `leidaibo-lab/hrm`，执行器写独立候选目录，已接通整仓 pnpm 验证，尚未接通 Git 回库。输入、候选文件保存在当前数据目录的 `development-runs/<Run标识散列>/`。原生 LibSQLStore 保存流程事实；候选目录不创建第二套审批库。授权人是本地标签，当前未接入认证。
+示例只说明格式，不是实际业务验收。业务代码目标为 `leidaibo-lab/hrm`，执行器写独立候选目录，已接通整仓 pnpm 验证，已接通角色资料与候选源码副本的远端交付分支，尚未将候选代码合入业务源码分支。输入、候选文件保存在当前数据目录的 `development-runs/<Run标识散列>/`。原生 LibSQLStore 保存流程事实；候选目录不创建第二套审批库。授权人是本地标签，当前未接入认证。
 
 ## 团队、委派与数据边界
 
@@ -137,7 +137,7 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 
 时间使用 ISO UTC，例如 `2026-11-07T08:00:00Z`。所有外部回执的 authority 为 `local-human-report`，本地操作者标签不等于认证身份。最终确认必须有同版本测试通过、发布成功和全部健康通过记录；失败则等待回滚并产生明确终态。
 
-终态 `delivery-confirmed` 表示基于已收集证据确认交付，不表示远程机器独立验证；fixture 模式仅产生 `fixture-completed`。其他终态包括 `blocked/rework-exhausted/rejected/rolled-back/manual-attention`。产品审批前的拒绝/退回仍保留原产品状态结构。新图使用新 Run；旧 Run 不承诺跨版本透明续跑。
+终态 `delivery-confirmed` 表示基于已收集证据确认交付，不表示远程机器独立验证；fixture 模式仅产生 `fixture-completed`。其他终态包括 `blocked/rework-exhausted/rejected/rolled-back/manual-attention`。产品审批前的拒绝/退回仍保留原产品状态结构。新图使用新 Run；旧 Run 不承诺跨版本透明续跑；仅对未实施的业务阻塞提供经过版本和源码校验的固定澄清入口，见[工作台契约](./guided-intake.md)。
 
 采用锁定版本的原生 Workflow 嵌套与 `foreach concurrency`，未采用 Agent network 自由路由或自建通用调度引擎；原因、维护责任、退出及重评条件见[决策记录](../../docs/decisions/2026-11-07-mastra-unified-development-team.md)。
 
@@ -181,3 +181,7 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 原生 Datasets、Scorers、Experiments 的用例与命令见[原生节点评测](./evaluations/native/README.md)、[开发独立节点评测](./evaluations/native/development-nodes/README.md)及[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)。角色评测不代表动态团队、业务审批或发布路径已验收。
 
 前端需求澄清、完整稿及全部后续人工关口见[工作台契约](./guided-intake.md)；直接使用 Studio 原始输入默认跳过澄清。
+
+## 角色远端交接
+
+2026-11-08：live 主流程绑定 HRM 时，角色阶段在远端同步成功后才交付下游；同步失败原生暂停，工作台仅重试同步。模型输入采用按任务资料目录、固定版本分段读取与消息预算；旧审批/源码恢复字段保留兼容。[具体边界](./artifact-dataflow.md#2026-11-08远端交接与按需上下文)及[决策记录](../../docs/decisions/2026-11-08-mastra-remote-handoff.md)。

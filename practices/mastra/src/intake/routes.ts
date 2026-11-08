@@ -1,4 +1,5 @@
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
+import type { PracticeConfig } from '../mastra/config.js';
 import { registerApiRoute, type ContextWithMastra } from '@mastra/core/server';
 import { assembleRepositoryProject } from './repository-project.js';
 import { readRepositoryCatalog } from './repository-catalog.js';
@@ -8,7 +9,7 @@ import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
 const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
-export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string) {
+export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
   const busy = new Set<string>();
   /** 校验本机写来源；标签不等于认证身份。 */
   function origin(c: ContextWithMastra) {
@@ -84,7 +85,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
             catch (error) { throw new GateInputError(error instanceof Error ? error.message : '仓库配置不可用'); }
             input = { gateHash: input.gateHash, data: { project, reviewer: selection.reviewer, comment: selection.comment, maxReworks: 1 } };
           }
-          return c.json(await respondIntake(workflow, mode, id, input));
+          return c.json(await respondIntake(workflow, mode, id, input, config));
         } catch (error) { return failure(c, error); }
         finally { if (acquired) busy.delete(id); }
       },

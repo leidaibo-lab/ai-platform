@@ -1,5 +1,10 @@
+import { repositoryRetrySchema, repositorySyncPauseSchema } from '../delivery/remote-handoff.js';
 /** 业务关口白名单：复用已有 Zod 契约，不接受客户端指定步骤或执行命令。 */
 import { z } from 'zod';
+import { blockerAnswerSchema, revisedProductReviewSchema, blockerCycleSchema, validateBlockerAnswers } from './blocker-contracts.js';
+import { modelCallDiagnosticSchema, describeModelCall } from '../development/v2/model-diagnostic.js';
+import { applyRecoveryDecision } from '../development/v2/recovery-policy.js';
+import { stageFailureDetailsSchema } from '../development/v2/stage-failure.js';
 import { developmentHash, projectSchema, recoveryReviewSchema } from '../development/contracts.js';
 import { stateV2Schema, approvalHashV2, recoveryHashV2, findingsHashV2, approvalV2Schema, findingsReviewSchema } from '../development/v2/contracts.js';
 import { applyFindingsReview, assertApprovalV2 } from '../development/v2/gates.js';
@@ -7,6 +12,9 @@ import { validateCases, validateQualityReview } from '../delivery/testing.js';
 import { lifecycleSchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
 export const scopeFormSchema = z.object({ project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 const definitions: Record<string, { title: string; description: string; schema: z.ZodType }> = {
+  'retry-repository-sync': { title: '重试角色资料远端同步', description: '已保存角色产物；仅重试提交和推送，成功后继续原流程，不重新调用模型或替代审批。', schema: repositoryRetrySchema },
+  'confirm-blocker-answers': { title: '补齐影响开工的业务选择', description: '建议供参考，请逐项选择或补充；提交后生成完整修订产品稿，仍需你确认，不直接开工。', schema: blockerAnswerSchema },
+  'review-revised-product': { title: '确认修订后的完整产品稿', description: '核对显式回答如何进入规则和验收；批准后在原项目权限内重新规划，技术方案仍需另行确认。', schema: revisedProductReviewSchema },
   'confirm-project-scope': { title: '确认开发项目', description: '确认已关联项目和整体权限边界，具体文件、角色与检查映射由开发团队规划，方案批准后才实施。', schema: scopeFormSchema },
   'approve-architecture': { title: '确认开发方案', description: '阅读任务、接口、风险及团队安排。批准后将在已授权的隔离候选目录中执行实现和检查。', schema: approvalV2Schema },
   'resolve-readiness': { title: '处理开工前的待决问题', description: '逐项记录判断依据；无法解决时可终止，不能用批准掩盖阻塞。', schema: findingsReviewSchema },
@@ -20,24 +28,29 @@ const definitions: Record<string, { title: string; description: string; schema: 
   'execute-rollback-externally': { title: '填写回滚执行回执', description: '在外部平台完成回滚后填写真实回执；无法恢复时明确标为需要人工处理。', schema: rollbackReceiptSchema },
 };
 export type GatePayload = Record<string, any>;
-const phaseNames: Record<string, string> = { 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
+const phaseNames: Record<string, string> = { 'analyze-blocker-questions': '待决问题整理', 'write-revised-product': '产品稿修订', 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
 const faultReasons: Record<string, string> = { 'model-timeout': '模型未在规定时间内完成响应', 'model-network': '与模型服务的连接未能完成', 'invalid-output': '模型返回的内容未通过结构或引用校验', 'model-error': '模型调用未成功' };
 /** 从持久化故障分类生成用户指引；不暴露模型原始错误、源码或内部恢复状态。 */
 function recoveryGuidance(payload: GatePayload) {
   const phase = phaseNames[payload.phase] ?? '开发阶段';
-  const reason = faultReasons[payload.kind] ?? '该阶段执行未完成';
+  const reason = (payload.kind === 'call-budget' ? '自动调用额度已用完，请确认追加额度后继续' : undefined) ?? faultReasons[payload.kind] ?? '该阶段执行未完成';
   const after: Record<string, string> = { 'prepare-context': '分析完成后继续生成技术方案，方案仍需确认后才实施。', architecture: '方案生成后仍需确认，才会开始实施。', 'assess-readiness': '检查完成后继续展示待决问题或方案批准。', implement: '只重新派发未完成任务，已成功任务不重做；实现完成后进入开发自检。', 'development-self-check': '重新执行自检分析和固定检查，通过后进入独立代码评审。', 'review-code': '只重新执行评审，不重做已完成的实现；评审问题仍按流程处理。' };
-  return { title: `${phase}未完成`, phase, reason,
+  const modelCall = modelCallDiagnosticSchema.safeParse(payload.modelCall);
+  const history = payload.recoveryState?.faults ?? [];
+  const attemptDetails = history.filter(/** 只展示当前阶段最近的脱敏记录。 */(fault: GatePayload) => fault.phase === payload.phase && modelCallDiagnosticSchema.safeParse(fault.modelCall).success).slice(-8).map(/** 原生记录已保存实际尝试次序。 */(fault: GatePayload) => describeModelCall(modelCallDiagnosticSchema.parse(fault.modelCall), fault.attempt));
+  if (!attemptDetails.length && modelCall.success) attemptDetails.push(describeModelCall(modelCall.data));
+  return { title: `${phase}未完成`, phase, reason, attemptDetails,
     description: `${reason}，流程已暂停，等待你决定是否重试。`,
     preserved: '已确认的产品需求、项目配置和成功任务检查点已保留，无需重新填写。',
-    next: `建议先重试${phase}。${after[payload.phase] ?? '重新调用该阶段所需的模型，成功后才继续。'}`,
-    retryLabel: `重试${phase}`, stopLabel: '停止本轮流程',
+    next: payload.kind === 'call-budget' ? `确认后追加72次角色调用额度，继续${phase}；累计消费和已完成任务保留，不扩大文件权限或跳过审批。` : `建议先重试${phase}。${after[payload.phase] ?? '重新调用该阶段所需的模型，成功后才继续。'}`,
+    additionalCalls: payload.kind === 'call-budget' ? 72 : undefined, retryLabel: payload.kind === 'call-budget' ? '追加72次调用额度并继续' : `重试${phase}`, stopLabel: '停止本轮流程',
     stopImpact: '停止后保留已有记录，本轮不再自动推进。',
-    limit: '本轮允许一次人工重试；再次失败将停止并显示错误，不会无限重试。' };
+    limit: '每轮最多自动尝试5次，连续失败后暂停等待处理；你可以再次继续，不会仅因次数用完而结束需求。' };
 }
 /** 服务端生成只读绑定值，不让用户手工抄写版本与发布标识。 */
 export function gateInitial(key: string, payload: GatePayload) {
   const fixed: Record<string, unknown> = {};
+  if (key === 'retry-repository-sync') fixed.repositoryRetry = payload.retryKey;
   if (payload.hash) fixed.hash = payload.hash;
   if (key === 'approve-test-cases') fixed.hash = payload.plan?.hash;
   if (key === 'approve-release-scope') fixed.hash = payload.packageHash;
@@ -48,7 +61,7 @@ export function gateInitial(key: string, payload: GatePayload) {
 export function describeGate(path: string, payload: GatePayload) {
   const nativeKey = path.split('.').at(-1)!;
   const stageRecovery = payload.recoveryState && stateV2Schema.safeParse(payload.recoveryState).success;
-  const key = stageRecovery ? 'recover-development' : nativeKey;
+  const key = repositorySyncPauseSchema.safeParse(payload).success ? 'retry-repository-sync' : stageRecovery ? 'recover-development' : nativeKey;
   const definition = definitions[key];
   if (!definition) return undefined;
   const schema = z.toJSONSchema(definition.schema, { unrepresentable: 'any' });
@@ -79,6 +92,8 @@ export function validateGate(path: string, payload: GatePayload, input: unknown,
   if (envelope.gateHash !== gate.gateHash) throw new Error('确认材料已变化，请刷新');
   const data = definitions[gate.key].schema.parse(envelope.data) as GatePayload;
   for (const [name, value] of Object.entries(gate.fixed)) if (data[name] !== value) throw new Error('绑定版本不匹配');
+  if (gate.key === 'confirm-blocker-answers') validateBlockerAnswers(blockerCycleSchema.parse(savedState), data);
+  if (gate.key === 'review-revised-product') { const state = blockerCycleSchema.parse(savedState); if (data.hash !== state.draft?.hash) throw new Error('修订产品稿版本发生变化'); }
   if (gate.key === 'approve-architecture' && data.resolutions.length) throw new Error('方案确认不能替代发现裁决');
   if (gate.key === 'approve-release-scope' && new Set(data.scope.healthChecks.map(/** 健康清单标识必须唯一。 */(check: GatePayload) => check.id)).size !== data.scope.healthChecks.length) throw new Error('健康检查重复');
   if (gate.key === 'verify-release-health') {
@@ -89,7 +104,7 @@ export function validateGate(path: string, payload: GatePayload, input: unknown,
     const state = stateV2Schema.parse(payload.recoveryState ?? savedState);
     if (gate.key === 'approve-architecture') { assertApprovalV2(state); if (data.hash !== approvalHashV2(state)) throw new Error('方案版本发生漂移'); }
     if (gate.key === 'resolve-readiness' || gate.key === 'resolve-findings') { if (data.hash !== findingsHashV2(state)) throw new Error('报告版本发生漂移'); applyFindingsReview(state, findingsReviewSchema.parse(data)); }
-    if (gate.key === 'recover-development' && data.hash !== recoveryHashV2(state)) throw new Error('恢复版本发生漂移');
+    if (gate.key === 'recover-development') applyRecoveryDecision(state, recoveryReviewSchema.parse(data));
   }
   if (gate.key === 'approve-test-cases' || gate.key === 'review-test-results') {
     const state = lifecycleSchema.parse(savedState);
@@ -105,8 +120,10 @@ export function describeDevelopmentProgress(status: string, steps: Record<string
   const entry = Object.entries(steps).find(/** 容器不是业务阶段，优先匹配具体开发步骤。 */([path, value]) => !Array.isArray(value) && path.split('.').at(-1)! in phaseNames && value.status === status);
   if (!entry) return undefined;
   const phase = phaseNames[entry[0].split('.').at(-1)!];
+  const failure = stageFailureDetailsSchema.safeParse(entry[1].error?.details);
+  const attemptDetails = failure.success ? failure.data.attempts.filter(/** 旧记录没有诊断时不补猜。 */attempt => attempt.phase === failure.data.phase && !!attempt.modelCall).map(/** 只投影白名单诊断文案。 */attempt => describeModelCall(attempt.modelCall!, attempt.attempt)) : [];
   const exhausted = typeof entry[1].error?.message === 'string' && entry[1].error.message.includes('预算已耗尽');
-  return { phase, title: status === 'running' ? `正在进行${phase}` : `${phase}执行失败`,
+  return { phase, attemptDetails, title: status === 'running' ? `正在进行${phase}` : `${phase}执行失败`,
     detail: status === 'running' ? '正在处理该阶段，后续阶段尚未执行。完成或需要你处理时会自动更新。' : exhausted ? '该阶段再次执行未完成，重试或调用预算已耗尽。流程已停止，检查点保留，后续阶段未放行。' : '该阶段发生无法自动恢复的错误，流程已停止。已确认信息和检查点保留，后续阶段未放行。',
     next: status === 'running' ? '请等待，无需重复提交；页面正在自动同步后台状态。' : '请核对模型服务和该阶段的技术错误。若本页没有重试入口，表示当前恢复预算已耗尽或不满足恢复条件。' };
 }

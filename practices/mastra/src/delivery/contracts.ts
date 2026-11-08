@@ -1,3 +1,4 @@
+import { remoteHandoffSchema } from './remote-handoff.js';
 /** 全链路版本化快照：原生 Store 拥有事实，自动进程与人工外部回执分开标记。 */
 import { z } from 'zod';
 import { commandEvidenceSchema, developmentHash } from '../development/contracts.js';
@@ -18,7 +19,7 @@ export const deploymentReceiptSchema = z.object({ releaseHash: hashSchema, sourc
 export const healthReceiptSchema = z.object({ releaseHash: hashSchema, deploymentReceiptHash: hashSchema, operator: text, checks: z.array(z.object({ id: z.string(), status: z.enum(['passed', 'failed']), evidence: text, observedAt: z.iso.datetime() })).min(1).max(30) });
 export const rollbackReceiptSchema = z.object({ releaseHash: hashSchema, rollbackArtifactRef: text, status: z.enum(['rolled-back', 'manual-attention']), jobRef: text, operator: text, notes: text });
 export const releaseStateSchema = z.object({ plan: testPlanSchema.nullable(), qualityHash: hashSchema.nullable(), approval: releaseApprovalSchema.nullable(), hash: hashSchema.nullable(), receipt: deploymentReceiptSchema.nullable(), health: healthReceiptSchema.nullable(), rollback: rollbackReceiptSchema.nullable(), authority: z.literal('local-human-report') });
-export const lifecycleSchema = z.object({ version: z.literal('delivery-lifecycle.v1'), brief: z.string().min(1), development: stateV2Schema, quality: qualityStateSchema, qualityHistory: z.array(qualityStateSchema), developmentHistory: z.array(stateV2Schema.shape.delivery.unwrap()), release: releaseStateSchema, outcome: z.enum(['in-progress', 'blocked', 'rework-exhausted', 'rejected', 'rolled-back', 'manual-attention', 'delivery-confirmed', 'fixture-completed']), limitations: z.array(z.string()) });
+export const lifecycleSchema = z.object({ repositoryHandoff: remoteHandoffSchema.optional(), version: z.literal('delivery-lifecycle.v1'), brief: z.string().min(1), development: stateV2Schema, quality: qualityStateSchema, qualityHistory: z.array(qualityStateSchema), developmentHistory: z.array(stateV2Schema.shape.delivery.unwrap()), release: releaseStateSchema, outcome: z.enum(['in-progress', 'blocked', 'rework-exhausted', 'rejected', 'rolled-back', 'manual-attention', 'delivery-confirmed', 'fixture-completed']), limitations: z.array(z.string()) });
 export type Lifecycle = z.infer<typeof lifecycleSchema>;
 
 /** QA 审阅绑定计划、用例批准、源码及真实检查，不能重用旧版本通过记录。 */

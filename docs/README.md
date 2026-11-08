@@ -54,4 +54,6 @@
 - `openspec/` 固化稳定能力契约，约束后续代码和配置变更。
 - `README.md` 保持用户启动和测试路径清晰，不承载过多内部协作细节。
 
-- [Mastra 主流程需求输入](../practices/mastra/guided-intake.md)：需求澄清、完整稿确认及开发、测试、发布等全部人工关口。
+- [Mastra 主流程需求输入](../practices/mastra/guided-intake.md)：需求澄清、开发阻塞后的业务选择补齐、完整修订稿确认及开发、测试、发布等人工关口。
+
+- [Mastra 角色产物远端交接与按需上下文](./decisions/2026-11-08-mastra-remote-handoff.md)：阶段同步回执、原生同步恢复与有界资料读取。
