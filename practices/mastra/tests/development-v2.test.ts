@@ -290,6 +290,36 @@ test('v2连续超时多轮暂停，重开后保留诊断和累计预算，不终
   }, generate);
 });
 
+test('资料预算不足原阶段暂停，补充预算后只重试当前角色并保留审批', /** 原生Store重开后验证预算追加、旧令牌拒绝和未执行阶段。 */async () => {
+  const { ContextBudgetError } = await import('../src/delivery/context-budget.js');
+  const { describeGate } = await import('../src/intake/gates.js');
+  const roles: string[] = [];
+  /** 模拟生成内部的资料预算故障，不调用真实服务。 */
+  const generate: GeneratorV2 = async (...args) => { roles.push(args[2]); if (args[2] === 'architect' && !(args[3].contextBudgetLevel ?? 0)) throw new ContextBudgetError('read', 50000, 48000); return generateV2(...args); };
+  await fixture(/** 未明确追加不能消耗暂停点。 */async (app, directory, config) => {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    let state = await pending(app, run.runId, 'recover-development');
+    const nativeBudget = await app.workflow.getWorkflowRunById(run.runId);
+    assert.ok(Object.values(nativeBudget!.steps!).some(/** 原生暂停schema不能丢掉预算计量。 */(step: any) => step.status === 'suspended' && step.suspendPayload?.budget?.limitBytes === 48000));
+    assert.equal(state.recovery!.kind, 'context-budget'); assert.equal(state.faults.length, 1); assert.equal(state.recovery!.budget!.limitBytes, 48000);
+    const oldHash = state.recovery!.hash; const checkpoint = state.checkpointHash;
+    const gate = describeGate('development-iteration-v2.architecture', { ...state.recovery, recoveryState: state })!;
+    assert.equal(gate.recoveryInfo!.additionalContextLevel, 1); assert.match(gate.recoveryInfo!.retryLabel, /补充资料预算/);
+    await assert.rejects(recoverDevelopmentV2(app, run.runId, retry(oldHash)), /资料预算/);
+    await assert.rejects(recoverDevelopmentV2(app, run.runId, { ...retry(oldHash), additionalContextLevel: 2 }), /资料预算/);
+    assert.equal((await pending(app, run.runId, 'recover-development')).checkpointHash, checkpoint);
+    await app.execution.close(); await app.storage.close();
+    const reopened = openDevelopmentV2(config, directory, false, generate);
+    try {
+      await recoverDevelopmentV2(reopened, run.runId, { ...retry(oldHash), additionalContextLevel: 1 });
+      state = await pending(reopened, run.runId, 'approve-architecture');
+      assert.equal(state.contextBudgetLevel, 1); assert.equal(state.recoveries.at(-1)!.additionalContextLevel, 1); assert.equal(state.completedTasks.length, 0); assert.equal(state.approvedHash, null);
+      assert.equal(roles.filter(/** 已完成分析不重做。 */role => role === 'context').length, 1); assert.equal(roles.filter(/** 只有失败架构被重试一次。 */role => role === 'architect').length, 2);
+      await assert.rejects(recoverDevelopmentV2(reopened, run.runId, { ...retry(oldHash), additionalContextLevel: 1 }));
+    } finally { await reopened.execution.close(); await reopened.storage.close(); }
+  }, generate, false);
+});
+
 test('v2调用额度用完转追加确认，非法追加不消耗暂停点，累计计数不清零', async () => {
   /** 让所有角色在开始业务前持续超时，验证额度边界。 */
   const generate: GeneratorV2 = async () => { throw new MastraTimeoutError({ timeoutType: 'step', timeoutMs: 600000 }); };

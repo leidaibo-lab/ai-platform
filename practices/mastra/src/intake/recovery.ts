@@ -8,6 +8,8 @@ const titles: Record<string, string> = { 'guided-requirements.requirements-round
 /** 从失败叶节点与已保存输入派生恢复计划；下游存在批准或交付时不开放重放。 */
 export function describeRecovery(runId: string, status: string, steps: Record<string, any>) {
   if (status !== 'failed') return undefined;
+  const sync = describeLegacySyncRecovery(runId, steps);
+  if (sync) return sync;
   const blocker = describeBlockerGenerationRecovery(runId, steps);
   if (blocker) return blocker;
   const development = describeArchitectureRecovery(runId, steps);
@@ -29,6 +31,27 @@ export function describeRecovery(runId: string, status: string, steps: Record<st
     message: `可以从“${titles[path]}”的已保存输入继续，无需重填已确认信息。`,
     impact: path === 'draft-product.publish-product' ? '重新整理已有产品稿并生成版本，随后等待人工确认。' : '重新调用该步骤及后续所需的模型；前面已完成的产物保留。生成完整产品稿后仍需人工确认。',
   };
+}
+
+/** 旧图同步失败只开放未实施的架构检查点；新版同步故障使用原生暂停关口。 */
+function describeLegacySyncRecovery(runId: string, steps: Record<string, any>) {
+  const paths = ['development-team.development-team-iteration.architecture', 'resolve-development-blockers.blocker-round.replanned-development.replanned-development-iteration.architecture'];
+  for (const path of paths) {
+    const entry = steps[path];
+    // 旧页面曾在同步前做身份校验；模型切换会把同一安全可恢复的同步失败改写为此固定错误。
+    if (entry?.status !== 'failed' || !['角色产物远端同步失败；生成检查点已保留，请恢复原失败节点重试同步', 'v2模型、模式或方法发生漂移'].includes(entry.error?.message)) continue;
+    const parsed = stateV2Schema.safeParse(entry.payload); if (!parsed.success) continue;
+    const s = parsed.data;
+    if (s.input.source.runId !== runId || s.phase !== 'architecture' || s.plan || s.approvedHash || s.completedTasks.length || s.reviews.length || s.delivery || !s.context) continue;
+    const revised = blockerCycleSchema.safeParse(steps['resolve-development-blockers.blocker-round.review-revised-product']?.output);
+    const original = deliverySchema.safeParse(steps['review-product']?.output);
+    const approved = path.startsWith('resolve-') ? revised.success && revised.data.review?.decision === 'approve' && revised.data.review.hash === s.input.source.hash && revised.data.draft?.hash === s.input.source.hash : original.success && original.data.reviews.some(/** 仅同产品版本的真实批准生效。 */review => review.decision === 'approve' && review.role === 'product' && review.artifactHash === s.input.source.hash);
+    if (!approved) continue;
+    // Time travel 必须落在真实失败叶节点；外层循环接收的是 blockerCycle，传入架构 State 会在原生输入校验前失败。
+    const identityDrift = entry.error?.message === 'v2模型、模式或方法发生漂移';
+    return { kind: 'development-repository-sync' as const, syncOnly: true, hash: developmentHash({ runId, path, state: s, endedAt: entry.endedAt }), step: path, checkpointStep: path, title: '技术方案资料同步', savedAnswers: revised.success ? revised.data.history.length : original.success ? original.data.intake?.history.length ?? 0 : 0, preserved: [{ label: '已批准产品稿与业务选择', role: 'product' }, { label: '已生成架构结果', role: 'architect' }], reason: identityDrift ? '切换模型后触发历史身份校验；调用额度并未耗尽' : '资料同步失败；调用额度并未耗尽', message: identityDrift ? '已保存技术方案与源码检查点一致。此恢复只同步已有资料，不使用当前模型。' : '已生成技术方案结果，远端同步尚未完成。可以只重试资料同步，无需重填或重新调用模型。', impact: '先校验已保存结果与源码版本，只同步现有产物；成功后按结果继续澄清或方案确认，不直接开工。' };
+  }
+  return undefined;
 }
 
 /** 仅恢复尚未实施的架构失败；批准产品、输入和前序成果必须来自同一原生Run。 */
@@ -56,5 +79,6 @@ function describeBlockerGenerationRecovery(runId: string, steps: Record<string, 
   const [path, entry] = failed; const parsed = blockerCycleSchema.safeParse(entry.payload);
   if (!parsed.success || parsed.data.development.completedTasks.length || parsed.data.development.approvedHash) return undefined;
   const state = parsed.data;
-  return { kind: 'blocker-generation' as const, hash: developmentHash({ runId, path, state, endedAt: entry.endedAt }), step: path, title: allowed[path], savedAnswers: (state.approvedProduct.intake?.history.length ?? 0) + (state.answer ? 1 : 0), preserved: [{ label: '原批准产品稿', role: 'product' }, ...(state.answer ? [{ label: '本轮已提交的业务选择', role: 'answers' }] : [])], reason: entry.error?.kind === 'model-timeout' ? '模型调用超时' : '本次模型输出未完成或未通过校验', message: `可以继续${allowed[path]}，原稿和已提交回答保留。`, impact: '重新执行当前只读生成步骤，修订产品稿仍需人工确认，不直接进入代码实施。' };
+  const identityDrift = entry.error?.message === 'v2模型、模式或方法发生漂移';
+  return { kind: 'blocker-generation' as const, hash: developmentHash({ runId, path, state, endedAt: entry.endedAt }), step: path, title: allowed[path], savedAnswers: (state.approvedProduct.intake?.history.length ?? 0) + (state.answer ? 1 : 0), preserved: [{ label: '原批准产品稿', role: 'product' }, ...(state.answer ? [{ label: '本轮已提交的业务选择', role: 'answers' }] : [])], reason: identityDrift ? '已切换模型，需要使用新模型重新整理' : entry.error?.kind === 'model-timeout' ? '模型调用超时' : '本次模型输出未完成或未通过校验', message: identityDrift ? `当前步骤尚未执行新模型。可以重新整理${allowed[path]}，原稿和已提交回答保留。` : `可以继续${allowed[path]}，原稿和已提交回答保留。`, impact: identityDrift ? '将调用当前已选择的新模型重新执行这个只读整理步骤，可能产生模型费用；修订产品稿仍需人工确认，不直接进入代码实施。' : '重新执行当前只读生成步骤，修订产品稿仍需人工确认，不直接进入代码实施。' };
 }

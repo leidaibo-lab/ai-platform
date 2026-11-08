@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import type { RemoteSyncTarget } from '../delivery/remote-sync-settings.js';
 
 /** 独立实践配置；数据库使用绝对路径，fixture 模式不会访问模型服务。 */
 export interface PracticeConfig {
@@ -16,6 +17,8 @@ export interface PracticeConfig {
   baseUrl?: string;
   /** Studio 显式绑定的业务仓库；旧 CLI/评测未设置时保持原材料边界。 */
   hrmRepositoryRoot?: string;
+  /** 仅服务端环境登记的远端目标，页面只能引用其ID。 */
+  remoteSyncTargets?: RemoteSyncTarget[];
 }
 
 /** 从实践根目录加载独立配置；不查找上级 .env，不输出凭据。 */

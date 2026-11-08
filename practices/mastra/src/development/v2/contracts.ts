@@ -1,3 +1,4 @@
+import { contextBudgetFailureSchema } from '../../delivery/context-budget.js';
 import { remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 /** v2 独立契约：不可变证据快照由原生 Workflow 持有，不迁移 v1 状态。 */
 import { z } from 'zod';
@@ -7,7 +8,7 @@ import { correlationSchema } from '../../delivery/asset-identity.js';
 import { architectureSchema, commandEvidenceSchema, developmentInputSchema, developmentReviewSchema, executionIdentitySchema, recoveryReviewSchema, validateArchitecture, developmentHash } from '../contracts.js';
 
 export const productWorkflowIdSchema = z.enum(['product-delivery', 'product-delivery-v2']);
-export const inputV2Schema = developmentInputSchema.extend({ repositoryHandoff: remoteHandoffSchema.optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.enum(['product-delivery', 'product-delivery-v2', 'product-development']).optional() }), budgetContinuation: z.object({ calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+export const inputV2Schema = developmentInputSchema.extend({ repositoryHandoff: remoteHandoffSchema.optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.enum(['product-delivery', 'product-delivery-v2', 'product-development']).optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -46,10 +47,11 @@ export const stateV2Schema = z.object({
   reviews: z.array(approvalV2Schema.extend({ authority: z.enum(['local-human-label', 'evaluation-policy']) })),
   resolutions: z.array(resolutionSchema.extend({ reportHash: hash, authority: z.enum(['reviewer', 'local-human-label']) })),
   checkpointHash: hash, completedTasks: z.array(z.string()), round: z.number().int().nonnegative(), route: z.enum(['all', 'frontend', 'backend', 'infrastructure', 'architecture', 'human']),
+  contextBudgetLevel: z.number().int().min(0).max(4).optional(),
   calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   work: z.array(z.object({ role: roleV2Schema, round: z.number(), text: z.string(), tools: z.array(z.string()), steps: z.number(), modelId: z.string().nullable(), inputTokens: z.number().nullable(), outputTokens: z.number().nullable() })),
-  faults: z.array(z.object({ sequence: z.number(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error']), attempt: z.number(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
-  recovery: z.object({ hash, checkpointHash: hash, phase: phaseSchema, role: roleV2Schema, kind: z.string(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), taskId: z.string().nullable() }).nullable(), recoveries: z.array(recoveryReviewSchema),
+  faults: z.array(z.object({ sequence: z.number(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error', 'context-budget']), budget: contextBudgetFailureSchema.optional(), attempt: z.number(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
+  recovery: z.object({ hash, checkpointHash: hash, phase: phaseSchema, role: roleV2Schema, kind: z.string(), budget: contextBudgetFailureSchema.optional(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), taskId: z.string().nullable() }).nullable(), recoveries: z.array(recoveryReviewSchema),
   checks: z.array(commandEvidenceSchema), checkedSourceHash: hash.nullable(), gates: z.array(gateDecisionSchema),
   outcome: z.enum(['in-progress', 'clarification-required', 'rejected', 'rework-exhausted', 'manual-attention', 'development-delivered']),
   delivery: z.object({ version: z.literal('development-delivery.v2'), productHash: hash, planHash: hash, approvalHash: hash, contextHash: hash, methodBundleHash: hash, readinessHash: hash, reviewHash: hash, sourceHash: hash, files: z.record(z.string(), z.string()), checks: z.array(commandEvidenceSchema), resolutions: z.array(resolutionSchema.extend({ reportHash: hash, authority: z.enum(['reviewer', 'local-human-label']) })), limitations: z.array(z.string()) }).nullable(),

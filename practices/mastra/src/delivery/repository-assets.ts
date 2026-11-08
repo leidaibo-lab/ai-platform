@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { legacyArchitectureCachePath, readLegacyArchitectureResult, validateLegacyArchitectureResult } from './legacy-sync.js';
 /** HRM 业务资产投影：Git 保存交付副本，Mastra Store 继续拥有审批和恢复事实。
  * ADR: docs/decisions/2026-11-07-hrm-repository-assets.md
  */
@@ -8,6 +9,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureAssetDirectory, validateHrmRepository } from './asset-files.js';
+import { validateRepository } from './asset-files.js';
+import { remoteSyncTargets, resolveRemoteSyncTarget, type RemoteSyncTarget } from './remote-sync-settings.js';
 export { validateHrmRepository } from './asset-files.js';
 import type { Step } from '@mastra/core/workflows';
 import type { PracticeConfig } from '../mastra/config.js';
@@ -73,11 +76,10 @@ function projectAssets(value: unknown): { correlation?: AssetCorrelation; runId?
 }
 
 /** 只写不可变投影目录，完成标记最后落盘；失败保留原生事实，不能假报成功。 */
-async function archive(config: PracticeConfig, runId: string, stage: string, value: unknown, event: 'pending' | 'completed', publish: typeof publishHandoff = publishHandoff): Promise<RemoteHandoff | undefined> {
-  if (!config.hrmRepositoryRoot) return;
+async function archive(config: PracticeConfig, target: RemoteSyncTarget, runId: string, stage: string, value: unknown, event: 'pending' | 'completed', publish: typeof publishHandoff = publishHandoff): Promise<RemoteHandoff | undefined> {
   const projection = projectAssets(value);
   if (!projection) throw new Error('没有可识别的业务资产投影');
-  const root = validateHrmRepository(config.hrmRepositoryRoot);
+  const root = validateRepository(target.root, target.origin);
   const owner = projection.correlation?.runId ?? projection.runId ?? runId;
   if (projection.correlation && projection.runId && projection.runId !== owner) throw new Error('归档 Run 关联漂移');
   if (!/^[a-zA-Z0-9_-]{1,200}$/.test(owner)) throw new Error('非法资产 Run 标识');
@@ -98,7 +100,7 @@ async function archive(config: PracticeConfig, runId: string, stage: string, val
   const complete = existsSync(manifestPath);
   if (complete && (lstatSync(manifestPath).isSymbolicLink() || !lstatSync(manifestPath).isFile())) throw new Error('清单必须为普通文件');
   const previous = complete ? assetManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8'))) : undefined;
-  const manifest = { schemaVersion: 2 as const, repository: 'https://github.com/leidaibo-lab/hrm' as const, runId: owner, stage, mode: config.mode, event, projectionHash: digest, authority: 'workflow-export' as const, correlation: projection.correlation, createdAt: previous?.createdAt ?? new Date().toISOString(), files: hashes };
+  const manifest = { schemaVersion: 2 as const, repository: target.origin, runId: owner, stage, mode: config.mode, event, projectionHash: digest, authority: 'workflow-export' as const, correlation: projection.correlation, createdAt: previous?.createdAt ?? new Date().toISOString(), files: hashes };
   for (const [name, content] of Object.entries(files)) {
     const path = join(directory, name);
     if (complete && !existsSync(path)) throw new Error('已完成资产缺失文件');
@@ -119,7 +121,7 @@ async function archive(config: PracticeConfig, runId: string, stage: string, val
 
 /** 装饰角色关口：暂停前归档输入，成功后归档输出，保留原审批并增加同步暂停类型。 */
 export function withRepositoryAssets<T extends Step<any, any, any, any, any, any>>(step: T, config: PracticeConfig, publish: typeof publishHandoff = publishHandoff): T {
-  if (!config.hrmRepositoryRoot) return step;
+  if (!remoteSyncTargets(config).length) return step;
   const execute = step.execute;
   const originalResumeSchema = step.resumeSchema;
   if (config.mode === 'live') {
@@ -129,7 +131,9 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
   }
   /** 生成检查点先于网络副作用，原生 suspend/resume 继续拥有调度权。 */
   step.execute = async (context) => {
-    const root = validateHrmRepository(config.hrmRepositoryRoot!);
+    const target = resolveRemoteSyncTarget(config, step.id);
+    if (!target) return execute(context);
+    const root = validateRepository(target.root, target.origin);
     const pausedSync = repositorySyncPauseSchema.safeParse(context.suspendData);
     if (!pausedSync.success && context.resumeData !== undefined) {
       if (!originalResumeSchema) throw new Error('该业务步骤没有恢复输入');
@@ -144,7 +148,7 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
     /** 成功推送后才返回/暂停业务关口；失败仅开放同步重试，不重放角色。 */
     async function deliver(checkpoint: Checkpoint) {
       let receipt: RemoteHandoff | undefined;
-      try { receipt = await archive(config, context.runId, step.id, checkpoint.value, checkpoint.action === 'suspend' ? 'pending' : 'completed', publish); }
+      try { receipt = await archive(config, target!, context.runId, step.id, checkpoint.value, checkpoint.action === 'suspend' ? 'pending' : 'completed', publish); }
       catch (error) {
         if (!cache) throw error;
         return context.suspend({ kind: 'repository-sync', mode: config.mode, retryKey: key, stage: step.id, reason: '产物已生成并保存，远端同步未完成；重试仅同步资料，不重新生成或批准。' });
@@ -161,7 +165,19 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
       if (checkpoint.runId !== context.runId || checkpoint.stage !== step.id || checkpoint.inputHash !== contentHash(json(context.inputData))) throw new Error('同步检查点归属不一致');
       return checkpoint;
     }
-    if (cache && existsSync(cache)) return deliver(validate(JSON.parse(readHandoffCache(cache))));
+    if (cache && existsSync(cache)) {
+      const cached = JSON.parse(readHandoffCache(cache));
+      if (cached.action === undefined && step.id === 'architecture') {
+        const value = validateLegacyArchitectureResult(stateV2Schema.parse(context.inputData), cached);
+        return deliver({ runId: context.runId, stage: step.id, inputHash: contentHash(json(context.inputData)), action: 'result', value });
+      }
+      return deliver(validate(cached));
+    }
+    // 历史架构缓存使用早期键格式；只允许精确同Run、同输入的只读适配，不能因此跳过源码或审批校验。
+    if (config.mode === 'live' && step.id === 'architecture' && existsSync(legacyArchitectureCachePath(root, context.runId, stateV2Schema.parse(context.inputData)))) {
+      const value = readLegacyArchitectureResult(root, context.runId, stateV2Schema.parse(context.inputData));
+      return deliver({ runId: context.runId, stage: step.id, inputHash: contentHash(json(context.inputData)), action: 'result', value });
+    }
     if (pausedSync.success) throw new Error('同步检查点缺失，拒绝重新生成角色产物');
     let intercepted = false;
     /** 只缓存业务产物，不缓存未校验的人工请求或模型配置。 */

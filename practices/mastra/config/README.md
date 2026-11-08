@@ -25,3 +25,25 @@
 ## 接入定义
 
 真正接入前的规则已集中在[资源接入规范v1](./runtime-resource-contract.md)，配套[配置示例](./workflow.runtime.example.json)和[方案决策](../../../docs/decisions/2026-11-07-mastra-resource-contract.md)。覆盖唯一权威、加载与交叉校验、Run冻结/恢复、13种角色输入、版本迁移和RC01–RC14验收。定义已形成，加载器、冻结存储与DTO投影尚未实现；示例不是当前可用运行配置。
+
+## 当前可执行的资料读取配置
+
+[material-policy.ts](./material-policy.ts)是已经接入运行时的局部配置，与上面的资源盘点JSON不同。服务端构建时导入；修改后检查并重新发布，不支持热更新。`version`随策略语义调整递增；当前只记录在定位工具结果中，尚不是全Run配置冻结机制。运行中更改配置可能影响下一次恢复，已有Run应保持同版本部署。
+
+| 字段 | 用途 | 默认 |
+| --- | --- | --- |
+| `chunks.strategy` | 换行优先分片`paragraph`，或固定长度`fixed` | paragraph |
+| `chunks.chars` | 每片最多UTF-16字符数；不得超过读取单片上限 | 3000 |
+| `chunks.pageSize` | 每次返回片段目录数量 | 12 |
+| `chunks.previewChars` | 每片预览，不是业务摘要 | 80 |
+| `chunks.responseBytes` | 单次目录条目字节上限 | 12000 |
+| `budget.materialBytes` | 大于此值的材料折叠为引用 | 3000 |
+| `budget.inlineBytes` / `readBytes` / `providerBytes` | 初始目录 / 累计读取 / 模型消息字节上限 | 24000 / 48000 / 96000 |
+| `budget.readChars` | 单次正文读取字符上限 | 6000 |
+| `budget.multiplier` / `maxLevel` | 每次确认扩容倍率 / 最高等级（历史恢复契约固定，不能单独调整） | 2 / 4 |
+
+只调整分片参数就能改变读取方式，无需改Agent或Workflow。更换算法时修改`src/delivery/material-chunks.ts`，保持`offset/end/bytes/preview`契约；它不访问文件、不调用模型、不改审批。任务资料注册和工具适配由`task-context.ts`负责，预算故障与等级计算由`context-budget.ts`负责，暂停/确认仍由原生Workflow负责。配置不得扩大读取目录或写权限。
+
+调用示例：先`handoff_locate({id, query:"权限"})`，从返回片段选取相关范围，调用`handoff_read({id, offset, length:end-offset})`；有`nextCursor`时可继续定位。有跨片段关键词时同时读取相邻片段。必要的完整核对仍应顺序读取全部相关片段，不能凭关键词未命中或预览声称已核实。
+
+目录预览也消耗累计资料预算，所有工具历史仍受模型消息预算检查。分片降低无关正文读取，不会使累计读取或模型上下文无限增长；必须读完的材料仍超过容量时，现有入口是确认增加资料预算。跨模型调用持久保存逐批核对结果再综合尚未实现，不能仅追加调用次数宣称已解决。

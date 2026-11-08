@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
+import { readRemoteSyncSettings, remoteSyncSettingsSchema, remoteSyncTargets, writeRemoteSyncSettings } from '../delivery/remote-sync-settings.js';
 const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
 export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
@@ -21,6 +22,22 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
     return c.json({ error: error instanceof GateInputError ? error.message : error instanceof z.ZodError ? '有内容未填完整或不符合要求，请检查必填、文件范围和列表中的每一项' : '操作未完成，请刷新确认版本、必答项及流程状态；不要自动重试批准。' }, 409);
   }
   return [
+    registerApiRoute('/intake-api/remote-sync-settings', { method: 'GET',
+      /** 只公开目标标签和阶段选择，绝不向浏览器返回本地路径或Git地址。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { return c.json({ settings: readRemoteSyncSettings(config!), targets: remoteSyncTargets(config!).map(/** 页面显示受控远端地址，不泄露本地checkout路径。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
+        catch { return c.json({ error: '远端同步设置暂不可读取，请检查服务端已授权仓库。' }, 409); }
+      },
+    }),
+    registerApiRoute('/intake-api/remote-sync-settings', { method: 'PUT',
+      /** 设置仅影响后续节点；仓库白名单仍由服务端配置拥有。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { origin(c); return c.json({ settings: writeRemoteSyncSettings(config!, remoteSyncSettingsSchema.parse(await c.req.json())), targets: remoteSyncTargets(config!).map(/** 保存后仍只回传受控远端地址。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
+        catch (error) { return c.json({ error: error instanceof z.ZodError ? '设置格式不正确，请检查每个阶段的同步开关和仓库选择。' : error instanceof Error ? error.message : '远端同步设置未保存。' }, 409); }
+      },
+    }),
     registerApiRoute('/intake-api/project', { method: 'GET',
       // 只读固定配置仓库，不允许客户端切换宿主路径或读取文件内容。
       handler: async c => {

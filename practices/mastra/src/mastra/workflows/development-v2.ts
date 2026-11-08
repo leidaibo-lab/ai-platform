@@ -70,7 +70,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         (item) => item.text.trim().length > 0,
       );
       if (requirements.length > 300) throw new Error('v2产品原文超过试点锚点预算');
-      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
+      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
     },
   });
   const context = createStep({ id: 'prepare-context', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
@@ -292,7 +292,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     },
   });
   const recovery = createStep({ id: 'recover-development', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
-    suspendSchema: z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall }), resumeSchema: recoveryReviewSchema,
+    suspendSchema: z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), budget: stateV2Schema.shape.recovery.unwrap().shape.budget, modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall }), resumeSchema: recoveryReviewSchema,
     // 连续重试阈值只决定暂停；人工可多轮继续，不清零累计调用。
     execute: async ({ inputData, resumeData, suspend }) => {
       if (inputData.outcome !== 'in-progress' || !inputData.recovery) return inputData;
@@ -310,7 +310,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     if (options.legacySequential) return step;
     const execute = step.execute;
     step.resumeSchema = recoveryReviewSchema;
-    step.suspendSchema = z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall, recoveryState: stateV2Schema });
+    step.suspendSchema = z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), budget: stateV2Schema.shape.recovery.unwrap().shape.budget, modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall, recoveryState: stateV2Schema });
     // suspendData 来自原生持久化，不接收客户端替代源码或失败状态。
     step.execute = async (context) => {
       let state: StateV2 = context.inputData;

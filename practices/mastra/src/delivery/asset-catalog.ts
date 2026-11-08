@@ -7,7 +7,7 @@ import { correlationSchema, type AssetCorrelation } from './asset-identity.js';
 import { ensureAssetDirectory, safeAssetPath, validateHrmRepository } from './asset-files.js';
 
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
-export const assetManifestSchema = z.object({ schemaVersion: z.union([z.literal(1), z.literal(2)]), repository: z.literal('https://github.com/leidaibo-lab/hrm'), runId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), stage: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), mode: z.enum(['fixture', 'live']), event: z.enum(['pending', 'completed']), projectionHash: hashSchema, authority: z.literal('workflow-export'), correlation: correlationSchema.optional(), createdAt: z.iso.datetime().optional(), files: z.record(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/), hashSchema) });
+export const assetManifestSchema = z.object({ schemaVersion: z.union([z.literal(1), z.literal(2)]), repository: z.string().url(), runId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), stage: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), mode: z.enum(['fixture', 'live']), event: z.enum(['pending', 'completed']), projectionHash: hashSchema, authority: z.literal('workflow-export'), correlation: correlationSchema.optional(), createdAt: z.iso.datetime().optional(), files: z.record(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/), hashSchema) });
 const runRecordSchema = z.object({ schemaVersion: z.literal(1), correlation: correlationSchema, createdAt: z.iso.datetime(), briefHash: hashSchema });
 export type AssetManifest = z.infer<typeof assetManifestSchema>;
 /** 单个不可变阶段版本；path 为仓库相对清单路径，正文按需校验读取。 */

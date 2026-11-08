@@ -1,3 +1,4 @@
+import { ContextBudgetError } from '../../delivery/context-budget.js';
 /** v2单角色受控调用：精确回滚、独立故障预算与失败阶段持久化。 */
 import { developmentTimeoutPolicy, diagnoseModelFailure, modelCallDiagnosticSchema } from './model-diagnostic.js';
 import { automaticAttempts, retryDelayMs, pauseForCallBudget } from './recovery-policy.js';
@@ -35,15 +36,16 @@ export async function invokeV2(config: PracticeConfig, execution: ExecutionPort,
       const partialSourceHash = developmentHash(await execution.snapshot());
       for (const [path, content] of Object.entries(contents)) await execution.writeFile(path, content);
       if (developmentHash(await execution.snapshot()) !== developmentHash(before)) throw new Error('v2失败检查点无法完整恢复');
-      const kind = error instanceof SyntaxError || (error instanceof Error && (error as Error & { code?: string }).code === 'INVALID_OUTPUT') ? 'invalid-output' as const : classifyDevelopmentError(error);
+      const budget = error instanceof ContextBudgetError ? error.budget : undefined;
+      const kind = budget ? 'context-budget' as const : error instanceof SyntaxError || (error instanceof Error && (error as Error & { code?: string }).code === 'INVALID_OUTPUT') ? 'invalid-output' as const : classifyDevelopmentError(error);
       const diagnostic = kind === 'invalid-output' ? diagnoseOutput(error) : undefined;
       const taskId = extra && typeof extra === 'object' && 'id' in extra && typeof extra.id === 'string' ? extra.id : null;
-      state = { ...state, faults: [...state.faults, { sequence: state.faults.length + 1, phase: state.phase, role, taskId, kind, attempt, modelCall, ...(diagnostic ? { diagnostic } : {}), checkpointHash: state.checkpointHash, partialSourceHash, restored: true }] };
+      state = { ...state, faults: [...state.faults, { sequence: state.faults.length + 1, phase: state.phase, role, taskId, kind, ...(budget ? { budget } : {}), attempt, modelCall, ...(diagnostic ? { diagnostic } : {}), checkpointHash: state.checkpointHash, partialSourceHash, restored: true }] };
       if (attempt < automaticAttempts && ['model-timeout', 'model-network'].includes(kind)) {
         if (config.mode === 'live') await delay(retryDelayMs(attempt));
         continue;
       }
-      return { state: { ...state, recovery: { hash: recoveryHashV2(state), checkpointHash: state.checkpointHash, phase: state.phase, role, taskId, kind, modelCall, ...(diagnostic ? { diagnostic } : {}) } }, entry: null };
+      return { state: { ...state, recovery: { hash: recoveryHashV2(state), checkpointHash: state.checkpointHash, phase: state.phase, role, taskId, kind, ...(budget ? { budget } : {}), modelCall, ...(diagnostic ? { diagnostic } : {}) } }, entry: null };
     }
   }
   throw new Error('v2有界调用没有返回');

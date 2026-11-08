@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { phaseSchema, roleV2Schema, type StateV2 } from './contracts.js';
 import { modelCallDiagnosticSchema } from './model-diagnostic.js';
-export const stageFailureDetailsSchema = z.object({ version: z.literal('development-stage-failure.v1'), phase: phaseSchema, reason: z.literal('recovery-exhausted'), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), faultCount: z.number().int().nonnegative(), attempts: z.array(z.object({ phase: phaseSchema, role: roleV2Schema, kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error']), attempt: z.number().int().positive(), modelCall: modelCallDiagnosticSchema.optional() })).max(8) });
+export const stageFailureDetailsSchema = z.object({ version: z.literal('development-stage-failure.v1'), phase: phaseSchema, reason: z.literal('recovery-exhausted'), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), faultCount: z.number().int().nonnegative(), attempts: z.array(z.object({ phase: phaseSchema, role: roleV2Schema, kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error', 'context-budget']), attempt: z.number().int().positive(), modelCall: modelCallDiagnosticSchema.optional() })).max(8) });
 /** SDK会序列化Error自有属性；这里只允许校验后的固定字段，禁止复制整个业务状态。 */
 export class DevelopmentStageFailure extends Error {
   readonly details: z.infer<typeof stageFailureDetailsSchema>;

@@ -76,6 +76,19 @@ test('模型发送前预算包含工具历史，超限中止不静默裁剪', /*
   assert.equal(aborted, true);
 });
 
+test('工具捕获预算错误后仍不得交付，下一档预算可以继续读取', /** 提升容量不改变资料引用或文件访问权限。 */() => {
+  const text = 'x'.repeat(60000); const base = createTaskContext({ task: 'read', text });
+  const id = base.manifest[0].id;
+  for (let i = 0; i < 8; i++) base.read({ id, offset: i * 6000 });
+  assert.throws(/** 工具可能把错误包装成结果。 */() => base.read({ id, offset: 48000 }), /预算/);
+  assert.throws(/** 交付边界仍抛出具名预算错误。 */() => base.assertBudget(), /预算/);
+  const expanded = createTaskContext({ task: 'read', text }, true, undefined, 1);
+  for (let i = 0; i < 10; i++) expanded.read({ id: expanded.manifest[0].id, offset: i * 6000 });
+  expanded.assertBudget();
+  assert.throws(/** 追加容量不授予未知文件访问。 */() => expanded.read({ id: 'unknown' }));
+  assert.throws(/** 拒绝无限预算。 */() => createTaskContext({ task: 'read' }, true, undefined, 5));
+});
+
 test('原生暂停恢复：远端失败后只重试同步，不重新运行角色或跳过原审批', /** 真实Mastra Step + bare远端验证业务/同步两个暂停点。 */async () => {
   const { createStep, createWorkflow } = await import('@mastra/core/workflows');
   const { Mastra } = await import('@mastra/core');

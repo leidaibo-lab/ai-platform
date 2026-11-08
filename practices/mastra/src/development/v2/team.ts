@@ -196,7 +196,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
           // 故障恢复沿用原任务责任和当前合并源码检查点。
           (item) => item.id === failed.taskId,
         )!;
-        return { ...next, recovery: { hash: recoveryHashV2(next), checkpointHash: next.checkpointHash, phase: next.phase, role: task.role, taskId: task.id, kind: failed.faults.at(-1)?.kind ?? 'model-error', modelCall: failed.faults.at(-1)?.modelCall, ...(failed.faults.at(-1)?.diagnostic ? { diagnostic: failed.faults.at(-1)!.diagnostic } : {}) } };
+        return { ...next, recovery: { hash: recoveryHashV2(next), checkpointHash: next.checkpointHash, phase: next.phase, role: task.role, taskId: task.id, kind: failed.faults.at(-1)?.kind ?? 'model-error', budget: failed.faults.at(-1)?.budget, modelCall: failed.faults.at(-1)?.modelCall, ...(failed.faults.at(-1)?.diagnostic ? { diagnostic: failed.faults.at(-1)!.diagnostic } : {}) } };
       }
       if (results.some(
         // 任一实现成员遇到契约阻塞即重规划，不能继续自检交付。

@@ -10,7 +10,7 @@ import type { PracticeConfig } from '../mastra/config.js';
 import { blockerCycleSchema, blockerPlanSchema, blockerAnswerSchema, revisedProductReviewSchema, blockerHash, validateBlockerPlan, validateBlockerAnswers, splitBlockers, developmentBlockers } from './blocker-contracts.js';
 import { readEngineeringReferences } from './engineering-references.js';
 import { generateProductContent } from './product-generation.js';
-import { developmentHash, projectSchema } from '../development/contracts.js';
+import { developmentExecutionIdentity, developmentHash, projectSchema } from '../development/contracts.js';
 import { stateV2Schema, inputV2Schema } from '../development/v2/contracts.js';
 import { validateIdentityV2 } from '../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
@@ -23,20 +23,24 @@ import { generateV2, type GeneratorV2 } from '../development/v2/agents.js';
 /** 复用原有产品角色和开发执行器，子流程本身只拥有版本与人工确认事实。 */
 export function createBlockerClarificationWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, resolveExecution: ExecutionResolver, generate: GeneratorV2 = generateV2) {
   const methods = loadDevelopmentMethods(config.rootDir);
-  /** 每次问答和批准前确认原代码检查点没有变化。 */
-  async function guard(state: z.infer<typeof blockerCycleSchema>) {
-    validateIdentityV2(state.development, config, methods.hash);
+  /** 只读澄清节点可受控换模型；源码、模式、端点、方法和未实施状态仍必须一致。 */
+  async function guard(state: z.infer<typeof blockerCycleSchema>, allowModelRebase = false) {
+    const current = developmentExecutionIdentity(config);
+    const prior = state.development.executionIdentity;
+    const canRebase = allowModelRebase && state.development.mode === config.mode && state.development.methodBundleHash === methods.hash && prior.mode === current.mode && prior.endpointHash === current.endpointHash && prior.modelId !== current.modelId && state.development.outcome === 'clarification-required' && state.development.completedTasks.length === 0 && !state.development.approvedHash && !state.development.delivery;
+    if (!canRebase) validateIdentityV2(state.development, config, methods.hash);
     const execution = resolveExecution(state.development.input);
     try { if (developmentHash(await execution.snapshot()) !== state.development.checkpointHash) throw new Error('澄清期间源码检查点发生变化'); }
     finally { await execution.close(); }
+    return canRebase ? { ...state, development: { ...state.development, executionIdentity: current } } : state;
   }
   const analyze = createStep({ id: 'analyze-blocker-questions', inputSchema: blockerCycleSchema, outputSchema: blockerCycleSchema,
     // 工程资料自动读取；业务建议必须绑定实际阻塞，不能把推荐当成用户答案。
     execute: async ({ inputData }) => {
-      await guard(inputData);
-      const separated = splitBlockers(developmentBlockers(inputData.development));
+      const guarded = await guard(inputData, true);
+      const separated = splitBlockers(developmentBlockers(guarded.development));
       const references = readEngineeringReferences(config.hrmRepositoryRoot);
-      const state = { ...inputData, ...separated, references: references.files, referenceNote: references.note };
+      const state = { ...guarded, ...separated, references: references.files, referenceNote: references.note };
       let plan: z.infer<typeof blockerPlanSchema>;
       if (config.mode === 'fixture') {
         const groups: typeof state.business[] = [];
@@ -107,7 +111,7 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
       try { for (const path of Object.keys(await execution.snapshot())) files[path] = await execution.readFile(path); } finally { await execution.close(); }
       for (const [path, content] of Object.entries(inputData.references)) { if (old.input.project.writablePaths.includes(path)) throw new Error('参考资料不能扩大代码写权限'); files[path] = content; }
       const project = projectSchema.parse({ ...old.input.project, files, checkFiles: [...new Set([...old.input.project.checkFiles, ...Object.keys(inputData.references)])] });
-      return inputV2Schema.parse({ ...old.input, source: { ...old.input.source, content: inputData.draft.content, hash: inputData.draft.hash, evidence: inputData.draft.evidence }, project, budgetContinuation: { calls: old.calls, maxCalls: old.maxCalls }, continuation: { runId: old.input.source.runId, sourceHash: old.input.source.hash, candidateHash: old.checkpointHash, reason: '前端业务澄清及修订产品稿已人工确认；沿用原代码权限继续规划', authority: 'approved-product-version' }, scopeApproval: { reviewer: inputData.review.reviewer, comment: '批准修订产品稿，并在原项目和代码权限内继续技术规划；只读工程资料已关联', productHash: inputData.draft.hash } });
+      return inputV2Schema.parse({ ...old.input, source: { ...old.input.source, content: inputData.draft.content, hash: inputData.draft.hash, evidence: inputData.draft.evidence }, project, budgetContinuation: { calls: old.calls, maxCalls: old.maxCalls, ...(old.contextBudgetLevel !== undefined ? { contextBudgetLevel: old.contextBudgetLevel } : {}) }, continuation: { runId: old.input.source.runId, sourceHash: old.input.source.hash, candidateHash: old.checkpointHash, reason: '前端业务澄清及修订产品稿已人工确认；沿用原代码权限继续规划', authority: 'approved-product-version' }, scopeApproval: { reviewer: inputData.review.reviewer, comment: '批准修订产品稿，并在原项目和代码权限内继续技术规划；只读工程资料已关联', productHash: inputData.draft.hash } });
     },
   });
   const scope = createExecutionScope(resolveExecution, config.mode === 'live' && !!config.hrmRepositoryRoot);

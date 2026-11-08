@@ -1,4 +1,5 @@
 import { repositorySyncPauseSchema } from '../delivery/remote-handoff.js';
+import { readLegacyArchitectureResult } from '../delivery/legacy-sync.js';
 /** 主流程业务投影与命令；存储、调度及恢复继续归 Mastra。 */
 import { blockerCycleSchema, developmentBlockers } from './blocker-contracts.js';
 import { executionResolver } from '../mastra/workflows/product-development.js';
@@ -58,6 +59,17 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
   if (current.status === 'failed' && current.retry && current.mode === mode) {
     if (!input || typeof input !== 'object' || !('retryHash' in input) || input.retryHash !== current.retry.hash) throw new GateInputError('恢复版本已变化，请刷新');
     let checkpointInput: unknown;
+    if ('kind' in current.retry && current.retry.kind === 'development-repository-sync') {
+      if (!config?.hrmRepositoryRoot) throw new GateInputError('同步恢复缺少已授权仓库配置');
+      const snapshot = await workflow.getWorkflowRunById(runId);
+      const state = stateV2Schema.parse((snapshot!.steps![current.retry.checkpointStep] as any).payload);
+      // 此入口只发布已保存结果，不调用角色；模型切换不能阻止既有交付资料的补同步。
+      const saved = readLegacyArchitectureResult(config.hrmRepositoryRoot, runId, state);
+      const execution = executionResolver(config)(state.input);
+      try { if (developmentHash(await execution.snapshot()) !== saved.checkpointHash) throw new GateInputError('源码检查点已变化，不能重试同步'); } finally { await execution.close(); }
+      // 嵌套 Workflow 的 time travel 会从快照还原每层输入；把架构 State 作为根输入会被外层 blockerCycle Schema 拒绝。
+      checkpointInput = undefined;
+    }
     if ('kind' in current.retry && current.retry.kind === 'development-architecture') {
       if (!config) throw new GateInputError('架构恢复缺少服务端执行配置');
       const snapshot = await workflow.getWorkflowRunById(runId);

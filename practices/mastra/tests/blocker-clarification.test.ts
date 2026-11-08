@@ -96,3 +96,51 @@ test('答案提交前拒绝源码漂移，修订失败时已提交回答仍可�
     assert.equal(write.payload.answer.answers[0].custom, '本轮显式选择的补充');
   } finally { await app.storage.close(); rmSync(fixture.directory, { recursive: true, force: true }); }
 });
+
+test('历史架构同步失败复用同版本阻塞结果，拒绝篡改且不误报调用预算耗尽', /** 使用实际合成Workflow产物验证缓存准入与UI恢复投影。 */async () => {
+  const { validateLegacyArchitectureResult } = await import('../src/delivery/legacy-sync.js');
+  const { describeRecovery } = await import('../src/intake/recovery.js');
+  const { describeDevelopmentProgress } = await import('../src/intake/gates.js');
+  const f = setup(); const app = f.open(true);
+  try {
+    const { runId } = await f.start(app);
+    const native = await app.workflow.getWorkflowRunById(runId);
+    const path = 'development-team.development-team-iteration.architecture';
+    const entry = native!.steps![path] as any;
+    const saved = validateLegacyArchitectureResult(entry.payload, entry.output);
+    assert.ok(saved.plan?.blockers.length); assert.equal(saved.calls, entry.payload.calls + 1);
+    assert.throws(/** 不用其他产品版本的缓存继续。 */() => validateLegacyArchitectureResult(entry.payload, { ...saved, input: { ...saved.input, source: { ...saved.input.source, hash: '0'.repeat(64) } } }), /恢复条件/);
+    assert.throws(/** 没有阻塞的计划可能创建新文件，不进入本次历史适配。 */() => validateLegacyArchitectureResult(entry.payload, { ...saved, plan: { ...saved.plan, blockers: [] } }), /恢复条件/);
+    const steps = { ...native!.steps, [path]: { ...entry, status: 'failed', error: { message: '角色产物远端同步失败；生成检查点已保留，请恢复原失败节点重试同步' } } };
+    const retry = describeRecovery(runId, 'failed', steps)!;
+    assert.ok('kind' in retry && retry.kind === 'development-repository-sync'); assert.equal(retry.syncOnly, true);
+    assert.equal(retry.step, path);
+    assert.match(retry.reason, /并未耗尽/); assert.match(describeDevelopmentProgress('failed', steps)!.title, /资料同步未完成/);
+    const drift = describeRecovery(runId, 'failed', { ...steps, [path]: { ...steps[path], error: { message: 'v2模型、模式或方法发生漂移' } } })!;
+    assert.ok('kind' in drift && drift.kind === 'development-repository-sync'); assert.match(drift.reason, /切换模型/);
+    assert.equal(describeRecovery(runId, 'failed', { [path]: steps[path] }), undefined);
+    const { createStep } = await import('@mastra/core/workflows');
+    const { withRepositoryAssets } = await import('../src/delivery/repository-assets.js');
+    const { contentHash, handoffCache } = await import('../src/delivery/remote-handoff.js');
+    const { stateV2Schema } = await import('../src/development/v2/contracts.js');
+    const { execFileSync } = await import('node:child_process');
+    const { mkdirSync, realpathSync, writeFileSync } = await import('node:fs');
+    const repo = resolve(realpathSync(f.directory), 'sync-repo'); mkdirSync(repo);
+    execFileSync('git', ['init', '-q', repo]); execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/leidaibo-lab/hrm.git']);
+    const key = contentHash(JSON.stringify({ runId, stage: 'architecture', input: entry.payload }, null, 2) + '\n');
+    writeFileSync(resolve(handoffCache(repo), `result-${key}.json`), JSON.stringify(saved));
+    let generations = 0; let failPublish = true;
+    const step = createStep({ id: 'architecture', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
+      /** 恢复时禁止重新调用原角色。 */execute: async () => { generations++; throw new Error('不得重新生成'); },
+    });
+    const wrapped = withRepositoryAssets(step, { ...f.config, mode: 'live', hrmRepositoryRoot: repo },
+      /** 只模拟网络边界，不访问真实业务远端。 */async (_root, owner, files) => { if (failPublish) throw new Error('synthetic network'); return { version: 'remote-handoff.v1', branch: `codex/workflow/${owner}`, commit: 'a'.repeat(40), files: Object.fromEntries(Object.entries(files).map(/** 回执绑定实际投影内容。 */([name, text]) => [name, contentHash(text)])) }; });
+    const context = { runId, inputData: entry.payload,
+      /** 这里只捕获暂停数据，不代替任何业务审批。 */suspend: async (value: unknown) => value };
+    const paused = await wrapped.execute(context as any) as any;
+    assert.equal(paused.kind, 'repository-sync'); assert.equal(generations, 0);
+    failPublish = false;
+    const restored = await wrapped.execute({ ...context, suspendData: paused, resumeData: { repositoryRetry: paused.retryKey } } as any) as any;
+    assert.equal(restored.calls, saved.calls); assert.equal(generations, 0); assert.deepEqual(restored.plan, saved.plan);
+  } finally { await app.storage.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});

@@ -117,7 +117,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
   ), ...state.verificationRefs, ...(state.plan?.tasks.map(
     // 给评审提供当前任务集合。
     (task) => `task:${task.id}`,
-  ) ?? [])], context: state.context, plan: state.plan, checks: state.checks, priorReports: state.codeReviews, round: state.round, taskPaths: paths, extra }, config.mode === 'live', config.hrmRepositoryRoot ? { root: config.hrmRepositoryRoot, receipt: state.repositoryHandoff ?? state.input.repositoryHandoff } : undefined);
+  ) ?? [])], context: state.context, plan: state.plan, checks: state.checks, priorReports: state.codeReviews, round: state.round, taskPaths: paths, extra }, config.mode === 'live', config.hrmRepositoryRoot ? { root: config.hrmRepositoryRoot, receipt: state.repositoryHandoff ?? state.input.repositoryHandoff } : undefined, state.contextBudgetLevel ?? 0);
   const prompt = taskContext.prompt;
   const schema = role === 'context' ? contextDraftSchema : role === 'architect' ? planV2Schema : role === 'readiness' || role === 'reviewer' ? assessmentSchema : null;
   const timeout = developmentTimeoutPolicy(role);
@@ -129,11 +129,13 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
         ? await agent.generate(prompt, { ...options, structuredOutput: { schema: schema as z.ZodType<unknown>, errorStrategy: 'strict', logger: noopLogger } })
         : await agent.generate(prompt, options);
     } catch (error) {
+      taskContext.assertBudget();
       if (classifyDevelopmentError(error) === 'invalid-output') throw new OutputValidationError({ stage: 'structured-output', code: 'structured-output-invalid' });
       throw error;
     }
   }
   const result = await call();
+  taskContext.assertBudget();
   if (result.finishReason === 'error') throw new DevelopmentModelError(classifyDevelopmentError(result.error), diagnoseModelFailure(result.error));
   if (result.finishReason !== 'stop') throw new DevelopmentModelError('model-error');
   const tools = result.toolResults.map(
