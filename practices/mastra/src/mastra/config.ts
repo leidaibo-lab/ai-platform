@@ -24,7 +24,7 @@ export function readConfig(): PracticeConfig {
   const envPath = resolve(root, '.env');
   if (existsSync(envPath)) process.loadEnvFile(envPath);
   const mode = z.enum(['fixture', 'live']).parse(process.env.MASTRA_MODE ?? 'fixture');
-  const { modelId, roleModels } = readModelConfig(process.env);
+  const { modelId, roleModels } = readModelConfig({ ...process.env, MASTRA_MODEL: process.env.MASTRA_MODEL ?? (mode === 'fixture' ? 'openai/fixture' : undefined) });
   const port = z.coerce.number().int().min(1024).max(65535).parse(process.env.MASTRA_PORT ?? 4111);
   const dataDir = resolve(root, process.env.MASTRA_DATA_DIR ?? '.data');
   mkdirSync(dataDir, { recursive: true });
@@ -35,14 +35,14 @@ export function readConfig(): PracticeConfig {
   return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
 }
 
-/** 解析默认模型和角色组覆盖；空覆盖显式禁用，模型名称由上游服务解释。 */
+/** 解析必填默认模型和可选角色组覆盖；缺省或空覆盖回退默认模型，非法值直接拒绝。 */
 export function readModelConfig(env: Record<string, string | undefined>): Pick<PracticeConfig, 'modelId' | 'roleModels'> {
   const schema = z.string().regex(/^openai\/[^\s]+$/);
-  const modelId = schema.parse(env.MASTRA_MODEL ?? 'openai/gpt-5.6-sol') as PracticeConfig['modelId'];
+  const modelId = schema.parse(env.MASTRA_MODEL) as PracticeConfig['modelId'];
   const roleModels: NonNullable<PracticeConfig['roleModels']> = {};
   for (const [role, value] of [
-    ['product', env.MASTRA_PRODUCT_MODEL ?? 'openai/gpt-6-luna'],
-    ['development', env.MASTRA_DEVELOPMENT_MODEL ?? 'openai/gpt-5.6-luna'],
+    ['product', env.MASTRA_PRODUCT_MODEL ?? ''],
+    ['development', env.MASTRA_DEVELOPMENT_MODEL ?? ''],
   ] as const) {
     if (value.trim()) roleModels[role] = schema.parse(value) as PracticeConfig['modelId'];
   }

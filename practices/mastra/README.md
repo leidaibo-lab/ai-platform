@@ -45,7 +45,7 @@ npm run review:dev
 | --- | --- |
 | `MASTRA_MODE` | `fixture`；显式设置 `live` 才调用远程模型 |
 | `OPENAI_API_KEY` | live 必填 |
-| `MASTRA_MODEL` | `openai/gpt-5.6-sol`；未匹配角色的默认模型 |
+| `MASTRA_MODEL` | 真实模式必填；未匹配角色的默认模型，参见 `.env.example` |
 | `MASTRA_BASE_URL` | 可选 OpenAI-compatible API 基址 |
 | `MASTRA_PORT` | `4111`；修改后需同步前端代理 |
 | `MASTRA_DATA_DIR` | `.data`，相对本实践根目录，也可为绝对路径 |
@@ -98,6 +98,14 @@ Mastra 提供 Agent、工具循环、Workflow 与存储；本实践维护业务 
 
 ### 按角色配置模型
 
-复用 Mastra 原生 Agent 的 model 配置，产品四角色使用 `MASTRA_PRODUCT_MODEL`（默认 `openai/gpt-6-luna`），开发提案及开发 v1/v2 全部角色（含评审和受限委派）使用 `MASTRA_DEVELOPMENT_MODEL`（默认 `openai/gpt-5.6-luna`）。其他角色和评测裁判使用 `MASTRA_MODEL`（默认 `openai/gpt-5.6-sol`）。环境变量优先于上述内置默认值；角色变量显式设为空字符串时回退默认模型。配置共用原有端点和凭据，fixture 继续使用模拟模型。
+模型选择集中在本实践 `.env`，示例见 [.env.example](./.env.example)：
 
-重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。现有 `.env` 若已设置 `MASTRA_MODEL`，需将该项调整为 `openai/gpt-5.6-sol` 才使用本次指定默认值；本次未读取或修改真实凭据文件。模型可用性与真实质量仍需上游验证。
+```dotenv
+MASTRA_MODEL=openai/gpt-5.6-sol
+MASTRA_PRODUCT_MODEL=openai/gpt-6-luna
+MASTRA_DEVELOPMENT_MODEL=openai/gpt-5.6-luna
+```
+
+复用 Mastra 原生 Agent 的 model 配置。产品四角色使用产品覆盖；开发提案及开发 v1/v2 全部角色（含评审和受限委派）使用开发覆盖；其他角色和评测裁判使用默认模型。角色变量缺省或为空时回退 `MASTRA_MODEL`。真实模式要求显式设置默认模型；fixture 缺少默认配置时仅使用模拟模型占位标识。代码不内置上述业务模型名称，端点和凭据沿用原配置。
+
+重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。模型可用性与真实质量仍需上游验证。
