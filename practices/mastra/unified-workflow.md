@@ -50,7 +50,11 @@
 
 ## 项目范围确认
 
-在 `confirm-project-scope` 的 Resume 输入填写以下结构。`files` 是显式提供的初始源码，`writablePaths` 是精确写权限，`checkFiles` 必须存在且不可写。当前执行器支持受限 Node `.mjs` 语法检查及登记的 Node 检查，不支持任意项目命令。
+当前 HRM 前端在 `confirm-project-scope` 只确认关联项目、代码版本、确认人及交接说明。服务端从固定仓库装配源码、源码根权限上界、只读检查文件和角色候选池；浏览器不能自报全栈执行档或上传源码替换基线。开发 Agent 决定具体文件、任务依赖及所需角色，动态团队由任务形成，仍需人工批准架构方案后才实施。
+
+HRM 执行档为 `hrm-pnpm-docker-v1`，`planning=agent`。检查登记为 `project:check/build/smoke`，通过 Docker/Compose 在源码副本和临时数据库中运行 `pnpm check/build/smoke`；前两项禁网，smoke 仅连内部测试网络，不使用宿主 `.env`。新增文件限已授权源码根，依赖清单、锁和固定检查不可修改。当前 smoke 验证页面、API 与数据库健康，业务断言需后续随需求补充。
+
+以下 JSON 保留为 CLI/Node fixture 兼容格式，不是当前 HRM 前端的填表要求。`files` 是显式提供的初始源码，`writablePaths` 是精确写权限，`checkFiles` 必须存在且不可写。旧执行器支持受限 Node `.mjs` 语法检查及登记的 Node 检查，不支持任意项目命令。
 
 ```json
 {
@@ -71,7 +75,7 @@
 }
 ```
 
-示例只说明格式，不是实际业务验收。业务代码的目标仓库已确定为 `leidaibo-lab/hrm`，但当前执行器仍写候选目录，尚未接通 Git 回库或整仓 pnpm 执行。输入、候选文件保存在当前数据目录的 `development-runs/<Run标识散列>/`。原生 LibSQLStore 保存流程事实；候选目录不创建第二套审批库。授权人是本地标签，当前未接入认证。
+示例只说明格式，不是实际业务验收。业务代码目标为 `leidaibo-lab/hrm`，执行器写独立候选目录，已接通整仓 pnpm 验证，尚未接通 Git 回库。输入、候选文件保存在当前数据目录的 `development-runs/<Run标识散列>/`。原生 LibSQLStore 保存流程事实；候选目录不创建第二套审批库。授权人是本地标签，当前未接入认证。
 
 ## 团队、委派与数据边界
 

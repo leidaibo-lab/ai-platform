@@ -4,13 +4,15 @@
 
 ## 使用方式
 
+[HRM 全栈验证与开发团队自主规划](./2026-11-08-mastra-hrm-execution.md)：接受；项目自动关联，具体文件/角色由 Agent 提案，Docker 类型检查、构建与临时数据库连通实测通过，Git 回库仍未接入。
+
 [主流程交互式需求澄清](./2026-11-07-mastra-guided-intake.md)：接受；原生暂停恢复、问题卡片、回答修订及完整稿确认，真实模型质量待验。
 
 [Mastra资源声明、Run冻结与最小角色契约](./2026-11-07-mastra-resource-contract.md)：提议；接入定义、配置示例与RC01–RC14验收已形成，运行时实现待完成。
 
 [HRM 项目、迭代、Run 与统一产物目录](./2026-11-07-hrm-asset-catalog.md)：接受；原生步骤装饰与只读目录/下载，Mastra 保留流程审批事实。
 
-最新实践选型：[HRM 单仓资产与资料来源](./2026-11-07-hrm-repository-assets.md)，用户指定 product/testSet/deploy，薄归档 Adapter 与来源 Workspace，代码回库及全栈执行仍待接入。
+资料归属选型：[HRM 单仓资产与资料来源](./2026-11-07-hrm-repository-assets.md)，用户指定 product/testSet/deploy，薄归档 Adapter 与来源 Workspace；全栈验证由上述2026-11-08决策接入，代码回库仍待接入。
 
 生命周期选型：[Mastra 完整产研生命周期](./2026-11-07-mastra-full-delivery-lifecycle.md)，恢复测试、部署和最终交付，采用原生嵌套/暂停与人工外部回执；
 

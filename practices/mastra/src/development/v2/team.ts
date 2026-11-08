@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { PracticeConfig } from '../../mastra/config.js';
+import { createDevelopmentExecution } from '../hrm-execution.js';
 import { DevelopmentExecution } from '../../development-execution.js';
 import { seedDevelopment } from '../../development-service.js';
 import { developmentHash } from '../contracts.js';
@@ -43,7 +44,7 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
   let execution: DevelopmentExecution | undefined;
   try {
     seedDevelopment(directory, { ...job.state.input, project: { ...job.state.input.project, files: job.files, writablePaths: task.paths } });
-    execution = new DevelopmentExecution(resolve(directory, 'candidate'), task.paths, job.state.input.project.checkFiles);
+    execution = createDevelopmentExecution(resolve(directory, 'candidate'), { ...job.state.input.project, writablePaths: task.paths });
     const branch = execution;
     let calls = 0; let delegates = 0; let queue: Promise<unknown> = Promise.resolve();
     let delegatedBlocker = false;

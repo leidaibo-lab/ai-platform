@@ -107,6 +107,7 @@ export function recoveryHashV2(state: StateV2): string {
 
 /** 固定检查清单由输入派生，模型不能添加命令或降低验证范围。 */
 export function registeredChecks(input: InputV2): string[] {
+  if (input.project.executionProfile === 'hrm-pnpm-docker-v1') return ['project:check', 'project:build', 'project:smoke'];
   return [...Object.keys(input.project.files).filter(
     // 与受限执行 Adapter 的实际 Node 语法检查选择保持一致。
     (path) => path.startsWith('src/') && path.endsWith('.mjs'),

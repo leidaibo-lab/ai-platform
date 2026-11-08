@@ -79,7 +79,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       await guard(inputData);
       const files = await execution.snapshot();
       const contents: Record<string, string> = {};
-      for (const path of Object.keys(files)) contents[path] = await execution.readFile(path);
+      for (const path of Object.keys(files)) if (path !== 'pnpm-lock.yaml') contents[path] = await execution.readFile(path);
       const called = await invokeV2(config, execution, 'context', inputData, [], { files: contents }, methods, generate,
         // 上下文规则只能引用实际读取文件和批准原文。
         (text) => {
@@ -108,7 +108,12 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         (text) => validatePlanV2(planV2Schema.parse(parseDevelopmentJson(text)), inputData));
       if (!called.entry) return called.state;
       const plan = planV2Schema.parse(parseDevelopmentJson(called.entry.text));
-      return { ...called.state, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
+      if (inputData.input.project.planning === 'agent' && !plan.blockers.length) {
+        const existing = await execution.snapshot();
+        for (const task of plan.tasks) for (const path of task.paths) if (!(path in existing)) await execution.writeFile(path, '');
+      }
+      const checkpointHash = developmentHash(await execution.snapshot());
+      return { ...called.state, checkpointHash, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
     },
   });
   const assemble = createStep({ id: 'assemble-agent-team', description: '按批准任务和文件范围动态生成团队成员', inputSchema: stateV2Schema, outputSchema: stateV2Schema,

@@ -1,12 +1,14 @@
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
 import { registerApiRoute, type ContextWithMastra } from '@mastra/core/server';
+import { assembleRepositoryProject } from './repository-project.js';
+import { readRepositoryCatalog } from './repository-catalog.js';
 import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
 const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
-export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live') {
+export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string) {
   const busy = new Set<string>();
   /** 校验本机写来源；标签不等于认证身份。 */
   function origin(c: ContextWithMastra) {
@@ -18,6 +20,14 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
     return c.json({ error: error instanceof GateInputError ? error.message : error instanceof z.ZodError ? '有内容未填完整或不符合要求，请检查必填、文件范围和列表中的每一项' : '操作未完成，请刷新确认版本、必答项及流程状态；不要自动重试批准。' }, 409);
   }
   return [
+    registerApiRoute('/intake-api/project', { method: 'GET',
+      // 只读固定配置仓库，不允许客户端切换宿主路径或读取文件内容。
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { return c.json(readRepositoryCatalog(repositoryRoot)); }
+        catch { return c.json({ available: false, reason: '已关联仓库暂不可读，请检查仓库路径及授权。' }, 409); }
+      },
+    }),
     registerApiRoute('/intake-api/runs', { method: 'POST',
       // 客户端预先固定 Run ID，响应丢失可回读，禁止重复创建。
       handler: async c => {
@@ -65,7 +75,16 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         const id = c.req.param('runId'); let acquired = false;
         try {
           origin(c); if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
-          return c.json(await respondIntake(workflow, mode, id, await c.req.json()));
+          let input = await c.req.json();
+          if (input.data?.project?.executionProfile && !input.repositoryScope) throw new GateInputError('全栈项目必须通过已关联仓库确认，不能从页面传入源码或执行档');
+          if (input.repositoryScope) {
+            const selection = z.object({ catalogHash: z.string().length(64), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) }).parse(input.repositoryScope);
+            let project;
+            try { project = assembleRepositoryProject(repositoryRoot, selection.catalogHash); }
+            catch (error) { throw new GateInputError(error instanceof Error ? error.message : '仓库配置不可用'); }
+            input = { gateHash: input.gateHash, data: { project, reviewer: selection.reviewer, comment: selection.comment, maxReworks: 1 } };
+          }
+          return c.json(await respondIntake(workflow, mode, id, input));
         } catch (error) { return failure(c, error); }
         finally { if (acquired) busy.delete(id); }
       },

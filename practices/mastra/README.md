@@ -55,7 +55,9 @@ MASTRA_MODE=live MASTRA_DATA_DIR=.data/live npm run dev
 
 ## 当前执行边界
 
-开发可在隔离候选目录执行受限 Node `.mjs` 修改和登记检查；候选代码尚未自动回写 HRM，Git 回库、整仓 pnpm 执行和 CI 制品绑定未接通。独立测试会重跑登记套件，人工用例需要实际结果和证据。
+HRM 项目由服务端自动关联当前仓库、分支和版本。用户确认项目后，开发 Agent 根据需求决定具体改动路径和团队，方案批准后才实施。HRM 候选通过 Docker/Compose 执行完整的 `pnpm check`、`pnpm build` 和 `pnpm smoke`，数据库为独立临时实例；检查脚本、依赖清单和锁文件受保护。旧 Node fixture 执行器保留兼容。
+
+可在本目录运行 `npm run verify:hrm -- /Users/lei/code/hrm` 重新验证当前基线，要求 Docker Desktop 可用。结果保存到忽略的 `.data/hrm-verification-result.json`。2026-11-08 三项真实基线检查通过；这不代表招聘业务已实现或全部业务验收通过。候选代码尚未自动回写 HRM，Git 回库和 CI 制品绑定仍未接通。独立测试会重跑登记套件，人工用例需要实际结果和证据。
 
 部署由外部平台实际执行，工作台收集发布、健康检查与回滚回执，尚未接入自动 CI/CD。最终交付依赖同版本质量与发布证据；人工回执不等于机器独立验证。真实业务全链路、生产多实例和完整故障恢复尚未验收。
 

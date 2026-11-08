@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { createAgents } from '../agents/index.js';
 import type { PracticeConfig } from '../config.js';
+import { createDevelopmentExecution } from '../../development/hrm-execution.js';
 import { DevelopmentExecution } from '../../development-execution.js';
 import { seedDevelopment } from '../../development-service.js';
 import { developmentHash, projectSchema } from '../../development/contracts.js';
@@ -44,7 +45,7 @@ function executionResolver(config: PracticeConfig) {
       const saved = inputV2Schema.parse(JSON.parse(readFileSync(inputFile, 'utf8')));
       if (developmentHash(saved) !== developmentHash(input)) throw new Error('运行项目输入与保存版本不一致');
     }
-    return new DevelopmentExecution(resolve(directory, 'candidate'), input.project.writablePaths, input.project.checkFiles);
+    return createDevelopmentExecution(resolve(directory, 'candidate'), input.project);
   };
 }
 
@@ -83,7 +84,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
         // 不接受其他产品版本的批准。
         (decision) => decision.role === 'product' && decision.decision === 'approve' && decision.artifactHash === product.hash,
       )) throw new Error('开发缺少当前产品批准');
-      if (!resumeData) return suspend({ productHash: product.hash, instruction: '提供 project 文件快照及精确可写范围；checkFiles 为已存在且不可写的固定检查。角色可选 frontend/backend/infrastructure。reviewer 和 comment 记录本地授权人。', projectFields: ['id', 'files', 'writablePaths', 'checkFiles', 'roles'] });
+      if (!resumeData) return suspend({ productHash: product.hash, instruction: '确认已关联仓库、当前代码版本与整体权限。技术文件拆分和实际团队由架构与开发Agent提出，后续方案批准后才实施；旧CLI的显式manifest仍兼容。', projectFields: ['id', 'files', 'writablePaths', 'checkFiles', 'roles'] });
       return inputV2Schema.parse({ correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
     },
   });

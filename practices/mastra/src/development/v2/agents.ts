@@ -1,4 +1,5 @@
 /** 原生 Agent 工厂；方法按角色最少注册，工具权限与模型报告相互独立。 */
+import { developmentHash } from '../contracts.js';
 import { OutputValidationError } from './output-diagnostic.js';
 import { Agent, type ToolsInput } from '@mastra/core/agent';
 import { createTool } from '@mastra/core/tools';
@@ -22,7 +23,7 @@ export interface MemberRuntime {
 const instructions: Record<RoleV2, string> = {
   ...developmentInstructions,
   context: '你核实项目上下文。根据提供的实际候选文件与批准产品，返回JSON {rules:[{text,refs}],unknowns:[]}。引用只能选择提供的ref；无法证实的规则不当作事实。',
-  architect: '你是架构师，输出完整JSON技术方案。字段为summary,coverage:[{requirement,behavior,verification}],contracts,tasks,blockers,risks。每个task包含id,role,paths,dependsOn,requirementRefs,acceptanceRefs,contextRefs,constraints,verificationRefs。严格按referenceGroups分别取值：requirementRefs和acceptanceRefs只能取requirements；contextRefs只能取contextFiles中的file:路径，不得使用产品行号或rules.refs代替；verificationRefs只能取registeredChecks。无blockers时全部产品原文ID须至少被一项任务的requirementRefs或acceptanceRefs覆盖，包括标题和说明行。精确分配已授权文件并按拓扑排序。业务规则缺失列blockers，不补猜。不得授予写权限或批准。',
+  architect: '你是架构师，输出完整JSON技术方案。字段为summary,coverage:[{requirement,behavior,verification}],contracts,tasks,blockers,risks。每个task包含id,role,paths,dependsOn,requirementRefs,acceptanceRefs,contextRefs,constraints,verificationRefs。严格按referenceGroups分别取值：requirementRefs和acceptanceRefs只能取requirements；contextRefs只能取contextFiles中的file:路径，不得使用产品行号或rules.refs代替；verificationRefs只能取registeredChecks。无blockers时全部产品原文ID须至少被一项任务的requirementRefs或acceptanceRefs覆盖，包括标题和说明行。精确分配已授权文件并按拓扑排序。project.planning=agent时，writablePaths只是现存文件上界，不要求全部修改；自行确定最小必要文件和角色，可在writableRoots源码根内创建新文件，但不能更改checkFiles。业务规则缺失列blockers，不补猜。不得授予写权限或批准。',
   readiness: '你独立评估是否能不臆造决定就实现。双向检查产品、上下文、任务的覆盖、契约冲突、异常与验收。只输出JSON {verdict:"PASS"|"CONCERNS"|"FAIL",findings:[{id,severity:"blocking"|"high"|"medium"|"low",category:"business"|"architecture"|"implementation"|"verification"|"integrity",route:"product"|"architecture"|"frontend"|"backend"|"infrastructure"|"human",detail,refs,evidence}],coverageRefs,unchecked,resolutions:[]}。PASS必须无发现；CONCERNS/FAIL必须有发现。引用只能取knownRefs。',
   reviewer: '你是与实现者分开的只读代码评审员。评估批准意图、实际源码变化、异常边界和真实检查的验证缺口。输出与readiness相同的JSON，coverageRefs覆盖全部原文与任务ID，unchecked公开未审范围。发现必须有具体坏结果、路径引用和证据。复查priorReports的每条旧发现；已修复可在resolutions返回{findingId,decision:"fixed",reason,refs}，不得删除原始发现或无证据关闭。不能用PASS抹掉旧问题；无法核实应保留问题，不冒充独立测试。',
 };
@@ -95,7 +96,7 @@ export function createAgentV2(config: PracticeConfig, execution: ExecutionPort, 
 /** 记录实际工具/用量并强制方法读取；结构失败走相同安全检查点。 */
 export async function generateV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, state: StateV2, paths: string[], extra: unknown, methods: DevelopmentMethods, runtime?: MemberRuntime): Promise<EntryV2> {
   const agent = createAgentV2(config, execution, role, state, paths, methods, runtime);
-  const prompt = JSON.stringify({ source: state.input.source, project: state.input.project, requirements: state.requirements, referenceGroups: {
+  const prompt = JSON.stringify({ source: state.input.source, project: state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 锁文件只提供版本摘要，避免每轮重复注入近十万字符。 */([path, content]) => [path, path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, referenceGroups: {
     requirements: state.requirements.map(
       /** 需求与验收只消费批准原文锚点。 */
       (item) => item.id,

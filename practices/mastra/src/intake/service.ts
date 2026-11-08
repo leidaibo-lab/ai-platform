@@ -1,6 +1,7 @@
 /** 主流程业务投影与命令；存储、调度及恢复继续归 Mastra。 */
 import type { createProductDevelopmentWorkflow } from '../mastra/workflows/product-development.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from '../mastra/workflows/delivery.js';
+import { describeRecovery } from './recovery.js';
 import { describeGate, validateGate } from './gates.js';
 import { intakeSchema, validateAnswers } from './contracts.js';
 /** 仅公开本地业务输入校验，不透出模型或文件系统异常。 */
@@ -24,11 +25,18 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
     const approved = reviewed && !Array.isArray(reviewed) ? deliverySchema.safeParse(reviewed.output) : undefined;
     if (approved?.success) gate.evidence = { ...gate.evidence, approvedProduct: approved.data.artifacts.at(-1)?.content };
   }
-  return { outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  const retry = describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
+  return { retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown) {
   const current = await readIntake(workflow, runId);
+  if (current.status === 'failed' && current.retry && current.mode === mode) {
+    if (!input || typeof input !== 'object' || !('retryHash' in input) || input.retryHash !== current.retry.hash) throw new GateInputError('恢复版本已变化，请刷新');
+    const run = await workflow.createRun({ runId });
+    await run.timeTravel({ step: current.retry.step.split('.') });
+    return readIntake(workflow, runId);
+  }
   if (current.status !== 'suspended' || current.mode !== mode) throw new Error('状态或模型模式已变化，请刷新');
   let step: string | string[];
   let resumeData;

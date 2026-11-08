@@ -1,10 +1,12 @@
 # 项目文档
 
+- [HRM 全栈验证与开发自主规划](./decisions/2026-11-08-mastra-hrm-execution.md)：用户确认关联项目，Agent 提出具体文件与团队；已实测 Docker 中类型检查、构建及页面/API/临时数据库连通。[使用说明](../practices/mastra/README.md)。
+
 - [Mastra资源配置接入规范](../practices/mastra/config/runtime-resource-contract.md)：单一配置归属、加载交叉校验、Run冻结/恢复、逐角色最小输入与版本迁移；定义稿，未接入运行时。
 
 - [HRM 产物归档与数据流转](../practices/mastra/artifact-dataflow.md)：项目/迭代/Run 关联、阶段版本、查看与下载；[PNG](./assets/mastra-hrm-artifact-dataflow.png) / [SVG](./assets/mastra-hrm-artifact-dataflow.svg)，[决策](./decisions/2026-11-07-hrm-asset-catalog.md)。
 
-- [HRM 仓库资产归属](./decisions/2026-11-07-hrm-repository-assets.md)：产品、测试、发布投影归 hrm，业务资料从 product/sources 读取；代码目标已定，Git 回库/全栈执行另行接线。
+- [HRM 仓库资产归属](./decisions/2026-11-07-hrm-repository-assets.md)：产品、测试、发布投影归 hrm，业务资料从 product/sources 读取；全栈验证见2026-11-08决策，Git 回库仍待接线。
 
 - [Mastra 完整产研流程](../practices/mastra/unified-workflow.md)：同一主 Run，工作台承接人工关口，Studio 用于调试，产品到动态团队、前后端并行/受限委派、评审、独立测试/缺陷回归、外部发布回执/健康与回滚、最终交付；[生命周期决策](./decisions/2026-11-07-mastra-full-delivery-lifecycle.md)，[统一团队选型](./decisions/2026-11-07-mastra-unified-development-team.md)。下文旧双流程与图保留为历史设计。
 

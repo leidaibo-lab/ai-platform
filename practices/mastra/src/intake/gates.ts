@@ -7,7 +7,7 @@ import { validateCases, validateQualityReview } from '../delivery/testing.js';
 import { lifecycleSchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
 export const scopeFormSchema = z.object({ project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 const definitions: Record<string, { title: string; description: string; schema: z.ZodType }> = {
-  'confirm-project-scope': { title: '确认项目与开发范围', description: '选择本次使用的文件快照、允许修改的文件和不可修改的检查文件。当前是文件快照级受限执行，尚不支持直接执行整个 pnpm 仓库。提交后只生成技术方案；实施前还会再次确认。', schema: scopeFormSchema },
+  'confirm-project-scope': { title: '确认开发项目', description: '确认已关联项目和整体权限边界，具体文件、角色与检查映射由开发团队规划，方案批准后才实施。', schema: scopeFormSchema },
   'approve-architecture': { title: '确认开发方案', description: '阅读任务、接口、风险及团队安排。批准后将在已授权的隔离候选目录中执行实现和检查。', schema: approvalV2Schema },
   'resolve-readiness': { title: '处理开工前的待决问题', description: '逐项记录判断依据；无法解决时可终止，不能用批准掩盖阻塞。', schema: findingsReviewSchema },
   'resolve-findings': { title: '处理评审发现', description: '对当前报告逐项裁决；通过已有门禁后才继续交付。', schema: findingsReviewSchema },

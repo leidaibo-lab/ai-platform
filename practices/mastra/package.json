@@ -30,7 +30,8 @@
     "eval:native:rescore": "tsx scripts/rescore-native-baseline.ts",
     "eval:review-rework": "tsx scripts/review-rework-eval.ts",
     "eval:development-nodes": "tsx scripts/development-node-eval.ts",
-    "eval:development-nodes:seed": "tsx scripts/development-node-eval.ts --seed"
+    "eval:development-nodes:seed": "tsx scripts/development-node-eval.ts --seed",
+    "verify:hrm": "tsx scripts/verify-hrm.ts"
   },
   "dependencies": {
     "@mastra/ai-sdk": "1.11.3",
