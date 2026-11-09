@@ -1,3 +1,4 @@
+import { validateQualityReview } from '../src/delivery/testing.js';
 /** 新版完整主链原生持久化回归；所有审批及发布回执均为合成测试数据。 */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -20,7 +21,7 @@ function paused(result: any): { path: string[]; payload: any } {
 }
 
 // 每个暂停点关闭Store再装配，验证原生快照续跑而非内存闭包。
-for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-fixed']) {
+for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-fixed', 'browser-success', 'browser-failure']) {
   test(`完整产研主链与跨Store恢复：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'mastra-unified-'));
     const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
@@ -51,7 +52,7 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
         assert.ok(p, `缺少暂停载荷 ${JSON.stringify(result)}`); visited.push(id);
         let data: any;
         if (id === 'review-product') data = { ...actor, role: 'product', artifactHash: scenario === 'stale-product' ? '0'.repeat(64) : p.artifact.hash, decision: scenario === 'reject-product' ? 'reject' : 'approve' };
-        else if (id === 'confirm-project-scope') data = { ...actor, project, maxReworks: 1 };
+        else if (id === 'confirm-project-scope') data = { ...actor, project: scenario.startsWith('browser-') ? { ...project, files: { ...project.files, 'page.html': '<!doctype html><p id="result">候选页面</p>' } } : project, maxReworks: 1 };
         else if (id === 'approve-architecture') { assert.equal(p.team.members.length, 2); data = { ...actor, hash: p.hash, decision: 'approve' }; }
         else if (id === 'approve-test-cases') data = { ...actor, hash: p.plan.hash, decision: 'approve', cases: [{ id: 'automatic', requirementRefs: p.requirements.map(/** 保留所有批准原文引用。 */(r: any) => r.id), expected: '两个模块返回1', method: 'registered-check', checkRefs: p.registeredChecks }] };
         else if (id === 'review-test-results') { assert.ok(p.quality.checks.length); data = { ...actor, hash: p.hash, decision: ['qa-rework', 'qa-fixed'].includes(scenario) && visited.filter(/** 只在首轮质量门注入缺陷。 */(step) => step === id).length === 1 ? 'rework' : 'pass', manualResults: [], findings: ['qa-rework', 'qa-fixed'].includes(scenario) && visited.filter(/** 保留一次实际返工。 */(step) => step === id).length === 1 ? [{id: 'qa-1', severity: 'medium', category: 'implementation', route: 'backend', detail: '合成缺陷用于验证修复路由', refs: ['task:fixture-task-2'], evidence: '合成质量门故障注入'}] : [] }; }
@@ -60,13 +61,19 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
         else if (id === 'verify-release-health') data = { releaseHash: p.releaseHash, deploymentReceiptHash: p.deploymentReceiptHash, operator: 'fixture', checks: [{ id: scenario === 'missing-health' ? 'unknown' : 'ready', status: scenario === 'health-failure' ? 'failed' : 'passed', evidence: '合成健康结果', observedAt: '2026-11-07T00:00:00Z' }] };
         else if (id === 'execute-rollback-externally') data = { releaseHash: p.releaseHash, rollbackArtifactRef: p.rollbackArtifactRef, status: 'rolled-back', jobRef: 'synthetic://rollback', operator: 'fixture', notes: '模拟回滚' };
         else assert.fail(`未预期暂停点 ${id}`);
+        if (scenario.startsWith('browser-') && id === 'approve-test-cases') data.cases.push({ id: 'browser', requirementRefs: p.requirements.map(/** 浏览器用例仍引用批准需求。 */(r: any) => r.id), expected: '页面显示候选内容', method: 'browser', checkRefs: [], browser: { entry: 'page.html', assets: [], actions: [], assertions: [{ selector: '#result', text: scenario === 'browser-failure' ? '不存在' : '候选页面' }] } });
+        if (scenario.startsWith('browser-') && id === 'review-test-results') {
+          assert.equal(p.quality.browser.receipts[0].status, scenario === 'browser-failure' ? 'failed' : 'passed');
+          assert.ok(p.quality.browser.receipts[0].screenshot);
+          if (scenario === 'browser-failure') { assert.throws(/** 失败断言不能用人工通过覆盖。 */() => validateQualityReview(p.quality ? { development: { checkpointHash: p.quality.sourceHash, requirements: [], verificationRefs: [] }, quality: p.quality } as any : {} as any, data), /测试未全部通过/); data.decision = 'stop'; }
+        }
         await app.storage.close(); app = await open(); run = await app.workflow.createRun({ runId });
         result = await run.resume({ step: pending.path, resumeData: data });
       }
       if (['stale-release', 'wrong-artifact', 'missing-health'].includes(scenario)) { assert.equal(result.status, 'failed'); return; }
       if (scenario === 'stale-product') { assert.equal(result.status, 'failed'); assert.deepEqual(visited, ['review-product']); return; }
       assert.equal(result.status, 'success', JSON.stringify(result));
-      assert.equal(result.result.outcome, scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
+      assert.equal(result.result.outcome, scenario === 'browser-failure' ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
       if (['qa-rework', 'qa-fixed'].includes(scenario)) { assert.equal(result.result.qualityHistory.length, 1); assert.equal(result.result.development.round, 1); }
       if (scenario === 'success') { assert.equal(result.result.development.delegations.length, 2); assert.equal(result.result.quality.status, 'passed'); assert.ok(visited.includes('verify-release-health')); }
     } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }

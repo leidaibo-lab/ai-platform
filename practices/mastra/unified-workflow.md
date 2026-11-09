@@ -34,6 +34,7 @@
        prepare-test-plan：测试角色读取需求与实际源码
        approve-test-cases：确认用例、预期、需求与登记检查映射
        execute-tests：隔离环境重跑登记套件
+       execute-browser-qa：QA Agent 加载固定方法并执行批准浏览器用例
        review-test-results：补充人工用例结果，确认质量
        通过 → deployment
        缺陷 → route-test-defects → 原开发团队修复/自检/评审 → 重新测试
@@ -185,3 +186,5 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 ## 角色远端交接
 
 2026-11-08：live 主流程绑定 HRM 时，角色阶段在远端同步成功后才交付下游；同步失败原生暂停，工作台仅重试同步。模型输入采用按任务资料目录、固定版本分段读取与消息预算；旧审批/源码恢复字段保留兼容。[具体边界](./artifact-dataflow.md#2026-11-08远端交接与按需上下文)及[决策记录](../../docs/decisions/2026-11-08-mastra-remote-handoff.md)。
+
+浏览器用例使用 `method: browser`，同版本回执 authority 为 browser-process，人工不能覆盖机器失败。字段、安装与静态候选限制见[浏览器 QA 本地契约](./browser-qa.md)。

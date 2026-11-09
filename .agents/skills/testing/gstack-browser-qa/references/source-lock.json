@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/garrytan/gstack",
+  "commit": "b6155921a564ba9ec2470fd2cb3894c05e2c2d13",
+  "files": {
+    "reporting.md": "74dde7559c27cfdd4f618ef3f10de8e961bb994a6fba0bc5b708cc7847530fa9",
+    "qa-patterns.md": "8f46ba8932e9dfdb37801ced266b2a1c982d11b8396e28e9f4f95912e65b9f3a",
+    "LICENSE": "e56fbb5b3d95756f3fa1cfefa24732ec79f18ece1ad08a4e79e00df57e8b198c"
+  }
+}

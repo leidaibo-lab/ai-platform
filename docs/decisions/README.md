@@ -82,3 +82,5 @@
 | 2026-07-29 | [存量能力选型审计](./2026-07-29-existing-capability-selection-audit.md) | 接受 | 保留模型主链和业务事实；封装记忆与有限重试；迁移到 OTel；停止自研工具循环、协议、工作流引擎和 Trace 后端 |
 
 没有单独决策证据的存量实现仍按照 [`方案选型与复用治理`](../solution-selection-governance.md) 审计，不能因为本次总审计存在就自动视为已经通过选型。后续 PoC、迁移和重要依赖引入继续建立独立记录。
+
+[适配 gstack 方法与真实浏览器 QA](./2026-11-09-mastra-gstack-browser-qa.md)：接受；保留 Mastra/BMAD，固定方法来源、Playwright 执行与版本绑定证据，首版支持静态候选。

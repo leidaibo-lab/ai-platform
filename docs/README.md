@@ -59,3 +59,5 @@
 - [Mastra 角色产物远端交接与按需上下文](./decisions/2026-11-08-mastra-remote-handoff.md)：阶段同步回执、原生同步恢复与有界资料读取。
 
 - [Mastra 项目运行档案](../practices/mastra/artifact-dataflow.md#2026-11-09项目运行档案)：生命周期投影、交接分支同步与只读 Workspace，不迁移执行状态。
+
+- [Mastra 浏览器 QA](../practices/mastra/browser-qa.md)：Skill、原生 Agent、Playwright 工具与 Workflow 质量门；[选型 ADR](./decisions/2026-11-09-mastra-gstack-browser-qa.md)，首版静态候选，HRM 全栈仍阻塞。

@@ -158,3 +158,8 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - `.agents/skills/docs/context-memory-evaluation/assets/fixtures/`：上下文记忆评测的对话事件、标准答案和指标数据。
 - `src/evaluation/`、`scenarios/runtime/`：固定行为模型、进程故障注入、真实模型模式和独立场景验收的共用 Runner 与版本化资产。
 - `scripts/test-execution-governance.mjs`：Policy/Hook、Operation journal、双 SQLite owner 竞争、过期接管和旧 fencing token 拒绝的确定性回归入口。
+
+## 浏览器 QA 路由
+
+- `.agents/skills/testing/gstack-browser-qa/SKILL.md`：受治理的 gstack QA 方法，固定来源，不执行上游宿主脚本。
+- `practices/mastra/browser-qa.md`：Workflow 原生 QA Agent、Playwright 工具、用例/回执契约和静态首版边界。

@@ -74,3 +74,11 @@ node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs
 用户指定的实践作用域：[完整索引](../../practices/mastra/.agents/skills/README.md)。资产唯一落点为 `practices/mastra/.agents/skills/product-pm/<技能>/SKILL.md`，name 为 `product-pm-<技能>`，沿用本规范与统一校验；这是根目录规则的显式例外。
 
 套件固定 pm-skills 2.2.0 对应111个入口（69个方法、42个流程），另有1个本地导航。8个shipping迁移入口解析到已锁定的新仓方法；保留原文、MIT、逐文件SHA256和本地映射。产品角色加载套件及既有需求交接；技能方法不增加网络、任意文件/命令、部署或审批能力。
+
+## 浏览器测试
+
+| Skill | 入口 | 适用场景 |
+| --- | --- | --- |
+| testing-gstack-browser-qa | `testing/gstack-browser-qa/SKILL.md` | 对批准候选执行浏览器用例，形成版本绑定的观察和截图证据；不修复或审批 |
+
+来源锁与 MIT 在 Skill references；应用接线与限制见 [Mastra 浏览器 QA](../../practices/mastra/browser-qa.md)。
