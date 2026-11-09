@@ -1,5 +1,7 @@
 # 项目文档
 
+- [Mastra 自主开发与修复闭环](./decisions/2026-11-09-mastra-autonomous-development.md)：批准范围内连续实现、登记检查、失败证据传递、联合修复与预算/进展停止；[使用说明](../practices/mastra/unified-workflow.md#批准范围内自主开发与排障)。
+
 - [开发阶段状态与故障引导](./decisions/2026-11-08-mastra-stage-state-flow.md)：当前阶段、故障原因、保留检查点和下一步操作；未执行业务节点不再空跑为完成，原阶段暂停恢复。
 
 - [HRM 全栈验证与开发自主规划](./decisions/2026-11-08-mastra-hrm-execution.md)：用户确认关联项目，Agent 提出具体文件与团队；已实测 Docker 中类型检查、构建及页面/API/临时数据库连通。[使用说明](../practices/mastra/README.md)。

@@ -6,11 +6,11 @@ import { modelCallDiagnosticSchema, describeModelCall } from '../development/v2/
 import { applyRecoveryDecision } from '../development/v2/recovery-policy.js';
 import { stageFailureDetailsSchema } from '../development/v2/stage-failure.js';
 import { developmentHash, projectSchema, recoveryReviewSchema } from '../development/contracts.js';
-import { stateV2Schema, approvalHashV2, recoveryHashV2, findingsHashV2, approvalV2Schema, findingsReviewSchema } from '../development/v2/contracts.js';
+import { autonomyPolicySchema, stateV2Schema, approvalHashV2, recoveryHashV2, findingsHashV2, approvalV2Schema, findingsReviewSchema } from '../development/v2/contracts.js';
 import { applyFindingsReview, assertApprovalV2 } from '../development/v2/gates.js';
 import { validateCases, validateQualityReview } from '../delivery/testing.js';
 import { lifecycleSchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
-export const scopeFormSchema = z.object({ project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
+export const scopeFormSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 const definitions: Record<string, { title: string; description: string; schema: z.ZodType }> = {
   'retry-repository-sync': { title: '重试角色资料远端同步', description: '已保存角色产物；仅重试提交和推送，成功后继续原流程，不重新调用模型或替代审批。', schema: repositoryRetrySchema },
   'confirm-blocker-answers': { title: '补齐影响开工的业务选择', description: '建议供参考，请逐项选择或补充；提交后生成完整修订产品稿，仍需你确认，不直接开工。', schema: blockerAnswerSchema },

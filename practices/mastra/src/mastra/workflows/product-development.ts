@@ -16,7 +16,7 @@ import { createDevelopmentExecution } from '../../development/hrm-execution.js';
 import { DevelopmentExecution } from '../../development-execution.js';
 import { seedDevelopment } from '../../development-service.js';
 import { developmentHash, projectSchema } from '../../development/contracts.js';
-import { inputV2Schema, stateV2Schema, type InputV2 } from '../../development/v2/contracts.js';
+import { inputV2Schema, autonomyPolicySchema, stateV2Schema, type InputV2 } from '../../development/v2/contracts.js';
 import { createExecutionScope } from '../../development/v2/execution-scope.js';
 import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from './delivery.js';
@@ -30,7 +30,7 @@ import { registerAssetRun } from '../../delivery/asset-catalog.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 
 const inputSchema = z.object({ guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
-const scopeReviewSchema = z.object({ project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
+const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 
 /** 将每个 Run 的候选目录与输入绑定，步骤结束即关闭执行环境。 */
 export function executionResolver(config: PracticeConfig) {
@@ -94,7 +94,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
         (decision) => decision.role === 'product' && decision.decision === 'approve' && decision.artifactHash === product.hash,
       )) throw new Error('开发缺少当前产品批准');
       if (!resumeData) return suspend({ productHash: product.hash, instruction: '确认已关联仓库、当前代码版本与整体权限。技术文件拆分和实际团队由架构与开发Agent提出，后续方案批准后才实施；旧CLI的显式manifest仍兼容。', projectFields: ['id', 'files', 'writablePaths', 'checkFiles', 'roles'] });
-      return inputV2Schema.parse({ repositoryHandoff: inputData.repositoryHandoff, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
+      return inputV2Schema.parse({ repositoryHandoff: inputData.repositoryHandoff, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
     },
   });
   const execution = createExecutionScope(executionResolver(config), config.mode === 'live' && !!config.hrmRepositoryRoot);

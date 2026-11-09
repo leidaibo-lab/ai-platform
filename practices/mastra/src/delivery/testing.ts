@@ -1,3 +1,4 @@
+import { runVerification, VerificationBudgetError, stopAutonomy } from '../development/v2/autonomy.js';
 import { createHash } from 'node:crypto';
 import { executeBrowserAgent } from '../browser-qa/agent.js';
 import { loadBrowserMethod } from '../browser-qa/method.js';
@@ -160,7 +161,10 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
       await guard(state);
       if (!state.quality.approval) throw new Error('执行测试缺少用例批准');
       validateCases(state, state.quality.approval);
-      const checks = await scope.port.runChecks();
+      let verified;
+      try { verified = await runVerification(scope.port, state.development, 'self-check', [], 'qa'); }
+      catch (error) { if (error instanceof VerificationBudgetError) return { ...state, development: stopAutonomy(state.development, 'verification-budget'), outcome: 'rework-exhausted' as const }; throw error; }
+      const checks = verified.checks;
       await guard(state);
       const results: Lifecycle['quality']['results'] = state.quality.approval.cases.filter(
         // 人工用例由质量门收取逐项执行回执。
@@ -175,7 +179,7 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
           ),
         ) ? 'passed' : 'failed', evidence: `登记检查：${item.checkRefs.join(', ')}`, authority: 'sandbox-process' }),
       );
-      const next = { ...state, quality: { ...state.quality, checks, results, sourceHash: state.development.checkpointHash } };
+      const next = { ...state, development: verified.state, quality: { ...state.quality, checks, results, sourceHash: state.development.checkpointHash } };
       return { ...next, quality: { ...next.quality, reportHash: qualityHash(next) } };
     },
   });
@@ -227,14 +231,14 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
       const assessment = { verdict: 'FAIL' as const, findings: review.findings, coverageRefs: [...evidenceRefs(development)], unchecked: ['QA人工缺陷来源，非模型评审'], resolutions: [] };
       const report = reportV2(assessment, { ...development, checks: state.quality.checks });
       const routes = new Set(review.findings.map(
-        // 多责任缺陷保守回架构，重新确认依赖与分工。
+        // 保留所有责任；新政策在批准团队内联合修复，历史政策回架构。
         (finding) => finding.route,
       ));
-      const selected = routes.size === 1 ? review.findings[0].route : 'architecture';
-      if (!['frontend', 'backend', 'infrastructure', 'architecture'].includes(selected)) throw new Error('未知测试返工路由');
-      const role = selected as 'frontend' | 'backend' | 'infrastructure' | 'architecture';
-      const next = reworkDevelopmentV2({ ...development, outcome: 'in-progress', delivery: null, codeReviews: [...development.codeReviews, report], recovery: null }, role, role === 'architecture' ? 'prepare-context' : 'implement');
-      return { ...state, development: next, developmentHistory: [...state.developmentHistory, development.delivery!], qualityHistory: [...state.qualityHistory, state.quality], quality: emptyQuality(), outcome: next.outcome === 'rework-exhausted' ? 'rework-exhausted' as const : 'in-progress' as const };
+      const selected = routes.has('architecture') ? 'architecture' : routes.size === 1 ? review.findings[0].route : development.input.autonomy ? 'all' : 'architecture';
+      if (!['frontend', 'backend', 'infrastructure', 'architecture', 'all'].includes(selected)) throw new Error('未知测试返工路由');
+      const role = selected as 'frontend' | 'backend' | 'infrastructure' | 'architecture' | 'all';
+      const next = reworkDevelopmentV2({ ...development, outcome: 'in-progress', delivery: null, checks: state.quality.checks, codeReviews: [...development.codeReviews, report], recovery: null }, role, role === 'architecture' ? 'prepare-context' : 'implement');
+      return { ...state, development: next, developmentHistory: [...state.developmentHistory, development.delivery!], qualityHistory: [...state.qualityHistory, state.quality], quality: emptyQuality(), outcome: next.outcome === 'rework-exhausted' ? 'rework-exhausted' as const : next.outcome === 'in-progress' ? 'in-progress' as const : 'blocked' as const };
     },
   });
   const cycle = createWorkflow({ id: 'test-and-regression-cycle', description: '独立测试 → 缺陷修复 → 回归，沿用累计返工预算', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema })

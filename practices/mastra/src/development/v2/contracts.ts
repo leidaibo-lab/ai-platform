@@ -8,7 +8,9 @@ import { correlationSchema } from '../../delivery/asset-identity.js';
 import { architectureSchema, commandEvidenceSchema, developmentInputSchema, developmentReviewSchema, executionIdentitySchema, recoveryReviewSchema, validateArchitecture, developmentHash } from '../contracts.js';
 
 export const productWorkflowIdSchema = z.enum(['product-delivery', 'product-delivery-v2']);
-export const inputV2Schema = developmentInputSchema.extend({ repositoryHandoff: remoteHandoffSchema.optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.enum(['product-delivery', 'product-delivery-v2', 'product-development']).optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+/** 新Run显式选择自主政策；缺省不改变历史批准/恢复散列。 */
+export const autonomyPolicySchema = z.object({ version: z.literal('autonomy.v1'), maxCheckRuns: z.number().int().min(2).max(96).default(24), maxNoProgress: z.number().int().min(1).max(5).default(2) });
+export const inputV2Schema = developmentInputSchema.extend({ autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.enum(['product-delivery', 'product-delivery-v2', 'product-development']).optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -35,7 +37,13 @@ export const reportSchema = z.object({ assessment: assessmentSchema, sourceHash:
 export const gateDecisionSchema = z.object({ decision: z.enum(['deliver', 'rework', 'replan', 'clarify', 'stop']), reasons: z.array(z.string()), sourceHash: hash, reportHash: hash.nullable() });
 export const teamSchema = z.object({ planHash: hash, maxParallel: z.literal(3), maxDelegations: z.literal(3), delegationDepth: z.literal(1), members: z.array(z.object({ id: z.string(), role: z.enum(['frontend', 'backend', 'infrastructure']), taskId: z.string(), paths: z.array(z.string()) })) });
 export const delegationSchema = z.object({ taskId: z.string(), parentId: z.string(), memberId: z.string(), role: z.enum(['frontend', 'backend', 'infrastructure']), goal: z.string(), paths: z.array(z.string()), outputHash: hash, sourceHash: hash });
+/** 宿主检查记录按实际执行追加；分支源码与集成源码分别绑定，不原地覆盖。 */
+export const verificationRecordSchema = z.object({ sequence: z.number().int().positive(), sourceHash: hash, role: roleV2Schema, taskPaths: z.array(z.string()), round: z.number().int().nonnegative(), purpose: z.enum(['tool', 'integration', 'qa']), checks: z.array(commandEvidenceSchema) });
+/** 返工保留失败签名和责任任务；源码变化本身不是进展。 */
+export const repairRecordSchema = z.object({ round: z.number().int().nonnegative(), sourceHash: hash, signature: hash, tasks: z.array(z.string()), noProgress: z.number().int().nonnegative(), kind: z.enum(['code', 'environment', 'business', 'authorization']) });
 export const stateV2Schema = z.object({
+  verificationHistory: z.array(verificationRecordSchema).optional(), repairHistory: z.array(repairRecordSchema).optional(),
+  stopReason: z.enum(['business-decision', 'authorization-required', 'repair-budget', 'verification-budget', 'no-progress']).optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),
   team: teamSchema.optional(), delegations: z.array(delegationSchema).optional(),
   version: z.literal('development-state.v2'), input: inputV2Schema, mode: z.enum(['fixture', 'live']), executionIdentity: executionIdentitySchema,

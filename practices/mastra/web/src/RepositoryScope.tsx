@@ -8,6 +8,9 @@ export function RepositoryScope({ gateHash, busy, submit }: { gateHash: string; 
   const [reviewer, setReviewer] = useState('');
   const [comment, setComment] = useState('');
   const [confirm, setConfirm] = useState(false);
+  const [maxReworks, setMaxReworks] = useState(3);
+  const [maxCheckRuns, setMaxCheckRuns] = useState(24);
+  const [maxNoProgress, setMaxNoProgress] = useState(2);
   // 只读取服务端已授权仓库；不接受浏览器任意路径。
   useEffect(() => {
     const controller = new AbortController(); setConfirm(false); setError(''); setCatalog(undefined);
@@ -21,7 +24,7 @@ export function RepositoryScope({ gateHash, busy, submit }: { gateHash: string; 
     return () => controller.abort();
   }, [revision]);
   /** 确认仅启动上下文、方案与团队规划；不会跳过架构批准直接实施。 */
-  function proceed() { if (catalog) void submit({ gateHash, repositoryScope: { catalogHash: catalog.catalogHash, reviewer, comment } }); }
+  function proceed() { if (catalog) void submit({ gateHash, repositoryScope: { catalogHash: catalog.catalogHash, reviewer, comment, maxReworks, autonomy: { version: 'autonomy.v1', maxCheckRuns, maxNoProgress } } }); }
   if (!catalog) return <section className="intake-card"><h1>确认开发项目</h1><p role="status">{error || '正在关联 HRM 仓库并检查验证环境…'}</p>{error && <button onClick={/** 重试只读检查。 */() => setRevision(revision + 1)}>重新检查</button>}</section>;
   return <section className="intake-card repository-scope"><div className="intake-eyebrow">产品需求已确认 · 交接开发团队</div><h1>确认开发项目</h1><p>你只需确认使用这个项目和代码版本。具体改哪些文件、由哪些开发角色负责，会由开发团队根据已批准需求提出方案。</p>
     {!catalog.available ? <p role="alert">{catalog.reason}</p> : <>
@@ -29,7 +32,11 @@ export function RepositoryScope({ gateHash, busy, submit }: { gateHash: string; 
       <section className="scope-section"><h2>开发团队接下来会做什么？</h2><ol><li>读取已批准的需求、项目规则和当前代码。</li><li>提出实现方案，确定具体文件改动和任务依赖。</li><li>根据任务组建所需角色，再由独立角色检查是否具备开工条件。</li><li>向你展示技术方案、团队和改动范围，确认后才开始实施。</li></ol><p>本次仅在独立候选副本中准备与开发，不直接修改原仓库。检查脚本、依赖清单和锁文件受保护；数据库使用临时测试实例。</p><details><summary>查看项目权限上界</summary><p>允许开发团队在前端页面、后端接口、数据库代码与模型目录内提出文件新增和改动。具体路径必须进入后续架构批准包；不能由 Agent 自行扩大授权。</p></details></section>
       <section className="scope-section"><h2>改动如何验证？</h2><p>验证配置由项目自动关联，不需要你选择测试文件。开发自检和后续独立测试会使用这些固定检查。</p>{catalog.checks.map(/** 显示已登记的验证能力，不冒充当前候选已经测试通过。 */check => <div className="scope-check" key={check.id}><span><strong>{check.title}</strong><code>{check.command}</code><small>{catalog.executionReady ? '已接入隔离执行 · 实际改动后运行并保存证据' : '工程准备完成后执行'}</small></span></div>)}<p role="status">{catalog.executionReason}</p>{!!catalog.preparationIssues?.length && <details open><summary>待完成的工程准备（{catalog.preparationIssues.length} 项）</summary><ul>{catalog.preparationIssues.map(/** 显示服务端实际检测缺口，产品交接不要求用户代建工程。 */issue => <li key={issue}>{issue}</li>)}</ul></details>}<button disabled={busy} onClick={/** 环境变化后只重新检查，不自动提交授权。 */() => setRevision(revision + 1)}>重新检查环境</button></section>
       <label>确认人<input value={reviewer} maxLength={100} onChange={/** 本地标签不代表真实身份认证。 */event => { setReviewer(event.target.value); setConfirm(false); }} /></label><label>交接说明<textarea value={comment} maxLength={2000} placeholder="例如：使用当前 HRM 项目，由开发团队提出实现方案后再确认开工。" onChange={/** 明确保留人类对本次交接的说明。 */event => { setComment(event.target.value); setConfirm(false); }} /></label>
-      {confirm ? <div className="intake-assumptions"><strong>确认使用当前项目，开始生成开发方案？</strong><p>会读取当前代码并调用开发模型分析。{catalog.executionReady ? '方案完成后仍会等待你的确认，不自动实施或发布。' : '当前仅生成方案并列出工程准备事项，不能批准实施或发布。'}</p><button className="primary" disabled={busy} onClick={proceed}>{busy ? '正在生成开发方案…' : '确认项目并继续'}</button><button disabled={busy} onClick={/** 返回不会改变工作流或授权。 */() => setConfirm(false)}>返回检查</button></div> : <button className="primary" disabled={busy || !reviewer.trim() || !comment.trim()} onClick={/** 提交前明确说明实际后果。 */() => setConfirm(true)}>确认项目，交给开发团队规划 →</button>}
+      <fieldset disabled={busy}><legend>自主开发预算</legend><p>批准方案后，团队在授权范围内自主修复与验证。新增业务决定、扩大权限或达到以下上限时需要人工处理；模型调用沿用累计72次额度。</p>
+      <label>最多返工轮数<input type="number" min={0} max={3} value={maxReworks} onChange={/** 预算修改后重新确认。 */e => { setMaxReworks(Number(e.target.value)); setConfirm(false); }} /></label>
+      <label>最多登记检查执行次数<input type="number" min={2} max={96} value={maxCheckRuns} onChange={/** 父子任务、集成复跑共用总次数。 */e => { setMaxCheckRuns(Number(e.target.value)); setConfirm(false); }} /></label>
+      <label>连续无进展返工上限<input type="number" min={1} max={5} value={maxNoProgress} onChange={/** 相同失败再次出现累计无进展次数。 */e => { setMaxNoProgress(Number(e.target.value)); setConfirm(false); }} /></label>
+    </fieldset>{confirm ? <div className="intake-assumptions"><strong>确认使用当前项目，开始生成开发方案？</strong><p>会读取当前代码并调用开发模型分析。{catalog.executionReady ? '方案完成后仍会等待你的确认，不自动实施或发布。' : '当前仅生成方案并列出工程准备事项，不能批准实施或发布。'}</p><button className="primary" disabled={busy} onClick={proceed}>{busy ? '正在生成开发方案…' : '确认项目并继续'}</button><button disabled={busy} onClick={/** 返回不会改变工作流或授权。 */() => setConfirm(false)}>返回检查</button></div> : <button className="primary" disabled={busy || !reviewer.trim() || !comment.trim()} onClick={/** 提交前明确说明实际后果。 */() => setConfirm(true)}>确认项目，交给开发团队规划 →</button>}
     </>}
   </section>;
 }

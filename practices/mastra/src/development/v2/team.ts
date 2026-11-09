@@ -1,3 +1,4 @@
+import { stopAutonomy, reworkState } from './autonomy.js';
 /** 原生 foreach 执行一个依赖波次；每任务独占候选，屏障后校验并合并补丁。
  * ADR: docs/decisions/2026-11-07-mastra-unified-development-team.md
  */
@@ -19,8 +20,8 @@ import { invokeV2 } from './invoke.js';
 import type { ExecutionPort } from './execution-scope.js';
 import type { DevelopmentMethods } from './methods.js';
 
-const jobSchema = z.object({ state: stateV2Schema, task: taskPackageSchema.nullable(), files: z.record(z.string(), z.string()), budget: z.number().int().nonnegative() });
-const resultSchema = z.object({ state: stateV2Schema, taskId: z.string().nullable(), patches: z.record(z.string(), z.string()), calls: z.number(), entry: stateV2Schema.shape.work.element.nullable(), faults: stateV2Schema.shape.faults, failed: z.boolean(), blocker: z.boolean(), delegations: z.array(delegationSchema) });
+const jobSchema = z.object({ state: stateV2Schema, task: taskPackageSchema.nullable(), files: z.record(z.string(), z.string()), budget: z.number().int().nonnegative(), checkBudget: z.number().int().nonnegative().optional() });
+const resultSchema = z.object({ state: stateV2Schema, taskId: z.string().nullable(), patches: z.record(z.string(), z.string()), calls: z.number(), entry: stateV2Schema.shape.work.element.nullable(), faults: stateV2Schema.shape.faults, failed: z.boolean(), blocker: z.boolean(), delegations: z.array(delegationSchema), verificationHistory: stateV2Schema.shape.verificationHistory, stopReason: stateV2Schema.shape.stopReason, blockerKind: z.enum(['business-decision', 'authorization-required']).optional() });
 
 /** 从批准任务派生具名成员，不固定启动所有角色；团队参与批准包 hash。 */
 export function assembleTeam(state: StateV2): NonNullable<StateV2['team']> {
@@ -47,15 +48,20 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
     seedDevelopment(directory, { ...job.state.input, project: { ...job.state.input.project, files: job.files, writablePaths: task.paths } });
     execution = createDevelopmentExecution(resolve(directory, 'candidate'), { ...job.state.input.project, writablePaths: task.paths });
     const branch = execution;
+    let activeExecution: ExecutionPort = branch;
     let calls = 0; let delegates = 0; let queue: Promise<unknown> = Promise.resolve();
     let delegatedBlocker = false;
+    let blockerKind: 'business-decision' | 'authorization-required' | undefined;
     let delegationError: Error | undefined;
     const delegated: NonNullable<StateV2['delegations']> = [];
     /** 每次真实父/子模型调用共用分支预算，不依赖模型自报用量。 */
     async function counted(role: typeof task.role, state: StateV2, paths: string[], extra: unknown, runtime: MemberRuntime) {
       if (calls >= job.budget) throw new Error('团队任务模型预算耗尽');
       calls++;
-      return generate(config, branch, role, state, paths, extra, methods, runtime);
+      const entry = await generate(config, activeExecution, role, state, paths, extra, methods, runtime);
+      if (entry.text.includes('BUSINESS_BLOCKER:')) blockerKind = 'business-decision';
+      if (entry.text.includes('AUTHORIZATION_BLOCKER:')) blockerKind = 'authorization-required';
+      return entry;
     }
     const runtime: MemberRuntime = { memberId: member.id,
       /** 所有子委派串行执行，防止同一父任务内部的文件重叠写入。 */
@@ -83,6 +89,7 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
     };
     /** 外层检查点负责父任务整体回滚，失败不会影响其他并行候选。 */
     const parent: GeneratorV2 = async (_config, _execution, role, state, paths, extra) => {
+      activeExecution = _execution;
       const previousCount = delegated.length;
       try {
         const entry = await counted(role as typeof task.role, state, paths, extra, runtime);
@@ -103,15 +110,16 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
         queue = Promise.resolve();
         delegated.splice(previousCount);
         delegatedBlocker = false;
+        blockerKind = undefined;
         delegationError = undefined;
         throw error;
       }
     };
-    const called = await invokeV2(config, branch, task.role, job.state, task.paths, { ...task, findings: unresolvedV2(job.state) }, methods, parent);
+    const called = await invokeV2(config, branch, task.role, job.state, task.paths, { ...task, findings: unresolvedV2(job.state) }, methods, parent, undefined, job.checkBudget);
     const patches: Record<string, string> = {};
     if (called.entry) for (const path of task.paths) patches[path] = await branch.readFile(path);
     const faults = called.state.faults.slice(job.state.faults.length);
-    return { state: job.state, taskId: task.id, patches, calls, entry: called.entry, faults, failed: !called.entry, blocker: (called.entry?.text.includes('ARCHITECTURE_BLOCKER:') ?? false) || delegatedBlocker, delegations: called.entry ? delegated : [] };
+    return { state: job.state, taskId: task.id, patches, calls, entry: called.entry, faults, failed: !called.entry, blocker: (called.entry?.text.includes('ARCHITECTURE_BLOCKER:') ?? false) || delegatedBlocker, delegations: called.entry ? delegated : [], verificationHistory: called.state.verificationHistory?.slice(job.state.verificationHistory?.length ?? 0), stopReason: called.state.stopReason, blockerKind };
   } finally { if (execution) await execution.close(); rmSync(temporary, { recursive: true, force: true }); }
 }
 
@@ -139,12 +147,13 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
           (id) => state.completedTasks.includes(id),
         ),
       ).slice(0, capacity);
+      const checkBudget = state.input.autonomy ? Math.floor(Math.max(0, state.input.autonomy.maxCheckRuns - (state.verificationHistory?.length ?? 0) - 2) / ready.length) : undefined;
       if (!ready.length) throw new Error('团队任务图没有可执行节点');
       const files: Record<string, string> = {};
       for (const path of Object.keys(await execution.snapshot())) files[path] = await execution.readFile(path);
       return ready.map(
         // 每分支最多8次父子模型调用，聚合后全Run仍不超过72次。
-        (task) => ({ state, task, files, budget: 8 }),
+        (task) => ({ state, task, files, budget: 8, checkBudget }),
       );
     },
   });
@@ -182,11 +191,14 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
       const next = { ...state, calls: state.calls + results.reduce(
         // 计数包含动态子成员，不只计算父Agent调用。
         (sum, result) => sum + result.calls, 0,
-      ), checkpointHash: developmentHash(await execution.snapshot()), completedTasks: [...state.completedTasks], work: [...state.work], faults: [...state.faults], delegations: [...(state.delegations ?? [])] };
+      ), checkpointHash: developmentHash(await execution.snapshot()), completedTasks: [...state.completedTasks], work: [...state.work], faults: [...state.faults], delegations: [...(state.delegations ?? [])], verificationHistory: [...(state.verificationHistory ?? [])] };
       for (const result of results) {
+        for (const record of result.verificationHistory ?? []) next.verificationHistory.push({ ...record, sequence: next.verificationHistory.length + 1 });
         if (result.entry) { next.completedTasks.push(result.taskId!); next.work.push(result.entry); next.delegations.push(...result.delegations); }
         for (const fault of result.faults) next.faults.push({ ...fault, sequence: next.faults.length + 1 });
       }
+      const stopped = results.find(/** 分支额度耗尽或明确业务/权限阻塞不能当作普通模型故障重试。 */result => result.stopReason || (next.input.autonomy && result.blockerKind));
+      if (stopped) return stopAutonomy(next, stopped.stopReason ?? stopped.blockerKind!);
       const failed = results.find(
         // 已成功分支持久化完成；人工接续只派发失败任务。
         (result) => result.failed,
@@ -202,8 +214,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
         // 任一实现成员遇到契约阻塞即重规划，不能继续自检交付。
         (result) => result.blocker,
       )) {
-        if (next.round >= next.input.maxReworks) return { ...next, outcome: 'rework-exhausted' as const };
-        return { ...next, round: next.round + 1, phase: 'prepare-context' as const, route: 'architecture' as const, context: null, plan: null, planHash: null, approvedHash: null, approvalHash: null, readiness: null, team: undefined, completedTasks: [], checks: [], checkedSourceHash: null };
+        return reworkState(next, 'architecture', 'prepare-context');
       }
       const complete = next.plan!.tasks.every(
         // 仅全部批准任务完成后进入整体自检。

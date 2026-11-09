@@ -1,3 +1,4 @@
+import { reworkState, stopAutonomy, runVerification, VerificationBudgetError } from '../../development/v2/autonomy.js';
 /** 版本化受限开发流水线；阶段状态由原生dountil/suspend保存，终态只由交付门写入。 */
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
@@ -16,21 +17,9 @@ import { assembleTeam, createTeamExecution } from '../../development/v2/team.js'
 import type { ExecutionPort } from '../../development/v2/execution-scope.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 
-/** 有界业务返工；总次数不因架构重新规划而重置。 */
+/** 与团队和独立测试共用同一返工策略；保留既有公开入口。 */
 export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], phase: StateV2['phase']): StateV2 {
-  if (state.round >= state.input.maxReworks) return { ...state, outcome: 'rework-exhausted' };
-  const invalid = new Set<string>();
-  for (const task of state.plan?.tasks ?? []) {
-    // 已拓扑排序，重新执行责任任务及依赖其输出的下游任务。
-    if (route === 'architecture' || task.role === route || task.dependsOn.some(
-      // 上游重做会使下游已完成证据失效。
-      (id) => invalid.has(id),
-    )) invalid.add(task.id);
-  }
-  return { ...state, round: state.round + 1, route, phase, completedTasks: state.completedTasks.filter(
-    // 独立任务保持完成证据，避免并行返工重放无关变更。
-    (id) => !invalid.has(id),
-  ), checks: [], checkedSourceHash: null, ...(route === 'architecture' ? { plan: null, planHash: null, approvedHash: null, approvalHash: null, readiness: null, context: null, team: undefined } : {}) };
+  return reworkState(state, route, phase);
 }
 
 /** 与v1隔离的原生步骤，复用执行Adapter；评测自动批准仅接受明确合成来源。 */
@@ -167,12 +156,12 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     },
   });
   const approve = createStep({ id: 'approve-architecture', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
-    suspendSchema: z.object({ hash: z.string(), plan: planV2Schema, readiness: assessmentSchema, contextHash: z.string(), methodBundleHash: z.string(), team: stateV2Schema.shape.team }), resumeSchema: approvalV2Schema,
+    suspendSchema: z.object({ hash: z.string(), plan: planV2Schema, readiness: assessmentSchema, contextHash: z.string(), methodBundleHash: z.string(), team: stateV2Schema.shape.team, executionBudget: z.object({ maxReworks: z.number(), maxCalls: z.number(), autonomy: inputV2Schema.shape.autonomy }).optional() }), resumeSchema: approvalV2Schema,
     // 正式运行在原生暂停点等待对整个包的人工确认。
     execute: async ({ inputData, resumeData, suspend }) => {
       if (!active(inputData, 'approve-architecture')) return inputData;
       await guard(inputData); assertApprovalV2(inputData);
-      if (!resumeData && !evaluationPolicy) return suspend({ hash: inputData.approvalHash!, plan: inputData.plan!, readiness: inputData.readiness!.assessment, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hash, team: inputData.team });
+      if (!resumeData && !evaluationPolicy) return suspend({ hash: inputData.approvalHash!, plan: inputData.plan!, readiness: inputData.readiness!.assessment, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hash, team: inputData.team, executionBudget: { maxReworks: inputData.input.maxReworks, maxCalls: inputData.maxCalls, autonomy: inputData.input.autonomy } });
       const review = resumeData ?? { hash: inputData.approvalHash!, decision: 'approve' as const, reviewer: 'evaluation-organizer-policy', comment: '仅隔离fixture自动执行，不代表业务批准', resolutions: [] };
       if (review.hash !== inputData.approvalHash) throw new Error('v2批准包版本不匹配');
       if (review.resolutions.length) throw new Error('方案批准不能处理交付评审发现');
@@ -191,6 +180,8 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         const called = await invokeV2(config, execution, task.role, state, task.paths, { ...task, findings: unresolvedV2(state) }, methods, generate);
         if (!called.entry) return called.state;
         state = { ...called.state, work: [...called.state.work, called.entry], completedTasks: [...called.state.completedTasks, task.id] };
+        if (state.input.autonomy && called.entry.text.includes('BUSINESS_BLOCKER:')) return stopAutonomy(state, 'business-decision');
+        if (state.input.autonomy && called.entry.text.includes('AUTHORIZATION_BLOCKER:')) return stopAutonomy(state, 'authorization-required');
         if (called.entry.text.includes('ARCHITECTURE_BLOCKER:')) return reworkDevelopmentV2(state, 'architecture', 'prepare-context');
       }
       return { ...state, phase: 'development-self-check' as const };
@@ -203,13 +194,17 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       await guard(inputData);
       const called = await invokeV2(config, execution, 'self-check', inputData, [], null, methods, generate);
       if (!called.entry) return called.state;
-      const checks = await execution.runChecks();
-      await guard(called.state);
-      const state = { ...called.state, checks, checkedSourceHash: called.state.checkpointHash, work: [...called.state.work, called.entry] };
+      let verified;
+      try { verified = await runVerification(execution, called.state, 'self-check', [], 'integration'); }
+      catch (error) { if (error instanceof VerificationBudgetError) return stopAutonomy(called.state, 'verification-budget'); throw error; }
+      const checks = verified.checks;
+      await guard(verified.state);
+      const state = { ...verified.state, checks, checkedSourceHash: called.state.checkpointHash, work: [...called.state.work, called.entry] };
       if (!checksPassedV2(state)) {
         let route: StateV2['route'] = 'human';
-        try { route = z.object({ route: z.enum(['frontend', 'backend', 'infrastructure', 'architecture', 'human']) }).parse(parseDevelopmentJson(called.entry.text)).route; } catch { /* 未知归属升级人工。 */ }
-        if (route === 'human' || (route !== 'architecture' && !state.input.project.roles.includes(route))) return { ...state, outcome: 'manual-attention' as const };
+        try { route = z.object({ route: z.enum(['frontend', 'backend', 'infrastructure', 'architecture', 'human']) }).parse(parseDevelopmentJson(called.entry.text)).route; } catch { /* 新政策回批准团队定位，历史政策保留人工路由。 */ }
+        if (state.input.autonomy && (route === 'human' || (route !== 'architecture' && !state.input.project.roles.includes(route)))) route = 'all';
+        if (route === 'human' || (route !== 'architecture' && route !== 'all' && !state.input.project.roles.includes(route))) return { ...state, outcome: 'manual-attention' as const };
         return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement');
       }
       return { ...state, phase: 'review-code' as const };
@@ -260,7 +255,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       const findings = unresolvedV2(inputData);
       if (findings.length) {
         const routes = new Set(findings.map(
-          // 多责任问题保守返回人工，避免隐式选择遗漏责任。
+          // 新政策联合修复多责任任务；历史政策仍保留人工裁决。
           (finding) => finding.route,
         ));
         const route = findings.some(
@@ -269,13 +264,14 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         ) ? 'product' : findings.some(
           // 真实完整性问题直接停止人工处理。
           (finding) => finding.category === 'integrity',
-        ) ? 'human' : routes.size === 1 ? [...routes][0] : 'human';
+        ) ? 'human' : routes.has('architecture') ? 'architecture' : routes.size === 1 && !routes.has('human') ? [...routes][0] : inputData.input.autonomy ? 'all' : 'human';
         const decision = route === 'product' ? 'clarify' as const : route === 'architecture' ? 'replan' as const : route === 'human' ? 'stop' as const : 'rework' as const;
         const state = { ...inputData, gates: [...inputData.gates, { decision, reasons: findings.map(
           // 完整保存所有未解决发现ID。
           (finding) => finding.id,
         ), sourceHash: inputData.checkpointHash, reportHash: latest.hash }] };
-        if (route === 'product') return { ...state, outcome: 'clarification-required' as const };
+        if (route === 'product') return state.input.autonomy ? stopAutonomy(state, 'business-decision') : { ...state, outcome: 'clarification-required' as const };
+        if (route === 'human' && state.input.autonomy && findings.some(/** 完整性异常不得当作可修复代码问题。 */finding => finding.category === 'integrity')) return stopAutonomy(state, 'authorization-required');
         if (route === 'human') return { ...state, phase: 'resolve-findings' as const, outcome: findings.some(
           // 完整性问题不提供接受风险后通过的旁路。
           (finding) => finding.category === 'integrity',

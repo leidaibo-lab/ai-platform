@@ -1,3 +1,4 @@
+import { autonomyPolicySchema } from '../development/v2/contracts.js';
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
 import type { PracticeConfig } from '../mastra/config.js';
 import { registerApiRoute, type ContextWithMastra } from '@mastra/core/server';
@@ -112,11 +113,11 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
           let input = await c.req.json();
           if (input.data?.project?.executionProfile && !input.repositoryScope) throw new GateInputError('全栈项目必须通过已关联仓库确认，不能从页面传入源码或执行档');
           if (input.repositoryScope) {
-            const selection = z.object({ catalogHash: z.string().length(64), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) }).parse(input.repositoryScope);
+            const selection = z.object({ catalogHash: z.string().length(64), maxReworks: z.number().int().min(0).max(3).optional(), autonomy: autonomyPolicySchema.optional(), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) }).parse(input.repositoryScope);
             let project;
             try { project = assembleRepositoryProject(repositoryRoot, selection.catalogHash); }
             catch (error) { throw new GateInputError(error instanceof Error ? error.message : '仓库配置不可用'); }
-            input = { gateHash: input.gateHash, data: { project, reviewer: selection.reviewer, comment: selection.comment, maxReworks: 1 } };
+            input = { gateHash: input.gateHash, data: { project, reviewer: selection.reviewer, comment: selection.comment, maxReworks: selection.maxReworks ?? 1, autonomy: selection.autonomy } };
           }
           return c.json(await respondIntake(workflow, mode, id, input, config));
         } catch (error) { return failure(c, error); }
