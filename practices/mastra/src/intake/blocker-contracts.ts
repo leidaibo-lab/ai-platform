@@ -1,12 +1,16 @@
 import { remoteHandoffSchema } from '../delivery/remote-handoff.js';
 /** 开发阻塞澄清契约；原稿、问题建议、人工答案与新稿审批分别保存。 */
 import { z } from 'zod';
-import { planSchema, answerSchema } from './contracts.js';
+import { planSchema, answerSchema, questionDecisionSchema } from './contracts.js';
 import { stateV2Schema, inputV2Schema, type StateV2 } from '../development/v2/contracts.js';
 import { artifactSchema, deliverySchema } from '../mastra/workflows/delivery.js';
 import { developmentHash } from '../development/contracts.js';
-export const blockerQuestionSchema = planSchema.shape.questions.element.extend({ blockerIds: z.array(z.string()).min(1).max(20) });
+export const blockerQuestionSchema = planSchema.shape.questions.element.extend({ blockerIds: z.array(z.string()).max(20) });
 export const blockerPlanSchema = planSchema.safeExtend({ questions: z.array(blockerQuestionSchema).max(16) });
+/** 新开发澄清必须解释开工影响；兼容历史卡片时不虚构依据。 */
+export const generatedBlockerPlanSchema = blockerPlanSchema.safeExtend({ questions: z.array(blockerQuestionSchema.extend({ decision: questionDecisionSchema })).max(16) }).superRefine(/** 阻塞与卡片关联不可降级；可选项只能是额外细节。 */(plan, context) => {
+  for (const question of plan.questions) if (question.decision.blocks === 'product' || (question.blockerIds.length > 0 && !question.required) || (question.required && !question.blockerIds.length)) context.addIssue({ code: 'custom', message: '开发问题分类与阻塞来源不一致' });
+});
 export const blockerAnswerSchema = z.object({ hash: z.string().length(64), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(16), supplement: z.string().trim().max(4000) });
 export const revisedProductReviewSchema = z.object({ hash: z.string().length(64), decision: z.enum(['approve', 'revise', 'stop']), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) });
 export const blockerCycleSchema = z.object({ repositoryHandoff: remoteHandoffSchema.optional(),
@@ -32,7 +36,11 @@ export function developmentBlockers(state: StateV2): string[] {
 export function validateBlockerPlan(plan: z.infer<typeof blockerPlanSchema>, state: BlockerCycle): void {
   const ids = new Set(state.business.map(/** 原始阻塞作为唯一覆盖集合。 */item => item.id));
   const covered = new Set<string>();
-  for (const question of plan.questions) { if (!question.required) throw new Error('业务阻塞必须显式回答'); for (const id of question.blockerIds) { if (!ids.has(id)) throw new Error('问题引用未知阻塞'); covered.add(id); } }
+  for (const question of plan.questions) {
+    if (question.blockerIds.length && !question.required) throw new Error('业务阻塞必须显式回答');
+    if (question.required && !question.blockerIds.length) throw new Error('必答问题缺少业务阻塞依据');
+    for (const id of question.blockerIds) { if (!ids.has(id)) throw new Error('问题引用未知阻塞'); covered.add(id); }
+  }
   if (covered.size !== ids.size) throw new Error('问题卡片遗漏业务阻塞');
 }
 /** 绑定当前产品、方案与问题；工程资料观察也参与版本，避免旧表单污染新稿。 */

@@ -72,6 +72,7 @@ export function unresolvedV2(state: StateV2) {
 
 /** 人工批准只针对当前绑定包，确定性结构与FAIL不提供评论绕过。 */
 export function assertApprovalV2(state: StateV2): void {
+  if (state.input.project.preparationIssues?.length) throw new Error('工程准备未完成，请补齐后重新确认项目，当前方案不能批准实施');
   if (!state.plan || !state.readiness || state.readiness.assessment.verdict !== 'PASS' || state.approvalHash !== approvalHashV2(state)) throw new Error('当前方案包未就绪或批准绑定无效');
 }
 

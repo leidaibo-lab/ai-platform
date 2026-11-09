@@ -14,6 +14,15 @@ export const repositoryRetrySchema = z.object({ repositoryRetry: z.string().rege
 export const repositorySyncPauseSchema = z.object({ kind: z.literal('repository-sync'), mode: z.enum(['fixture', 'live']), retryKey: z.string().regex(/^[a-f0-9]{64}$/), stage: z.string(), reason: z.string() });
 export type RemoteHandoff = z.infer<typeof remoteHandoffSchema>;
 
+/** 资料读取边界只公开固定故障码，不泄露 Git 输出、路径或原文。 */
+export class HandoffReadError extends Error {
+  /** 故障码供生成 Adapter 分类，调用方不能用它绕过版本或散列检查。 */
+  constructor(readonly code: 'HANDOFF_VERSION_UNAVAILABLE' | 'HANDOFF_HASH_MISMATCH' | 'HANDOFF_FILE_UNREGISTERED') {
+    super(code === 'HANDOFF_VERSION_UNAVAILABLE' ? '交付版本不可读取' : code === 'HANDOFF_HASH_MISMATCH' ? '交付内容散列不一致' : '未登记的交付文件');
+    this.name = 'HandoffReadError';
+  }
+}
+
 /** 只生成内容标识，不接受任意路径作为缓存文件名。 */
 export function contentHash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
 
@@ -114,11 +123,11 @@ export async function publishHandoff(root: string, runId: string, files: Record<
 /** 只读取回执登记的固定 commit 文件，并核对 SHA256，拒绝任意 Git 表达式。 */
 export function readHandoffFile(root: string, value: RemoteHandoff, path: string): string {
   const receipt = remoteHandoffSchema.parse(value);
-  if (!Object.hasOwn(receipt.files, path)) throw new Error('未登记的交付文件');
+  if (!Object.hasOwn(receipt.files, path)) throw new HandoffReadError('HANDOFF_FILE_UNREGISTERED');
   // blob 保留原始换行；git 辅助函数只用于行式元数据。
   let content: string;
   try { content = execFileSync('git', ['-C', root, 'show', `${receipt.commit}:${path}`], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] }); }
-  catch { throw new Error('交付版本不可读取'); }
-  if (contentHash(content) !== receipt.files[path]) throw new Error('交付内容散列不一致');
+  catch { throw new HandoffReadError('HANDOFF_VERSION_UNAVAILABLE'); }
+  if (contentHash(content) !== receipt.files[path]) throw new HandoffReadError('HANDOFF_HASH_MISMATCH');
   return content;
 }

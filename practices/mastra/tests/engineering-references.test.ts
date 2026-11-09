@@ -23,6 +23,12 @@ test('关联决策和归档文档、保留Git观察，不读.env或凭据文件�
     writeFileSync(join(directory, 'docs/delivery-assets.md'), '# 修改后的合成资产规则');
     const dirty = JSON.parse(readEngineeringReferences(directory).files['engineering/repository-observation.json']!);
     assert.deepEqual(dirty.sourceStatus, [' M docs/delivery-assets.md']);
+    // 超过旧40份/500000字节门槛仍可关联，后续按需读取由Agent负责。
+    for (let i = 0; i < 45; i++) writeFileSync(join(directory, `docs/decisions/extra-${i}.md`), '合成工程依据'.repeat(800));
+    git(['add', 'docs/decisions']);
+    const large = readEngineeringReferences(directory);
+    assert.match(large.note, /47份工程文档/);
+    assert.ok(Buffer.byteLength(JSON.stringify(large.files)) > 500000);
     symlinkSync(join(directory, 'docs/delivery-assets.md'), join(directory, 'docs/decisions/link.md')); git(['add', 'docs/decisions/link.md']);
     assert.throws(/** 不沿链接读取任何目标。 */() => readEngineeringReferences(directory), /符号链接/);
   } finally { rmSync(directory, { recursive: true, force: true }); }

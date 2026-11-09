@@ -8,6 +8,7 @@ import { revisionSourceSchema } from './revision.js';
 import { maxProductReworks, productReworkSchema, productWorkSchema } from './product-contract.js';
 import { createProductWorkflow } from './product.js';
 import { correlationSchema } from '../../delivery/asset-identity.js';
+import { maxContextBudgetLevel } from '../../delivery/context-budget.js';
 
 export const stageSchema = z.enum(['product', 'development', 'testing', 'operations']);
 export type Stage = z.infer<typeof stageSchema>;
@@ -31,6 +32,7 @@ export const deliverySchema = z.object({
   revision: revisionSourceSchema.optional(),
   productWork: productWorkSchema.optional(),
   productRework: productReworkSchema.optional(),
+  contextBudgetLevel: z.number().int().min(0).max(maxContextBudgetLevel).optional(),
   artifacts: z.array(artifactSchema).max(4),
   reviews: z.array(reviewSchema).max(4),
   outcome: z.enum(['in-progress', 'rejected', 'rework-requested', 'plan-approved']),

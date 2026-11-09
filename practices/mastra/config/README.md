@@ -37,13 +37,17 @@
 | `chunks.pageSize` | 每次返回片段目录数量 | 12 |
 | `chunks.previewChars` | 每片预览，不是业务摘要 | 80 |
 | `chunks.responseBytes` | 单次目录条目字节上限 | 12000 |
-| `budget.materialBytes` | 大于此值的材料折叠为引用 | 3000 |
-| `budget.inlineBytes` / `readBytes` / `providerBytes` | 初始目录 / 累计读取 / 模型消息字节上限 | 24000 / 48000 / 96000 |
-| `budget.readChars` | 单次正文读取字符上限 | 6000 |
-| `budget.multiplier` / `maxLevel` | 每次确认扩容倍率 / 最高等级（历史恢复契约固定，不能单独调整） | 2 / 4 |
+| `reading.materialBytes` | 大于此值的材料折叠为引用 | 3000 |
+| `reading.readChars` | 单次正文读取字符上限 | 6000 |
 
-只调整分片参数就能改变读取方式，无需改Agent或Workflow。更换算法时修改`src/delivery/material-chunks.ts`，保持`offset/end/bytes/preview`契约；它不访问文件、不调用模型、不改审批。任务资料注册和工具适配由`task-context.ts`负责，预算故障与等级计算由`context-budget.ts`负责，暂停/确认仍由原生Workflow负责。配置不得扩大读取目录或写权限。
+只调整分片参数就能改变读取方式，无需改Agent或Workflow。更换算法时修改`src/delivery/material-chunks.ts`，保持`offset/end/bytes/preview`契约；它不访问文件、不调用模型、不改审批。任务资料注册和工具适配由`task-context.ts`负责，执行上下文由`src/mastra/context-memory.ts`装配原生 Memory；`context-budget.ts`仅保留历史故障Schema与旧档位字段兼容，不再执行预算门槛。暂停/确认仍由原生Workflow负责。配置不得扩大读取目录或写权限。
 
 调用示例：先`handoff_locate({id, query:"权限"})`，从返回片段选取相关范围，调用`handoff_read({id, offset, length:end-offset})`；有`nextCursor`时可继续定位。有跨片段关键词时同时读取相邻片段。必要的完整核对仍应顺序读取全部相关片段，不能凭关键词未命中或预览声称已核实。
 
-目录预览也消耗累计资料预算，所有工具历史仍受模型消息预算检查。分片降低无关正文读取，不会使累计读取或模型上下文无限增长；必须读完的材料仍超过容量时，现有入口是确认增加资料预算。跨模型调用持久保存逐批核对结果再综合尚未实现，不能仅追加调用次数宣称已解决。
+目录预览与正文不再消耗累计资料额度，初始目录和模型消息不再按UTF-8字节阻断。保留分页、单次返回大小及固定版本引用，避免默认展开无关资料。
+
+## 原生上下文配置
+
+`src/mastra/context-memory.ts`是角色 Memory 的唯一装配入口，使用 Mastra 原生观察、反思与上下文溢出恢复。默认同步观察阈值为24000消息token，反思阈值为12000观察token，估算由框架完成；无需资料升档确认。Observer/Reflector沿用当前角色模型与出口。每次执行的宿主UUID隔离thread/resource，失败重试从保存输入重新开始，不将失败片段带入新执行。fixture保持离线，独立原生Mock用例验证压缩与隔离。原始消息属于Mastra Store，不代替Workflow批准事实。
+
+这些阈值不代表上游窗口的精确容量，压缩也不保证零信息损失；首次系统提示或单条输入过大、provider不兼容、观察模型失败仍可能使当前调用失败。应核实实际模型窗口及长材料业务质量，不通过恢复资料字节门槛掩盖问题。

@@ -21,7 +21,7 @@ function paused(result: any): { path: string[]; payload: any } {
 }
 
 // 每个暂停点关闭Store再装配，验证原生快照续跑而非内存闭包。
-for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-fixed', 'browser-success', 'browser-failure']) {
+for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
   test(`完整产研主链与跨Store恢复：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'mastra-unified-'));
     const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
@@ -38,6 +38,11 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
           return { ...entry, text: JSON.stringify(assessment) };
         };
         options.workflows.productDevelopmentWorkflow = createProductDevelopmentWorkflow(options.agents as any, config, generate);
+      }
+      if (scenario === 'test-plan-incomplete' || scenario === 'release-plan-incomplete') {
+        const agent = scenario === 'test-plan-incomplete' ? options.agents.testingAgent : options.agents.operationsAgent;
+        // 模拟原生压缩或模型调用中断仍带部分文本，不能进入人工批准。
+        agent.generate = (async () => ({ text: '部分计划', finishReason: 'other' })) as any;
       }
       new Mastra(options); await options.storage.init();
       return { workflow: options.workflows.productDevelopmentWorkflow, storage: options.storage };
@@ -69,6 +74,11 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
         }
         await app.storage.close(); app = await open(); run = await app.workflow.createRun({ runId });
         result = await run.resume({ step: pending.path, resumeData: data });
+      }
+      if (scenario === 'test-plan-incomplete' || scenario === 'release-plan-incomplete') {
+        assert.equal(result.status, 'failed');
+        assert.equal(visited.includes(scenario === 'test-plan-incomplete' ? 'approve-test-cases' : 'approve-release-scope'), false);
+        return;
       }
       if (['stale-release', 'wrong-artifact', 'missing-health'].includes(scenario)) { assert.equal(result.status, 'failed'); return; }
       if (scenario === 'stale-product') { assert.equal(result.status, 'failed'); assert.deepEqual(visited, ['review-product']); return; }

@@ -1,4 +1,3 @@
-import { contextBudgetLimits, maxContextBudgetLevel } from '../delivery/context-budget.js';
 import { repositoryRetrySchema, repositorySyncPauseSchema } from '../delivery/remote-handoff.js';
 /** 业务关口白名单：复用已有 Zod 契约，不接受客户端指定步骤或执行命令。 */
 import { z } from 'zod';
@@ -35,26 +34,24 @@ const faultReasons: Record<string, string> = { 'model-timeout': '模型未在规
 function recoveryGuidance(payload: GatePayload) {
   const phase = phaseNames[payload.phase] ?? '开发阶段';
   const contextPause = payload.kind === 'context-budget';
-  const level = payload.recoveryState?.contextBudgetLevel ?? 0;
-  const nextLevel = contextPause && level < maxContextBudgetLevel ? level + 1 : undefined;
-  const limits = contextBudgetLimits(level); const nextLimits = contextBudgetLimits(nextLevel ?? level);
   const exhausted = payload.kind === 'call-budget' || (payload.recoveryState && payload.recoveryState.calls >= payload.recoveryState.maxCalls);
-  const contextNext = nextLevel !== undefined ? `确认后资料读取上限从${limits.readBytes / 1000}KB提高到${nextLimits.readBytes / 1000}KB，消息上下文从${limits.providerBytes / 1000}KB提高到${nextLimits.providerBytes / 1000}KB，目录从${limits.inlineBytes / 1000}KB提高到${nextLimits.inlineBytes / 1000}KB；仅重新执行当前阶段，已完成任务不重做。` : '当前资料预算已达本地上限。可在缩小资料或任务范围后按当前上限重试，或停止本轮；不保证上游模型能够接受全部材料。';
-  const reason = (contextPause ? ({ read: '本阶段可读取的资料量达到上限', provider: '本阶段发送给模型的上下文达到上限', catalog: '本阶段资料目录达到上限' }[payload.budget?.resource as 'read' | 'provider' | 'catalog'] ?? '本阶段资料预算不足') : undefined) ?? (payload.kind === 'call-budget' ? '自动调用额度已用完，请确认追加额度后继续' : undefined) ?? faultReasons[payload.kind] ?? '该阶段执行未完成';
-  const after: Record<string, string> = { 'prepare-context': '分析完成后继续生成技术方案，方案仍需确认后才实施。', architecture: '方案生成后仍需确认，才会开始实施。', 'assess-readiness': '检查完成后继续展示待决问题或方案批准。', implement: '只重新派发未完成任务，已成功任务不重做；实现完成后进入开发自检。', 'development-self-check': '重新执行自检分析和固定检查，通过后进入独立代码评审。', 'review-code': '只重新执行评审，不重做已完成的实现；评审问题仍按流程处理。' };
+  const contextNext = '资料预算门槛已移除；直接重试当前阶段，执行上下文由 Mastra 原生观察记忆管理，已完成任务不重做。';
   const modelCall = modelCallDiagnosticSchema.safeParse(payload.modelCall);
+  const finishReasons: Record<string, string> = { 'tool-step-limit': '资料读取达到工具步骤上限，尚未生成最终结果', 'output-length': '模型输出被长度上限截断', 'content-filter': '模型输出被安全规则阻断', 'model-finish': '模型提前结束，结果未完成' };
+  const reason = contextPause ? '历史资料预算限制中断了执行' : payload.kind === 'call-budget' ? '自动调用额度已用完，请确认追加额度后继续' : (modelCall.success ? finishReasons[modelCall.data.failure.source] : undefined) ?? faultReasons[payload.kind] ?? '该阶段执行未完成';
+  const after: Record<string, string> = { 'prepare-context': '分析完成后继续生成技术方案，方案仍需确认后才实施。', architecture: '方案生成后仍需确认，才会开始实施。', 'assess-readiness': '检查完成后继续展示待决问题或方案批准。', implement: '只重新派发未完成任务，已成功任务不重做；实现完成后进入开发自检。', 'development-self-check': '重新执行自检分析和固定检查，通过后进入独立代码评审。', 'review-code': '只重新执行评审，不重做已完成的实现；评审问题仍按流程处理。' };
   const history = payload.recoveryState?.faults ?? [];
   const attemptDetails = history.filter(/** 只展示当前阶段最近的脱敏记录。 */(fault: GatePayload) => fault.phase === payload.phase && modelCallDiagnosticSchema.safeParse(fault.modelCall).success).slice(-8).map(/** 原生记录已保存实际尝试次序。 */(fault: GatePayload) => describeModelCall(modelCallDiagnosticSchema.parse(fault.modelCall), fault.attempt));
   if (!attemptDetails.length && modelCall.success) attemptDetails.push(describeModelCall(modelCall.data));
   return { title: `${phase}未完成`, phase, reason, attemptDetails,
     description: `${reason}，流程已暂停，等待你决定是否重试。`,
     preserved: '已确认的产品需求、项目配置和成功任务检查点已保留，无需重新填写。',
-    budgetUsage: contextPause ? `当前资料预算档位 ${level} / ${maxContextBudgetLevel}；${payload.budget ? `触限请求 ${payload.budget.usedBytes} 字节，上限 ${payload.budget.limitBytes} 字节。` : ''}` : payload.recoveryState ? `模型角色调用已用 ${payload.recoveryState.calls} / ${payload.recoveryState.maxCalls} 次。` : undefined,
-    additionalContextLevel: nextLevel,
+    budgetUsage: payload.recoveryState ? `模型角色调用已用 ${payload.recoveryState.calls} / ${payload.recoveryState.maxCalls} 次。` : undefined,
+    additionalContextLevel: undefined,
     next: contextPause ? contextNext + (exhausted ? ' 同时需要追加模型调用额度。' : '') : payload.kind === 'call-budget' ? `确认后按下方填写数量追加角色调用额度，继续${phase}；累计消费和已完成任务保留，不扩大文件权限或跳过审批。` : `建议先重试${phase}。${after[payload.phase] ?? '重新调用该阶段所需的模型，成功后才继续。'}`,
-    additionalCalls: exhausted ? 72 : undefined, retryLabel: contextPause ? (nextLevel !== undefined ? '补充资料预算并继续' : '按当前资料上限重试') : payload.kind === 'call-budget' ? '补充调用额度并继续' : `重试${phase}`, stopLabel: '停止本轮流程',
+    additionalCalls: exhausted ? 72 : undefined, retryLabel: payload.kind === 'call-budget' ? '补充调用额度并继续' : `重试${phase}`, stopLabel: '停止本轮流程',
     stopImpact: '停止后保留已有记录，本轮不再自动推进。',
-    limit: '每轮最多自动尝试5次，连续失败后暂停等待处理；你可以再次继续，不会仅因次数用完而结束需求。' };
+    limit: '仅超时或临时连接故障每轮最多自动尝试5次；工具步数耗尽、输出校验等失败直接暂停。你可以从保存的检查点继续。' };
 }
 /** 服务端生成只读绑定值，不让用户手工抄写版本与发布标识。 */
 export function gateInitial(key: string, payload: GatePayload) {

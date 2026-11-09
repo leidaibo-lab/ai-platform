@@ -32,6 +32,11 @@ export function readRepositoryCatalog(directory?: string) {
   const catalog = { id: 'hrm', title: 'HRM 人资管理系统', branch, revision, modules: [...areas, { id: 'shared', title: '公共配置与说明', role: 'infrastructure' }].map(/** 模块数量由本次真实文件清单计算。 */area => ({ ...area, count: files.filter(/** 不把其他模块文件计入当前模块。 */file => file.area === area.id).length })), files, checks };
   let dockerReady = false;
   try { execFileSync('docker', ['--context', 'desktop-linux', 'info', '--format', '{{.ServerVersion}}'], { stdio: 'ignore', timeout: 3000 }); dockerReady = true; } catch { /* 没有隔离后端时不回退到宿主执行。 */ }
-  const complete = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/web/package.json', 'apps/api/package.json', 'packages/database/package.json', 'scripts/smoke.mjs'].every(/** 固定执行档依赖完整且版本明确的工程配置。 */path => files.some(/** 仅已验证普通文件算作配置存在。 */file => file.path === path)) && manifest.packageManager === 'pnpm@10.6.0';
-  return { available: true as const, ...catalog, catalogHash: developmentHash(catalog), executionReady: dockerReady && complete, executionReason: !complete ? '项目配置不完整或pnpm版本不匹配，请补齐工作区、锁文件及固定检查脚本。' : dockerReady ? '已接入独立 Docker 验证：类型检查、构建和临时页面/API/数据库连通检查。' : 'Docker Desktop 尚未就绪，请启动后重新检查；不会降级为宿主执行。' };
+  const missingFiles = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/web/package.json', 'apps/api/package.json', 'packages/database/package.json', 'scripts/smoke.mjs'].filter(/** 仅安全清单内的普通文件算作执行配置存在。 */path => !files.some(/** 复用已读取清单，避免绕过链接及大小检查。 */file => file.path === path));
+  const preparationIssues = missingFiles.map(/** 逐项说明真实工程缺口，不把未建项目误报为版本错误。 */path => `缺少可读取的工程文件：${path}`);
+  if (manifestFile && manifest.packageManager !== 'pnpm@10.6.0') preparationIssues.push('package.json 需要声明 packageManager 为 pnpm@10.6.0');
+  if (manifestFile) for (const key of ['check', 'build', 'smoke']) if (typeof manifest.scripts?.[key] !== 'string' || !manifest.scripts[key].trim()) preparationIssues.push(`package.json 缺少固定检查脚本：${key}`);
+  if (!dockerReady) preparationIssues.push('Docker Desktop 尚未就绪，请启动后重新检查');
+  const executionReady = preparationIssues.length === 0;
+  return { available: true as const, ...catalog, catalogHash: developmentHash(catalog), executionReady, preparationIssues, executionReason: executionReady ? '已接入独立 Docker 验证：类型检查、构建和临时页面/API/数据库连通检查。' : '可以先交给开发团队生成方案。以下工程准备项完成并重新确认项目后，才能批准实施。' };
 }

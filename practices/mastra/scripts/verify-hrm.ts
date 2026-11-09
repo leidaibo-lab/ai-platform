@@ -7,6 +7,7 @@ import { verifyHrm } from '../src/development/hrm-verification.js';
 const root = resolve(process.argv[2] ?? '../../../hrm');
 const catalog = readRepositoryCatalog(root);
 if (!catalog.available) throw new Error(catalog.reason);
+if (!catalog.executionReady) throw new Error(catalog.preparationIssues.join('；'));
 const project = assembleRepositoryProject(root, catalog.catalogHash);
 const result = await verifyHrm(project.files);
 mkdirSync('.data', { recursive: true });

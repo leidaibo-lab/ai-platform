@@ -6,7 +6,7 @@ import { mkdtempSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { publishHandoff, readHandoffFile } from '../src/delivery/remote-handoff.js';
-import { createTaskContext, contextLimits, contextBudgetProcessor } from '../src/delivery/task-context.js';
+import { createTaskContext, contextLimits } from '../src/delivery/task-context.js';
 
 /** 创建独立工作树与 bare 远端；只使用合成文件。 */
 function repositories() {
@@ -56,37 +56,31 @@ test('push失败后复用提交且禁止pushurl漂移', /** bare hook只用来�
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });
 
-test('长材料折叠、按版本分段读取与累计预算隔离', /** 多语言测试避免仅按英文字符估算。 */() => {
+test('长材料折叠、按版本分段读取与调用隔离', /** 多语言测试避免仅按英文字符估算。 */() => {
   const text = '已批准验收条件一二三\n'.repeat(7000);
   const c = createTaskContext({ task: 'review', product: text, files: { 'a.ts': text }, history: [text], instruction: '保留权限边界' });
-  assert.ok(Buffer.byteLength(c.prompt) < contextLimits.inlineBytes); assert.equal(c.manifest.length, 3);
+  assert.ok(Buffer.byteLength(c.prompt) < 24000); assert.equal(c.manifest.length, 3);
   const ref = c.manifest[0]; const a = c.read({ id: ref.id, length: 10 }); const b = c.read({ id: ref.id, offset: a.nextOffset!, length: 10 });
   assert.equal(a.content + b.content, text.slice(0, 20));
   assert.throws(/** 任意路径不授予读取权。 */() => c.read({ id: '/etc/passwd' }));
   const other = createTaskContext({ task: 'another', product: 'different'.repeat(1000) });
   assert.throws(/** 另一个调用不能读取该引用。 */() => other.read({ id: ref.id }));
-  for (let i = 0; i < 2; i++) c.read({ id: ref.id });
-  assert.throws(/** 反复读取也累计计费。 */() => c.read({ id: ref.id }), /预算/);
+  for (let i = 0; i < 30; i++) assert.ok(c.read({ id: ref.id }).content);
 });
 
-test('模型发送前预算包含工具历史，超限中止不静默裁剪', /** 处理器契约测试不代表真实模型质量。 */() => {
-  let aborted = false;
-  assert.throws(/** 超限触发框架tripwire。 */() => contextBudgetProcessor().processLLMRequest({ prompt: [{ role: 'user', content: [{ type: 'text', text: 'x'.repeat(contextLimits.providerBytes) }] }],
-    /** 模拟框架abort抛出中止。 */abort: () => { aborted = true; throw new Error('budget'); } } as any), /budget/);
-  assert.equal(aborted, true);
-});
-
-test('工具捕获预算错误后仍不得交付，下一档预算可以继续读取', /** 提升容量不改变资料引用或文件访问权限。 */() => {
-  const text = 'x'.repeat(60000); const base = createTaskContext({ task: 'read', text });
-  const id = base.manifest[0].id;
-  for (let i = 0; i < 8; i++) base.read({ id, offset: i * 6000 });
-  assert.throws(/** 工具可能把错误包装成结果。 */() => base.read({ id, offset: 48000 }), /预算/);
-  assert.throws(/** 交付边界仍抛出具名预算错误。 */() => base.assertBudget(), /预算/);
-  const expanded = createTaskContext({ task: 'read', text }, true, undefined, 1);
-  for (let i = 0; i < 10; i++) expanded.read({ id: expanded.manifest[0].id, offset: i * 6000 });
-  expanded.assertBudget();
-  assert.throws(/** 追加容量不授予未知文件访问。 */() => expanded.read({ id: 'unknown' }));
-  assert.throws(/** 拒绝无限预算。 */() => createTaskContext({ task: 'read' }, true, undefined, 5));
+test('资料读取不受旧累计额度或档位限制，目录总量也不阻断任务', /** 大资料仍须通过合法引用分页读取，不能越权读取文件。 */() => {
+  const text = 'x'.repeat(180000); const context = createTaskContext({ task: 'read', text }, true, undefined, 4);
+  const id = context.manifest[0].id;
+  let collected = '';
+  for (let offset = 0; offset < text.length; offset += contextLimits.readChars) collected += context.read({ id, offset }).content;
+  assert.equal(collected, text);
+  assert.throws(/** 取消累计预算不扩大引用权限。 */() => context.read({ id: 'unknown' }));
+  assert.throws(/** 单次返回仍使用分页边界。 */() => context.read({ id, length: contextLimits.readChars + 1 }));
+  const many = createTaskContext(Object.fromEntries(Array.from({ length: 500 }, /** 合法大目录不再触发旧inlineBytes门槛。 */(_, i) => [`file-${i}`, text])));
+  assert.equal(many.manifest.length, 500); assert.ok(Buffer.byteLength(many.prompt) > 24000);
+  assert.equal('inputProcessors' in context.options, false);
+  const other = createTaskContext({ task: 'read', text });
+  assert.notDeepEqual(context.options.memory, other.options.memory);
 });
 
 test('原生暂停恢复：远端失败后只重试同步，不重新运行角色或跳过原审批', /** 真实Mastra Step + bare远端验证业务/同步两个暂停点。 */async () => {

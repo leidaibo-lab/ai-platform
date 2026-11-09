@@ -14,14 +14,17 @@ export const projectSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
   executionProfile: z.literal('hrm-pnpm-docker-v1').optional(),
   planning: z.literal('agent').optional(),
+  /** 服务端检查得到的工程缺口随输入冻结；存在时仅可规划，不能批准或实施。 */
+  preparationIssues: z.array(z.string().min(1)).min(1).max(20).optional(),
   writableRoots: z.array(safePathSchema).max(4).optional(),
   files: z.record(safePathSchema, z.string().max(100000)),
-  writablePaths: z.array(safePathSchema).min(1).max(40),
+  writablePaths: z.array(safePathSchema).max(40),
   checkFiles: z.array(safePathSchema).min(1).max(200),
   roles: z.array(z.enum(['frontend', 'backend', 'infrastructure'])).min(1).max(3),
 }).superRefine(
   // 公开检查必须已存在且不在写入白名单内；角色和文件集合不能含重复项。
   (project, ctx) => {
+    if ((!project.writablePaths.length || project.preparationIssues) && project.planning !== 'agent') ctx.addIssue({ code: 'custom', message: '空源码或工程准备缺口仅适用于已登记项目规划' });
     if (project.planning === 'agent' && project.executionProfile !== 'hrm-pnpm-docker-v1') ctx.addIssue({ code: 'custom', message: '自动技术规划需要已登记项目执行档' });
     if (project.executionProfile && (project.planning !== 'agent' || !project.writableRoots?.length || project.writableRoots.some(/** 全栈档不能把脚本或配置目录变成源码授权根。 */root => !['apps/web/app', 'apps/api/src', 'packages/database/src', 'packages/database/prisma'].includes(root)))) ctx.addIssue({ code: 'custom', message: 'HRM源码授权根不合法' });
     for (const path of project.checkFiles) {

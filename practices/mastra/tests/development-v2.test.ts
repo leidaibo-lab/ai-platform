@@ -6,10 +6,11 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { MastraTimeoutError } from '@mastra/core/loop';
+import { Agent } from '@mastra/core/agent';
 import { describeDevelopmentProgress } from '../src/intake/gates.js';
 import { developmentHash } from '../src/development/contracts.js';
 import { findingsHashV2, inputV2Schema, stateV2Schema, type StateV2 } from '../src/development/v2/contracts.js';
-import { createAgentV2, generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
+import { createAgentV2, contextOutputSchema, generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
 import { seedDevelopment, openDevelopment } from '../src/development-service.js';
 import { approvedInputV2, clarifyDevelopmentV2, developmentStatusV2, openDevelopmentV2, readDevelopmentLocator, recoverDevelopmentV2, reviewDevelopmentV2, resolveDevelopmentFindingsV2, type ApplicationV2 } from '../src/development-v2-service.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
@@ -46,6 +47,30 @@ async function pending(app: ApplicationV2, runId: string, name: string): Promise
 function approval(hash: string) { return { hash, decision: 'approve', reviewer: 'fixture-owner', comment: '确认当前离线包' }; }
 /** 本地故障接续必须绑定原失败phase。 */
 function retry(hash: string) { return { hash, decision: 'retry', reviewer: 'fixture-owner', comment: '确认安全检查点' }; }
+
+test('上下文结构输出仅允许本次批准产品和候选引用，不接受资料或方法路径', /** 引用域在模型结构化输出和流程校验两处保持一致。 */async () => {
+  await fixture(/** 从真实流程初始化引用，避免测试自造规则域。 */async (app) => {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    const state = await pending(app, run.runId, 'approve-architecture');
+    const schema = contextOutputSchema(state);
+    assert.ok(schema.safeParse({ rules: [{ text: '真实候选规则', refs: ['file:src/solution.mjs', state.requirements[0].id] }], unknowns: [] }).success);
+    for (const ref of ['src/solution.mjs', 'material-2:L4-L7', 'development-bmad-context/references/upstream.md', 'product:L999', 'file:unregistered.mjs']) {
+      assert.equal(schema.safeParse({ rules: [{ text: '无效引用', refs: [ref] }], unknowns: [] }).success, false);
+    }
+  }, undefined, false);
+});
+
+test('v2工具循环失败保存SDK结束证据并在首轮暂停，候选与历史不变', /** 从真实 Workflow 暂停快照验证诊断不会在异常边界丢失。 */async (context) => {
+  context.mock.method(Agent.prototype, 'generate', /** 仅替代模型结果，流程持久化与失败处理仍由真实代码执行。 */async () => ({ finishReason: 'tool-calls', steps: Array(12).fill({}), text: 'synthetic-private' }) as any);
+  await fixture(/** 不接受部分结果，也不对步数失败做五次盲目重试。 */async (app) => {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    const state = await pending(app, run.runId, 'recover-development');
+    assert.equal(state.calls, 1); assert.equal(state.faults.length, 1); assert.equal(state.work.length, 0);
+    assert.deepEqual(state.recovery?.modelCall?.failure, { source: 'tool-step-limit', finishReason: 'tool-calls', steps: 12, maxSteps: 12 });
+    assert.equal(await app.execution.readFile('src/solution.mjs'), initial);
+    assert.doesNotMatch(JSON.stringify(state.faults), /synthetic-private/);
+  }, undefined, false);
+});
 
 // 就绪前后、自检与评审均有原生证据，只有交付门能设置终态。
 test('v2主路径真实读取四方法、写入、自检、独立评审后交付', async () => {
@@ -290,12 +315,12 @@ test('v2连续超时多轮暂停，重开后保留诊断和累计预算，不终
   }, generate);
 });
 
-test('资料预算不足原阶段暂停，补充预算后只重试当前角色并保留审批', /** 原生Store重开后验证预算追加、旧令牌拒绝和未执行阶段。 */async () => {
+test('历史资料预算暂停无需升档，只重试当前角色并保留审批', /** 原生Store重开后验证预算追加、旧令牌拒绝和未执行阶段。 */async () => {
   const { ContextBudgetError } = await import('../src/delivery/context-budget.js');
   const { describeGate } = await import('../src/intake/gates.js');
   const roles: string[] = [];
   /** 模拟生成内部的资料预算故障，不调用真实服务。 */
-  const generate: GeneratorV2 = async (...args) => { roles.push(args[2]); if (args[2] === 'architect' && !(args[3].contextBudgetLevel ?? 0)) throw new ContextBudgetError('read', 50000, 48000); return generateV2(...args); };
+  const generate: GeneratorV2 = async (...args) => { roles.push(args[2]); if (args[2] === 'architect' && roles.filter(/** 仅首次模拟历史预算失败。 */role => role === 'architect').length === 1) throw new ContextBudgetError('read', 50000, 48000); return generateV2(...args); };
   await fixture(/** 未明确追加不能消耗暂停点。 */async (app, directory, config) => {
     const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
     let state = await pending(app, run.runId, 'recover-development');
@@ -304,16 +329,15 @@ test('资料预算不足原阶段暂停，补充预算后只重试当前角色�
     assert.equal(state.recovery!.kind, 'context-budget'); assert.equal(state.faults.length, 1); assert.equal(state.recovery!.budget!.limitBytes, 48000);
     const oldHash = state.recovery!.hash; const checkpoint = state.checkpointHash;
     const gate = describeGate('development-iteration-v2.architecture', { ...state.recovery, recoveryState: state })!;
-    assert.equal(gate.recoveryInfo!.additionalContextLevel, 1); assert.match(gate.recoveryInfo!.retryLabel, /补充资料预算/);
-    await assert.rejects(recoverDevelopmentV2(app, run.runId, retry(oldHash)), /资料预算/);
+    assert.equal(gate.recoveryInfo!.additionalContextLevel, undefined); assert.match(gate.recoveryInfo!.next, /资料预算门槛已移除/);
     await assert.rejects(recoverDevelopmentV2(app, run.runId, { ...retry(oldHash), additionalContextLevel: 2 }), /资料预算/);
     assert.equal((await pending(app, run.runId, 'recover-development')).checkpointHash, checkpoint);
     await app.execution.close(); await app.storage.close();
     const reopened = openDevelopmentV2(config, directory, false, generate);
     try {
-      await recoverDevelopmentV2(reopened, run.runId, { ...retry(oldHash), additionalContextLevel: 1 });
+      await recoverDevelopmentV2(reopened, run.runId, retry(oldHash));
       state = await pending(reopened, run.runId, 'approve-architecture');
-      assert.equal(state.contextBudgetLevel, 1); assert.equal(state.recoveries.at(-1)!.additionalContextLevel, 1); assert.equal(state.completedTasks.length, 0); assert.equal(state.approvedHash, null);
+      assert.equal(state.contextBudgetLevel, undefined); assert.equal(state.recoveries.at(-1)!.additionalContextLevel, undefined); assert.equal(state.completedTasks.length, 0); assert.equal(state.approvedHash, null);
       assert.equal(roles.filter(/** 已完成分析不重做。 */role => role === 'context').length, 1); assert.equal(roles.filter(/** 只有失败架构被重试一次。 */role => role === 'architect').length, 2);
       await assert.rejects(recoverDevelopmentV2(reopened, run.runId, { ...retry(oldHash), additionalContextLevel: 1 }));
     } finally { await reopened.execution.close(); await reopened.storage.close(); }

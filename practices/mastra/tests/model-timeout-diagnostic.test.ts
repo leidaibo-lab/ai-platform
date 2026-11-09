@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MastraTimeoutError } from '@mastra/core/loop';
 import { classifyDevelopmentError, DevelopmentModelError } from '../src/development/errors.js';
-import { developmentTimeoutPolicy, diagnoseModelFailure, modelCallDiagnosticSchema, describeModelCall } from '../src/development/v2/model-diagnostic.js';
+import { developmentTimeoutPolicy, diagnoseModelFailure, diagnoseModelResult, modelCallDiagnosticSchema, describeModelCall } from '../src/development/v2/model-diagnostic.js';
 
 test('开发角色步骤10分钟/总计30分钟，历史策略仍可读取', /** 角色预算是宿主固定策略，不能由模型扩大。 */() => {
   assert.deepEqual(developmentTimeoutPolicy('architect'), { version: 'development-timeout.v3', totalMs: 1800000, stepMs: 600000 });
@@ -39,4 +39,16 @@ test('诊断文案区分已配置预算与实际触发来源，格式不夹带�
   const call = modelCallDiagnosticSchema.parse({ version: 'development-call.v1', callIndex: 5, durationMs: 202000, recordedAt: '2026-11-08T10:00:00.000Z', policy: developmentTimeoutPolicy('architect'), failure: { source: 'upstream-http', httpStatus: 524, url: 'synthetic-private' }, request: 'synthetic-private' });
   const text = describeModelCall(call, 2); assert.match(text, /上游HTTP 524/); assert.match(text, /实际耗时202秒/); assert.match(text, /步骤600秒、Agent总计1800秒/); assert.doesNotMatch(text, /触发时限|synthetic-private/); assert.doesNotMatch(JSON.stringify(call), /synthetic-private/);
   assert.match(describeModelCall(call), /^最近一次尝试/); assert.doesNotMatch(describeModelCall(call), /第1次/);
+});
+
+test('结束状态采用固定枚举，历史unknown不补造结束证据', /** 输出截断、安全阻断和工具提前退出保持不同诊断；不记录自由文本。 */() => {
+  for (const [finishReason, source] of [['length', 'output-length'], ['content-filter', 'content-filter'], ['other', 'model-finish'], ['tool-calls', 'model-finish']] as const) {
+    assert.deepEqual(diagnoseModelResult({ finishReason, steps: [] }, 12), { source, finishReason, steps: 0, maxSteps: 12 });
+  }
+  const failure = diagnoseModelResult({ finishReason: 'synthetic-private', steps: [] }, 12);
+  assert.equal(failure.finishReason, 'unknown'); assert.doesNotMatch(JSON.stringify(failure), /synthetic-private/);
+  const old = { version: 'development-call.v1', callIndex: 1, durationMs: 120173, recordedAt: '2026-11-09T09:49:49.521Z', policy: developmentTimeoutPolicy('context'), failure: { source: 'unknown' } };
+  assert.deepEqual(modelCallDiagnosticSchema.parse(old), old);
+  assert.match(describeModelCall(modelCallDiagnosticSchema.parse(old)), /未记录明确的失败来源/);
+  assert.deepEqual(diagnoseModelResult({ finishReason: 'error', steps: [], error: { statusCode: 524 } }, 12), { source: 'upstream-http', httpStatus: 524, finishReason: 'error', steps: 0, maxSteps: 12 });
 });

@@ -40,9 +40,10 @@ export function executionResolver(config: PracticeConfig) {
     mkdirSync(parent, { recursive: true, mode: 0o700 });
     if (lstatSync(parent).isSymbolicLink()) throw new Error('运行根目录不能是符号链接');
     const base = resolve(parent, developmentHash(input.source.runId));
-    const directory = input.continuation ? resolve(base, 'revisions', developmentHash(input)) : base;
-    if (input.continuation) {
-      for (const path of [base, resolve(base, 'revisions')]) { if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error('候选版本目录不能是符号链接'); }
+    const preparationRoot = resolve(parent, 'preparation');
+    const directory = input.continuation ? resolve(base, 'revisions', developmentHash(input)) : input.project.preparationIssues?.length ? resolve(preparationRoot, developmentHash(input)) : base;
+    if (input.continuation || input.project.preparationIssues?.length) {
+      for (const path of [base, resolve(base, 'revisions'), preparationRoot]) { if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error('候选版本目录不能是符号链接'); }
       mkdirSync(dirname(directory), { recursive: true, mode: 0o700 });
     }
     if (!existsSync(directory)) seedDevelopment(directory, input);
@@ -64,7 +65,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     execute: async ({ inputData, runId }) => {
       const correlation = correlationSchema.parse({ projectId: 'hrm', iterationId: inputData.iterationId, runId, workflowId: 'productDevelopmentWorkflow' });
       if (config.hrmRepositoryRoot) registerAssetRun(config.hrmRepositoryRoot, correlation, inputData.brief);
-      return { intake: { enabled: !!inputData.guidedIntake, ready: false, round: 0, history: [] }, brief: inputData.brief, correlation, mode: config.mode, artifacts: [], reviews: [], outcome: 'in-progress' as const };
+      return { intake: { enabled: !!inputData.guidedIntake, ready: false, round: 0, history: [] }, brief: inputData.brief, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], outcome: 'in-progress' as const };
     },
   });
   const review = createStep({ id: 'review-product', description: '人工确认产品需求与验收边界', inputSchema: deliverySchema, outputSchema: deliverySchema, suspendSchema: pendingSchema, resumeSchema: reviewSchema,

@@ -56,6 +56,8 @@ test('四个固定产品角色各自执行原生工具并持久化有序产物',
       assert.deepEqual(entry.toolNames, ['practiceInfo']);
       assert.equal(entry.modelSteps, 2);
       assert.ok(entry.content.length > 0);
+      assert.equal(entry.generation?.finishReason, 'stop');
+      assert.equal(entry.generation?.attempts, 1);
     }
     assert.equal(document.artifact?.content, document.productWork!.entries.at(-1)!.content);
     assert.equal(document.canReview, true);
@@ -167,6 +169,19 @@ test('产品闭环角色失败时不会形成可批准稿或进入开发', async
     assert.equal(document.artifact, undefined);
     assert.equal(document.canReview, false);
     await assert.rejects(reviewDelivery(app, status.runId, { role: 'product' }), /没有待审批/);
+  });
+});
+
+test('产品闭环只返回执行计划时失败关闭，不调用产品写作', async (context) => {
+  // 模型虽正常停止，但没有提供检查结果；后续角色不得把计划包装为已完成分析。
+  await withProductApp(async (app) => {
+    let writingCalls = 0;
+    context.mock.method(app.agents.productClosureAgent, 'generate', /** 注入计划句，覆盖结束状态正常但角色产物不完整的边界。 */async () => ({ text: '我会逐项检查需求测试场景和验收覆盖。', finishReason: 'stop', steps: [{ text: '我会逐项检查需求测试场景和验收覆盖。', finishReason: 'stop' }] }) as any);
+    context.mock.method(app.agents.productAgent, 'generate', /** 写作被调用即表示失败未阻断后继。 */async () => { writingCalls++; throw new Error('writing-must-not-run'); });
+    const status = await startDelivery(app, '闭环计划句不能放行');
+    const document = await readProductDocument(app, status.runId);
+    assert.equal(status.status, 'failed'); assert.equal(writingCalls, 0);
+    assert.equal(document.artifact, undefined); assert.equal(document.canReview, false);
   });
 });
 

@@ -3,11 +3,11 @@ import { useState } from 'react';
 import { Markdown } from './components/Markdown';
 import { ClarificationProgress, RequirementWorkspace } from './components/RequirementWorkspace';
 import type { WorkflowGate } from './WorkflowGate';
-interface Question { id: string; title: string; reason: string; recommendation: string; required: boolean; kind: 'single' | 'multiple' | 'text'; options: { id: string; label: string }[] }
-interface Answer { questionId: string; selected: string[]; custom: string }
+import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
 /** 用户提交之前只编辑本地草稿，缺失回答不会消耗暂停点。 */
 export function BlockerClarification({ gate, busy, submit }: { gate: WorkflowGate; busy: boolean; submit: (body: unknown) => Promise<void> }) {
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
+  const [activeQuestion, setActiveQuestion] = useState('');
   const [reviewer, setReviewer] = useState(''); const [supplement, setSupplement] = useState(''); const [preview, setPreview] = useState(false); const [error, setError] = useState('');
   const questions = gate.evidence.plan.questions as Question[];
   const missing = questions.filter(/** 推荐不算回答，必须实际选择或输入。 */question => question.required && !answers[question.id]?.selected.length && !answers[question.id]?.custom.trim()).length;
@@ -20,15 +20,15 @@ export function BlockerClarification({ gate, busy, submit }: { gate: WorkflowGat
     catch (reason) { setError((reason as Error).message); }
   }
   return <RequirementWorkspace title="澄清开工选择" panel={<>
-    <fieldset disabled={busy}><legend>需要你确认的业务选择（{questions.length}项）</legend>
-    {questions.map(/** 卡片与服务端问题ID一致，选项不默认打勾。 */(question, index) => { const answer = answers[question.id] ?? { questionId: question.id, selected: [], custom: '' }; return <fieldset key={question.id} id={`blocker-question-${question.id}`} tabIndex={-1}><legend>{index + 1}. {question.title} <small>{question.required ? '必须确认' : '可选'}</small></legend><p>{question.reason}</p><div className="intake-recommendation">建议：{question.recommendation}</div>{question.options.map(/** 用户点击才产生选项答案。 */option => <label className="intake-option" key={option.id}><input type={question.kind === 'multiple' ? 'checkbox' : 'radio'} name={question.id} checked={answer.selected.includes(option.id)} onChange={/** 多选去重，单选替换旧值。 */event => update(question, question.kind === 'multiple' ? event.target.checked ? [...answer.selected, option.id] : answer.selected.filter(/** 移除本项选择。 */id => id !== option.id) : [option.id], answer.custom)} />{/^[A-Z]$/.test(option.id) ? `${option.id}. ` : ''}{option.label}</label>)}<label>{question.kind === 'text' ? '你的回答' : '自己的方案或补充说明'}<textarea rows={3} maxLength={4000} value={answer.custom} onChange={/** 自定义答案可以独立回答，不强迫选择推荐。 */event => update(question, answer.selected, event.target.value)} /></label></fieldset>; })}
+    <fieldset className="requirement-inputs" disabled={busy}><legend className="sr-only">本轮问题与补充</legend>
+    <QuestionFlow key={gate.gateHash} questions={questions} answers={answers} activeId={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy} prefix="blocker-question" />
     <label>其他补充<textarea rows={3} value={supplement} maxLength={4000} onChange={/** 补充会进入本轮修订依据。 */event => { setSupplement(event.target.value); setPreview(false); }} /></label></fieldset>
   </>} actions={<>
 <label>确认人<input disabled={busy} value={reviewer} maxLength={100} onChange={/** 标签与本次人工决定一起记录。 */event => { setReviewer(event.target.value); setPreview(false); }} /></label>
     {missing > 0 && <p className="intake-validation" role="status">还有 {missing} 项必答事项，请选择或补充自己的答案。</p>}{!reviewer.trim() && <p className="intake-validation">填写确认人后提交。</p>}{error && <p role="alert">{error}</p>}
     {preview ? <div className="intake-assumptions" role="status"><strong>确认提交这些选择，并生成完整修订产品稿？</strong><p>将调用产品模型修订，原批准稿保留。新稿仍需你确认，不会直接开工。</p><button className="primary" disabled={busy} onClick={/** 最终确认才恢复Workflow。 */() => void send()}>{busy ? '正在修订，请稍候…' : '确认提交并生成修订稿'}</button><button disabled={busy} onClick={/** 返回不会提交或丢弃草稿。 */() => setPreview(false)}>返回检查</button></div> : <button className="primary" disabled={busy || missing > 0 || !reviewer.trim()} onClick={/** 先展示提交后果。 */() => setPreview(true)}>提交选择，生成完整修订产品稿 →</button>}
   </>}>
-    <ClarificationProgress questions={questions} answers={answers} prefix="blocker-question" />
+    <ClarificationProgress questions={questions} answers={answers} prefix="blocker-question" onSelect={setActiveQuestion} />
     <section className="intake-card"><div className="intake-eyebrow">补齐开工选择 · 原需求和已确认产品稿保留</div><h1>{gate.title}</h1><h2>需求分析与整理依据</h2><Markdown>{gate.evidence.plan.summary}</Markdown><p>建议供参考。请逐项选择，或直接填写自己的方案；提交后先生成完整修订稿，由你确认后才重新规划。</p>
     {gate.evidence.referenceNote && <div className="intake-assumptions"><strong>工程资料由系统关联</strong><p>{gate.evidence.referenceNote}</p><p>不需要你上传仓库文档、选择文件或安排开发角色。</p></div>}
     {gate.evidence.plan.assumptions?.length > 0 && <div className="intake-assumptions"><strong>选项中的具体规则建议，请一并核对</strong><ul>{gate.evidence.plan.assumptions.map(/** 复合选项引用的字段和生命周期必须完整展示，不能成为隐藏确认。 */(text: string, index: number) => <li key={index}>{text}</li>)}</ul></div>}

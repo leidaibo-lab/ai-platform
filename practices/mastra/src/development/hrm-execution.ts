@@ -13,6 +13,7 @@ class HrmExecution extends DevelopmentExecution {
   /** 允许架构Agent声明的新增文件，但绝不允许修改检查、锁文件及范围外文件。 */
   override async writeFile(path: string, content: string) {
     if (this.stopped) throw new Error('HRM候选环境已关闭');
+    if (this.project.preparationIssues?.length) throw new Error('工程准备未完成，当前候选仅允许只读规划');
     safePathSchema.parse(path);
     if (this.project.checkFiles.includes(path) || !this.project.writableRoots?.some(/** 写入上界由项目授权指定，不来自模型。 */root => path.startsWith(`${root}/`)) || Buffer.byteLength(content) > 100000) throw new Error('写入超出HRM源码范围');
     let cursor = this.root;
@@ -23,6 +24,7 @@ class HrmExecution extends DevelopmentExecution {
   override async close() { try { await super.close(); } finally { this.stopped = true; } }
   /** 验证使用源快照副本，Docker产物不写回模型候选源码。 */
   override async runChecks() {
+    if (this.project.preparationIssues?.length) throw new Error('工程准备未完成，不能运行项目验证');
     const before = await this.snapshot(); const files: Record<string, string> = {};
     for (const path of Object.keys(before)) files[path] = await this.readFile(path);
     return verifyHrm(files);

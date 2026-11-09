@@ -10,12 +10,11 @@ export function readEngineeringReferences(root?: string) {
   /** 参数均为宿主常量，不读取.env或任意Git内容。 */
   function git(args: string[]) { return execFileSync('git', ['-C', directory, ...args], { encoding: 'utf8', maxBuffer: 1048576 }).trimEnd(); }
   const paths = git(['ls-files', '-z', '--', 'docs']).split('\0').filter(/** 只读文档allowlist，其他资料不进入候选。 */path => path === 'docs/delivery-assets.md' || /^docs\/decisions\/[a-zA-Z0-9_-]+\.md$/.test(path)).filter(/** 凭据类名称不进入参考材料。 */path => !/secret|credential|private[-_]?key/i.test(path));
-  if (paths.length > 40) throw new Error('工程参考文档超过当前只读资料预算，需要开发侧筛选');
-  const files: Record<string, string> = {}; let totalBytes = 0;
+  const files: Record<string, string> = {};
   for (const path of paths) {
     const full = join(directory, path); let cursor = directory;
     for (const part of path.split('/')) { cursor = join(cursor, part); if (lstatSync(cursor).isSymbolicLink()) throw new Error('工程资料不能包含符号链接'); }
-    if (realpathSync(full) !== full || lstatSync(full).size > 100000 || (totalBytes += lstatSync(full).size) > 500000) throw new Error('工程资料超出读取边界');
+    if (realpathSync(full) !== full || !lstatSync(full).isFile()) throw new Error('工程资料必须为授权目录内的普通文件');
     const fd = openSync(full, constants.O_RDONLY | constants.O_NOFOLLOW); try { files[path] = readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
   }
   const observedAt = new Date().toISOString();

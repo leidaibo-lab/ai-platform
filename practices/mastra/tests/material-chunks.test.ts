@@ -14,7 +14,7 @@ test('两种分片策略无丢失重叠，Unicode与长行可还原', /** 与全
   assert.throws(/** 配置不能注入任意策略实现。 */() => chunkPolicySchema.parse({ ...defaultChunkPolicy, strategy: 'custom-script' }));
 });
 
-test('分页定位跨边界关键词并读取精确正文，不泄露其他调用资料', /** 实际工具同一闭包确保定位和读取共享权限与预算。 */() => {
+test('分页定位跨边界关键词并读取精确正文，不泄露其他调用资料', /** 实际工具同一闭包确保定位和读取共享引用权限。 */() => {
   const text = 'a'.repeat(2998) + '业务边界' + 'b'.repeat(50000);
   const c = createTaskContext({ source: text }); const id = c.manifest[0].id;
   const first = c.locate({ id }); assert.equal(first.items.length, 12); assert.notEqual(first.nextCursor, null);
@@ -26,9 +26,5 @@ test('分页定位跨边界关键词并读取精确正文，不泄露其他调�
   assert.throws(/** 拒绝超出分页游标。 */() => c.locate({ id, cursor: 999 }));
   const other = createTaskContext({ source: '其他正文'.repeat(3000) });
   assert.throws(/** 当前调用不能使用其他调用的引用。 */() => other.locate({ id }));
-  let exhausted = false;
-  for (let i = 0; i < 100; i++) {
-    try { c.locate({ id }); } catch { exhausted = true; break; }
-  }
-  assert.ok(exhausted); assert.throws(/** 目录超限也不能被工具吞掉后交付。 */() => c.assertBudget(), /预算/);
+  for (let i = 0; i < 100; i++) assert.ok(c.locate({ id }).items.length);
 });

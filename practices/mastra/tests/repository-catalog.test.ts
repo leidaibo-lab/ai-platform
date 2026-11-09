@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readRepositoryCatalog } from '../src/intake/repository-catalog.js';
+import { assembleRepositoryProject } from '../src/intake/repository-project.js';
 import { createIntakeRoutes } from '../src/intake/routes.js';
 import { Hono, type Handler } from 'hono';
 
@@ -37,4 +38,27 @@ test('仓库关联：真实分支/模块/文件/检查自动识别，隐藏文�
 test('未配置或非授权仓库不能通过任意路径打开', /** 业务入口只能使用服务端预配置仓库。 */() => {
   assert.equal(readRepositoryCatalog().available, false);
   assert.throws(/** 当前平台仓库不是HRM授权源。 */() => readRepositoryCatalog(process.cwd()));
+});
+
+test('只有产品资料的项目可交接只读规划，具体工程缺口随快照保存且旧清单不能提交', /** 复现没有package.json和任何源码的实际关联仓库。 */() => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'hrm-preparation-')));
+  try {
+    execFileSync('git', ['init', '-b', 'main', root], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'remote', 'add', 'origin', 'https://github.com/leidaibo-lab/hrm.git']);
+    writeFileSync(join(root, 'README.md'), '# 合成产品资料仓库');
+    execFileSync('git', ['-C', root, 'add', 'README.md']);
+    execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'test(hrm): 产品资料基线'], { stdio: 'ignore' });
+    const catalog = readRepositoryCatalog(root); assert.ok(catalog.available); if (!catalog.available) return;
+    assert.equal(catalog.executionReady, false); assert.equal(catalog.checks.length, 0);
+    assert.ok(catalog.preparationIssues.includes('缺少可读取的工程文件：package.json'));
+    assert.ok(!catalog.preparationIssues.some(/** 没有清单不能推断包管理器版本错误。 */issue => issue.includes('packageManager')));
+    const project = assembleRepositoryProject(root, catalog.catalogHash);
+    assert.deepEqual(project.writablePaths, []); assert.deepEqual(project.checkFiles, ['README.md']);
+    assert.deepEqual(project.preparationIssues, catalog.preparationIssues); assert.equal(project.planning, 'agent');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.6.0', scripts: { check: ' ', build: 'build' } }));
+    assert.throws(/** 工程准备变化必须重新确认，不能沿用旧页面版本。 */() => assembleRepositoryProject(root, catalog.catalogHash), /版本已变化/);
+    const changed = readRepositoryCatalog(root); assert.ok(changed.available); if (!changed.available) return;
+    assert.ok(changed.preparationIssues.includes('package.json 缺少固定检查脚本：check'));
+    assert.ok(changed.preparationIssues.includes('package.json 缺少固定检查脚本：smoke'));
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -106,17 +106,25 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       await guard(inputData);
       const called = await invokeV2(config, execution, 'architect', inputData, [], { priorGates: inputData.gates, priorReports: inputData.codeReviews }, methods, generate,
         // 结构错误保留故障，不能跳到人工批准。
-        (text) => validatePlanV2(planV2Schema.parse(parseDevelopmentJson(text)), inputData));
+        (text) => { parsePlan(text, inputData); });
       if (!called.entry) return called.state;
-      const plan = planV2Schema.parse(parseDevelopmentJson(called.entry.text));
+      const plan = parsePlan(called.entry.text, inputData);
+      const preparationIssues = inputData.input.project.preparationIssues;
       if (inputData.input.project.planning === 'agent' && !plan.blockers.length) {
         const existing = await execution.snapshot();
         for (const task of plan.tasks) for (const path of task.paths) if (!(path in existing)) await execution.writeFile(path, '');
       }
       const checkpointHash = developmentHash(await execution.snapshot());
-      return { ...called.state, checkpointHash, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
+      return { ...called.state, checkpointHash, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: preparationIssues?.length ? 'manual-attention' as const : plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
     },
   });
+  /** 先附加不可绕过的工程事实再校验任务包；未建工程时可保存零实施任务的受阻方案。 */
+  function parsePlan(text: string, state: StateV2) {
+    const plan = planV2Schema.parse(parseDevelopmentJson(text));
+    if (state.input.project.preparationIssues?.length) plan.blockers = [...new Set([...plan.blockers, ...state.input.project.preparationIssues.map(/** 宿主工程事实不能被模型PASS、业务回答或人工评论消除。 */issue => `工程上下文缺口：${issue}`)])];
+    validatePlanV2(plan, state);
+    return plan;
+  }
   const assemble = createStep({ id: 'assemble-agent-team', description: '按批准任务和文件范围动态生成团队成员', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 团队在就绪审查前展示并进入技术方案批准绑定。
     execute: async ({ inputData }) => inputData.phase !== 'assemble-team' || inputData.outcome !== 'in-progress' ? inputData : { ...inputData, team: assembleTeam(inputData), delegations: [], phase: 'assess-readiness' as const },
