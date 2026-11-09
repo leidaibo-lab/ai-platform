@@ -1,3 +1,4 @@
+import { runArchiveLifecycle } from '../../delivery/run-archive.js';
 /** 单个原生 Run 串联产品、动态开发团队、独立测试和外部发布回执。
  * ADR: docs/decisions/2026-11-07-mastra-full-delivery-lifecycle.md
  */
@@ -118,7 +119,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       return { ...state, outcome: config.mode === 'fixture' ? 'fixture-completed' as const : 'delivery-confirmed' as const };
     },
   });
-  const main = createWorkflow({ id: 'product-development', description: '完整产研：产品 → 开发（动态团队、并行、受限委派）→ 测试（缺陷修复与回归）→ 部署（审批、外部回执、健康检查与回滚）→ 最终交付', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
+  const main = createWorkflow({ options: runArchiveLifecycle(config), id: 'product-development', description: '完整产研：产品 → 开发（动态团队、并行、受限委派）→ 测试（缺陷修复与回归）→ 部署（审批、外部回执、健康检查与回滚）→ 最终交付', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
     .then(withRepositoryAssets(initialize, config)).then(createIntakeWorkflow(agents, config.mode,
       /** 澄清角色的建议与显式回答同样属于交接资产。 */
       step => withRepositoryAssets(step, config))).then(createProductWorkflow(agents, config.mode, deliverySchema,

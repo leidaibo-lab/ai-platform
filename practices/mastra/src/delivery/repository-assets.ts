@@ -1,3 +1,4 @@
+import { withRunArchive } from './run-archive.js';
 import { z } from 'zod';
 import { legacyArchitectureCachePath, readLegacyArchitectureResult, validateLegacyArchitectureResult } from './legacy-sync.js';
 /** HRM 业务资产投影：Git 保存交付副本，Mastra Store 继续拥有审批和恢复事实。
@@ -121,7 +122,7 @@ async function archive(config: PracticeConfig, target: RemoteSyncTarget, runId: 
 
 /** 装饰角色关口：暂停前归档输入，成功后归档输出，保留原审批并增加同步暂停类型。 */
 export function withRepositoryAssets<T extends Step<any, any, any, any, any, any>>(step: T, config: PracticeConfig, publish: typeof publishHandoff = publishHandoff): T {
-  if (!remoteSyncTargets(config).length) return step;
+  if (!remoteSyncTargets(config).length) return withRunArchive(step, config);
   const execute = step.execute;
   const originalResumeSchema = step.resumeSchema;
   if (config.mode === 'live') {
@@ -195,5 +196,5 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
     if (!intercepted && result !== undefined && projectAssets(result)) return checkpoint('result', result);
     return result;
   };
-  return step;
+  return withRunArchive(step, config);
 }

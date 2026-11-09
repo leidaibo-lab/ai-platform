@@ -47,3 +47,7 @@ npm run eval:product-skills -- --workspace --cases recruitment --live
 现有 brief 足以跑通接入和评测。更深入的业务质量验证需要：pm-hrm 原始资料所在路径及允许读取范围、脱敏流程/页面/字段说明、你认可的好稿或具体失败案例。没有给定的规则继续作为未决项，不由接入者补写标准答案。
 
 选型、维护责任及重评条件见[Workspace 决策](../../docs/decisions/2026-11-06-mastra-project-workspaces.md)。
+
+## 项目运行档案（2026-11-09）
+
+hrm-run-archives 指向已授权 HRM 的 product/catalog/runs/，名称为“HRM · 运行档案（状态投影，不可恢复）”。每个 Run 的 run.json 保存关联，history/ 保存不可变生命周期观察。Studio 只读且不挂 Agent；查阅方式、同步开关及补推命令见[运行档案](./artifact-dataflow.md#2026-11-09项目运行档案)。它不会将另一台机器的记录导入原生 Recent runs。

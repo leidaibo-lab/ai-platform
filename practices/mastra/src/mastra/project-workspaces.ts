@@ -43,6 +43,7 @@ export function registerProjectWorkspaceViews(mastra: Mastra, config: PracticeCo
   ];
   if (config.hrmRepositoryRoot) {
     const repository = validateHrmRepository(config.hrmRepositoryRoot);
+    views.push({ id: 'hrm-run-archives', name: 'HRM · 运行档案（状态投影，不可恢复）', directory: resolve(repository, 'product/catalog/runs') });
     for (const area of ['product', 'testSet', 'deploy']) views.push({ id: `hrm-${area.toLowerCase()}`, name: `HRM · ${area}（只读交付资产）`, directory: resolve(repository, area) });
   }
   for (const view of views) {

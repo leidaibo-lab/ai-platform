@@ -106,3 +106,21 @@ TypeScript 检查通过；运行中的 dev 服务返回页面、真实空目录�
 历史正文、批准依据和基线文件仍由旧 schema 保留兼容快照，确保原生审批与源码恢复不失效；新增候选正文只用于导出，不保留在业务状态中。当前完成“版本回执 + 按任务组装模型输入”，未进行整个历史 Workflow 状态仅引用化迁移。独立 CLI 未设置仓库时保留原有边界，已有历史 Run 不自动补推或迁移。
 
 实现采用 Git Adapter、Step Decorator 和按调用只读工具；Git 管版本与网络，Mastra 管暂停/恢复及审批。没有自建版本引擎、调度器或摘要模型。验证使用临时 bare 远端与框架模型测试端口，不向真实 HRM 远端写入合成材料，也不代表真实模型业务质量通过。
+
+## 2026-11-09：项目运行档案
+
+新主流程开始业务执行、已接入归档的阶段返回/暂停/失败及根 Run 暂停/失败/完成时，宿主自动写入 product/catalog/runs/<根RunId>/history/<UTC时间>-<UUID>.json。run.json 继续保存不可变归属，history 保存追加的版本化观察，不覆盖旧事件。仅 createRun 尚未 start 的空记录不生成业务档案；旧 Run 不自动补造历史。
+
+记录包含 run-archive.v1、项目/迭代、Run ID、Workflow 注册 ID 与定义 ID、档案契约版本、scope（run/step）、阶段、状态、脱敏原因类别、UTC 观察时间、平台代码 commit 与 dirty 标识、已完成产物清单路径、已有远端交接回执和恢复条件。workflowVersion 是本次档案接入版本，精确实现由 code.revision 和 dirty 共同说明，不是完整代码快照。阶段 returned 不表示整个 Run 成功。不保存需求正文、模型配置、原始错误消息或堆栈。
+
+在 Studio Workspace 选择“HRM · 运行档案（状态投影，不可恢复）”，按根 Run 查看 JSON 历史；原有 hrm-product 视图也能查看 catalog。Workspace 只读，不给 Agent 增加工具权限。原生 Recent runs 仍读取当前 Mastra Store，不会因为拉取这些档案而出现另一台机器的 Run。
+
+本地先落盘；live 模式沿用“产品”阶段的同步开关与登记目标，将运行档案推到 codex/workflow/<根RunId>。fixture 仅本地。其他业务阶段产物继续按各自路由同步。产品同步关闭时档案仍在本地；目标改变只影响后续同步，不迁移旧远端。下一次事件会补推本地历史；Run 已停止时可在本实践目录设置与服务相同的 MASTRA_MODE=live、MASTRA_DATA_DIR、MASTRA_HRM_REPOSITORY，运行：
+
+    npm run run:archive -- sync <RunId>
+
+命令只补推现有档案，不恢复执行或重新调用模型；输出 synced/disabled/missing，后两种不算同步成功。换机器需获取对应交接分支中的目录；只拉 main 不会把 Run 分支内容带进 Workspace。
+
+归档失败输出固定 [run-archive] 警告，不改变原生业务返回、异常或审批。Mastra Hook 会等待归档，但不持久重试；网络请求沿用60秒上限，可能增加阶段交付延迟。强杀或断电可能缺少最终记录，running 仅表示最后观察状态。单 Run 同步最多5000个历史文件、正文合计16MiB，超限明确失败。档案不是数据库备份、审批证明或恢复包。
+
+选型与维护边界见[运行档案决策](../../docs/decisions/2026-11-09-mastra-run-archive.md)。

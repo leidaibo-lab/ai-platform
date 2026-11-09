@@ -16,6 +16,7 @@
     "smoke:live": "tsx scripts/smoke.ts --live",
     "delivery": "tsx scripts/delivery.ts",
     "workspace": "tsx scripts/workspace.ts",
+    "run:archive": "tsx scripts/run-archive.ts",
     "development": "tsx scripts/development.ts",
     "eval:development": "tsx scripts/development-eval.ts",
     "review:dev": "npm --prefix web run dev",

@@ -57,3 +57,5 @@
 - [Mastra 主流程需求输入](../practices/mastra/guided-intake.md)：需求澄清、开发阻塞后的业务选择补齐、完整修订稿确认及开发、测试、发布等人工关口。
 
 - [Mastra 角色产物远端交接与按需上下文](./decisions/2026-11-08-mastra-remote-handoff.md)：阶段同步回执、原生同步恢复与有界资料读取。
+
+- [Mastra 项目运行档案](../practices/mastra/artifact-dataflow.md#2026-11-09项目运行档案)：生命周期投影、交接分支同步与只读 Workspace，不迁移执行状态。
