@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
-import { readRemoteSyncSettings, remoteSyncSettingsSchema, remoteSyncTargets, writeRemoteSyncSettings } from '../delivery/remote-sync-settings.js';
+import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
 const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
 export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
@@ -22,6 +22,22 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
     return c.json({ error: error instanceof GateInputError ? error.message : error instanceof z.ZodError ? '有内容未填完整或不符合要求，请检查必填、文件范围和列表中的每一项' : '操作未完成，请刷新确认版本、必答项及流程状态；不要自动重试批准。' }, 409);
   }
   return [
+    registerApiRoute('/intake-api/remote-sync-targets', { method: 'GET',
+      /** 仓库字典页仅在本机展示已登记目标及其本地checkout，阶段页继续隐藏路径。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { return c.json({ targets: readRemoteSyncTargets(config!) }); }
+        catch (error) { return c.json({ error: error instanceof Error ? error.message : '项目仓库字典暂不可读取。' }, 409); }
+      },
+    }),
+    registerApiRoute('/intake-api/remote-sync-targets', { method: 'PUT',
+      /** 仅本机服务保存完整字典；服务端复核Git根目录和origin，不能通过页面输入凭据。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { origin(c); return c.json({ targets: writeRemoteSyncTargets(config!, targetDictionarySchema.parse(await c.req.json())) }); }
+        catch (error) { return c.json({ error: error instanceof z.ZodError ? '仓库字典格式不正确，请检查标识、名称、本地checkout和HTTPS远端地址。' : error instanceof Error ? error.message : '项目仓库字典未保存。' }, 409); }
+      },
+    }),
     registerApiRoute('/intake-api/remote-sync-settings', { method: 'GET',
       /** 只公开目标标签和阶段选择，绝不向浏览器返回本地路径或Git地址。 */
       handler: async c => {

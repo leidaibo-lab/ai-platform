@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { WorkflowGateForm, type WorkflowGate } from './WorkflowGate';
 import { Markdown } from './components/Markdown';
 import { RemoteSyncSettings } from './RemoteSyncSettings';
+import { RepositoryManagement } from './RepositoryManagement';
 import './intake.css';
 interface Question { id: string; title: string; reason: string; required: boolean; kind: 'single' | 'multiple' | 'text'; options: { id: string; label: string }[]; recommendation: string }
 interface Answer { questionId: string; selected: string[]; custom: string }
@@ -38,6 +39,7 @@ export function IntakeApp() {
   const [approving, setApproving] = useState(false);
   const [recoveryConfirm, setRecoveryConfirm] = useState(false);
   const [showSyncSettings, setShowSyncSettings] = useState(false);
+  const [showRepositoryManagement, setShowRepositoryManagement] = useState(false);
   /** 深链接与所选 Run 一致，刷新恢复当前人工节点。 */
   function choose(value: string) {
     setNotice(''); setUncertain(false); setRecoveryConfirm(false); setId(value); setDocument(undefined); setAnswers({}); setSupplement(''); setComment(''); setError(''); setApproving(false);
@@ -130,6 +132,7 @@ export function IntakeApp() {
   function review(decision: 'approve' | 'reject') {
     void submit({ role: 'product', artifactHash: document!.product!.artifact.hash, decision, reviewer, comment });
   }
+  if (showRepositoryManagement) return <RepositoryManagement close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowRepositoryManagement(false)} />;
   if (showSyncSettings) return <RemoteSyncSettings close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowSyncSettings(false)} />;
   return <div className="intake-shell">
     <aside className="intake-sidebar"><a className="intake-brand" href="/">◈ 产研工作台</a><p>从想法到可执行需求</p>
@@ -137,7 +140,7 @@ export function IntakeApp() {
       <h3>最近的主流程</h3>{runs.map(/** 历史列表只选择，不恢复审批。 */run => <button className={id === run.runId ? 'selected' : ''} key={run.runId} disabled={busy || uncertain} onClick={/** 打开保存的 Run。 */() => choose(run.runId)}>{run.brief.slice(0, 32) || run.runId}<small>{run.step === 'review-product' ? '等待产品确认' : run.step === 'guided-requirements' ? '等待需求回答' : run.step === 'confirm-project-scope' ? '等待项目授权' : run.blockage ? '开工条件未齐' : run.status === 'failed' ? '生成失败' : run.gate ? `待办：${run.gate.title}` : run.status === 'success' ? '本轮已结束' : '流程记录'}</small></button>)}
       <small>所有确认在此工作台完成</small>
     </aside>
-    <main className="intake-main"><header><span>产研交付 · 业务流程</span><div className="intake-actions"><button disabled={busy} onClick={/** 设置只影响后续同步节点。 */() => setShowSyncSettings(true)}>远端同步设置</button><button disabled={busy} onClick={/** 刷新只回读事实。 */() => void refresh()}>刷新状态</button></div></header>
+    <main className="intake-main"><header><span>产研交付 · 业务流程</span><div className="intake-actions"><button disabled={busy} onClick={/** 管理仓库字典不改变当前Run。 */() => setShowRepositoryManagement(true)}>项目仓库管理</button><button disabled={busy} onClick={/** 设置只影响后续同步节点。 */() => setShowSyncSettings(true)}>远端同步设置</button><button disabled={busy} onClick={/** 刷新只回读事实。 */() => void refresh()}>刷新状态</button></div></header>
       <div className="intake-progress"><span className={intakeStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={intakeStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={intakeStage(document) === 2 ? 'active' : ''}>03 开发授权与实施</span><span className={intakeStage(document) === 3 ? 'active' : ''}>04 测试与发布</span></div>
       {error && <div role="alert" className="intake-error">{error}</div>}
       {busy && <p role="status">正在处理，请勿重复提交。完成后会自动展示下一步…</p>}

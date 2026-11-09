@@ -82,6 +82,7 @@
 .intake-card select{display:block;width:100%;box-sizing:border-box;border:1px solid #cbd5d9;background:#fff;color:#20272d;border-radius:9px;padding:13px;font:inherit;margin-top:9px}
 .sync-settings fieldset{margin:18px 0}
 .sync-targets{margin:24px 0;padding:18px;border:1px solid #dce5e0;border-radius:12px;background:#fafcfb}.sync-targets h2{font-size:18px;margin:0 0 8px}.sync-targets p,.sync-target-address{font-size:13px;color:#5e6d70}.sync-targets article{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-top:1px solid #e4ebe7}.sync-targets article:first-of-type{border-top:0}.sync-targets code,.sync-target-address code{overflow-wrap:anywhere;color:#276b5b}
+.repository-management fieldset{margin:22px 0}.repository-warning{padding:12px 15px;border:1px solid #e7d4a8;border-radius:9px;background:#fffaf0;color:#76551e!important}
 .intake-notice{color:#276b5b;background:#eff7f3;padding:12px 15px;border-radius:8px}
 .intake-card input:focus,.intake-card textarea:focus{outline:2px solid #8ab8a9;
   outline-offset:2px}

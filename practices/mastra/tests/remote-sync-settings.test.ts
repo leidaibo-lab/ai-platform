@@ -1,10 +1,11 @@
 /** 远端同步路由设置只允许服务端登记目标，阶段映射必须覆盖实际原生节点。 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readRemoteSyncSettings, resolveRemoteSyncTarget, syncPhaseForStep, writeRemoteSyncSettings } from '../src/delivery/remote-sync-settings.js';
+import { readRemoteSyncSettings, readRemoteSyncTargets, resolveRemoteSyncTarget, syncPhaseForStep, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../src/delivery/remote-sync-settings.js';
 
 /** 构造仅用于设置存储的服务端目标注册表；不执行Git或网络操作。 */
 function config(directory: string) {
@@ -31,5 +32,18 @@ test('阶段设置仅保存目标ID，并在运行时解析已登记仓库', /**
     assert.equal(resolveRemoteSyncTarget(value, 'architecture')?.root, '/workspace/design-flow');
     assert.equal(resolveRemoteSyncTarget(value, 'prepare-test-plan'), undefined);
     assert.throws(/** 非服务端登记的ID不能绕过白名单。 */() => writeRemoteSyncSettings(value, { ...saved, phases: { ...saved.phases, release: { enabled: true, targetId: 'unknown' } } }), /已授权仓库/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('仓库字典保存前核验checkout，且不允许删除被启用阶段引用的目标', /** 字典管理不能把任意目录或失效目标带入执行路径。 */() => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'remote-sync-target-dictionary-')));
+  const repository = join(directory, 'repository');
+  try {
+    execFileSync('git', ['init', repository], { stdio: 'ignore' });
+    execFileSync('git', ['-C', repository, 'remote', 'add', 'origin', 'https://github.com/example/hrm.git'], { stdio: 'ignore' });
+    const value = { ...config(directory), remoteSyncTargets: [{ id: 'hrm', label: 'HRM 项目仓库', root: repository, origin: 'https://github.com/example/hrm.git' }] };
+    const saved = writeRemoteSyncTargets(value, { version: 'remote-sync-targets.v1', targets: [{ id: 'hrm', label: '招聘项目仓库', root: repository, origin: 'https://github.com/example/hrm.git' }] });
+    assert.equal(saved[0].label, '招聘项目仓库'); assert.equal(readRemoteSyncTargets(value)[0].label, '招聘项目仓库');
+    assert.throws(/** 当前产品阶段默认仍使用hrm，不能删除。 */() => writeRemoteSyncTargets(value, { version: 'remote-sync-targets.v1', targets: [{ id: 'other', label: '其他项目', root: repository, origin: 'https://github.com/example/hrm.git' }] }), /仍有阶段使用/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
