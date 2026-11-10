@@ -1,3 +1,4 @@
+import { cancelExecution } from './execution-control.js';
 import { autonomyPolicySchema } from '../development/v2/contracts.js';
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
 import type { PracticeConfig } from '../mastra/config.js';
@@ -101,6 +102,20 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         c.header('Cache-Control', 'no-store');
         try { return c.json(await readIntake(workflow, c.req.param('runId'))); }
         catch (error) { return failure(c, error); }
+      },
+    }),
+    registerApiRoute('/intake-api/runs/:runId/cancel', { method: 'POST',
+      // 不获取start/respond长锁，只能以当前执行token取消只读生成。
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try {
+          origin(c); const id = z.string().uuid().parse(c.req.param('runId'));
+          const { token } = z.object({ token: z.string().uuid() }).strict().parse(await c.req.json());
+          await cancelExecution(id, token,
+            // createRun复用同进程原生活动实例；不得伪造Store终态。
+            async () => { const run = await workflow.createRun({ runId: id }); await run.cancel(); });
+          return c.json(await readIntake(workflow, id));
+        } catch { return c.json({ error: '取消未确认：执行已变化、已结束或不属于当前服务。请刷新状态；不要重新提交原操作。' }, 409); }
       },
     }),
     registerApiRoute('/intake-api/runs/:runId/respond', { method: 'POST',

@@ -1,5 +1,7 @@
 # Mastra 原生应用实践
 
+长时间执行：见[实际配置说明](./config/README.md#超时与重试的实际配置)及[处理交互设计](./execution-status-interaction.md)。已接入产品生成尝试、失败来源、服务端计时、只读有效配置及二次确认取消。取消仅支持当前服务进程中的需求分析和四产品角色；开发、推送、发布及跨实例取消暂不支持，参数在线调整尚未接入。
+
 本实践使用 Mastra 原生 Agent、Workflow 和 LibSQLStore，独立管理入口、依赖和数据，不导入探索主线 Runtime、Store 或 GatewayClient。
 
 ## 当前入口与流程

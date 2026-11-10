@@ -1,3 +1,4 @@
+import { ExecutionStatus, type ExecutionView, type ExecutionSettings } from './ExecutionStatus';
 import { intakeRequest as request, reconcileWrite } from './intake-request';
 import { RepositoryScope } from './RepositoryScope';
 import { OperationFeedback } from './OperationFeedback';
@@ -9,7 +10,7 @@ import { RemoteSyncSettings } from './RemoteSyncSettings';
 import { RepositoryManagement } from './RepositoryManagement';
 import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
 import './intake.css';
-interface Document { developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+interface Document { execution?: ExecutionView; executionSettings?: ExecutionSettings; developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
 /** 从实际关口映射业务阶段，避免进入开发后仍高亮需求输入。 */
 function intakeStage(document?: Document): number {
   if (document?.progress?.phase === '产品稿修订') return 1;
@@ -33,6 +34,7 @@ export function IntakeApp() {
   const [supplement, setSupplement] = useState('');
   const [comment, setComment] = useState('');
   const [uncertain, setUncertain] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [operation, setOperation] = useState({ label: '正在处理你的提交…', startedAt: Date.now() });
   const [notice, setNotice] = useState('');
@@ -75,19 +77,26 @@ export function IntakeApp() {
   }, [id]);
   // 已在服务端运行的记录可刷新恢复观察，不需要重复提交。
   useEffect(() => {
-    if (busy || (!uncertain && document?.status !== 'running') || !id) return;
+    if (!id || (!busy && !uncertain && document?.status !== 'running' && (!document?.execution || document.execution.settled))) return;
     let active = true; let reading = false;
     /** 一次只执行一个只读查询，终态或新暂停点会自然停止轮询。 */
     async function poll() {
       if (reading) return; reading = true;
       try { const next = await request<Document>(`/${id}`); if (active) { setDocument(next); setUncertain(false); setError(''); if (next.status !== document?.status) setNotice('已同步最新流程状态。'); if (next.status !== 'running') { setAnswers({}); setSupplement(''); setApproving(false); setRecoveryConfirm(false); if (next.status === 'failed') { setError(next.retry ? `${next.retry.title}未完成：${next.retry.reason}。可使用恢复入口继续。` : '后台执行已失败，请查看处理说明。'); setNotice(''); } else setNotice('已重新同步最新流程状态。'); } } }
-      catch { /* 只读观察暂不可达时保留未知状态，下一轮继续回读。 */ }
+      catch { if (active) { setUncertain(true); setError('状态查询暂不可达，后台执行状态未知。正在继续回读，请勿重新提交。'); } }
       finally { reading = false; }
     }
     const timer = window.setInterval(poll, 5000);
     // 切换记录或离开运行态后取消观察。
     return () => { active = false; window.clearInterval(timer); };
-  }, [busy, id, document?.status, uncertain]);
+  }, [busy, id, document?.status, document?.execution?.settled, uncertain]);
+  /** 取消不复用提交busy锁，后台长请求期间也可操作。 */
+  async function cancelCurrent(token: string) {
+    setCancelBusy(true); setError('');
+    try { setDocument(await request<Document>(`/${id}/cancel`, { token })); setNotice('取消请求已发送，正在确认本地调用退出。'); }
+    catch { setUncertain(true); setError('取消尚未确认，正在回读后台状态。请勿重新提交。'); }
+    finally { setCancelBusy(false); }
+  }
   /** 超时只代表连接结束；先回读状态，再决定展示运行、失败或输入错误。 */
   async function recoverResponse(runId: string, reason: unknown) {
     const result = await reconcileWrite(/** 仅回读原Run，不重发写入。 */() => request<Document>(`/${runId}`));
@@ -114,7 +123,7 @@ export function IntakeApp() {
     setBusy(true); setError('');
     try {
       const next = await request<Document>(`/${id}/respond`, body);
-      if (next.status === 'failed') setError(next.retry ? `${next.retry.title}未完成：${next.retry.reason}。请查看本页的失败证据与恢复入口。` : '后续生成未完成，请查看本页处理说明。'); else setNotice(next.gate?.key === 'confirm-blocker-answers' ? '待决问题已整理，请逐项选择或补充。' : next.gate?.key === 'review-revised-product' ? '已生成完整修订稿，请审阅确认。' : next.gate?.recoveryInfo ? '该阶段执行未完成，检查点已保留。请查看下面的处理指引。' : '本次决定已保存，请查看当前阶段与下一步。'); setDocument(next); window.scrollTo({ top: 0, behavior: 'smooth' }); setRuns(runs.map(/** 当前 Run 状态随已保存响应同步。 */run => run.runId === next.runId ? next : run)); setAnswers({}); setSupplement(''); setApproving(false); setRecoveryConfirm(false);
+      if (next.status === 'canceled') setNotice(next.execution?.settled ? '本轮流程已取消，本地生成调用已退出。' : '本轮流程已取消，正在等待本地生成调用退出。'); else if (next.status === 'failed') setError(next.retry ? `${next.retry.title}未完成：${next.retry.reason}。请查看本页的失败证据与恢复入口。` : '后续生成未完成，请查看本页处理说明。'); else setNotice(next.gate?.key === 'confirm-blocker-answers' ? '待决问题已整理，请逐项选择或补充。' : next.gate?.key === 'review-revised-product' ? '已生成完整修订稿，请审阅确认。' : next.gate?.recoveryInfo ? '该阶段执行未完成，检查点已保留。请查看下面的处理指引。' : '本次决定已保存，请查看当前阶段与下一步。'); setDocument(next); window.scrollTo({ top: 0, behavior: 'smooth' }); setRuns(runs.map(/** 当前 Run 状态随已保存响应同步。 */run => run.runId === next.runId ? next : run)); setAnswers({}); setSupplement(''); setApproving(false); setRecoveryConfirm(false);
     } catch (reason) { await recoverResponse(id, reason); }
     finally { setBusy(false); }
   }
@@ -138,19 +147,20 @@ export function IntakeApp() {
   return <div className="intake-shell intake-workbench">
     <aside className="intake-sidebar"><a className="intake-brand" href="/">◈ 产研工作台</a><p>从想法到可执行需求</p>
       <button disabled={busy || uncertain} onClick={/** 新建需求只重置本地页面。 */() => choose('')}>＋ 新需求</button>
-      <h3>最近的主流程</h3>{runs.map(/** 历史列表只选择，不恢复审批。 */run => <button className={id === run.runId ? 'selected' : ''} key={run.runId} disabled={busy || uncertain} onClick={/** 打开保存的 Run。 */() => choose(run.runId)}>{run.brief.slice(0, 32) || run.runId}<small>{run.step === 'review-product' ? '等待产品确认' : run.step === 'guided-requirements' ? '等待需求回答' : run.step === 'confirm-project-scope' ? '等待项目授权' : run.blockage ? '开工条件未齐' : run.status === 'failed' ? '生成失败' : run.gate ? `待办：${run.gate.title}` : run.status === 'success' ? '本轮已结束' : '流程记录'}</small></button>)}
+      <h3>最近的主流程</h3>{runs.map(/** 历史列表只选择，不恢复审批。 */run => <button className={id === run.runId ? 'selected' : ''} key={run.runId} disabled={busy || uncertain} onClick={/** 打开保存的 Run。 */() => choose(run.runId)}>{run.brief.slice(0, 32) || run.runId}<small>{run.step === 'review-product' ? '等待产品确认' : run.step === 'guided-requirements' ? '等待需求回答' : run.step === 'confirm-project-scope' ? '等待项目授权' : run.blockage ? '开工条件未齐' : run.status === 'canceled' ? '已取消' : run.status === 'failed' ? '生成失败' : run.gate ? `待办：${run.gate.title}` : run.status === 'success' ? '本轮已结束' : '流程记录'}</small></button>)}
       <small>所有确认在此工作台完成</small>
     </aside>
     <main className="intake-main"><header><span>产研交付 · 业务流程</span><div className="intake-actions"><button disabled={busy} onClick={/** 管理仓库字典不改变当前Run。 */() => setShowRepositoryManagement(true)}>项目仓库管理</button><button disabled={busy} onClick={/** 设置只影响后续同步节点。 */() => setShowSyncSettings(true)}>远端同步设置</button><button disabled={busy} onClick={/** 刷新只回读事实。 */() => void refresh()}>刷新状态</button></div></header>
       <div className="intake-progress"><span className={intakeStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={intakeStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={intakeStage(document) === 2 ? 'active' : ''}>03 开发授权与实施</span><span className={intakeStage(document) === 3 ? 'active' : ''}>04 测试与发布</span></div>
       {error && <div role="alert" className="intake-error">{error}</div>}
-      {busy && <p role="status">正在处理，请勿重复提交。完成后会自动展示下一步…</p>}
+      {busy && <p role="status">提交请求处理中；下方独立同步后台状态，请勿重复提交。</p>}
       {!id ? <section className="intake-card"><div className="intake-eyebrow">先描述问题，让方案逐步清晰</div><h1>你想解决什么问题？</h1><p>说明使用者、当前困难和期望结果。我们会先给出方案建议，再请你确认关键选择。</p>
         <label>需求描述<textarea value={brief} maxLength={12000} rows={8} placeholder="例如：招聘同事希望统一处理候选人初筛和面试邀约，目前靠表格记录，容易遗漏跟进…" onChange={/** 保留原始输入。 */e => setBrief(e.target.value)} /></label>
         <label>迭代标识<input value={iterationId} maxLength={100} onChange={/** 标识显式绑定本次主流程。 */e => setIterationId(e.target.value)} /></label>
         <button className="primary" disabled={busy || uncertain || !brief.trim() || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)} onClick={start}>分析需求，形成初步方案 →</button>
       </section> : <>
         <section className="intake-context"><details><summary>原始需求 · {document?.mode === 'fixture' ? '固定样例，不理解业务输入' : document?.mode === 'live' ? '真实模型提案，待人工审核' : '正在载入'}</summary><p>{document?.brief || brief}</p><code>{id}</code></details></section>
+        {document && <ExecutionStatus execution={document.execution} settings={document.executionSettings} status={document.status} cancel={cancelCurrent} cancelBusy={cancelBusy} />}
         {intake && <RequirementWorkspace title="澄清待确认项" panel={<fieldset className="requirement-inputs" disabled={busy || uncertain}><legend className="sr-only">本轮问题与补充</legend>
 <QuestionFlow key={intake.hash} questions={questions} answers={answers} activeId={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question" />
           <label>其他补充<textarea value={supplement} maxLength={4000} onChange={/** 补充与当前问题回答一并保存。 */e => setSupplement(e.target.value)} /></label>
@@ -182,9 +192,9 @@ export function IntakeApp() {
         {document && !intake && !document.product && !document.gate && !document.blockage && (!document.progress || document.retry) && (document.retry ? <RequirementWorkspace title="恢复与下一步" panel={<><p>{document.retry.next ?? '从已保存的检查点继续，已确认内容和前序成果保留。'}</p><h3>执行影响</h3><p>{document.retry.impact}</p></>} actions={recoveryConfirm ? <div className="intake-assumptions"><strong>确认从“{document.retry.title}”继续？</strong><p>{document.retry.next}</p><p>{document.retry.syncOnly ? '仅同步已保存产物，不重新调用模型；成功后继续原流程。' : '会继续当前需求执行，不重新填写需求；模型调用可能产生费用。'}</p><button className="primary" disabled={busy || uncertain} onClick={/** 路径和输入由服务端快照决定，客户端只提交版本令牌。 */() => void submit({ retryHash: document.retry!.hash })}>{busy ? '正在恢复…' : '确认恢复并继续'}</button><button disabled={busy || uncertain} onClick={/** 返回检查不改变原生快照。 */() => setRecoveryConfirm(false)}>返回检查</button></div> : <button className="primary" disabled={busy || uncertain} onClick={/** 恢复前先展示检查点与执行影响。 */() => setRecoveryConfirm(true)}>{document.retry.syncOnly ? '重试资料同步 →' : `从${document.retry.title}继续 →`}</button>}>
           <section className="intake-card requirement-completeness"><div className="intake-eyebrow">当前成果状态</div><h1>已保存的工作与待补结果</h1><p>已保存 {document.retry.savedAnswers} 轮回答。当前停在“{document.retry.title}”，恢复后仍会停在相应的人工确认关口。</p>{document.retry.preserved.length > 0 && <ul className="requirement-preserved">{document.retry.preserved.map(/** 状态由服务端依据保存的角色结果判断，计划句不计作完成交付。 */item => <li key={item.role}><span>{item.label}</span><strong>{item.complete === false ? '仅保存执行计划，未保存检查结果' : '已完成'}</strong></li>)}</ul>}</section>
           <section className="intake-card"><h2>当前需要处理的问题</h2><p><strong>{document.retry.title}：</strong>{document.retry.reason}</p>{document.retry.attemptDetails?.map(/** 保留服务端脱敏后的失败依据，不推断额外故障原因。 */detail => <p key={detail}>{detail}</p>)}<p>{document.retry.message}</p></section>
-        </RequirementWorkspace> : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
+        </RequirementWorkspace> : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'canceled' ? '流程已取消' : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'canceled' ? '本轮流程已终止，已保存的回答和前序成果保留；不支持直接恢复已取消流程。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
       </>}
     </main>
-    <OperationFeedback busy={busy || uncertain || document?.status === 'running'} label={busy || uncertain || operation.label.includes('超时') ? operation.label : document?.progress?.title ?? '后台流程仍在处理，正在自动同步最新结果…'} startedAt={operation.startedAt} error={error} notice={notice} dismiss={/** 关闭反馈不丢弃表单或重新提交。 */() => { setError(''); setNotice(''); }} />
+    <OperationFeedback busy={(busy || uncertain || document?.status === 'running') && document?.status !== 'canceled'} label={document?.execution && !document.execution.settled ? (document.execution.phase === 'canceling' ? '取消中，等待本地调用退出…' : `正在执行：第 ${document.execution.attempt} 次尝试${document.execution.failures.length ? '，已发生故障重试' : ''}…`) : busy || uncertain || operation.label.includes('超时') ? operation.label : document?.progress?.title ?? '后台流程仍在处理，正在自动同步最新结果…'} startedAt={document?.execution?.startedAt ?? operation.startedAt} error={error} notice={notice} dismiss={/** 关闭反馈不丢弃表单或重新提交。 */() => { setError(''); setNotice(''); }} />
   </div>;
 }
