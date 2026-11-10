@@ -8,7 +8,7 @@
 
 ```text
 原始需求
-  → guidedIntake=true 时：方案摘要 → 关键问题确认 → 回答后修订（最多四轮）
+  → guidedIntake=true 时：方案摘要 → 关键问题确认 → 回答后修订及业务成熟度检查（不设总轮数上限，每轮最多八题）
   → 总产品 → 需求梳理 → 产品闭环 → 产品写作
   → review-product：人工确认产品版本
   → confirm-project-scope：确认文件快照、可写范围和角色

@@ -6,7 +6,15 @@ const text = z.string().trim().min(1).max(4000);
 export const questionDecisionSchema = z.object({ blocks: z.enum(['product', 'development', 'none']), reason: text, unanswered: text });
 /** 两处澄清复用同一判断标准，具体业务证据仍由当前输入提供。 */
 export const questionDecisionInstructions = '主动区分必答与可选，不要把所有细节都设为必答。每题必须提供decision:{blocks:"product"|"development"|"none",reason:string,unanswered:string}。仅当未决选择影响本期范围、权限、核心流程、验收或已确认答案存在冲突时设required:true，并说明影响哪条结果及为什么当前不能继续确认；初始需求blocks为product，开发阻塞blocks为development。可延后细节/增强/偏好设required:false、blocks:none，说明不回答时明确保留待决或排除本期；不能默认采用推荐或擅自编造规则。已有人类回答不要重问。';
+/** 各业务维度分别给出判断依据；题数与轮次不代表成熟度。 */
+export const maturitySchema = z.object({
+  decisions: z.object({ clear: z.boolean(), evidence: text }),
+  mainFlow: z.object({ clear: z.boolean(), evidence: text }),
+  exceptions: z.object({ clear: z.boolean(), evidence: text }),
+  delivery: z.object({ clear: z.boolean(), evidence: text }),
+});
 export const planSchema = z.object({
+  maturity: maturitySchema.optional(),
   summary: text, assumptions: z.array(text).max(12),
   questions: z.array(z.object({ id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/), title: text, reason: text, required: z.boolean(), decision: questionDecisionSchema.optional(), kind: z.enum(['single', 'multiple', 'text']), options: z.array(z.object({ id: text, label: text })).max(8), recommendation: text })).max(8),
 }).superRefine(
@@ -20,13 +28,17 @@ export const planSchema = z.object({
   },
 );
 /** 新输出强制依据和当前阶段；旧快照仍由兼容planSchema读取。 */
-export const generatedPlanSchema = planSchema.safeExtend({ questions: z.array(planSchema.shape.questions.element.extend({ decision: questionDecisionSchema })).max(8) }).superRefine(/** 初始需求不能声称已评估开发开工门槛。 */(plan, context) => {
+export const generatedPlanSchema = planSchema.safeExtend({ maturity: maturitySchema, questions: z.array(planSchema.shape.questions.element.extend({ decision: questionDecisionSchema })).max(8) }).superRefine(/** 初始需求不能声称已评估开发开工门槛。 */(plan, context) => {
   if (plan.questions.some(/** 必答在当前产品阶段处理。 */question => question.decision.blocks === 'development')) context.addIssue({ code: 'custom', message: '需求问题阻塞阶段错误' });
 });
 export const answerSchema = z.object({ questionId: text, selected: z.array(text).max(8), custom: z.string().trim().max(4000) });
 export const responseSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), action: z.enum(['refine', 'finalize']), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(8), supplement: z.string().trim().max(4000) });
-export const intakeSchema = z.object({ enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0).max(4), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })).max(4) });
+export const intakeSchema = z.object({ enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })) });
 export type Intake = z.infer<typeof intakeSchema>;
+/** 最新分析各业务维度均明确且没有必答缺口时，才允许请求结束澄清。 */
+export function canFinalizePlan(plan: z.infer<typeof planSchema>): boolean {
+  return !!plan.maturity && Object.values(plan.maturity).every(/** 每个维度均需有判断。 */item => item.clear) && !plan.questions.some(/** 必答问题仍然表示关键缺口。 */question => question.required);
+}
 /** 散列绑定原始需求、轮次、建议与历史，避免旧卡片答案用于新方案。 */
 export function intakeHash(brief: string, intake: Intake): string {
   return createHash('sha256').update(JSON.stringify({ brief, round: intake.round, plan: intake.plan, history: intake.history })).digest('hex');
@@ -35,7 +47,6 @@ export function intakeHash(brief: string, intake: Intake): string {
 export function validateAnswers(intake: Intake, value: unknown) {
   const response = responseSchema.parse(value);
   if (!intake.plan || response.hash !== intake.hash) throw new Error('方案版本已变化，请刷新');
-  if (response.action === 'refine' && intake.round >= 4) throw new Error('已达四轮，请补齐回答生成完整稿或另起需求');
   const answers = new Map(response.answers.map(/** 以 ID 关联用户输入。 */a => [a.questionId, a]));
   if (answers.size !== response.answers.length) throw new Error('回答重复');
   for (const a of response.answers) if (!intake.plan.questions.some(/** 拒绝未知问题。 */q => q.id === a.questionId)) throw new Error('未知问题');

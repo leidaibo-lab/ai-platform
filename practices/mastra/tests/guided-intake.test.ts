@@ -36,6 +36,24 @@ test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修�
     assert.equal(current.intake?.history.length, 1);
     assert.equal(current.intake?.history[0].response.reviewer, 'test-human');
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, answer));
+    for (let round = 2; round <= 6; round++) {
+      const previousHash = current.intake!.hash;
+      current = await respondIntake(workflow, 'fixture', run.runId, { ...answer, hash: previousHash, answers: [], supplement: `第${round}轮补充` });
+      assert.equal(current.step, 'guided-requirements');
+      assert.equal(current.product, undefined);
+      assert.equal(current.intake!.round, round + 1);
+      assert.equal(current.intake!.history.length, round);
+      assert.equal(current.intake!.ready, false);
+      assert.equal(current.intake!.history[0].response.reviewer, 'test-human');
+      await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { ...answer, hash: previousHash, answers: [] }));
+      if (round === 4) {
+        await app.storage.close();
+        app = createStudioApplicationOptions(config); mastra = new Mastra(app); workflow = app.workflows.productDevelopmentWorkflow;
+        const restored = await readIntake(workflow, run.runId);
+        assert.deepEqual(restored.intake, current.intake);
+        current = restored;
+      }
+    }
     current = await respondIntake(workflow, 'fixture', run.runId, { ...answer, hash: current.intake!.hash, action: 'finalize', answers: [] });
     assert.equal(current.step, 'review-product'); assert.ok(current.product);
     const review = { role: 'product', artifactHash: current.product.artifact.hash, decision: 'approve', reviewer: 'test-human', comment: '合成批准' };
@@ -65,7 +83,9 @@ test('需求 HTTP：同源、固定标识创建、坏答案与完整稿版本门
     const again = await (await post('/intake-api/runs', input)).json(); assert.equal(again.intake.hash, current.intake.hash);
     assert.equal((await post(`/intake-api/runs/${input.runId}/respond`, { hash: current.intake.hash, action: 'finalize', reviewer: 'test', answers: [], supplement: '' })).status, 409);
     const read = await router.request(`/intake-api/runs/${input.runId}`); assert.equal(read.headers.get('cache-control'), 'no-store'); assert.equal((await read.json()).intake.hash, current.intake.hash);
-    const draft = await (await post(`/intake-api/runs/${input.runId}/respond`, { hash: current.intake.hash, action: 'finalize', reviewer: 'test', answers: [{ questionId: 'scope', selected: [], custom: '仅人工初筛和邀约记录' }], supplement: '' })).json();
+    let draft = await (await post(`/intake-api/runs/${input.runId}/respond`, { hash: current.intake.hash, action: 'finalize', reviewer: 'test', answers: [{ questionId: 'scope', selected: [], custom: '仅人工初筛和邀约记录' }], supplement: '' })).json();
+    assert.equal(draft.step, 'guided-requirements');
+    draft = await (await post(`/intake-api/runs/${input.runId}/respond`, { hash: draft.intake.hash, action: 'finalize', reviewer: 'test', answers: [], supplement: '' })).json();
     assert.equal(draft.step, 'review-product');
     const decision = { role: 'product', artifactHash: draft.product.artifact.hash, decision: 'reject', reviewer: 'test', comment: '合成终止' };
     assert.equal((await post(`/intake-api/runs/${input.runId}/respond`, { ...decision, artifactHash: '0'.repeat(64) })).status, 409);
@@ -76,13 +96,14 @@ test('需求 HTTP：同源、固定标识创建、坏答案与完整稿版本门
 
 import { validateAnswers, planSchema } from '../src/intake/contracts.js';
 
-test('澄清约束：坏表单、单多选、文本、重复问题与四轮上限', /** 纯边界断言避免用模型声明替代输入校验。 */() => {
+test('澄清约束：坏表单、单多选、文本、重复问题与继续澄清', /** 纯边界断言避免用模型声明替代输入校验。 */() => {
   const plan = planSchema.parse({ summary: '方案', assumptions: [], questions: [{ id: 'a', title: '选择', reason: '影响范围', required: true, kind: 'single', options: [{ id: 'x', label: 'X' }, { id: 'y', label: 'Y' }], recommendation: 'X' }] });
   const intake = { enabled: true, ready: false, round: 4, plan, hash: 'a'.repeat(64), history: [] };
   const response = { hash: intake.hash, action: 'finalize', reviewer: 'test', answers: [{ questionId: 'a', selected: ['x'], custom: '' }], supplement: '' };
   assert.equal(validateAnswers(intake, response).action, 'finalize');
   for (const answers of [[], [{ questionId: 'unknown', selected: ['x'], custom: '' }], [{ questionId: 'a', selected: ['x', 'y'], custom: '' }], [{ questionId: 'a', selected: ['bad'], custom: '' }], [response.answers[0], response.answers[0]]]) assert.throws(/** 非法答案不得被当作业务确认。 */() => validateAnswers(intake, { ...response, answers }));
-  assert.throws(/** 上限后禁止继续分析，但可以生成完整稿。 */() => validateAnswers(intake, { ...response, action: 'refine' }));
+  assert.equal(validateAnswers(intake, { ...response, action: 'refine' }).action, 'refine');
+  assert.throws(/** 每轮仍然最多八题。 */() => planSchema.parse({ ...plan, questions: Array.from({ length: 9 }, /** 为每题提供独立标识。 */(_, index) => ({ ...plan.questions[0], id: String(index) })) }));
   assert.throws(/** 同一表单不能生成重复问题标识。 */() => planSchema.parse({ ...plan, questions: [plan.questions[0], plan.questions[0]] }));
 });
 
@@ -98,6 +119,8 @@ for (const scenario of ['success', 'rollback']) test(`业务前端接口连续�
   try {
     let current = await (await post({ runId, brief: '合成全流程', iterationId: 'ui-test' }, true)).json();
     current = await (await post({ hash: current.intake.hash, action: 'finalize', reviewer: actor.reviewer, supplement: '', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }] })).json();
+    assert.equal(current.step, 'guided-requirements');
+    current = await (await post({ hash: current.intake.hash, action: 'finalize', reviewer: actor.reviewer, supplement: '', answers: [] })).json();
     current = await (await post({ ...actor, role: 'product', artifactHash: current.product.artifact.hash, decision: 'approve' })).json();
     const visited: string[] = [];
     while (current.gate && visited.length < 12) {
@@ -126,13 +149,13 @@ for (const scenario of ['success', 'rollback']) test(`业务前端接口连续�
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('需求分析失败后使用原生 timeTravel 保留用户回答，只重做生成', /** 注入结构化输出失败，验证真实快照恢复而不重填答案。 */async () => {
+for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${failureKind}后保留回答，仅恢复生成而不结束澄清`, /** 注入结构化输出失败，验证真实快照恢复而不重填答案。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-retry-'));
   const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   const app = createStudioApplicationOptions(config);
   let calls = 0;
-  const plan = { summary: '受控合成方案', assumptions: [], questions: [] };
-  app.agents.productCoordinatorAgent.generate = (/** 返回原生结构化对象；第二次模拟格式失败。 */async (_input: unknown, options: any) => { assert.ok(options.structuredOutput.schema); if (++calls === 2) throw new SyntaxError('synthetic invalid output'); return { object: plan }; }) as any;
+  const plan = { maturity: { decisions: { clear: true, evidence: '合成' }, mainFlow: { clear: true, evidence: '合成' }, exceptions: { clear: true, evidence: '合成' }, delivery: { clear: true, evidence: '合成' } }, summary: '受控合成方案', assumptions: [], questions: [] };
+  app.agents.productCoordinatorAgent.generate = (/** 返回原生结构化对象；第二次模拟格式失败。 */async (_input: unknown, options: any) => { assert.ok(options.structuredOutput.schema); assert.equal(options.maxSteps, 24); assert.equal(options.modelSettings.timeout.stepMs, 600000); assert.equal(options.modelSettings.timeout.totalMs, 1800000); if (++calls === 2) throw failureKind === 'timeout' ? new DOMException('synthetic timeout', 'TimeoutError') : new SyntaxError('synthetic invalid output'); return { object: plan }; }) as any;
   const { createProductDevelopmentWorkflow } = await import('../src/mastra/workflows/product-development.js');
   const workflow = createProductDevelopmentWorkflow(app.agents as any, { ...config, mode: 'live' });
   new Mastra({ ...app, workflows: { productDevelopmentWorkflow: workflow } });
@@ -144,7 +167,7 @@ test('需求分析失败后使用原生 timeTravel 保留用户回答，只重�
     await assert.rejects(respondIntake(workflow, 'live', run.runId, { retryHash: '0'.repeat(64) }));
     current = await respondIntake(workflow, 'live', run.runId, { retryHash: current.retry.hash });
     assert.equal(current.status, 'suspended'); assert.equal(current.intake?.history.length, 1); assert.equal(current.intake.history[0].response.supplement, '真实人工补充（合成测试）');
-    assert.equal(current.intake.round, 2); assert.equal(calls, 3);
+    assert.equal(current.intake.round, 2); assert.equal(current.intake.ready, false); assert.equal(current.product, undefined); assert.equal(calls, 3);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
