@@ -9,6 +9,9 @@ import { z } from 'zod';
 import { readHandoffFile, type RemoteHandoff, contentHash } from './remote-handoff.js';
 
 export const contextLimits = Object.freeze(materialPolicy.reading);
+const invocationToolsets = new WeakSet<object>();
+/** 仅认可本工厂生成且冻结结构的调用期资料工具，不能凭同名对象伪造。 */
+export function isTaskContextToolset(value: unknown): boolean { return !!value && typeof value === 'object' && invocationToolsets.has(value); }
 export interface MaterialReference { id: string; path: string; hash: string; chars: number; format: 'text' | 'json'; preview: string; commit?: string }
 
 /** 将大材料变成固定散列引用；完整字符串保持字节不变，只能通过本调用工具读取。 */
@@ -77,5 +80,7 @@ export function createTaskContext(input: Record<string, unknown>, enabled = true
     /** 框架只向宿主已注册的资料闭包分派，不能读任意文件。 */
     execute: async (input) => read(input),
   });
-  return { prompt, manifest, read, locate, options: enabled ? { memory: nativeInvocationMemory(), toolsets: { handoff: { read: readTool, locate: locateTool } } } : {} };
+  const toolsets = Object.freeze({ handoff: Object.freeze({ read: readTool, locate: locateTool }) });
+  invocationToolsets.add(toolsets);
+  return { prompt, manifest, read, locate, options: enabled ? { memory: nativeInvocationMemory(), toolsets } : {} };
 }

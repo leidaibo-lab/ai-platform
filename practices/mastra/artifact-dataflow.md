@@ -79,7 +79,7 @@ catalog 和 bundle 支持 `projectId=hrm`、`iterationId`、`runId`、`stage` �
 
 产品角色从 HRM 的 `product/sources` 读取真实材料。`sources-observed-at-export.json` 只说明导出时看见的来源清单；逐 Run 冻结资料和工具实际引用校验待建设，不能声称生成时读过清单全部资料。
 
-代码目标仓库已确定为 HRM，但当前开发执行器仍处理隔离候选目录中的受限 `.mjs`。本次归档研发交接及版本元数据，尚未把候选代码自动写到 HRM 的 `apps/web/apps/api/packages/database`，也未产生 commit/PR。源码基线/分支、代码回库、pnpm 全栈执行与 CI 制品绑定仍待接通。
+代码目标为确认的 HRM 工程仓库。当前隔离候选已支持全栈执行；独立测试通过后，`publish-tested-code` 使用临时 Git index 将批准任务的新增/修改源码写到真实路径并推送 `codex/workflow/<根RunId>`，不修改用户 checkout/index。代码回执存入 Lifecycle 的 `codePublication`，阶段 `source.json` 也投影基线、源码/质量散列和远端 commit；后续发布只消费同版本回执。资料仍放在 product/testSet/deploy，`candidate-files.json` 是历史/取证副本。删除、自动合并、PR 和 CI 制品绑定尚未接通；真实业务远端推送待验收，详见[源码回库决策](../../docs/decisions/2026-11-09-mastra-code-publication.md)。
 
 发布节点保存批准范围和人工回填的外部执行、健康、回滚结果。本轮没有运行实际部署，也没有接入自动 CI/CD 或认证审批身份。大型附件、备份保留、多用户权限和历史补归档需后续建设。
 

@@ -43,7 +43,7 @@ function projectAssets(value: unknown): { correlation?: AssetCorrelation; runId?
   const lifecycle = lifecycleSchema.safeParse(value);
   if (lifecycle.success) {
     const state = lifecycle.data;
-    const files: Record<string, string> = { 'quality.json': json(state.quality), 'quality-history.json': json(state.qualityHistory), 'source.json': json({ productHash: state.development.input.source.hash, sourceHash: state.development.checkpointHash, planHash: state.development.planHash }), 'outcome.json': json({ mode: state.development.mode, outcome: state.outcome, limitations: state.limitations }) };
+    const files: Record<string, string> = { 'quality.json': json(state.quality), 'quality-history.json': json(state.qualityHistory), 'source.json': json({ codePublication: state.codePublication, productHash: state.development.input.source.hash, sourceHash: state.development.checkpointHash, planHash: state.development.planHash }), 'outcome.json': json({ mode: state.development.mode, outcome: state.outcome, limitations: state.limitations }) };
     if (state.quality.plan) files['test-plan.md'] = state.quality.plan.content;
     if (state.quality.approval) files['test-cases.json'] = json(state.quality.approval.cases);
     if (state.release.plan) {

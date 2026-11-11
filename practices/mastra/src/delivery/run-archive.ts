@@ -21,7 +21,7 @@ const reasonSchema = z.enum(['repository-sync', 'human-or-recovery-gate', 'model
 export const runArchiveSchema = z.object({
   schemaVersion: z.literal('run-archive.v1'), authority: z.literal('mastra-store-projection'),
   projectId: z.literal('hrm'), iterationId: assetIdSchema.nullable(), runId: identifier,
-  workflowId: z.literal('productDevelopmentWorkflow'), workflowDefinitionId: z.literal('product-development'),
+  workflowId: z.literal('productDevelopmentWorkflow'), workflowDefinitionId: z.literal('product-development-resources-v1'),
   workflowVersion: z.literal('product-development.archive.v1'), mode: z.enum(['fixture', 'live']),
   scope: z.enum(['run', 'step']), stage: identifier.nullable(), status: statusSchema, observedAt: z.iso.datetime(),
   reason: reasonSchema.nullable(),
@@ -108,7 +108,7 @@ export async function recordRunArchive(config: PracticeConfig, observation: Arch
   const artifactPaths = readAssetCatalog(root).assets.filter(/** 只关联本根 Run 的已完成清单。 */asset => asset.manifest.runId === runId).map(/** 只记录路径，不复制交付正文。 */asset => asset.path);
   const record = runArchiveSchema.parse({
     schemaVersion: 'run-archive.v1', authority: 'mastra-store-projection', projectId: 'hrm', iterationId, runId,
-    workflowId: 'productDevelopmentWorkflow', workflowDefinitionId: 'product-development', workflowVersion: 'product-development.archive.v1', mode: config.mode,
+    workflowId: 'productDevelopmentWorkflow', workflowDefinitionId: 'product-development-resources-v1', workflowVersion: 'product-development.archive.v1', mode: config.mode,
     scope: observation.scope, stage: observation.stage ?? null, status, reason: observation.reason ?? null, observedAt: new Date().toISOString(), code: codeIdentity(config.rootDir), artifacts: metadata.artifacts, artifactPaths,
     recovery: { source: 'Mastra Store', portable: false, condition: status === 'suspended' ? 'wait-for-human-or-sync' : ['failed', 'tripwire'].includes(status) ? 'inspect-native-failure' : ['success', 'bailed', 'canceled'].includes(status) ? 'none' : 'inspect-native-state' },
   });

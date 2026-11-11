@@ -2,17 +2,21 @@
 
 - [Mastra长时间执行与处理交互](../practices/mastra/execution-status-interaction.md)：超时层次、自动重试、上下文整理、未知态和失败恢复；已接入产品尝试、失败来源、只读配置和受限取消；上下文细分事件与在线参数调整仍为后续设计。
 
+- [Mastra 业务验收改造设计](../practices/mastra/business-delivery-design.md)：澄清预算续办、最终包独立审查、纵向旅程、全栈执行及测试扩展，包含实施批次与20项验收；设计稿，尚未生效。
+
+- [Mastra本机交付闭环示例](../practices/mastra/examples/local-delivery/README.md)：工单标题校验、真实沙箱/浏览器、本机发布健康与故障回滚；固定模型不代表真实业务验收。
+
 - [Mastra 自主开发与修复闭环](./decisions/2026-11-09-mastra-autonomous-development.md)：批准范围内连续实现、登记检查、失败证据传递、联合修复与预算/进展停止；[使用说明](../practices/mastra/unified-workflow.md#批准范围内自主开发与排障)。
 
 - [开发阶段状态与故障引导](./decisions/2026-11-08-mastra-stage-state-flow.md)：当前阶段、故障原因、保留检查点和下一步操作；未执行业务节点不再空跑为完成，原阶段暂停恢复。
 
 - [HRM 全栈验证与开发自主规划](./decisions/2026-11-08-mastra-hrm-execution.md)：用户确认关联项目，Agent 提出具体文件与团队；已实测 Docker 中类型检查、构建及页面/API/临时数据库连通。[使用说明](../practices/mastra/README.md)。
 
-- [Mastra资源配置接入规范](../practices/mastra/config/runtime-resource-contract.md)：单一配置归属、加载交叉校验、Run冻结/恢复、逐角色最小输入与版本迁移；定义稿，未接入运行时。
+- [Mastra资源配置接入规范](../practices/mastra/config/runtime-resource-contract.md)：原始设计，预算统一、最小DTO和资料快照仍待实施。[角色原生版本运行说明](../practices/mastra/config/stored-role-runtime.md)：已接入正式主流程的Agent/Skill版本、Run绑定、资源发布及可信制品核验，不兼容历史Run。[前置四项实验](../practices/mastra/evaluations/native/stored-role-validation.md)与正式入口回归分别记录。
 
 - [HRM 产物归档与数据流转](../practices/mastra/artifact-dataflow.md)：项目/迭代/Run 关联、阶段版本、查看与下载；[PNG](./assets/mastra-hrm-artifact-dataflow.png) / [SVG](./assets/mastra-hrm-artifact-dataflow.svg)，[决策](./decisions/2026-11-07-hrm-asset-catalog.md)。
 
-- [HRM 仓库资产归属](./decisions/2026-11-07-hrm-repository-assets.md)：产品、测试、发布投影归 hrm，业务资料从 product/sources 读取；全栈验证见2026-11-08决策，Git 回库仍待接线。
+- [HRM 仓库资产归属](./decisions/2026-11-07-hrm-repository-assets.md)：产品、测试、发布投影归 hrm，业务资料从 product/sources 读取；全栈验证见2026-11-08决策，源码回库已按[新决策](./decisions/2026-11-09-mastra-code-publication.md)接通，真实业务远端验收待执行。
 
 - [Mastra 完整产研流程](../practices/mastra/unified-workflow.md)：同一主 Run，工作台承接人工关口，Studio 用于调试，产品到动态团队、前后端并行/受限委派、评审、独立测试/缺陷回归、外部发布回执/健康与回滚、最终交付；[生命周期决策](./decisions/2026-11-07-mastra-full-delivery-lifecycle.md)，[统一团队选型](./decisions/2026-11-07-mastra-unified-development-team.md)。下文旧双流程与图保留为历史设计。
 
@@ -65,3 +69,5 @@
 - [Mastra 项目运行档案](../practices/mastra/artifact-dataflow.md#2026-11-09项目运行档案)：生命周期投影、交接分支同步与只读 Workspace，不迁移执行状态。
 
 - [Mastra 浏览器 QA](../practices/mastra/browser-qa.md)：Skill、原生 Agent、Playwright 工具与 Workflow 质量门；[选型 ADR](./decisions/2026-11-09-mastra-gstack-browser-qa.md)，首版静态候选，HRM 全栈仍阻塞。
+
+- [Mastra 开发独立评测与源码回库（2026-11-09）](../practices/mastra/evaluations/native/development-nodes/results-2026-11-09.md)：真实模型分角色结果、原始实验和 Git 回库验证边界。

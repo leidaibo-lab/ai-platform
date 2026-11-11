@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { resolveModelId, type PracticeConfig } from '../mastra/config.js';
+import { currentResources } from '../resources/scope.js';
+import { resourceHash } from '../resources/contracts.js';
 
 export const developmentRoleSchema = z.enum(['architect', 'frontend', 'backend', 'infrastructure', 'self-check']);
 export type DevelopmentRole = z.infer<typeof developmentRoleSchema>;
@@ -12,6 +14,8 @@ export const safePathSchema = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_./-]
 );
 export const projectSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
+  /** 服务端项目确认冻结的代码来源；缺失的历史输入不能自动回库。 */
+  repository: z.object({ origin: z.string().url(), baseCommit: z.string().regex(/^[a-f0-9]{40,64}$/) }).optional(),
   executionProfile: z.literal('hrm-pnpm-docker-v1').optional(),
   planning: z.literal('agent').optional(),
   /** 服务端检查得到的工程缺口随输入冻结；存在时仅可规划，不能批准或实施。 */
@@ -83,6 +87,8 @@ export function developmentHash(value: unknown): string {
 
 /** 归一化等价端点；不保存 URL、账号密码或 API key，允许单独轮转凭据。 */
 export function developmentExecutionIdentity(config: PracticeConfig): z.infer<typeof executionIdentitySchema> {
+  const frozen = currentResources()?.binding;
+  if (frozen) return { mode: frozen.mode, modelId: `stored:${resourceHash(frozen.roles)}`, endpointHash: frozen.endpointHash };
   const endpoint = new URL(config.baseUrl ?? 'https://api.openai.com/v1');
   endpoint.username = '';
   endpoint.password = '';

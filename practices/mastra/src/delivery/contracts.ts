@@ -6,6 +6,8 @@ import { commandEvidenceSchema, developmentHash } from '../development/contracts
 import { findingSchema, stateV2Schema } from '../development/v2/contracts.js';
 
 export const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+/** 原生 Store 拥有源码推送回执；版本与质量门绑定，不能由模型自行声明。 */
+export const codePublicationSchema = z.object({ version: z.literal('code-publication.v1'), baselineCommit: z.string().regex(/^[a-f0-9]{40,64}$/), sourceHash: hashSchema, qualityHash: hashSchema, receipt: remoteHandoffSchema });
 const text = z.string().trim().min(1).max(2000);
 export const actorSchema = z.object({ reviewer: z.string().trim().min(1).max(100), comment: text });
 export const testCaseSchema = z.object({ id: z.string().min(1).max(100), requirementRefs: z.array(z.string()).min(1), expected: text, method: z.enum(['registered-check', 'manual', 'browser']), checkRefs: z.array(z.string()), browser: browserCaseSchema.optional() });
@@ -21,7 +23,7 @@ export const deploymentReceiptSchema = z.object({ releaseHash: hashSchema, sourc
 export const healthReceiptSchema = z.object({ releaseHash: hashSchema, deploymentReceiptHash: hashSchema, operator: text, checks: z.array(z.object({ id: z.string(), status: z.enum(['passed', 'failed']), evidence: text, observedAt: z.iso.datetime() })).min(1).max(30) });
 export const rollbackReceiptSchema = z.object({ releaseHash: hashSchema, rollbackArtifactRef: text, status: z.enum(['rolled-back', 'manual-attention']), jobRef: text, operator: text, notes: text });
 export const releaseStateSchema = z.object({ plan: testPlanSchema.nullable(), qualityHash: hashSchema.nullable(), approval: releaseApprovalSchema.nullable(), hash: hashSchema.nullable(), receipt: deploymentReceiptSchema.nullable(), health: healthReceiptSchema.nullable(), rollback: rollbackReceiptSchema.nullable(), authority: z.literal('local-human-report') });
-export const lifecycleSchema = z.object({ repositoryHandoff: remoteHandoffSchema.optional(), version: z.literal('delivery-lifecycle.v1'), brief: z.string().min(1), development: stateV2Schema, quality: qualityStateSchema, qualityHistory: z.array(qualityStateSchema), developmentHistory: z.array(stateV2Schema.shape.delivery.unwrap()), release: releaseStateSchema, outcome: z.enum(['in-progress', 'blocked', 'rework-exhausted', 'rejected', 'rolled-back', 'manual-attention', 'delivery-confirmed', 'fixture-completed']), limitations: z.array(z.string()) });
+export const lifecycleSchema = z.object({ codePublication: codePublicationSchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), version: z.literal('delivery-lifecycle.v1'), brief: z.string().min(1), development: stateV2Schema, quality: qualityStateSchema, qualityHistory: z.array(qualityStateSchema), developmentHistory: z.array(stateV2Schema.shape.delivery.unwrap()), release: releaseStateSchema, outcome: z.enum(['in-progress', 'blocked', 'rework-exhausted', 'rejected', 'rolled-back', 'manual-attention', 'delivery-confirmed', 'fixture-completed']), limitations: z.array(z.string()) });
 export type Lifecycle = z.infer<typeof lifecycleSchema>;
 
 /** QA 审阅绑定计划、用例批准、源码及真实检查，不能重用旧版本通过记录。 */

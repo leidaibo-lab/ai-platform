@@ -1,8 +1,14 @@
 # Mastra 原生应用实践
 
-长时间执行：见[实际配置说明](./config/README.md#超时与重试的实际配置)及[处理交互设计](./execution-status-interaction.md)。已接入产品生成尝试、失败来源、服务端计时、只读有效配置及二次确认取消。取消仅支持当前服务进程中的需求分析和四产品角色；开发、推送、发布及跨实例取消暂不支持，参数在线调整尚未接入。
+角色资源已接入正式主流程：Mastra保存Agent/Skill版本，应用负责Run绑定、恢复装配和可信制品核验。见[配置、发布与恢复](./config/stored-role-runtime.md)及[前置隔离实验](./evaluations/native/stored-role-validation.md)。历史Run不兼容；live主流程需要部署侧可信签名。
+
+后续改造设计：[以业务验收为完成条件](./business-delivery-design.md)，覆盖澄清续办、最终包审查、纵向旅程及全栈测试；目前为设计稿，以下运行方式与现有能力不因该文档改变。
+
+本机闭环验证示例：[工单标题校验页](./examples/local-delivery/README.md)，运行 `npm run example:local-delivery`，实际执行沙箱测试、浏览器 QA、本机静态发布、健康检查和回滚；角色使用固定模型，自动决策仅为示例策略，不代表真实业务或生产验收。
 
 本实践使用 Mastra 原生 Agent、Workflow 和 LibSQLStore，独立管理入口、依赖和数据，不导入探索主线 Runtime、Store 或 GatewayClient。
+
+长时间执行：见[实际配置说明](./config/README.md#超时与重试的实际配置)及[处理交互设计](./execution-status-interaction.md)。已接入产品生成尝试、失败来源、服务端计时、只读有效配置及二次确认取消。取消仅支持当前服务进程中的需求分析和四产品角色；开发、推送、发布及跨实例取消暂不支持，参数在线调整尚未接入。
 
 ## 当前入口与流程
 
@@ -80,7 +86,7 @@ HRM 项目由服务端自动关联当前仓库、分支和版本。用户确认�
 
 只有产品资料、尚未建立工程骨架的仓库也可先交接生成方案。工作台逐项列出工程文件、固定脚本及 Docker 的准备缺口；这些缺口随本次输入保存，存在时仅允许只读规划，不能批准实施或执行检查。工程准备完成后，使用“重新检查项目，继续交接”返回同一 Run 的项目确认关口；保留产品批准，重新确认当前仓库版本后再规划。不会自动创建工程骨架。
 
-可在本目录运行 `npm run verify:hrm -- /Users/lei/code/hrm` 重新验证当前基线，要求 Docker Desktop 可用。结果保存到忽略的 `.data/hrm-verification-result.json`。2026-11-08 三项真实基线检查通过；这不代表招聘业务已实现或全部业务验收通过。候选代码尚未自动回写 HRM，Git 回库和 CI 制品绑定仍未接通。独立测试会重跑登记套件，人工用例需要实际结果和证据。
+可在本目录运行 `npm run verify:hrm -- /Users/lei/code/hrm` 重新验证当前基线，要求 Docker Desktop 可用。结果保存到忽略的 `.data/hrm-verification-result.json`。2026-11-08 三项真实基线检查通过；这不代表招聘业务已实现或全部业务验收通过。独立测试通过后，`publish-tested-code` 将批准任务内的实际源码提交到 `codex/workflow/<根RunId>`，随后才进入发布计划；沿用开发阶段同步目标，但必须匹配确认的项目 origin。项目确认冻结 Git 基线，拒绝未提交的源码/工程配置混入、目标分支漂移及缺少基线的历史 Run。回执保存 commit、源码/质量散列，失败只重试同步。真实 bare 远端与跨 Store 恢复已验证，GitHub push dry-run通过；真实业务 Run 的 HRM 实际源码推送仍待验收，CI 制品绑定尚未接通。独立测试会重跑登记套件，人工用例需要实际结果和证据。
 
 部署由外部平台实际执行，工作台收集发布、健康检查与回滚回执，尚未接入自动 CI/CD。最终交付依赖同版本质量与发布证据；人工回执不等于机器独立验证。真实业务全链路、生产多实例和完整故障恢复尚未验收。
 
@@ -128,3 +134,5 @@ MASTRA_DEVELOPMENT_MODEL=openai/gpt-5.6-luna
 重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。模型可用性与真实质量仍需上游验证。
 
 浏览器 QA 已接入主 Workflow：在测试用例批准关口显式选择 browser，执行真实 Chromium 并在质量关口查看截图与版本绑定回执。安装、示例与边界见[浏览器 QA](./browser-qa.md)；首版限候选静态 HTML，HRM 全栈需后续启动 Adapter。
+
+本轮独立角色评测与源码回库证据见[2026-11-09报告](./evaluations/native/development-nodes/results-2026-11-09.md)；源码回库边界见[决策](../../docs/decisions/2026-11-09-mastra-code-publication.md)。

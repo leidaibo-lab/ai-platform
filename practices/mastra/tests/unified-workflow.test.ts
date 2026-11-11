@@ -2,6 +2,7 @@ import { validateQualityReview } from '../src/delivery/testing.js';
 /** 新版完整主链原生持久化回归；所有审批及发布回执均为合成测试数据。 */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { MastraLanguageModelV2Mock } from '@mastra/core/test-utils/llm-mock';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -9,6 +10,9 @@ import { Mastra } from '@mastra/core';
 import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { createProductDevelopmentWorkflow } from '../src/mastra/workflows/product-development.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
+import { ensureRoleCatalog } from '../src/resources/catalog.js';
+import { publishRole, resolveRole } from '../src/resources/native-store.js';
+import { loadResources } from '../src/resources/runtime.js';
 
 const actor = { reviewer: 'evaluation-policy', comment: '合成可靠性测试授权，不代表业务人工批准' };
 const project = { id: 'reliability', files: { 'src/a.mjs': 'export const initial=0;', 'src/b.mjs': 'export const initial=0;', 'check.mjs': 'import {test} from "node:test"; import assert from "node:assert/strict"; import {fixtureValue as a} from "./src/a.mjs"; import {fixtureValue as b} from "./src/b.mjs"; test("two modules",/** 检查两个真实模块。 */()=>{assert.equal(a(),1);assert.equal(b(),1)});' }, writablePaths: ['src/a.mjs', 'src/b.mjs'], checkFiles: ['check.mjs'], roles: ['frontend', 'backend'] };
@@ -21,7 +25,8 @@ function paused(result: any): { path: string[]; payload: any } {
 }
 
 // 每个暂停点关闭Store再装配，验证原生快照续跑而非内存闭包。
-for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
+let baselineHash: string;
+for (const scenario of ['success', 'resources-enhanced', 'health-failure', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
   test(`完整产研主链与跨Store恢复：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'mastra-unified-'));
     const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
@@ -42,18 +47,39 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
       if (scenario === 'test-plan-incomplete' || scenario === 'release-plan-incomplete') {
         const agent = scenario === 'test-plan-incomplete' ? options.agents.testingAgent : options.agents.operationsAgent;
         // 模拟原生压缩或模型调用中断仍带部分文本，不能进入人工批准。
-        agent.generate = (async () => ({ text: '部分计划', finishReason: 'other' })) as any;
+        const incomplete = new MastraLanguageModelV2Mock({
+          /** 在模型边界注入中断，保持正式Stored Agent装配与循环。 */
+          doGenerate: async () => ({ content: [{ type: 'text', text: '部分计划' }], finishReason: 'other', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, warnings: [] }),
+        });
+        agent.getModel = /** fixture装配只替换模型，不替换资源检查。 */ () => incomplete;
       }
       new Mastra(options); await options.storage.init();
       return { workflow: options.workflows.productDevelopmentWorkflow, storage: options.storage };
     }
     let app = await open();
     try {
+      if (scenario === 'resources-enhanced') {
+        const options = createStudioApplicationOptions(config);
+        const ids = await ensureRoleCatalog(app.storage, config, options.agents);
+        for (const id of Object.values(ids)) {
+          const entity = (await (await app.storage.getStore('agents'))!.getById(id))!;
+          const role = await resolveRole(app.storage, id, entity.activeVersionId!);
+          await publishRole(app.storage, id, { ...role.config, instructions: role.config.instructions + '\nENHANCED_ROLE_V2', tools: { ...role.config.tools, practiceInfo: {} }, model: { ...role.config.model, temperature: 0.2 } });
+        }
+        await options.storage.close();
+      }
       let run = await app.workflow.createRun(); const runId = run.runId;
       let result: any = await run.start({ inputData: { brief: '固定fixture双模块工具链', iterationId: 'reliability' } });
+      const resources = await loadResources(app.storage, config, runId);
       const visited: string[] = [];
       for (let count = 0; result.status === 'suspended' && count < 15; count++) {
         const pending = paused(result); const id = pending.path.at(-1)!; const p = pending.payload;
+        if (scenario === 'resources-enhanced' && id === 'review-product') {
+          for (const key of ['productAgent', 'development-context-standard-member', 'development-backend-standard-member']) {
+            const pin = resources.roles[key]; const role = await resolveRole(app.storage, pin.agentId, pin.versionId);
+            await publishRole(app.storage, pin.agentId, { ...role.config, instructions: role.config.instructions + '\nPUBLISHED_WHILE_SUSPENDED_V3' });
+          }
+        }
         assert.ok(p, `缺少暂停载荷 ${JSON.stringify(result)}`); visited.push(id);
         let data: any;
         if (id === 'review-product') data = { ...actor, role: 'product', artifactHash: scenario === 'stale-product' ? '0'.repeat(64) : p.artifact.hash, decision: scenario === 'reject-product' ? 'reject' : 'approve' };
@@ -65,7 +91,7 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
         else if (id === 'execute-release-externally') data = { releaseHash: p.releaseHash, sourceHash: p.sourceHash, artifactDigest: scenario === 'wrong-artifact' ? 'b'.repeat(64) : p.artifactDigest, environment: p.environment, status: scenario === 'deploy-failure' ? 'failed' : 'succeeded', jobRef: 'synthetic://job', operator: 'fixture', finishedAt: '2026-11-07T00:00:00Z', notes: '模拟回执，未部署' };
         else if (id === 'verify-release-health') data = { releaseHash: p.releaseHash, deploymentReceiptHash: p.deploymentReceiptHash, operator: 'fixture', checks: [{ id: scenario === 'missing-health' ? 'unknown' : 'ready', status: scenario === 'health-failure' ? 'failed' : 'passed', evidence: '合成健康结果', observedAt: '2026-11-07T00:00:00Z' }] };
         else if (id === 'execute-rollback-externally') data = { releaseHash: p.releaseHash, rollbackArtifactRef: p.rollbackArtifactRef, status: 'rolled-back', jobRef: 'synthetic://rollback', operator: 'fixture', notes: '模拟回滚' };
-        else assert.fail(`未预期暂停点 ${id}`);
+        else assert.fail(`未预期暂停点 ${id}: ${JSON.stringify(p)}`);
         if (scenario.startsWith('browser-') && id === 'approve-test-cases') data.cases.push({ id: 'browser', requirementRefs: p.requirements.map(/** 浏览器用例仍引用批准需求。 */(r: any) => r.id), expected: '页面显示候选内容', method: 'browser', checkRefs: [], browser: { entry: 'page.html', assets: [], actions: [], assertions: [{ selector: '#result', text: scenario === 'browser-failure' ? '不存在' : '候选页面' }] } });
         if (scenario.startsWith('browser-') && id === 'review-test-results') {
           assert.equal(p.quality.browser.receipts[0].status, scenario === 'browser-failure' ? 'failed' : 'passed');
@@ -73,6 +99,7 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
           if (scenario === 'browser-failure') { assert.throws(/** 失败断言不能用人工通过覆盖。 */() => validateQualityReview(p.quality ? { development: { checkpointHash: p.quality.sourceHash, requirements: [], verificationRefs: [] }, quality: p.quality } as any : {} as any, data), /测试未全部通过/); data.decision = 'stop'; }
         }
         await app.storage.close(); app = await open(); run = await app.workflow.createRun({ runId });
+        assert.deepEqual(await loadResources(app.storage, config, runId), resources);
         result = await run.resume({ step: pending.path, resumeData: data });
       }
       if (scenario === 'test-plan-incomplete' || scenario === 'release-plan-incomplete') {
@@ -84,6 +111,8 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
       if (scenario === 'stale-product') { assert.equal(result.status, 'failed'); assert.deepEqual(visited, ['review-product']); return; }
       assert.equal(result.status, 'success', JSON.stringify(result));
       assert.equal(result.result.outcome, scenario === 'browser-failure' ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
+      if (scenario === 'success') baselineHash = result.result.development.checkpointHash;
+      if (scenario === 'resources-enhanced') { assert.equal(result.result.development.checkpointHash, baselineHash); assert.equal(visited.length, 8); }
       if (['qa-rework', 'qa-fixed'].includes(scenario)) { assert.equal(result.result.qualityHistory.length, 1); assert.equal(result.result.development.round, 1); }
       if (scenario === 'success') { assert.equal(result.result.development.delegations.length, 2); assert.equal(result.result.quality.status, 'passed'); assert.ok(visited.includes('verify-release-health')); }
     } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }

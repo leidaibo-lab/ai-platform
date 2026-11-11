@@ -18,5 +18,5 @@ export function assembleRepositoryProject(root: string | undefined, expected: st
     finally { closeSync(fd); }
   }
   const writablePaths = Object.keys(files).filter(/** 只授权源码根；检查脚本、依赖与包管理配置保持只读。 */path => hrmWritableRoots.some(/** 根目录是宿主固定策略，不来自用户字符串或模型。 */root => path.startsWith(`${root}/`)));
-  return projectSchema.parse({ id: 'hrm', files, writablePaths, checkFiles: Object.keys(files).filter(/** 非源码基线全部受保护，避免候选降低检查要求。 */path => !writablePaths.includes(path)), roles: ['frontend', 'backend', 'infrastructure'], executionProfile: 'hrm-pnpm-docker-v1', planning: 'agent', writableRoots: hrmWritableRoots, ...(!catalog.executionReady ? { preparationIssues: catalog.preparationIssues } : {}) });
+  return projectSchema.parse({ id: 'hrm', repository: { origin: 'https://github.com/leidaibo-lab/hrm.git', baseCommit: catalog.revision }, files, writablePaths, checkFiles: Object.keys(files).filter(/** 非源码基线全部受保护，避免候选降低检查要求。 */path => !writablePaths.includes(path)), roles: ['frontend', 'backend', 'infrastructure'], executionProfile: 'hrm-pnpm-docker-v1', planning: 'agent', writableRoots: hrmWritableRoots, ...(!catalog.executionReady ? { preparationIssues: catalog.preparationIssues } : {}) });
 }

@@ -30,7 +30,7 @@ function synthetic(item: DevelopmentNodeCase): GeneratorV2 {
         // 从真实受限进程结果构造合成报告。
         (check) => check.exitCode !== 0,
       );
-      output = item.expected.reportProtocol ? { summary: failed.length ? '实际检查失败' : '实际检查通过', route: 'backend' } : { status: failed.length ? 'failed' : 'passed', failedCheckIds: failed.map(
+      output = item.expected.reportProtocol ? { status: failed.length ? 'failed' : 'passed', summary: failed.length ? '实际检查失败' : '实际检查通过，0项失败', route: 'backend' } : { status: failed.length ? 'failed' : 'passed', failedCheckIds: failed.map(
         // 报告引用固定检查ID。
         (check) => check.id,
       ) };
@@ -64,7 +64,7 @@ for (const item of suite.cases) {
       assert.equal(assessDevelopmentNode(wrong, truth).score, 0);
       const prefix = structuredClone(result); prefix.entry!.text = '额外解说' + prefix.entry!.text;
       assert.equal(assessDevelopmentNode(prefix, truth).score, 0);
-      const falseReport = structuredClone(result); falseReport.entry!.text = JSON.stringify({ summary: item.expected.passed ? '检查失败' : '检查全部通过', route: 'backend' });
+      const falseReport = structuredClone(result); falseReport.entry!.text = JSON.stringify({ status: item.expected.passed ? 'failed' : 'passed', summary: item.expected.passed ? '检查失败' : '检查全部通过', route: 'backend' });
       assert.equal(assessDevelopmentNode(falseReport, truth).score, 0);
       const legacyTruth = structuredClone(truth); delete legacyTruth.expected.reportProtocol;
       assert.equal(assessDevelopmentNode(result, legacyTruth).score, 0);

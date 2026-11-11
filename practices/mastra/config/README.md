@@ -1,5 +1,7 @@
 # Workflow 资源衔接清单
 
+已实施的角色版本能力见[Stored Agent 配置、发布与恢复](./stored-role-runtime.md)：角色和 Skill 内容由原生版本库拥有，Run 首步绑定，工具实现由可信制品约束；预算统一、最小交接 DTO 与资料快照仍未完成。
+
 [workflow-resources.json](./workflow-resources.json)登记当前完整产研流程的资源归属、生产消费关系、版本绑定、代码配置入口和已知缺口。它是当前代码的审计快照，**没有被运行时加载**，修改它不会改变Agent权限、流程、预算或审批。
 
 ## 当前判断

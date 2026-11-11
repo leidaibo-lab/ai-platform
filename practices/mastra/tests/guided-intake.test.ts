@@ -1,7 +1,12 @@
 /** 真实原生快照测试，仅使用合成模型，不操作用户已有 Run。 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { captureArtifact } from '../src/resources/artifact.js';
+import { canonical } from '../src/resources/contracts.js';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Mastra } from '@mastra/core';
@@ -151,24 +156,34 @@ for (const scenario of ['success', 'rollback']) test(`业务前端接口连续�
 
 for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${failureKind}后保留回答，仅恢复生成而不结束澄清`, /** 注入结构化输出失败，验证真实快照恢复而不重填答案。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-retry-'));
-  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
-  const app = createStudioApplicationOptions(config);
   let calls = 0;
+  let allowRecovery = false;
   const plan = { maturity: { decisions: { clear: true, evidence: '合成' }, mainFlow: { clear: true, evidence: '合成' }, exceptions: { clear: true, evidence: '合成' }, delivery: { clear: true, evidence: '合成' } }, summary: '受控合成方案', assumptions: [], questions: [] };
-  app.agents.productCoordinatorAgent.generate = (/** 返回原生结构化对象；第二次模拟格式失败。 */async (_input: unknown, options: any) => { assert.ok(options.structuredOutput.schema); assert.equal(options.maxSteps, 24); assert.equal(options.modelSettings.timeout.stepMs, 600000); assert.equal(options.modelSettings.timeout.totalMs, 1800000); if (++calls === 2) throw failureKind === 'timeout' ? new DOMException('synthetic timeout', 'TimeoutError') : new SyntaxError('synthetic invalid output'); return { object: plan }; }) as any;
-  const { createProductDevelopmentWorkflow } = await import('../src/mastra/workflows/product-development.js');
-  const workflow = createProductDevelopmentWorkflow(app.agents as any, { ...config, mode: 'live' });
-  new Mastra({ ...app, workflows: { productDevelopmentWorkflow: workflow } });
+  const server = createServer(/** 本地合成HTTP模型，保留live装配、结构化解析和错误恢复。 */async (request, response) => {
+    for await (const _chunk of request) { /* 消费请求，不记录正文或凭据。 */ }
+    if (++calls >= 2 && !allowRecovery && failureKind === 'timeout') { response.writeHead(408, { 'content-type': 'application/json' }); response.end(JSON.stringify({ error: { message: 'synthetic timeout' } })); return; }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ id: 'synthetic', object: 'chat.completion', created: 1, model: 'synthetic', choices: [{ index: 0, message: { role: 'assistant', content: calls === 2 ? 'invalid structured output' : JSON.stringify(plan) }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const pair = generateKeyPairSync('ed25519'); const manifest = captureArtifact(resolve('.'), true);
+  const manifestPath = resolve(directory, 'manifest.json'); const publicKeyPath = resolve(directory, 'public.pem');
+  writeFileSync(publicKeyPath, pair.publicKey.export({ type: 'spki', format: 'pem' }));
+  writeFileSync(manifestPath, JSON.stringify({ manifest, signature: sign(null, Buffer.from(canonical(manifest)), pair.privateKey).toString('base64') }));
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'live', modelId: 'openai/synthetic', apiKey: 'synthetic', baseUrl: `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}/v1`, resourceTrust: { manifestPath, publicKeyPath }, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const app = createStudioApplicationOptions(config); const workflow = app.workflows.productDevelopmentWorkflow;
+  new Mastra(app);
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成恢复需求', iterationId: 'retry-test', guidedIntake: true } });
     let current = await readIntake(workflow, run.runId);
     current = await respondIntake(workflow, 'live', run.runId, { hash: current.intake!.hash, action: 'refine', reviewer: 'test-human', answers: [], supplement: '真实人工补充（合成测试）' });
     assert.equal(current.status, 'failed'); assert.ok(current.retry); assert.equal(current.retry.savedAnswers, 1);
     await assert.rejects(respondIntake(workflow, 'live', run.runId, { retryHash: '0'.repeat(64) }));
+    allowRecovery = true;
     current = await respondIntake(workflow, 'live', run.runId, { retryHash: current.retry.hash });
     assert.equal(current.status, 'suspended'); assert.equal(current.intake?.history.length, 1); assert.equal(current.intake.history[0].response.supplement, '真实人工补充（合成测试）');
-    assert.equal(current.intake.round, 2); assert.equal(current.intake.ready, false); assert.equal(current.product, undefined); assert.equal(calls, 3);
-  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+    assert.equal(current.intake.round, 2); assert.equal(current.intake.ready, false); assert.equal(current.product, undefined); assert.ok(calls >= 3);
+  } finally { await app.storage.close(); server.closeAllConnections(); await new Promise<void>(/** 等待本地测试服务释放端口。 */done => server.close(/** 关闭回执无需传播测试请求。 */() => done())); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('产品写作 Time travel：前序三角色不重跑、旧令牌拒绝、恢复后重新待审', /** 使用原生嵌套快照与真实业务服务，不对用户 Run 提交决定。 */async () => {
@@ -176,8 +191,8 @@ test('产品写作 Time travel：前序三角色不重跑、旧令牌拒绝、�
   const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   const calls: Record<string, number> = {};
   for (const name of ['productCoordinatorAgent', 'productClarificationAgent', 'productClosureAgent', 'productAgent'] as const) {
-    const agent = app.agents[name]; const original = agent.generate.bind(agent) as any;
-    agent.generate = (/** 只在首次写作注入失败，其余模型仍走正式固定模型链。 */async (...args: any[]) => { calls[name] = (calls[name] ?? 0) + 1; if (name === 'productAgent' && calls[name] === 1) throw new Error('synthetic upstream failure'); return original(...args); }) as any;
+    const agent = app.agents[name]; const original = agent.getModel.bind(agent);
+    agent.getModel = (/** 在fixture模型装配边界注入首次故障，其余保留原生Stored Agent循环。 */async () => { calls[name] = (calls[name] ?? 0) + 1; if (name === 'productAgent' && calls[name] === 1) throw new Error('synthetic upstream failure'); return original(); }) as any;
   }
   new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
   try {
@@ -205,8 +220,8 @@ test('历史产品预算失败无需升档恢复且不重跑前序角色', /** �
   const directory = mkdtempSync(resolve(tmpdir(), 'product-budget-recovery-'));
   const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   const counts: Record<string, number> = {};
-  const writing = app.agents.productAgent; const original = writing.generate.bind(writing) as any;
-  writing.generate = (/** 第一次命中固定预算故障，恢复后走既有合成模型。 */async (...args: any[]) => { counts.writing = (counts.writing ?? 0) + 1; if (counts.writing === 1) throw new ContextBudgetError('read', 50000, 48000); return original(...args); }) as any;
+  const writing = app.agents.productAgent; const original = writing.getModel.bind(writing);
+  writing.getModel = (/** 第一次装配命中预算故障，恢复后使用原生固定模型。 */async () => { counts.writing = (counts.writing ?? 0) + 1; if (counts.writing === 1) throw new ContextBudgetError('read', 50000, 48000); return original(); }) as any;
   new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成产品预算恢复', iterationId: 'budget-recovery' } });

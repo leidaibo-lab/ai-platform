@@ -1,5 +1,9 @@
 # 完整产研流程
 
+2026-11-10 的[业务验收改造设计](./business-delivery-design.md)定义下一版澄清、交接和测试门禁，当前尚未接入；本文件下文继续描述现有运行图，不将设计状态计为实现完成。
+
+本机可复跑示例见[工单交付闭环](./examples/local-delivery/README.md)：复用本主链的暂停恢复与质量门，补充实际静态发布和回滚执行者。固定模型、示例自动决策与真实机器观察分开记录。
+
 2026-11-07 起，Studio业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）；另注册六个具名开发独立评测Workflow，仅在隔离候选中考核单个角色。旧提案链、独立产品交接及修订入口从 Studio 移除；历史源文件与数据库保留，旧 CLI 仅作兼容。
 
 日常操作按 [README](./README.md#启动)启动后端与前端，打开[产研工作台](http://127.0.0.1:4112/)；所有人工关口可在工作台完成。以下 Studio 图和 Resume JSON 供技术调试及契约查阅。
@@ -177,7 +181,7 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 
 来源清单为 `hrm/product/sources/manifest.json`，目前复制原始 brief 并登记出处/散列，pm-hrm 仅登记参考尚未加载。当前用户确认和本 Run 批准需求决定范围。`sources-observed-at-export.json` 只是归档时来源清单，不能证明生成时工具实际读取；逐 Run 冻结及工具引用仍是待办。
 
-代码回库、全栈执行、CI/制品、历史 Run 补导出和恢复等剩余项见 `hrm/docs/delivery-assets.md` 与[资产决策](../../docs/decisions/2026-11-07-hrm-repository-assets.md)。
+历史记录中的代码回库/全栈执行边界已由后续决策扩展；CI/制品、真实业务验收、历史 Run 补导出和恢复等剩余项见 `hrm/docs/delivery-assets.md` 与[资产决策](../../docs/decisions/2026-11-07-hrm-repository-assets.md)。
 
 ## 产物归档与查看（2026-11-07）
 
@@ -207,3 +211,9 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 2026-11-08：live 主流程绑定 HRM 时，角色阶段在远端同步成功后才交付下游；同步失败原生暂停，工作台仅重试同步。模型输入采用按任务资料目录、固定版本分段读取与消息预算；旧审批/源码恢复字段保留兼容。[具体边界](./artifact-dataflow.md#2026-11-08远端交接与按需上下文)及[决策记录](../../docs/decisions/2026-11-08-mastra-remote-handoff.md)。
 
 浏览器用例使用 `method: browser`，同版本回执 authority 为 browser-process，人工不能覆盖机器失败。字段、安装与静态候选限制见[浏览器 QA 本地契约](./browser-qa.md)。
+
+## 2026-11-09 测试通过后的源码回库
+
+独立质量门通过 → `publish-tested-code` → 发布计划。live 的项目确认冻结 origin/基线 commit；开发阶段同步目标必须匹配项目。宿主读取实际候选、交叉验证研发/质量/批准版本，只提交批准任务内新增或修改的普通源码。Git 使用独立 index 和普通 push，同一根 Run 的资料与源码共用 `codex/workflow/<RunId>`。失败暂停在现有远端同步关口，重开 Store 后可复用原提交；重复执行不会重做模型或把远端回退。旧 Run 缺少基线、同步关闭、未提交工程基线或目标漂移时保持暂停，不能假报推送成功。`codePublication` 绑定远端 commit、sourceHash 和 qualityHash，发布流程必须消费同版本回执。
+
+本轮本地 bare 远端和原生暂停恢复已验证，HRM GitHub push dry-run通过；实际业务候选的 GitHub 写入、自动合并与 CI 制品绑定尚未验收。见[回库决策](../../docs/decisions/2026-11-09-mastra-code-publication.md)和[评测报告](./evaluations/native/development-nodes/results-2026-11-09.md)。

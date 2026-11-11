@@ -14,6 +14,9 @@ import { deliverySchema, pendingSchema, reviewSchema, validateReview } from '../
 import { describeRecovery } from './recovery.js';
 import { describeGate, validateGate, describeDevelopmentProgress } from './gates.js';
 import { intakeSchema, validateAnswers } from './contracts.js';
+import { loadResources, resourceWorkflowConfig } from '../resources/runtime.js';
+import { currentResources, withResources } from '../resources/scope.js';
+import { ResourceError } from '../resources/contracts.js';
 /** 仅公开本地业务输入校验，不透出模型或文件系统异常。 */
 export class GateInputError extends Error {}
 export type IntakeWorkflow = ReturnType<typeof createProductDevelopmentWorkflow>;
@@ -47,7 +50,15 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
-export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
+export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig): Promise<Awaited<ReturnType<typeof readIntake>>> {
+  config ??= resourceWorkflowConfig(workflow);
+  if (!currentResources()) {
+    const storage = workflow.mastra?.getStorage();
+    if (!config || !storage) throw new ResourceError('BINDING_MISSING');
+    const binding = await loadResources(storage, config, runId);
+    return withResources({ storage, binding }, /** HTTP预校验与后续原生恢复共享已核验资源身份。 */
+      () => respondIntake(workflow, mode, runId, input, config));
+  }
   const current = await readIntake(workflow, runId);
   if (current.status === 'success' && current.reconfigure && current.mode === mode) {
     if (!config || !input || typeof input !== 'object' || !('reconfigureHash' in input) || input.reconfigureHash !== current.reconfigure.hash) throw new GateInputError('项目重新交接入口已变化，请刷新');

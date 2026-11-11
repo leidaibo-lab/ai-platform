@@ -7,6 +7,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "resources": "tsx scripts/role-resources.ts",
     "dev": "MASTRA_AUTO_DETECT_URL=true MASTRA_TELEMETRY_DISABLED=1 mastra dev",
     "build": "MASTRA_TELEMETRY_DISABLED=1 mastra build",
     "start": "node .mastra/output/index.mjs",
@@ -25,6 +26,7 @@
     "eval:product-skills": "tsx scripts/product-skill-eval.ts",
     "product:delivery": "tsx scripts/product-delivery.ts",
     "eval:unified": "tsx scripts/unified-eval.ts",
+    "example:local-delivery": "tsx scripts/local-delivery.ts",
     "eval:native": "tsx scripts/native-eval.ts",
     "eval:native:seed": "tsx scripts/native-eval.ts --seed",
     "eval:fixed:import": "tsx scripts/import-fixed-baseline.ts",
@@ -37,6 +39,7 @@
   "dependencies": {
     "@mastra/ai-sdk": "1.11.3",
     "@mastra/core": "1.81.0",
+    "@mastra/editor": "0.17.0",
     "@mastra/libsql": "1.28.0",
     "@mastra/memory": "1.41.0",
     "ai": "7.0.162",

@@ -19,6 +19,8 @@ export interface PracticeConfig {
   hrmRepositoryRoot?: string;
   /** 仅服务端环境登记的远端目标，页面只能引用其ID。 */
   remoteSyncTargets?: RemoteSyncTarget[];
+  /** 信任根只由宿主提供；签名私钥不得传入服务。 */
+  resourceTrust?: { manifestPath: string; publicKeyPath: string };
 }
 
 /** 从实践根目录加载独立配置；不查找上级 .env，不输出凭据。 */
@@ -35,7 +37,10 @@ export function readConfig(): PracticeConfig {
   if (mode === 'live' && !apiKey) throw new Error('真实模型尚未配置：请在本实践 .env 设置 OPENAI_API_KEY。');
   const baseUrl = process.env.MASTRA_BASE_URL || undefined;
   if (baseUrl) z.url().parse(baseUrl);
-  return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  const manifestPath = process.env.MASTRA_ARTIFACT_MANIFEST;
+  const publicKeyPath = process.env.MASTRA_ARTIFACT_PUBLIC_KEY;
+  if (!!manifestPath !== !!publicKeyPath) throw new Error('制品清单与可信公钥必须同时配置');
+  return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}`, ...(manifestPath && publicKeyPath ? { resourceTrust: { manifestPath: resolve(manifestPath), publicKeyPath: resolve(publicKeyPath) } } : {}) };
 }
 
 /** 解析必填默认模型和可选角色组覆盖；缺省或空覆盖回退默认模型，非法值直接拒绝。 */

@@ -12,7 +12,7 @@ import { validateCases, validateQualityReview } from '../delivery/testing.js';
 import { lifecycleSchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
 export const scopeFormSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 const definitions: Record<string, { title: string; description: string; schema: z.ZodType }> = {
-  'retry-repository-sync': { title: '重试角色资料远端同步', description: '已保存角色产物；仅重试提交和推送，成功后继续原流程，不重新调用模型或替代审批。', schema: repositoryRetrySchema },
+  'retry-repository-sync': { title: '重试交付远端同步', description: '已保存角色资料或业务源码；仅重试提交和推送，成功后继续原流程，不重新调用模型或替代审批。', schema: repositoryRetrySchema },
   'confirm-blocker-answers': { title: '补齐影响开工的业务选择', description: '建议供参考，请逐项选择或补充；提交后生成完整修订产品稿，仍需你确认，不直接开工。', schema: blockerAnswerSchema },
   'review-revised-product': { title: '确认修订后的完整产品稿', description: '核对显式回答如何进入规则和验收；批准后在原项目权限内重新规划，技术方案仍需另行确认。', schema: revisedProductReviewSchema },
   'confirm-project-scope': { title: '确认开发项目', description: '确认已关联项目和整体权限边界，具体文件、角色与检查映射由开发团队规划，方案批准后才实施。', schema: scopeFormSchema },

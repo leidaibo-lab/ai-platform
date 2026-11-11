@@ -1,6 +1,6 @@
 # Mastra 资源配置与角色交接接入规范 v1
 
-状态：定义稿，待实现验证；本文件和示例均未被运行时加载。范围仅为Mastra原生实践，不变更探索主线Runtime/OpenSpec契约。[决策记录](../../../docs/decisions/2026-11-07-mastra-resource-contract.md)。
+状态：整体仍为定义稿，示例未被运行时加载。2026-11-11角色版本/恢复子集由[原生角色版本决策](../../../docs/decisions/2026-11-11-mastra-stored-role-runtime.md)及`openspec/specs/mastra-role-resources/spec.md`取代：Agent/Skill内容归Mastra原生版本库，应用只存Run版本引用与可信制品绑定，历史Run不兼容。下文旧版兼容、整包内容自存方案不再作为该子集实施要求；预算统一、13种DTO、业务资料快照等仍属未实施设计，不因角色版本接入而宣称完成。[原始决策](../../../docs/decisions/2026-11-07-mastra-resource-contract.md)。
 
 ## 1. 唯一归属
 

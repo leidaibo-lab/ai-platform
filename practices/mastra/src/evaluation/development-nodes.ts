@@ -20,7 +20,7 @@ import { judgeReviewSource } from './review-rework.js';
 
 export const developmentNodeRoleSchema = z.enum(['context', 'architect', 'readiness', 'backend', 'self-check', 'reviewer']);
 export type DevelopmentNodeRole = z.infer<typeof developmentNodeRoleSchema>;
-const expectedSchema = z.object({ reportProtocol: z.enum(['native-summary-route']).optional(), kind: z.enum(['context', 'plan', 'assessment', 'code', 'checks']), unknown: z.boolean().optional(), blocked: z.boolean().optional(), passed: z.boolean().optional(), keywords: z.array(z.string()).default([]), category: z.string().nullable().optional(), route: z.string().nullable().optional() });
+const expectedSchema = z.object({ reportProtocol: z.enum(['native-summary-route', 'native-status-summary-route']).optional(), kind: z.enum(['context', 'plan', 'assessment', 'code', 'checks']), unknown: z.boolean().optional(), blocked: z.boolean().optional(), passed: z.boolean().optional(), keywords: z.array(z.string()).default([]), category: z.string().nullable().optional(), route: z.string().nullable().optional() });
 const caseSchema = z.object({ id: z.string(), role: developmentNodeRoleSchema, label: z.string(), requirement: z.string().min(1), files: z.object({ 'src/solution.mjs': z.string(), 'checks.mjs': z.string(), 'rules.md': z.string() }).strict(), planIssue: z.boolean(), expected: expectedSchema });
 export type DevelopmentNodeCase = z.infer<typeof caseSchema>;
 export const developmentNodeTargets = {
@@ -40,8 +40,8 @@ export function loadDevelopmentNodeCases(rootDir: string) {
     // 每类角色必须有独立的三条冻结输入。
     (item) => item.role === role,
   ).length !== 3) throw new Error('开发节点用例覆盖不完整');
-  const protocolRaw = readFileSync(resolve(rootDir, 'evaluations/native/development-nodes/self-check-protocol.v2.json'), 'utf8');
-  const protocol = z.object({ version: z.literal('self-check-native-contract.v2'), reportProtocol: z.literal('native-summary-route'), instruction: z.string() }).parse(JSON.parse(protocolRaw));
+  const protocolRaw = readFileSync(resolve(rootDir, 'evaluations/native/development-nodes/self-check-protocol.v3.json'), 'utf8');
+  const protocol = z.object({ version: z.literal('self-check-native-contract.v3'), reportProtocol: z.literal('native-status-summary-route'), instruction: z.string() }).parse(JSON.parse(protocolRaw));
   for (const item of suite.cases) if (item.role === 'self-check') item.expected.reportProtocol = protocol.reportProtocol;
   return { ...suite, hash: createHash('sha256').update(raw).digest('hex'), selfCheckHash: createHash('sha256').update(raw).update(protocolRaw).digest('hex'), protocol };
 
@@ -163,14 +163,17 @@ export function assessDevelopmentNode(value: unknown, expected: unknown) {
     } else if (rule.kind === 'code') {
       if (!out.writes.includes('src/solution.mjs') || !checksPassed(out.checks) || !out.oracle?.passed || !checksPassed(out.oracle.checks) || !/^# tests 3$/m.test(out.oracle.checks.at(-1)?.stdout ?? '')) issues.push('behavior-acceptance-failed');
     } else {
-      if (rule.reportProtocol === 'native-summary-route') {
+      if (rule.reportProtocol === 'native-summary-route' || rule.reportProtocol === 'native-status-summary-route') {
         const report = z.object({ summary: z.string().min(1), route: z.enum(['frontend', 'backend', 'infrastructure', 'architecture', 'human']) }).parse(parseDevelopmentJson(out.entry.text));
         if (!out.entry.tools.includes('runChecks') || !out.toolChecks.length) issues.push('checks-not-executed');
         const last = out.toolChecks.at(-1) ?? [];
         if (checksPassed(last) !== rule.passed || checksPassed(out.checks) !== rule.passed) issues.push('incorrect-check-result');
         const failure = /检查失败|测试失败|语法错误|未通过|不通过|失败|failed/i.test(report.summary);
         const success = /通过|成功|passed|success/i.test(report.summary);
-        if (rule.passed ? !success || failure : !failure || report.route !== 'backend') issues.push('incorrect-check-summary-or-route');
+        if (rule.reportProtocol === 'native-status-summary-route') {
+          const status = z.object({ status: z.enum(['passed', 'failed']) }).parse(parseDevelopmentJson(out.entry.text)).status;
+          if (status !== (rule.passed ? 'passed' : 'failed') || (!rule.passed && report.route !== 'backend')) issues.push('incorrect-check-status-or-route');
+        } else if (rule.passed ? !success || failure : !failure || report.route !== 'backend') issues.push('incorrect-check-summary-or-route');
         if (JSON.stringify(last.map(
           // 比较两次真实检查的ID与退出结果，不比较不同进程的耗时。
           (check) => [check.id, check.exitCode, check.processExitCode, check.timedOut],
@@ -197,7 +200,7 @@ export function assessDevelopmentNode(value: unknown, expected: unknown) {
 }
 
 /** 六类共享透明硬判定评分器，每项输出缺陷原因；不以词项均值掩盖代码失败。 */
-export function createDevelopmentNodeScorer(version: 'v1' | 'v2' = 'v1') {
+export function createDevelopmentNodeScorer(version: 'v1' | 'v2' | 'v3' = 'v1') {
   return createScorer({ id: `development-node-evidence-${version}`, name: `开发单节点结构、引用与执行证据 ${version}`, description: '架构/评审验证结构引用、缺陷与阻断；实现/自检验证实际沙箱代码结果。不替代人工语义审查。' })
     // 原生评分从步骤持久化的原始证据重新判定。
     .generateScore(({ run }) => assessDevelopmentNode(run.output, run.groundTruth).score)
@@ -236,8 +239,8 @@ export async function seedDevelopmentNodeDatasets(mastra: Mastra, config: Practi
     const target = developmentNodeTargets[role];
     mastra.getWorkflow(target.key);
     const hash = role === 'self-check' ? suite.selfCheckHash : suite.hash;
-    const version = role === 'self-check' ? 'development-nodes.v2' : suite.version;
-    const scorerId = role === 'self-check' ? 'development-node-evidence-v2' : 'development-node-evidence-v1';
+    const version = role === 'self-check' ? 'development-nodes.v3' : suite.version;
+    const scorerId = role === 'self-check' ? 'development-node-evidence-v3' : 'development-node-evidence-v1';
     const id = `${version}-${config.mode}-${role}-${hash.slice(0, 12)}`;
     const found = await mastra.datasets.list({ perPage: false, filters: { datasetIds: [id] } });
     const dataset = found.datasets.length ? await mastra.datasets.get({ id }) : await mastra.datasets.create({ id, name: `${target.name} · ${config.mode} · ${version}`, description: '固定上游单节点独立测评，正式Agent与真实沙箱；fixture分数不作为能力结论。', targetType: 'workflow', targetIds: [target.key], scorerIds: [scorerId], metadata: { mode: config.mode, suiteHash: hash, authority: 'evaluation-only' } });

@@ -27,7 +27,12 @@ import { assertCandidate, createTestingWorkflow } from '../../delivery/testing.j
 import { createDeploymentWorkflow } from '../../delivery/deployment.js';
 import { assetIdSchema, correlationSchema } from '../../delivery/asset-identity.js';
 import { registerAssetRun } from '../../delivery/asset-catalog.js';
+import { createCodePublicationStep } from '../../delivery/code-publication.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
+import { freezeResources, guardResourceWorkflow } from '../../resources/runtime.js';
+import { frozenResourcesSchema, freezeStepId, resourceWorkflowId, ResourceError } from '../../resources/contracts.js';
+import { roleProxy } from '../../resources/assembly.js';
+import { staticRoles } from '../../resources/catalog.js';
 
 const inputSchema = z.object({ guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
 const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
@@ -60,6 +65,18 @@ export function executionResolver(config: PracticeConfig) {
 
 /** 采用 Workflow 嵌套和 foreach；人工批准保持为原生 suspend/resume。 */
 export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean } = {}) {
+  const originals = agents;
+  agents = { ...agents, ...Object.fromEntries(staticRoles.map(
+    /** 每个角色保持原有Agent类型与非生成方法。 */
+    (key) => [key, roleProxy(originals[key], key, config)],
+  )) };
+  const freeze = createStep({ id: freezeStepId, inputSchema, outputSchema: inputSchema.extend({ resources: frozenResourcesSchema }),
+    /** 首个原生提交固定资源，客户端没有注入版本或信任根的入口。 */
+    execute: async ({ inputData, mastra, runId }) => {
+      const storage = mastra.getStorage(); if (!storage) throw new ResourceError('STORE_UNAVAILABLE');
+      return { ...inputData, resources: await freezeResources(storage, config, originals, runId) };
+    },
+  });
   const initialize = createStep({ id: 'initialize-product-development', description: '从原始需求启动完整产研流程', inputSchema, outputSchema: deliverySchema,
     // 不接受客户端伪造产品稿、批准或模式。
     execute: async ({ inputData, runId }) => {
@@ -120,8 +137,8 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       return { ...state, outcome: config.mode === 'fixture' ? 'fixture-completed' as const : 'delivery-confirmed' as const };
     },
   });
-  const main = createWorkflow({ options: runArchiveLifecycle(config), id: 'product-development', description: '完整产研：产品 → 开发（动态团队、并行、受限委派）→ 测试（缺陷修复与回归）→ 部署（审批、外部回执、健康检查与回滚）→ 最终交付', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
-    .then(withRepositoryAssets(initialize, config)).then(createIntakeWorkflow(agents, config.mode,
+  const main = createWorkflow({ options: runArchiveLifecycle(config), id: resourceWorkflowId, description: '完整产研：固定角色资源 → 产品 → 开发 → 独立测试 → 发布 → 交付', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
+    .then(freeze).then(withRepositoryAssets(initialize, config)).then(createIntakeWorkflow(agents, config.mode,
       /** 澄清角色的建议与显式回答同样属于交接资产。 */
       step => withRepositoryAssets(step, config))).then(createProductWorkflow(agents, config.mode, deliverySchema,
       // 每个产品职责形成独立可追溯版本，保持原生子流程结构。
@@ -129,5 +146,5 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     )).then(withRepositoryAssets(review, config)).then(withRepositoryAssets(scope, config)).then(development);
   // 旧图选项仅用于持久化迁移回归，正式入口始终接通澄清。
   const ready = options.legacyBlocked ? main : main.then(openClarification).branch([[/** 只有尚未实施的业务阻塞进入产品澄清循环。 */async ({ inputData }) => inputData.development.outcome === 'clarification-required' && inputData.development.completedTasks.length === 0, clarification]]).map(/** 未阻塞时不调用产品模型，直接继续现有交付。 */async ({ inputData, getStepResult }) => inputData['resolve-development-blockers']?.development ?? getStepResult(openClarification).development, { id: 'continue-after-clarification' });
-  return ready.then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, execution, generate)).then(createDeploymentWorkflow(agents, config, execution)).then(withRepositoryAssets(execution.bind(finish), config)).commit();
+  return guardResourceWorkflow(ready.then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, execution, generate)).then(execution.bind(createCodePublicationStep(config, execution.port))).then(createDeploymentWorkflow(agents, config, execution)).then(withRepositoryAssets(execution.bind(finish), config)).commit(), config);
 }

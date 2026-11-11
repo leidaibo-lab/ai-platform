@@ -6,7 +6,7 @@
 
 ## 用例与目标
 
-[cases.v1.json](./cases.v1.json)共18例，每类3例。自检另由[self-check-protocol.v2.json](./self-check-protocol.v2.json)版本化约束正式报告协议，其他五类保持v1。所有上游数据为明确标记的合成冻结输入，单次只调用当前角色。标准`expected`不发送给被测Agent；模型只看到该角色的真实输入文件、需求、固定计划及允许引用。
+[cases.v1.json](./cases.v1.json)共18例，每类3例。自检当前由[self-check-protocol.v3.json](./self-check-protocol.v3.json)约束正式 `status/summary/route` 协议，v1/v2保留历史，其他五类保持v1。所有上游数据为明确标记的合成冻结输入，单次只调用当前角色。标准`expected`不发送给被测Agent；模型只看到该角色的真实输入文件、需求、固定计划及允许引用。
 
 | 数据集 | Studio Workflow目标 | 三类用例 | 主要判据 |
 | --- | --- | --- | --- |
@@ -63,3 +63,9 @@ Studio默认模式来自实践原有配置。要在面板直接执行live用例�
 - 真实模型结果、历史协议差异及待修缺陷见[2026-11-07开发独立节点报告](./results-2026-11-07.md)。
 
 自检单组复验：`npm run eval:development-nodes -- --live --run --role=self-check`。这是按新协议执行的新实验；不是在原实验中改分。新旧分数应分别查看。
+
+## 2026-11-09 自检协议 v3 与源码回库
+
+自检启用 Mastra 原生结构化输出，新增 `status: passed|failed` 并按真实工具/宿主检查交叉核对；摘要作为解释，不再因“0项失败”误判状态。对应 `development-nodes.v3` 数据集和 `development-node-evidence-v3`，协议散列进入身份，v1/v2实验分数保留原样。CLI实验记录实际development角色组模型和更多调用链源码散列。
+
+[本轮报告](./results-2026-11-09.md)包含三轮自检发现和最终全量评测，以及真实Git/bare回库测试、GitHub推送预检与剩余业务验收边界。

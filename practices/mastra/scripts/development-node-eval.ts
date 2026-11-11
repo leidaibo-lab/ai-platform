@@ -1,6 +1,6 @@
 /** 六类开发独立节点评测的原生Dataset/Experiment入口，默认只导入，不隐式调用模型。 */
 import { Mastra } from '@mastra/core';
-import { readConfig } from '../src/mastra/config.js';
+import { readConfig, resolveModelId } from '../src/mastra/config.js';
 import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { seedDevelopmentNodeDatasets, loadDevelopmentNodeCases } from '../src/evaluation/development-nodes.js';
 import { loadDevelopmentMethods } from '../src/development/v2/methods.js';
@@ -19,8 +19,8 @@ try {
   await options.storage.init();
   const datasets = await seedDevelopmentNodeDatasets(mastra, config);
   const sourceHashes: Record<string, string> = {};
-  for (const path of ['src/evaluation/development-nodes.ts', 'src/evaluation/review-rework.ts', 'src/development/v2/agents.ts', 'src/development/v2/contracts.ts', 'src/development/v2/gates.ts', 'src/development-execution.ts', 'package-lock.json']) sourceHashes[path] = createHash('sha256').update(readFileSync(resolve(config.rootDir, path))).digest('hex');
-  const metadata = { mode: config.mode, modelId: config.mode === 'live' ? config.modelId : 'fixture', suiteHash: loadDevelopmentNodeCases(config.rootDir).hash, methodBundleHash: loadDevelopmentMethods(config.rootDir).hash, sourceHashes, revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: config.rootDir, encoding: 'utf8' }).trim(), dirty: !!execFileSync('git', ['status', '--porcelain'], { cwd: config.rootDir, encoding: 'utf8' }).trim(), authority: 'evaluation-only', manualReview: null };
+  for (const path of ['src/evaluation/development-nodes.ts', 'src/evaluation/review-rework.ts', 'src/development/v2/agents.ts', 'src/development/v2/contracts.ts', 'src/development/v2/gates.ts', 'src/development/agents.ts', 'src/development/v2/model-diagnostic.ts', 'src/mastra/context-memory.ts', 'src/development-execution.ts', 'package-lock.json']) sourceHashes[path] = createHash('sha256').update(readFileSync(resolve(config.rootDir, path))).digest('hex');
+  const metadata = { mode: config.mode, modelId: config.mode === 'live' ? resolveModelId(config, 'development') : 'fixture', suiteHash: loadDevelopmentNodeCases(config.rootDir).hash, methodBundleHash: loadDevelopmentMethods(config.rootDir).hash, sourceHashes, revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: config.rootDir, encoding: 'utf8' }).trim(), dirty: !!execFileSync('git', ['status', '--porcelain'], { cwd: config.rootDir, encoding: 'utf8' }).trim(), authority: 'evaluation-only', manualReview: null };
   for (const entry of datasets) {
     if (args.includes('--role=self-check') && entry.role !== 'self-check') continue;
     console.log(JSON.stringify({ datasetId: entry.dataset.id, targetId: entry.targetId, mode: config.mode }));

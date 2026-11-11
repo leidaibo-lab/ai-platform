@@ -1,5 +1,9 @@
 # Mastra 原生节点评测
 
+正式运行时见[验证记录](./stored-role-runtime-results.md)及[资源接入说明](../../config/stored-role-runtime.md#验证入口)，与下述前置隔离实验分开记账。
+
+角色资源实验：[Stored Agent / Skill pin / 可信制品 / 完整主链对照](./stored-role-validation.md)，含四项结果、固定边界与独立重跑命令。
+
 测试用例由仓库 [nodes.v1.json](./nodes.v1.json) 管理，使用当前锁定的 `@mastra/core 1.81.0` 原生 Dataset、Scorer、Experiment API。Studio 注册评分器，实验与分数写入同一 `LibSQLStore`，没有额外评测页面、数据库或评测引擎。应用实践内采用原生能力，不改变探索主线稳定契约。
 
 ## 使用
