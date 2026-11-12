@@ -1,6 +1,6 @@
 # Mastra 资源配置与角色交接接入规范 v1
 
-状态：定义与增量实施并存。2026-11-11角色版本/恢复子集由[原生角色版本决策](../../../docs/decisions/2026-11-11-mastra-stored-role-runtime.md)及`openspec/specs/mastra-role-resources/spec.md`取代：Agent/Skill内容归Mastra原生版本库，应用只存Run版本引用与可信制品绑定，历史Run不兼容。2026-11-12已实现`workflow.runtime.json`加载/冻结、业务资料副本、开发角色调用信封和工作台受控发布；下文13种严格DTO、输出契约注册、审批链绑定和RC01–RC14全量验收仍是设计与后续实施项。[原始决策](../../../docs/decisions/2026-11-07-mastra-resource-contract.md)。
+状态：已实施全角色严格DTO与版本证据链，剩余真实模型业务评测与RC01–RC14完整证据分别单独报告。2026-11-11角色版本/恢复子集由[原生角色版本决策](../../../docs/decisions/2026-11-11-mastra-stored-role-runtime.md)及`openspec/specs/mastra-role-resources/spec.md`取代：Agent/Skill内容归Mastra原生版本库，应用只存Run版本引用与可信制品绑定，历史Run不兼容。2026-11-12完成`workflow.runtime.json`加载/冻结、业务资料副本、十三角色严格DTO、统一调用输出证据、`bundleHash`质量/发布绑定和工作台受控发布。[原始决策](../../../docs/decisions/2026-11-07-mastra-resource-contract.md)。
 
 ## 1. 唯一归属
 
@@ -119,7 +119,7 @@
 5. 收敛：删除新入口内旧角色默认值及手写引用域说明，展示清单从解析后的bundle生成；历史兼容代码单独标明适用版本。
 6. 验证后启用新Workflow内部ID`product-development-resources-v1`，保留Studio注册键`productDevelopmentWorkflow`。回退只影响新建Run路由，不能用旧工厂继续新Run。
 
-已实现的接线位于`src/resources/resource-config.ts`（加载、校验与冻结）、`src/resources/contracts.ts`（冻结资源契约）、`src/resources/source-snapshot.ts`（资料副本）、`src/resources/projections.ts`（开发角色调用信封）、`src/resources/workbench.ts`（受控发布）以及现有 app/workflow/Agent 工厂。严格13类DTO、统一输出契约注册和审批链全量`bundleHash`传递仍按本规范后续接入。维护者为Mastra实践维护者；不增加平台服务、跨框架协议或新的调度事实源。
+已实现的接线位于`src/resources/resource-config.ts`（加载、校验与冻结）、`src/resources/contracts.ts`（冻结资源契约）、`src/resources/source-snapshot.ts`（资料副本）、`src/resources/projections.ts`（十三类输入/输出注册、调用信封与宿主输出证据）、`src/resources/workbench.ts`（受控发布）以及现有 app/workflow/Agent 工厂。产品四角色、开发模板、独立测试和运维均只消费其DTO；质量、发布与最终交付对同一`bundleHash`和调用证据失败关闭。维护者为Mastra实践维护者；不增加平台服务、跨框架协议或新的调度事实源。
 
 ## 7. 必须通过的验收
 

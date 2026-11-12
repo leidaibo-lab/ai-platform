@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { PRODUCT_MAX_STEPS } from '../agents/skills.js';
 import { productGenerationSchema } from '../../delivery/product-generation-contract.js';
+import { invocationEvidenceSchema } from '../../resources/projections.js';
 
 export const productRoles = ['coordinator', 'clarification', 'closure', 'writing'] as const;
 export const maxProductReworks = 3;
@@ -16,6 +17,8 @@ export const productWorkSchema = z.object({
     modelSteps: z.number().int().min(1).max(PRODUCT_MAX_STEPS),
     // 旧产物不补造完成证据；后续产物记录正常结束及有界重试事实。
     generation: productGenerationSchema.optional(),
+    // 正式资源主链由宿主写入输入/输出/工具/版本证据，非资源旧入口不补造。
+    invocation: invocationEvidenceSchema.optional(),
   })).max(4),
 });
 export type ProductWork = z.infer<typeof productWorkSchema>;

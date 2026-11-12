@@ -10,6 +10,10 @@ import type { PracticeConfig } from '../../src/mastra/config.js';
 import { resolve } from 'node:path';
 import { implementation } from './implementation.js';
 import { brief } from './scenario.js';
+import { createInvocationEvidence, createRoleInvocation } from '../../src/resources/projections.js';
+import { currentResources } from '../../src/resources/scope.js';
+import { frozenRuntimeResourceConfig, roleResource } from '../../src/resources/resource-config.js';
+import { developmentHash } from '../../src/development/contracts.js';
 
 /** 有序脚本只决定模型请求；工具结果和执行记录由框架产生。 */
 function scripted(calls: { name: string; input: unknown }[], text: string) {
@@ -50,5 +54,19 @@ export const scenarioGenerate: GeneratorV2 = async (...args) => {
   const agent = new Agent({ id: runtime?.memberId ?? `local-${role}`, name: '本机示例实现', instructions: await base.getInstructions(), tools: await base.listTools(), model: scripted(calls, '固定模型已请求实际工具执行；业务结果以宿主检查为准。') });
   const result = await agent.generate('执行本机示例批准任务', { maxSteps: 12 });
   assert.equal(result.finishReason, 'stop');
-  return { role, round: state.round, text: result.text, tools: result.toolResults.map(/** 记录真实调用，不接受模型自报。 */ item => item.payload.toolName), steps: result.steps.length, modelId: 'local-scripted-fixture', inputTokens: result.usage.inputTokens ?? null, outputTokens: result.usage.outputTokens ?? null };
+  const resources = currentResources(); if (!resources) throw new Error('本机示例缺少冻结角色资源');
+  const runtimeConfig = frozenRuntimeResourceConfig(resources.binding.runtimeConfig);
+  const resourceRole = runtime?.delegate ? 'implementation-owner' as const : 'implementation-member' as const;
+  const configured = roleResource(runtimeConfig, resourceRole);
+  const task = state.plan!.tasks.find(item => item.paths.some(path => paths.includes(path)))!;
+  const dependencies = state.work.map((item, index) => ({ id: `${item.role}-${index + 1}`, hash: developmentHash(item.text), content: item.text }));
+  const files = task.paths.map(path => ({ id: path, hash: developmentHash(state.input.project.files[path] ?? '') }));
+  const findings = state.codeReviews.flatMap(report => report.assessment.findings).map(item => ({ id: item.id, category: item.category, route: item.route, detail: item.detail, refs: item.refs }));
+  const payload = runtime?.delegate
+    ? { task, requiredContracts: task.constraints, contextRefs: task.contextRefs, dependencyOutputs: dependencies, assignedFileRefs: files, findings, remainingTaskBudget: Math.max(0, state.maxCalls - state.calls) }
+    : { delegatedTask: task, requiredContracts: task.constraints, contextRefs: task.contextRefs, assignedFileRefs: files, relevantDependencyOutputs: dependencies, findings };
+  const invocation = createRoleInvocation({ runId: state.input.source.runId, roleId: resourceRole, taskId: runtime?.memberId ?? null, round: state.round, bundleHash: resources.binding.bundleHash, inputContract: configured.inputContract, payload, resources: resources.binding, config: runtimeConfig });
+  const tools = result.toolResults.map(/** 记录真实调用，不接受模型自报。 */ item => item.payload.toolName);
+  const invocationEvidence = createInvocationEvidence({ invocation, outputContract: configured.outputContract, output: { content: result.text }, tools, usage: { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, steps: result.steps.length, modelId: 'local-scripted-fixture' }, config: runtimeConfig });
+  return { role, round: state.round, text: result.text, tools, steps: result.steps.length, modelId: 'local-scripted-fixture', inputTokens: result.usage.inputTokens ?? null, outputTokens: result.usage.outputTokens ?? null, invocation: invocationEvidence };
 };

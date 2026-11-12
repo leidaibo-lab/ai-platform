@@ -33,9 +33,20 @@ import { freezeResources, guardResourceWorkflow } from '../../resources/runtime.
 import { frozenResourcesSchema, freezeStepId, resourceWorkflowId, ResourceError } from '../../resources/contracts.js';
 import { roleProxy } from '../../resources/assembly.js';
 import { staticRoles } from '../../resources/catalog.js';
+import { assertInvocationEvidence } from '../../resources/projections.js';
+import { currentResources } from '../../resources/scope.js';
 
 const inputSchema = z.object({ guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
 const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
+
+/** 在人工批准和跨阶段转交前复核每个角色的宿主调用证据，不能只在生成点创建而不消费。 */
+function assertRoleEvidence(bundleHash: string, entries: readonly { role: string; invocation?: unknown }[], contracts: Record<string, string>) {
+  for (const entry of entries) {
+    const contract = contracts[entry.role];
+    if (!contract || !entry.invocation) throw new Error('角色严格调用证据缺失');
+    assertInvocationEvidence(entry.invocation, bundleHash, contract);
+  }
+}
 
 /** 将每个 Run 的候选目录与输入绑定，步骤结束即关闭执行环境。 */
 export function executionResolver(config: PracticeConfig) {
@@ -89,6 +100,8 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     // 产品拒绝或退回在当前 Run 留存终态，不进入代码执行。
     execute: async ({ inputData, resumeData, suspend, bail }) => {
       if (inputData.mode !== config.mode) throw new Error('产品运行模式发生变化');
+      const binding = currentResources()?.binding; if (!binding) throw new ResourceError('BINDING_MISSING');
+      assertRoleEvidence(binding.bundleHash, inputData.productWork?.entries ?? [], { coordinator: 'product-work.output.v1', clarification: 'product-work.output.v1', closure: 'product-work.output.v1', writing: 'product-document.output.v1' });
       const pending = pendingSchema.parse({ role: 'product', artifact: inputData.artifacts.at(-1), productReworkRound: 0 });
       if (!resumeData) return suspend(pending);
       const decision = validateReview(pending, resumeData);
@@ -123,13 +136,16 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
   const clarification = createBlockerClarificationWorkflow(agents, config, executionResolver(config), generate);
   const lifecycle = createStep({ id: 'initialize-delivery-lifecycle', description: '研发交付进入独立测试和发布主链', inputSchema: stateV2Schema, outputSchema: lifecycleSchema,
     // 新生命周期保存各轮角色证据，原开发状态及累计预算保持不变。
-    execute: async ({ inputData, getInitData, bail }) => { const state = lifecycleSchema.parse({ version: 'delivery-lifecycle.v1', brief: getInitData<z.infer<typeof inputSchema>>().brief, development: inputData, quality: emptyQuality(), qualityHistory: [], developmentHistory: [], release: { plan: null, qualityHash: null, approval: null, hash: null, receipt: null, health: null, rollback: null, authority: 'local-human-report' }, outcome: inputData.outcome === 'development-delivered' ? 'in-progress' : inputData.outcome === 'rework-exhausted' ? 'rework-exhausted' : 'blocked', limitations: ['自动测试仅执行项目授权的登记套件，语义覆盖由测试负责人确认，人工用例结果单独标记。', '部署、健康及回滚由外部平台执行并人工回填；当前未接入自动 CI/CD 或认证身份。'] }); return state.outcome === 'in-progress' ? state : bail(state); },
+    execute: async ({ inputData, getInitData, bail }) => { const resources = currentResources()?.binding ?? getInitData<z.infer<typeof inputSchema> & { resources?: z.infer<typeof frozenResourcesSchema> }>().resources; if (!resources) throw new ResourceError('BINDING_MISSING'); assertRoleEvidence(resources.bundleHash, inputData.work, { context: 'context.output.v1', architect: 'plan.output.v1', readiness: 'assessment.output.v1', frontend: 'implementation-summary.output.v1', backend: 'implementation-summary.output.v1', infrastructure: 'implementation-summary.output.v1', 'self-check': 'self-check-summary.output.v1', reviewer: 'assessment.output.v1' }); const state = lifecycleSchema.parse({ version: 'delivery-lifecycle.v1', bundleHash: resources.bundleHash, brief: getInitData<z.infer<typeof inputSchema>>().brief, development: inputData, quality: emptyQuality(), qualityHistory: [], developmentHistory: [], release: { plan: null, qualityHash: null, approval: null, hash: null, receipt: null, health: null, rollback: null, authority: 'local-human-report' }, outcome: inputData.outcome === 'development-delivered' ? 'in-progress' : inputData.outcome === 'rework-exhausted' ? 'rework-exhausted' : 'blocked', limitations: ['自动测试仅执行项目授权的登记套件，语义覆盖由测试负责人确认，人工用例结果单独标记。', '部署、健康及回滚由外部平台执行并人工回填；当前未接入自动 CI/CD 或认证身份。'] }); return state.outcome === 'in-progress' ? state : bail(state); },
   });
   const finish = createStep({ id: 'confirm-final-delivery', description: '汇总产品、开发、测试和部署证据，确认最终交付', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema,
     // 生成计划或研发自检均不能替代质量放行和实际外部发布回执。
     execute: async ({ inputData: state }) => {
       if (state.outcome !== 'delivery-confirmed') return state;
       await assertCandidate(state, execution.port);
+      if (!state.bundleHash || !state.quality.plan?.invocation || !state.release.plan?.invocation) throw new Error('最终交付缺少角色严格调用证据');
+      assertInvocationEvidence(state.quality.plan.invocation, state.bundleHash, 'test-plan.output.v1');
+      assertInvocationEvidence(state.release.plan.invocation, state.bundleHash, 'release-plan.output.v1');
       if (state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || state.quality.reportHash !== qualityHash(state) || state.release.qualityHash !== state.quality.reportHash || state.release.hash !== releaseHash(state) || state.release.receipt?.status !== 'succeeded' || state.release.receipt.releaseHash !== state.release.hash || state.release.receipt.sourceHash !== state.development.checkpointHash || state.release.health?.releaseHash !== state.release.hash || state.release.health.deploymentReceiptHash !== developmentHash(state.release.receipt) || !state.release.health.checks.length || !state.release.health.checks.every(
         // 只有批准的发布后检查全部有成功回执才形成成功终态。
         (check) => check.status === 'passed',

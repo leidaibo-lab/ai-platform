@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { modelCallDiagnosticSchema } from './model-diagnostic.js';
 import { outputDiagnosticSchema } from './output-diagnostic.js';
 import { correlationSchema } from '../../delivery/asset-identity.js';
+import { invocationEvidenceSchema } from '../../resources/projections.js';
 import { architectureSchema, commandEvidenceSchema, developmentInputSchema, developmentReviewSchema, executionIdentitySchema, recoveryReviewSchema, validateArchitecture, developmentHash } from '../contracts.js';
 
 export const productWorkflowIdSchema = z.enum(['product-delivery', 'product-delivery-v2']);
@@ -57,7 +58,7 @@ export const stateV2Schema = z.object({
   checkpointHash: hash, completedTasks: z.array(z.string()), round: z.number().int().nonnegative(), route: z.enum(['all', 'frontend', 'backend', 'infrastructure', 'architecture', 'human']),
   contextBudgetLevel: z.number().int().min(0).max(4).optional(),
   calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  work: z.array(z.object({ role: roleV2Schema, round: z.number(), text: z.string(), tools: z.array(z.string()), steps: z.number(), modelId: z.string().nullable(), inputTokens: z.number().nullable(), outputTokens: z.number().nullable() })),
+  work: z.array(z.object({ role: roleV2Schema, round: z.number(), text: z.string(), tools: z.array(z.string()), steps: z.number(), modelId: z.string().nullable(), inputTokens: z.number().nullable(), outputTokens: z.number().nullable(), invocation: invocationEvidenceSchema.optional() })),
   faults: z.array(z.object({ sequence: z.number(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error', 'context-budget']), budget: contextBudgetFailureSchema.optional(), attempt: z.number(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
   recovery: z.object({ hash, checkpointHash: hash, phase: phaseSchema, role: roleV2Schema, kind: z.string(), budget: contextBudgetFailureSchema.optional(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), taskId: z.string().nullable() }).nullable(), recoveries: z.array(recoveryReviewSchema),
   checks: z.array(commandEvidenceSchema), checkedSourceHash: hash.nullable(), gates: z.array(gateDecisionSchema),
