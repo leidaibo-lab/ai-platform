@@ -31,9 +31,9 @@ export function captureArtifact(root: string, dependencies: boolean): ArtifactMa
 }
 
 /** 每次执行段重新检查字节；live没有可信签名绝不降级为fixture散列。 */
-export function verifyArtifact(config: PracticeConfig) {
+export function verifyArtifact(config: PracticeConfig, expectedDigest?: string) {
   try {
-    const trust = config.resourceTrust;
+    const trust = expectedDigest && config.resourceTrust?.routes?.[expectedDigest] ? config.resourceTrust.routes[expectedDigest] : config.resourceTrust;
     if (!trust) {
       if (config.mode !== 'fixture') throw new ResourceError('TRUST_REQUIRED');
       return { digest: resourceHash(captureArtifact(config.rootDir, false)), assurance: 'fixture' as const, signer: 'fixture-only' };
@@ -43,6 +43,8 @@ export function verifyArtifact(config: PracticeConfig) {
     if (key.asymmetricKeyType !== 'ed25519' || !verify(null, Buffer.from(canonical(document.manifest)), key, Buffer.from(document.signature, 'base64'))) throw new ResourceError('SIGNATURE_INVALID');
     const actual = captureArtifact(config.rootDir, true);
     if (resourceHash(actual) !== resourceHash(document.manifest)) throw new ResourceError('ARTIFACT_DRIFT');
-    return { digest: resourceHash(actual), assurance: 'signed' as const, signer: bytesHash(key.export({ type: 'spki', format: 'der' })) };
+    const digest = resourceHash(actual);
+    if (expectedDigest && digest !== expectedDigest) throw new ResourceError('ARTIFACT_DRIFT');
+    return { digest, assurance: 'signed' as const, signer: bytesHash(key.export({ type: 'spki', format: 'der' })) };
   } catch (error) { if (error instanceof ResourceError) throw error; throw new ResourceError('ARTIFACT_INVALID'); }
 }

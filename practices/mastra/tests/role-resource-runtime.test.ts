@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Mastra } from '@mastra/core';
@@ -13,7 +13,9 @@ import { freezeResources, loadResources } from '../src/resources/runtime.js';
 import { withResources } from '../src/resources/scope.js';
 import { publishRole, resolveRole } from '../src/resources/native-store.js';
 import { captureArtifact, verifyArtifact } from '../src/resources/artifact.js';
-import { bytesHash, canonical, freezeStepId } from '../src/resources/contracts.js';
+import { bytesHash, canonical, freezeStepId, resourceHash } from '../src/resources/contracts.js';
+import { sourceSnapshotContentDirectory, verifySourceSnapshot } from '../src/resources/source-snapshot.js';
+import { loadRuntimeResourceConfig } from '../src/resources/resource-config.js';
 
 /** 每个实验使用独占数据库，支持重新装配相同正式入口。 */
 async function application(config: PracticeConfig) {
@@ -106,6 +108,12 @@ test('可信制品：签名、代码、依赖、额外文件与live降级均严�
   const config: PracticeConfig = { rootDir: root, mode: 'live', modelId: 'openai/test', databaseUrl: ':memory:', port: 4111, resourceTrust: { manifestPath, publicKeyPath } };
   try {
     assert.equal(verifyArtifact(config).assurance, 'signed');
+    const staleManifestPath = resolve(directory, 'stale-manifest.json');
+    const staleManifest = { ...manifest, node: 'v0.0.0' };
+    writeFileSync(staleManifestPath, JSON.stringify({ manifest: staleManifest, signature: sign(null, Buffer.from(canonical(staleManifest)), pair.privateKey).toString('base64') }));
+    const routed: PracticeConfig = { ...config, resourceTrust: { manifestPath: staleManifestPath, publicKeyPath, routes: { [resourceHash(manifest)]: { manifestPath, publicKeyPath } } } };
+    assert.equal(verifyArtifact(routed, resourceHash(manifest)).digest, resourceHash(manifest), '冻结摘要应选择对应可信清单');
+    assert.throws(/** 未登记的冻结摘要不能借默认清单继续。 */() => verifyArtifact(routed, 'f'.repeat(64)), /ARTIFACT_DRIFT/);
     assert.throws(/** live不可借fixture降级绕过独立签名。 */() => verifyArtifact({ ...config, resourceTrust: undefined }), /TRUST_REQUIRED/);
     for (const path of ['src/tool.ts', 'node_modules/dependency.js']) {
       const original = path.startsWith('src') ? 'export const schema = 1' : 'original';
@@ -115,4 +123,39 @@ test('可信制品：签名、代码、依赖、额外文件与live降级均严�
     const other = generateKeyPairSync('ed25519'); writeFileSync(publicKeyPath, other.publicKey.export({ type: 'spki', format: 'pem' }));
     assert.throws(/** Run不能自行提供公钥来信任其他签名者。 */() => verifyArtifact(config), /SIGNATURE_INVALID/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('资源快照：资料在首Agent前复制，恢复只读取副本且副本漂移拒绝', /** 快照是Run输入的一部分，不能只保存来源目录摘要。 */ async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'role-sources-'));
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'run.db')}` };
+  const app = await application(config);
+  try {
+    const run = await app.workflow.createRun();
+    await run.start({ inputData: { brief: '资料快照验证', iterationId: 'sources' } });
+    const binding = await loadResources(app.storage, config, run.runId);
+    const frozen = resolve(sourceSnapshotContentDirectory(config, run.runId));
+    const first = Object.keys(verifySourceSnapshot(config, run.runId, binding.sourceSnapshotHash).files)[0]!;
+    const frozenFile = resolve(frozen, first);
+    assert.ok(readFileSync(frozenFile, 'utf8').length > 0);
+    assert.deepEqual(await loadResources(app.storage, config, run.runId), binding, '恢复只校验Run副本，不重新读取可变来源');
+    writeFileSync(frozenFile, 'Run副本被修改');
+    await assert.rejects(/** 副本不完整或被改都不能用当前来源自动修复。 */() => loadResources(app.storage, config, run.runId), /SOURCE_INTEGRITY/);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('资源配置：新Run冻结统一预算，后续当前配置变化不能覆盖已批准团队', /** 预算属于Run绑定，而不是可变服务端默认值。 */ async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'role-config-'));
+  const base = loadRuntimeResourceConfig(resolve('.'));
+  const runtimeResources = { ...base, budgets: { ...base.budgets, developmentMaxCalls: 64, maxParallel: 2, maxDelegationsPerTask: 1 } };
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'run.db')}`, runtimeResources };
+  const app = await application(config);
+  try {
+    const run = await app.workflow.createRun(); const result: any = await run.start({ inputData: { brief: '预算冻结验证', iterationId: 'budget' } });
+    const binding = await loadResources(app.storage, config, run.runId);
+    assert.equal((binding.runtimeConfig as any).budgets.maxParallel, 2);
+    assert.equal((binding.runtimeConfig as any).budgets.developmentMaxCalls, 64);
+    const restarted = { ...config, runtimeResources: { ...runtimeResources, budgets: { ...runtimeResources.budgets, maxParallel: 3, developmentMaxCalls: 72 } } };
+    assert.deepEqual(await loadResources(app.storage, restarted, run.runId), binding);
+    assert.equal(result.status, 'suspended');
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -9,6 +9,7 @@ import { ClarificationProgress, RequirementWorkspace } from './components/Requir
 import { RemoteSyncSettings } from './RemoteSyncSettings';
 import { RepositoryManagement } from './RepositoryManagement';
 import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
+import { RoleWorkbench } from './RoleWorkbench';
 import './intake.css';
 interface Document { execution?: ExecutionView; executionSettings?: ExecutionSettings; developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
 /** 从实际关口映射业务阶段，避免进入开发后仍高亮需求输入。 */
@@ -23,6 +24,7 @@ function intakeStage(document?: Document): number {
 }
 /** 主流程需求入口；只有未提交表单属于 React，所有已确认内容来自快照。 */
 export function IntakeApp() {
+  const [view, setView] = useState(new URLSearchParams(location.search).get('view') === 'roles' ? 'roles' : 'runs');
   const [id, setId] = useState(new URLSearchParams(location.search).get('run') ?? '');
   const [document, setDocument] = useState<Document>();
   const [runs, setRuns] = useState<Document[]>([]);
@@ -144,9 +146,11 @@ export function IntakeApp() {
   }
   if (showRepositoryManagement) return <RepositoryManagement close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowRepositoryManagement(false)} />;
   if (showSyncSettings) return <RemoteSyncSettings close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowSyncSettings(false)} />;
+  if (view === 'roles') return <div className="intake-shell intake-workbench"><aside className="intake-sidebar"><a className="intake-brand" href="/">◈ 产研工作台</a><p>角色资源受控发布</p><button className="selected" onClick={() => setView('roles')}>角色资源工作台<small>发布可插拔增强</small></button><button onClick={() => { const url = new URL(location.href); url.searchParams.delete('view'); history.replaceState(null, '', url); setView('runs'); }}>返回产研 Run<small>需求、审批与恢复</small></button></aside><RoleWorkbench /></div>;
   return <div className="intake-shell intake-workbench">
     <aside className="intake-sidebar"><a className="intake-brand" href="/">◈ 产研工作台</a><p>从想法到可执行需求</p>
       <button disabled={busy || uncertain} onClick={/** 新建需求只重置本地页面。 */() => choose('')}>＋ 新需求</button>
+      <button disabled={busy || uncertain} onClick={() => { const url = new URL(location.href); url.searchParams.set('view', 'roles'); history.replaceState(null, '', url); setView('roles'); }}>角色资源工作台<small>发布可插拔增强</small></button>
       <h3>最近的主流程</h3>{runs.map(/** 历史列表只选择，不恢复审批。 */run => <button className={id === run.runId ? 'selected' : ''} key={run.runId} disabled={busy || uncertain} onClick={/** 打开保存的 Run。 */() => choose(run.runId)}>{run.brief.slice(0, 32) || run.runId}<small>{run.step === 'review-product' ? '等待产品确认' : run.step === 'guided-requirements' ? '等待需求回答' : run.step === 'confirm-project-scope' ? '等待项目授权' : run.blockage ? '开工条件未齐' : run.status === 'canceled' ? '已取消' : run.status === 'failed' ? '生成失败' : run.gate ? `待办：${run.gate.title}` : run.status === 'success' ? '本轮已结束' : '流程记录'}</small></button>)}
       <small>所有确认在此工作台完成</small>
     </aside>

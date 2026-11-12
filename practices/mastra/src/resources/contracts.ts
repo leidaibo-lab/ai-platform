@@ -8,7 +8,9 @@ export const freezeStepId = 'freeze-role-resources';
 export function developmentResourceKey(role: string, autonomy: boolean, parent: boolean) { return `development-${role}-${autonomy ? 'autonomous' : 'standard'}-${parent ? 'owner' : 'member'}`; }
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const frozenResourcesSchema = z.object({
-  version: z.literal('role-resources.v1'), runId: z.string().min(1), mode: z.enum(['fixture', 'live']),
+  version: z.literal('role-resources.v2'), runId: z.string().min(1), mode: z.enum(['fixture', 'live']), configHash: hash, bundleHash: hash,
+  runtimeConfig: z.unknown(),
+  sourceSnapshotHash: hash,
   artifact: z.object({ digest: hash, assurance: z.enum(['fixture', 'signed']), signer: z.string() }).strict(),
   endpointHash: hash,
   roles: z.record(z.string(), z.object({ agentId: z.string(), versionId: z.string(), configHash: hash, toolContractHash: hash }).strict()),

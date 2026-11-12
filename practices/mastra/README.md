@@ -1,6 +1,6 @@
 # Mastra 原生应用实践
 
-角色资源已接入正式主流程：Mastra保存Agent/Skill版本，应用负责Run绑定、恢复装配和可信制品核验。见[配置、发布与恢复](./config/stored-role-runtime.md)及[前置隔离实验](./evaluations/native/stored-role-validation.md)。历史Run不兼容；live主流程需要部署侧可信签名。
+角色资源已接入正式主流程：Mastra保存Agent/Skill版本，应用负责Run绑定、恢复装配、受控工作台发布、冻结预算/资料副本及可信制品核验。见[配置、发布与恢复](./config/stored-role-runtime.md)及[前置隔离实验](./evaluations/native/stored-role-validation.md)。历史Run不兼容；live主流程需要部署侧可信签名。
 
 后续改造设计：[以业务验收为完成条件](./business-delivery-design.md)，覆盖澄清续办、最终包审查、纵向旅程及全栈测试；目前为设计稿，以下运行方式与现有能力不因该文档改变。
 
@@ -12,7 +12,7 @@
 
 ## 当前入口与流程
 
-日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案、测试与发布回执等人工确认。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
+日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案、测试与发布回执等人工确认；侧栏“角色资源工作台”可发布受控的新Agent版本。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
 
 需求输入与澄清 → 四产品角色成稿 → 产品确认 → 项目范围授权 → 上下文、架构、动态组队与就绪评估 → 方案批准 → 按依赖开发 → 自检与独立评审 → 独立测试与缺陷返工 → 发布审批、外部执行回执与健康检查/回滚 → 最终交付。
 
@@ -108,7 +108,7 @@ npm run build
 - [需求工作台验证证据](./guided-intake.md)
 - [原生节点评测](./evaluations/native/README.md)、[开发角色评测](./evaluations/native/development-nodes/README.md)、[独立评审与返工](./evaluations/native/review-rework/README.md)
 - [产品 Skill 配对评测](./evaluations/product-skills/README.md)、[招聘管理验证项目](./projects/pm-hrm-recruitment/README.md)
-- [资源配置归属](./config/README.md)与[资源输入契约](./config/runtime-resource-contract.md)：配置规范仍是定义稿，未作为统一运行时配置加载。
+- [资源配置归属](./config/README.md)与[资源输入契约](./config/runtime-resource-contract.md)：已落地预算、资料副本和开发调用信封；13种严格角色DTO及完整验收矩阵仍在后续迭代。
 - [产品角色与 Skill](./src/mastra/agents/product-roles.ts)、[PM 技能套件](./.agents/skills/README.md)、[第三方声明](./web/THIRD_PARTY_NOTICES.md)
 
 Mastra 提供 Agent、工具循环、Workflow 与存储；本实践维护业务 schema、版本绑定、人工关口、权限边界和 I/O 适配。不将文件投影另建为审批库，不以评测计数替代业务质量验收。

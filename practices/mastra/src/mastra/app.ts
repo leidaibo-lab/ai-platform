@@ -27,7 +27,7 @@ export function createStudioApplicationOptions(config: PracticeConfig) {
     workflows: { productDevelopmentWorkflow, ...createDevelopmentNodeWorkflows(config) },
     storage: new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl }),
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
-    server: { host: '127.0.0.1', port: config.port, apiRoutes: [...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config)] },
+    server: { host: '127.0.0.1', port: config.port, apiRoutes: [...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config, agents)] },
   };
 }
 

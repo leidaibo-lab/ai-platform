@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RemoteSyncTarget } from '../delivery/remote-sync-settings.js';
+import type { RuntimeResourceConfig } from '../resources/resource-config.js';
+import { loadRuntimeResourceConfig, validateRuntimeResourceConfig } from '../resources/resource-config.js';
 
 /** 独立实践配置；数据库使用绝对路径，fixture 模式不会访问模型服务。 */
 export interface PracticeConfig {
@@ -20,7 +22,9 @@ export interface PracticeConfig {
   /** 仅服务端环境登记的远端目标，页面只能引用其ID。 */
   remoteSyncTargets?: RemoteSyncTarget[];
   /** 信任根只由宿主提供；签名私钥不得传入服务。 */
-  resourceTrust?: { manifestPath: string; publicKeyPath: string };
+  resourceTrust?: { manifestPath: string; publicKeyPath: string; routes?: Record<string, { manifestPath: string; publicKeyPath: string }> };
+  /** 严格解析后的唯一运行时预算/角色资源配置。 */
+  runtimeResources?: RuntimeResourceConfig;
 }
 
 /** 从实践根目录加载独立配置；不查找上级 .env，不输出凭据。 */
@@ -39,8 +43,12 @@ export function readConfig(): PracticeConfig {
   if (baseUrl) z.url().parse(baseUrl);
   const manifestPath = process.env.MASTRA_ARTIFACT_MANIFEST;
   const publicKeyPath = process.env.MASTRA_ARTIFACT_PUBLIC_KEY;
+  let routes: Record<string, { manifestPath: string; publicKeyPath: string }> | undefined;
+  try { routes = process.env.MASTRA_ARTIFACT_ROUTES ? z.record(z.string(), z.object({ manifestPath: z.string().min(1), publicKeyPath: z.string().min(1) }).strict()).parse(JSON.parse(process.env.MASTRA_ARTIFACT_ROUTES)) : undefined; } catch { throw new Error('制品版本路由配置不正确'); }
   if (!!manifestPath !== !!publicKeyPath) throw new Error('制品清单与可信公钥必须同时配置');
-  return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}`, ...(manifestPath && publicKeyPath ? { resourceTrust: { manifestPath: resolve(manifestPath), publicKeyPath: resolve(publicKeyPath) } } : {}) };
+  if (mode === 'live' && (!manifestPath || !publicKeyPath)) throw new Error('live 模式必须配置制品清单与独立可信公钥');
+  const runtimeResources = validateRuntimeResourceConfig(loadRuntimeResourceConfig(root, process.env.MASTRA_RUNTIME_CONFIG ? resolve(process.env.MASTRA_RUNTIME_CONFIG) : undefined));
+  return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}`, runtimeResources, ...(manifestPath && publicKeyPath ? { resourceTrust: { manifestPath: resolve(manifestPath), publicKeyPath: resolve(publicKeyPath), ...(routes ? { routes } : {}) } } : {}) };
 }
 
 /** 解析必填默认模型和可选角色组覆盖；缺省或空覆盖回退默认模型，非法值直接拒绝。 */

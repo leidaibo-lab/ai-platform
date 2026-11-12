@@ -16,6 +16,8 @@ import { invokeV2 } from '../../development/v2/invoke.js';
 import { assembleTeam, createTeamExecution } from '../../development/v2/team.js';
 import type { ExecutionPort } from '../../development/v2/execution-scope.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
+import { currentResources } from '../../resources/scope.js';
+import { frozenRuntimeResourceConfig } from '../../resources/resource-config.js';
 
 /** 与团队和独立测试共用同一返工策略；保留既有公开入口。 */
 export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], phase: StateV2['phase']): StateV2 {
@@ -25,6 +27,8 @@ export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], pha
 /** 与v1隔离的原生步骤，复用执行Adapter；评测自动批准仅接受明确合成来源。 */
 function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPort, evaluationPolicy = false, generate: GeneratorV2 = generateV2, options: DevelopmentWorkflowOptions = {}) {
   const methods = loadDevelopmentMethods(config.rootDir);
+  /** 新Run用已加载配置；恢复Run只从冻结资源读取预算，不能随当前文件漂移。 */
+  function runtimeResources() { return currentResources() ? frozenRuntimeResourceConfig(currentResources()!.binding.runtimeConfig) : config.runtimeResources; }
   // 默认保留现有 CLI 的固定执行环境；Studio 注入每步骤的运行作用域。
   const executionBind = options.bind ?? (
     // CLI 已持有固定执行环境，保持步骤对象不变。
@@ -59,7 +63,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         (item) => item.text.trim().length > 0,
       );
       if (requirements.length > 300) throw new Error('v2产品原文超过试点锚点预算');
-      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
+      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? runtimeResources()?.budgets.developmentMaxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
     },
   });
   const context = createStep({ id: 'prepare-context', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
@@ -116,7 +120,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   }
   const assemble = createStep({ id: 'assemble-agent-team', description: '按批准任务和文件范围动态生成团队成员', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 团队在就绪审查前展示并进入技术方案批准绑定。
-    execute: async ({ inputData }) => inputData.phase !== 'assemble-team' || inputData.outcome !== 'in-progress' ? inputData : { ...inputData, team: assembleTeam(inputData), delegations: [], phase: 'assess-readiness' as const },
+    execute: async ({ inputData }) => inputData.phase !== 'assemble-team' || inputData.outcome !== 'in-progress' ? inputData : { ...inputData, team: assembleTeam(inputData, runtimeResources()?.budgets), delegations: [], phase: 'assess-readiness' as const },
   });
   const readiness = createStep({ id: 'assess-readiness', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 独立只读语义调用；CONCERNS需逐项证据裁决，FAIL保留阻塞。

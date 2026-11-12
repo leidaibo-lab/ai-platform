@@ -6,7 +6,7 @@ Mastra Stored Agent 和 Skill 版本库拥有角色配置、正文及参考文�
 
 `工作台创建 Run → freeze-role-resources → 需求澄清/四产品角色 → 开发团队 → 测试 → 发布回执/健康检查`。
 
-首步在模型调用前将 `role-resources.v1` 写入原生 Workflow 输出。保存 Run ID、28 个角色变体的 Agent/version ID、配置摘要、工具契约摘要、端点身份和制品摘要；Skill pin 由固定 Agent 版本持有，不复制正文。产品、开发、测试、运维使用同一装配边界。
+首步在模型调用前将 `role-resources.v2` 写入原生 Workflow 输出。保存 Run ID、28 个角色变体的 Agent/version ID、配置摘要、工具契约摘要、端点身份、`workflow.runtime.json`冻结副本摘要、业务资料快照摘要和制品摘要；Skill pin 由固定 Agent 版本持有，不复制正文。产品、开发、测试、运维使用同一装配边界。
 
 暂停后重新装配应用，步骤守卫从已提交首步读取引用，核验制品、端点、Agent 和 Skill blob，再通过 `MastraEditor.agent.getById(id, { versionId })` 解析。异步作用域只隔离当前执行段，不拥有第二份 Run 状态；动态开发工具闭包始终来自当前任务。
 
@@ -29,7 +29,7 @@ npm run resources -- publish-agent role-productAgent /absolute/path/to/product-a
 
 启动不会覆盖已有实体。`MASTRA_MODEL` 和角色模型环境变量仅决定首次导入的默认值；已有角色更换模型须发布 Agent 版本。旧 Run 继续使用原版本，新 Run 使用新发布版本。默认模型或凭据轮换不改变旧 Run 身份；端点变更拒绝恢复。
 
-当前提供服务端 CLI，尚未新增工作台可视化角色编辑页面。未启用原生编辑器的任意远端工具、处理器和动态表达式配置。
+工作台的“角色资源工作台”可查看原生已发布版本，并基于当前版本发布受控增强：角色指令、模型名称/参数、以及已登记工具的收紧集合。提交必须携带当前版本ID；如有其他人先发布，服务端拒绝陈旧提交。页面不读取或编辑Skill正文、Skill pin、Workspace、工具实现、凭据或信任根；Skill正文继续通过CLI的`publish-skill`进入Mastra原生blob/tree。发布只影响后续新Run，已开始Run仍按冻结Agent版本恢复。未启用原生编辑器的任意远端工具、处理器和动态表达式配置。
 
 ## 可信制品
 
@@ -50,7 +50,7 @@ npm run resources -- sign /absolute/path/to/practices/mastra /secure/release-pri
 
 清单覆盖 `src/`、`package.json`、`package-lock.json`、`node_modules/` 实际内容、存在时的 `.mastra/output/` 和 `config/material-policy.ts`，以及 Node 版本；不读取用户 `.env`、运行数据库或业务候选。执行树符号链接拒绝，包管理器 `.bin` 入口除外。工具 schema 与实现属于制品，工具契约摘要同时绑定制品摘要和固定工具配置，不只比较工具名或版本标签。
 
-每个新执行段重新检查完整字节，有 I/O 成本。运行中代码与磁盘替换的竞态由只读部署控制，本机制不能防御被接管的宿主进程。部署升级后旧 Run 须由原可信制品执行；当前未实现自动多版本部署路由。
+每个新执行段重新检查完整字节，有 I/O 成本。运行中代码与磁盘替换的竞态由只读部署控制，本机制不能防御被接管的宿主进程。部署升级后旧 Run 须由原可信制品执行；恢复会按冻结制品摘要从 `MASTRA_ARTIFACT_ROUTES` 选择对应清单与独立公钥。路由只解决可信清单与公钥的选择，旧制品目录、依赖和运行宿主仍须在 Run 保留期内持续可用。
 
 fixture 使用明确标识的无签名测试摘要，不能让 live 降级。独立 Agent/节点评测入口保持原用途；资源守卫覆盖正式产研主 Workflow，不将 Studio 独立聊天宣称为已冻结 Run。
 
@@ -60,13 +60,13 @@ fixture 使用明确标识的无签名测试摘要，不能让 live 降级。独
 
 Run 保留期间必须保留引用的 Agent/Skill 版本及 blob。版本、工具或 blob 缺失，签名失败、制品/端点漂移都拒绝；恢复原资源后再续跑，不能篡改 Run 引用强行通过。调用级 `model`、`instructions`、`tools` 不得覆盖冻结配置；`toolsets` 仅允许原有任务资料工厂生成的受限只读闭包，通过对象身份校验，不能用同名对象伪造。
 
-模块职责：`native-store.ts` 原生版本解析/发布；`catalog.ts` 宿主角色契约；`assembly.ts` 按任务装配；`artifact.ts` 制品核验；`runtime.ts` 步骤守卫；`scope.ts` 异步隔离。使用适配器、工厂和步骤装饰器，现有 Workflow 保持业务状态所有权。
+模块职责：`native-store.ts` 原生版本解析/发布；`workbench.ts` 受控版本投影和乐观发布；`resource-config.ts` 严格运行配置；`source-snapshot.ts` Run专属资料副本；`projections.ts` 最小角色调用信封；`catalog.ts` 宿主角色契约；`assembly.ts` 按任务装配；`artifact.ts` 制品核验；`runtime.ts` 步骤守卫；`scope.ts` 异步隔离。使用适配器、工厂和步骤装饰器，现有 Workflow 保持业务状态所有权。
 
 ## 验证入口
 
 ```sh
 npm run check
-node --import tsx --test tests/role-resource-runtime.test.ts tests/unified-workflow.test.ts tests/guided-intake.test.ts tests/run-archive.test.ts
+node --import tsx --test tests/role-resource-runtime.test.ts tests/role-workbench.test.ts tests/unified-workflow.test.ts tests/guided-intake.test.ts tests/run-archive.test.ts
 ```
 
-覆盖正式入口新旧版本分流、Skill 内容与模型参数、工具/版本/blob 缺失、端点变更、首步重放及增强前后完整主链。完整链使用合成模型、审批和发布回执；签名路径使用临时测试密钥和本地 HTTP 模型服务。真实模型业务质量、生产凭据及实际生产部署须另验。
+覆盖正式入口新旧版本分流、Skill内容与模型参数、工具/版本/blob缺失、端点变更、首步重放、资料副本漂移、配置冻结、工作台陈旧版本拒绝及增强前后完整主链。完整链使用合成模型、审批和发布回执；签名路径使用临时测试密钥和本地 HTTP 模型服务。真实模型业务质量、生产凭据及实际生产部署须另验。

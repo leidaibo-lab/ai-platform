@@ -1,12 +1,12 @@
 # Mastra 资源配置与角色交接接入规范 v1
 
-状态：整体仍为定义稿，示例未被运行时加载。2026-11-11角色版本/恢复子集由[原生角色版本决策](../../../docs/decisions/2026-11-11-mastra-stored-role-runtime.md)及`openspec/specs/mastra-role-resources/spec.md`取代：Agent/Skill内容归Mastra原生版本库，应用只存Run版本引用与可信制品绑定，历史Run不兼容。下文旧版兼容、整包内容自存方案不再作为该子集实施要求；预算统一、13种DTO、业务资料快照等仍属未实施设计，不因角色版本接入而宣称完成。[原始决策](../../../docs/decisions/2026-11-07-mastra-resource-contract.md)。
+状态：定义与增量实施并存。2026-11-11角色版本/恢复子集由[原生角色版本决策](../../../docs/decisions/2026-11-11-mastra-stored-role-runtime.md)及`openspec/specs/mastra-role-resources/spec.md`取代：Agent/Skill内容归Mastra原生版本库，应用只存Run版本引用与可信制品绑定，历史Run不兼容。2026-11-12已实现`workflow.runtime.json`加载/冻结、业务资料副本、开发角色调用信封和工作台受控发布；下文13种严格DTO、输出契约注册、审批链绑定和RC01–RC14全量验收仍是设计与后续实施项。[原始决策](../../../docs/decisions/2026-11-07-mastra-resource-contract.md)。
 
 ## 1. 唯一归属
 
 | 内容 | 唯一权威 | 可配置部分 | 代码强制部分 |
 | --- | --- | --- | --- |
-| 角色资源声明 | 生效的`workflow.runtime.json`（拟新增） | 登记ID、角色卡/方法/工具/投影引用及预算 | 注册表内ID、合法组合、宿主能力上限 |
+| 角色资源声明 | 生效的`workflow.runtime.json` | 登记ID、角色卡/方法/工具/投影引用及预算 | 固定角色集合、合法组合、宿主能力上限 |
 | 角色卡、方法正文 | 版本化文件及来源锁 | 选择登记版本 | 文件完整性、只读、禁止热替换 |
 | 输入输出数据结构 | Zod契约注册表 | 选择`contractId`，不定义字段表达式 | 字段、类型、引用域、权限和版本校验 |
 | 工具能力 | 宿主工具注册表与执行Adapter | 选择能力子集 | 工具实现、可写路径、沙箱、禁止任意命令 |
@@ -21,7 +21,7 @@
 
 ## 2. 输入配置与加载结果
 
-拟新增的生效文件`workflow.runtime.json`使用`mastra-resource-config.v1`；当前[示例](./workflow.runtime.example.json)只供评审，其中所有版本ID都是拟定义的注册表项，不能宣称现有加载器已能解析。`workflow-resources.json`继续是审计清单，不改作运行配置。
+生效文件`workflow.runtime.json`使用`mastra-resource-config.v1`；当前加载器严格解析13个固定角色模板和预算，冻结内容而非当前文件用于恢复。`workflow-resources.json`继续是审计清单，不改作运行配置；严格资源注册表、完整角色投影与全量验收仍在后续实施。
 
 配置必填字段：`schemaVersion`、`id`、`workflowRef`、`sourceProfile`、`modelProfile`、`budgets`、`roles`。禁止未知字段、null、重复JSON键、重复角色或方法/工具ID；字符串必须非空，ID仅限宿主登记值。对象字段不做任意模板插值，不能携带函数、动态import、URL、绝对路径、shell或JSONPath。`id`只作可读标签，不能代替内容hash。
 
@@ -119,7 +119,7 @@
 5. 收敛：删除新入口内旧角色默认值及手写引用域说明，展示清单从解析后的bundle生成；历史兼容代码单独标明适用版本。
 6. 验证后启用新Workflow内部ID`product-development-resources-v1`，保留Studio注册键`productDevelopmentWorkflow`。回退只影响新建Run路由，不能用旧工厂继续新Run。
 
-建议实现位置：`src/mastra/resource-config.ts`（加载/注册适配）、`src/resources/contracts.ts`（唯一Zod契约）、`src/resources/freeze.ts`（冻结/hash）、`src/resources/projections.ts`（角色DTO）以及现有app/workflow/Agent工厂接线。以上文件是计划，当前尚不存在。维护者为Mastra实践维护者；不增加平台服务、跨框架协议或新的调度事实源。
+已实现的接线位于`src/resources/resource-config.ts`（加载、校验与冻结）、`src/resources/contracts.ts`（冻结资源契约）、`src/resources/source-snapshot.ts`（资料副本）、`src/resources/projections.ts`（开发角色调用信封）、`src/resources/workbench.ts`（受控发布）以及现有 app/workflow/Agent 工厂。严格13类DTO、统一输出契约注册和审批链全量`bundleHash`传递仍按本规范后续接入。维护者为Mastra实践维护者；不增加平台服务、跨框架协议或新的调度事实源。
 
 ## 7. 必须通过的验收
 

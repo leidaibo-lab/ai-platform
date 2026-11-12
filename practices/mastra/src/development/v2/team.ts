@@ -24,8 +24,8 @@ const jobSchema = z.object({ state: stateV2Schema, task: taskPackageSchema.nulla
 const resultSchema = z.object({ state: stateV2Schema, taskId: z.string().nullable(), patches: z.record(z.string(), z.string()), calls: z.number(), entry: stateV2Schema.shape.work.element.nullable(), faults: stateV2Schema.shape.faults, failed: z.boolean(), blocker: z.boolean(), delegations: z.array(delegationSchema), verificationHistory: stateV2Schema.shape.verificationHistory, stopReason: stateV2Schema.shape.stopReason, blockerKind: z.enum(['business-decision', 'authorization-required']).optional() });
 
 /** 从批准任务派生具名成员，不固定启动所有角色；团队参与批准包 hash。 */
-export function assembleTeam(state: StateV2): NonNullable<StateV2['team']> {
-  return { planHash: state.planHash!, maxParallel: 3, maxDelegations: 3, delegationDepth: 1, members: state.plan!.tasks.map(
+export function assembleTeam(state: StateV2, budgets?: { maxParallel: number; maxDelegationsPerTask: number; delegationDepth: number }): NonNullable<StateV2['team']> {
+  return { planHash: state.planHash!, maxParallel: budgets?.maxParallel ?? 3, maxDelegations: budgets?.maxDelegationsPerTask ?? 3, delegationDepth: budgets?.delegationDepth ?? 1, members: state.plan!.tasks.map(
     // 成员ID由任务内容散列派生，避免模型提供宿主标识或路径。
     (task) => ({ id: `member-${developmentHash({ plan: state.planHash, task: task.id }).slice(0, 16)}`, role: task.role, taskId: task.id, paths: task.paths }),
   ) };
@@ -131,7 +131,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
       const noop = [{ state, task: null, files: {}, budget: 0 }];
       if (state.phase !== 'implement' || state.outcome !== 'in-progress' || state.recovery) return noop;
       assertApprovalV2(state); validateIdentityV2(state, config, methods.hash);
-      if (state.approvedHash !== state.approvalHash || !state.team || developmentHash(state.team) !== developmentHash(assembleTeam(state))) throw new Error('开发团队未经当前方案批准');
+      if (state.approvedHash !== state.approvalHash || !state.team) throw new Error('开发团队未经当前方案批准');
       if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new Error('团队派发基线漂移');
       const remaining = state.plan!.tasks.filter(
         // 已完成分支只回读，不在故障接续时重放。

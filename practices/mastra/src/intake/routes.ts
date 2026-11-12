@@ -10,9 +10,12 @@ import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
 import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
+import type { RoleAgents } from '../resources/catalog.js';
+import { listRoleWorkbench, publishRoleWorkbench } from '../resources/workbench.js';
+import { ResourceError } from '../resources/contracts.js';
 const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
-export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
+export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig, agents?: RoleAgents) {
   const busy = new Set<string>();
   /** 校验本机写来源；标签不等于认证身份。 */
   function origin(c: ContextWithMastra) {
@@ -23,7 +26,29 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
   function failure(c: ContextWithMastra, error: unknown) {
     return c.json({ error: error instanceof GateInputError ? error.message : error instanceof z.ZodError ? '有内容未填完整或不符合要求，请检查必填、文件范围和列表中的每一项' : '操作未完成，请刷新确认版本、必答项及流程状态；不要自动重试批准。' }, 409);
   }
+  /** 工作台角色服务只使用当前原生Store；没有完整宿主依赖时失败关闭。 */
+  async function roleService() {
+    const storage = workflow.mastra?.getStorage();
+    if (!storage || !config || !agents) throw new ResourceError('STORE_UNAVAILABLE');
+    return { storage, config, agents };
+  }
   return [
+    registerApiRoute('/intake-api/role-resources', { method: 'GET',
+      /** 只返回可编辑角色版本投影，不导出Skill正文、实现字节或凭据。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { const service = await roleService(); return c.json(await listRoleWorkbench(service.storage, service.config, service.agents)); }
+        catch { return c.json({ error: '角色资源暂不可读取，请检查本机服务与原生资源库。' }, 409); }
+      },
+    }),
+    registerApiRoute('/intake-api/role-resources/publish', { method: 'POST',
+      /** 发布只新建原生版本；现有Run在冻结版本下继续，页面不能改Run绑定。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { origin(c); const service = await roleService(); return c.json(await publishRoleWorkbench(service.storage, service.config, service.agents, await c.req.json())); }
+        catch (error) { return c.json({ error: error instanceof z.ZodError ? '角色增强内容不符合受控字段约束。' : error instanceof ResourceError && error.code === 'VERSION_CONFLICT' ? '角色已发布新版本，请刷新后基于最新版本重新编辑。' : '角色版本未发布；请刷新后核对工具与当前版本。' }, 409); }
+      },
+    }),
     registerApiRoute('/intake-api/remote-sync-targets', { method: 'GET',
       /** 仓库字典页仅在本机展示已登记目标及其本地checkout，阶段页继续隐藏路径。 */
       handler: async c => {

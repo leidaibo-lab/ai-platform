@@ -13,8 +13,13 @@
 - **WHEN** 用户发布通过宿主契约校验的新Agent版本
 - **THEN** 后续新Run选择新版本，已冻结Run的引用不变
 
+#### Scenario: 工作台发布受控增强
+- **WHEN** 用户从工作台以当前Agent版本ID提交角色指令、模型参数或已登记工具的收紧集合
+- **THEN** 宿主 SHALL 校验版本未冲突、工具仍是宿主允许集合且核心工具齐全，再创建新的Mastra原生Agent版本
+- **AND** 工作台不得编辑Skill正文、工具实现、Workspace、制品信任根或任何既有Run绑定
+
 ### Requirement: 首次执行前冻结并按版本恢复
-主Workflow SHALL 在首个模型调用前持久化RunID、角色Agent版本、Skill pin、工具契约摘要、模型传输身份及宿主制品摘要；恢复 SHALL 校验并使用该记录，缺失或不匹配 SHALL 拒绝，不得回退最新版本。
+主Workflow SHALL 在首个模型调用前持久化RunID、角色Agent版本、Skill pin、工具契约摘要、模型传输身份、运行资源配置摘要、业务资料快照摘要及宿主制品摘要；恢复 SHALL 校验并使用该记录，缺失或不匹配 SHALL 拒绝，不得回退最新版本。
 
 #### Scenario: 暂停期间切换发布版本
 - **WHEN** 暂停后发布新版本并重新装配宿主
@@ -23,6 +28,18 @@
 #### Scenario: 无冻结历史Run
 - **WHEN** 请求恢复没有新资源冻结记录的Run
 - **THEN** 拒绝执行，不补造快照，不执行历史兼容迁移
+
+### Requirement: 配置与业务资料随Run冻结
+运行时 SHALL 从服务端指定的严格`workflow.runtime.json`读取受限预算和角色模板声明，并在Run首步冻结其内容摘要；后续恢复 SHALL 使用冻结配置，不得让当前配置覆盖旧Run。产品角色可读的业务资料 SHALL 在同一首步复制为Run专属只读副本，恢复前逐文件核验摘要，不得回读可变来源目录。
+
+#### Scenario: 当前配置或来源资料变化
+- **WHEN** Run暂停后当前配置文件或来源资料发生变化
+- **THEN** 已冻结Run继续使用冻结配置与资料副本
+- **AND** 新Run才采用新的配置或来源资料
+
+#### Scenario: Run资料副本漂移
+- **WHEN** Run专属资料副本缺失、增加文件或任一文件字节摘要不匹配
+- **THEN** 恢复 SHALL 以固定资源完整性错误拒绝，不能用当前来源自动补齐
 
 ### Requirement: 工具与可信制品执行前核验
 live宿主 SHALL 使用独立配置的可信公钥核验制品签名和内容清单，并核对Run绑定；工具引用、schema、实现制品及Skill blob不完整 SHALL 在调用前拒绝。工具闭包 SHALL 由当前Run/任务装配，不能从存储执行任意代码。

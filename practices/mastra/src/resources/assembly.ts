@@ -9,6 +9,8 @@ import { currentResources } from './scope.js';
 import { resolveRole } from './native-store.js';
 import { ResourceError } from './contracts.js';
 import { isTaskContextToolset } from '../delivery/task-context.js';
+import { LocalFilesystem } from '@mastra/core/workspace';
+import { sourceSnapshotContentDirectory } from './source-snapshot.js';
 
 /** 使用当前任务的工具闭包，存储配置只能选择其子集及已登记只读增强。 */
 export async function assembleRole(original: Agent<any, any, any, any>, key: string, config: PracticeConfig) {
@@ -20,9 +22,13 @@ export async function assembleRole(original: Agent<any, any, any, any>, key: str
   for (const name of Object.keys(await original.listTools())) if (!(name in stored.config.tools)) throw new ResourceError('TOOL_MISSING');
   for (const name of Object.keys(stored.config.tools)) if (!(name in available)) throw new ResourceError('TOOL_MISSING');
   const workspace = await original.getWorkspace();
+  const frozenSources = sourceSnapshotContentDirectory(config, scope.binding.runId);
   const editor = new MastraEditor({ filesystems: { 'role-sources': { id: 'role-sources', name: '当前角色只读资料',
-    /** 数据资料由已有只读Workspace拥有，不接受存储配置提供宿主路径。 */
-    createFilesystem: () => { if (!workspace?.filesystem) throw new ResourceError('WORKSPACE_MISSING'); return workspace.filesystem; },
+    /** 产品资料只从Run快照读取；开发角色没有原始资料Workspace时仍保持既有受限闭包。 */
+    createFilesystem: () => {
+      if (!workspace?.filesystem) throw new ResourceError('WORKSPACE_MISSING');
+      return new LocalFilesystem({ basePath: frozenSources, contained: true, readOnly: true });
+    },
   } } });
   new Mastra({ storage: scope.storage, editor, tools: available });
   const agent = await editor.agent.getById(pin.agentId, { versionId: pin.versionId });

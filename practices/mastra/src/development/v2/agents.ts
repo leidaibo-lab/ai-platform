@@ -2,6 +2,8 @@ import { createNativeMemory } from '../../mastra/context-memory.js';
 import { assembleRole } from '../../resources/assembly.js';
 import { developmentResourceKey } from '../../resources/contracts.js';
 import { currentResources } from '../../resources/scope.js';
+import { createRoleInvocation } from '../../resources/projections.js';
+import { frozenRuntimeResourceConfig, loadRuntimeResourceConfig, roleResource } from '../../resources/resource-config.js';
 import { LibSQLStore } from '@mastra/libsql';
 import { createTaskContext } from '../../delivery/task-context.js';
 /** 原生 Agent 工厂；方法按角色最少注册，工具权限与模型报告相互独立。 */
@@ -118,7 +120,12 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
   const storage = config.mode === 'live' ? new LibSQLStore({ id: 'development-context-memory', url: config.databaseUrl }) : undefined;
   try {
     const agent = await assembleRole(createAgentV2(config, execution, role, state, paths, methods, runtime, storage), developmentResourceKey(role, !!state.input.autonomy, !!runtime?.delegate), config);
-    const taskContext = createTaskContext({ repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从候选工具读原文，避免文件在project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
+    const scope = currentResources();
+    const runtimeConfig = scope ? frozenRuntimeResourceConfig(scope.binding.runtimeConfig) : config.runtimeResources ?? loadRuntimeResourceConfig(config.rootDir);
+    const resourceRole = ['frontend', 'backend', 'infrastructure'].includes(role) ? runtime?.delegate ? 'implementation-owner' : 'implementation-member' : role;
+    const configuredRole = roleResource(runtimeConfig, resourceRole as Parameters<typeof roleResource>[1]);
+    const invocation = scope ? createRoleInvocation({ runId: state.input.source.runId, roleId: configuredRole.id, taskId: runtime?.memberId ?? null, round: state.round, bundleHash: scope.binding.bundleHash, inputContract: configuredRole.inputContract, payload: { requirementRefs: state.requirements.map(item => item.id), taskPaths: paths, registeredChecks: state.verificationRefs }, resources: scope.binding, config: runtimeConfig }) : undefined;
+    const taskContext = createTaskContext({ invocation, repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
       requirements: state.requirements.map(
         /** 需求与验收只消费批准原文锚点。 */
         (item) => item.id,
@@ -141,7 +148,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
     const prompt = taskContext.prompt;
     const schema = role === 'context' ? contextOutputSchema(state) : role === 'architect' ? planV2Schema : role === 'readiness' || role === 'reviewer' ? assessmentSchema : role === 'self-check' ? z.object({ status: z.enum(['passed', 'failed']), summary: z.string().min(1), route: z.enum(['frontend', 'backend', 'infrastructure', 'architecture', 'human']) }) : null;
     const timeout = developmentTimeoutPolicy(role);
-    const options = { ...taskContext.options, maxSteps: developmentMaxSteps, prepareStep: developmentPrepareStep(role), modelSettings: { maxOutputTokens: 6000, maxRetries: 0, timeout: { totalMs: timeout.totalMs, stepMs: timeout.stepMs } } };
+    const options = { ...taskContext.options, maxSteps: Math.min(developmentMaxSteps, configuredRole.maxSteps), prepareStep: developmentPrepareStep(role), modelSettings: { maxOutputTokens: 6000, maxRetries: 0, timeout: { totalMs: timeout.totalMs, stepMs: timeout.stepMs } } };
     /** SDK结构输出失败在边界转为固定诊断，禁止把原cause带入Workflow日志。 */
     async function call() {
       try {

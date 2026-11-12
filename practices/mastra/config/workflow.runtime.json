@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "mastra-resource-config.v1",
+  "id": "hrm-native-v1",
+  "workflowRef": "product-development-resources-v1",
+  "sourceProfile": "hrm-sources.v1",
+  "modelProfile": "default-model.v1",
+  "budgets": { "developmentMaxCalls": 72, "maxParallel": 3, "maxDelegationsPerTask": 3, "delegationDepth": 1, "maxReworks": 1, "faultRetries": 1 },
+  "roles": [
+    { "id": "product-coordinator", "cardRef": "product-coordinator.card.v1", "inputContract": "product-coordinator.input.v1", "outputContract": "product-work.output.v1", "methodRefs": [], "toolRefs": ["practice.info", "sources.read"], "maxSteps": 24 },
+    { "id": "product-clarification", "cardRef": "product-clarification.card.v1", "inputContract": "product-clarification.input.v1", "outputContract": "product-work.output.v1", "methodRefs": [], "toolRefs": ["practice.info", "sources.read"], "maxSteps": 24 },
+    { "id": "product-closure", "cardRef": "product-closure.card.v1", "inputContract": "product-closure.input.v1", "outputContract": "product-work.output.v1", "methodRefs": [], "toolRefs": ["practice.info", "sources.read"], "maxSteps": 24 },
+    { "id": "product-writing", "cardRef": "product-writing.card.v1", "inputContract": "product-writing.input.v1", "outputContract": "product-document.output.v1", "methodRefs": [], "toolRefs": ["practice.info", "sources.read"], "maxSteps": 24 },
+    { "id": "context", "cardRef": "context.card.v1", "inputContract": "context.input.v1", "outputContract": "context.output.v1", "methodRefs": [], "toolRefs": ["candidate.read"], "maxSteps": 12 },
+    { "id": "architect", "cardRef": "architect.card.v1", "inputContract": "architect.input.v1", "outputContract": "plan.output.v1", "methodRefs": [], "toolRefs": ["candidate.read"], "maxSteps": 12 },
+    { "id": "readiness", "cardRef": "readiness.card.v1", "inputContract": "readiness.input.v1", "outputContract": "assessment.output.v1", "methodRefs": [], "toolRefs": ["candidate.read"], "maxSteps": 12 },
+    { "id": "implementation-owner", "cardRef": "implementation-owner.card.v1", "inputContract": "implementation-owner.input.v1", "outputContract": "implementation-summary.output.v1", "methodRefs": [], "toolRefs": ["candidate.read", "task.delegate"], "maxSteps": 12 },
+    { "id": "implementation-member", "cardRef": "implementation-member.card.v1", "inputContract": "implementation-member.input.v1", "outputContract": "implementation-summary.output.v1", "methodRefs": [], "toolRefs": ["candidate.read", "candidate.write-assigned"], "maxSteps": 12 },
+    { "id": "self-check", "cardRef": "self-check.card.v1", "inputContract": "self-check.input.v1", "outputContract": "self-check-summary.output.v1", "methodRefs": [], "toolRefs": ["checks.run-registered"], "maxSteps": 12 },
+    { "id": "reviewer", "cardRef": "reviewer.card.v1", "inputContract": "reviewer.input.v1", "outputContract": "assessment.output.v1", "methodRefs": [], "toolRefs": ["candidate.read"], "maxSteps": 12 },
+    { "id": "testing", "cardRef": "testing.card.v1", "inputContract": "testing.input.v1", "outputContract": "test-plan.output.v1", "methodRefs": [], "toolRefs": [], "maxSteps": 1 },
+    { "id": "operations", "cardRef": "operations.card.v1", "inputContract": "operations.input.v1", "outputContract": "release-plan.output.v1", "methodRefs": [], "toolRefs": [], "maxSteps": 1 }
+  ]
+}
