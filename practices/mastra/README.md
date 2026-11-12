@@ -2,11 +2,19 @@
 
 角色资源已接入正式主流程：Mastra保存Agent/Skill版本，应用负责Run绑定、恢复装配、受控工作台发布、冻结预算/资料副本及可信制品核验。见[配置、发布与恢复](./config/stored-role-runtime.md)及[前置隔离实验](./evaluations/native/stored-role-validation.md)。历史Run不兼容；live主流程需要部署侧可信签名。
 
+主流程同时固定`Run / Artifact / Evidence / Approval / CapabilityGrant / TaskPlan`六类治理记录：Agent输出以带schema、hash和证据引用的Artifact交接；项目范围确认由宿主生成冻结能力授权，架构任务只能在其中选择角色、路径和登记检查，不能由模型扩大。详见[运行资源契约](./config/runtime-resource-contract.md#51-run治理记录与能力授权)。
+
+工作台将原生暂停和已保存执行事实投影为`HumanGate / ApprovalReceipt / AgentInvocation / EvidenceRecord / AgentRun`：它们统一展示关口、调用可见范围、检查/回执证据和Run摘要，但不创建第二状态库，也不能作为恢复输入。任务级或调用级授权、授权撤销/过期、外部写操作和跨实例执行仍是触发式后续决策。
+
 后续改造设计：[以业务验收为完成条件](./business-delivery-design.md)，覆盖澄清续办、最终包审查、纵向旅程及全栈测试；目前为设计稿，以下运行方式与现有能力不因该文档改变。
 
 本机闭环验证示例：[工单标题校验页](./examples/local-delivery/README.md)，运行 `npm run example:local-delivery`，实际执行沙箱测试、浏览器 QA、本机静态发布、健康检查和回滚；角色使用固定模型，自动决策仅为示例策略，不代表真实业务或生产验收。
 
 本实践使用 Mastra 原生 Agent、Workflow 和 LibSQLStore，独立管理入口、依赖和数据，不导入探索主线 Runtime、Store 或 GatewayClient。
+
+![Mastra 当前原生产研实践能力图](../../docs/assets/mastra-current-capability-map-v1.png)
+
+[可编辑 SVG：Mastra 当前原生产研实践能力图](../../docs/assets/mastra-current-capability-map-v1.svg)。图将当前接入能力、受限/人工门禁与未接入或待验收能力分开标注；不将 MCP、向量 RAG、生产多实例或自动 CI/CD 表述为当前能力。
 
 长时间执行：见[实际配置说明](./config/README.md#超时与重试的实际配置)及[处理交互设计](./execution-status-interaction.md)。已接入产品生成尝试、失败来源、服务端计时、只读有效配置及二次确认取消。取消仅支持当前服务进程中的需求分析和四产品角色；开发、推送、发布及跨实例取消暂不支持，参数在线调整尚未接入。
 

@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1280" viewBox="0 0 1600 1280" role="img" aria-labelledby="title desc">
+  <title id="title">Mastra Current Capability Map：当前原生产研实践能力图</title>
+  <desc id="desc">从产研工作台输入，经 Mastra 原生工作流、受控多角色团队、隔离执行和事实存储，到评测、产物归档和人工确认的当前能力地图。实线为当前接线，紫色虚线为人工门禁，灰色虚线为尚未接入能力。</desc>
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#1769aa"/></marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#15806f"/></marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#7452a2"/></marker>
+    <style>
+      .title{font:700 34px Arial,'PingFang SC',sans-serif;fill:#1f2933}.subtitle{font:17px Arial,'PingFang SC',sans-serif;fill:#52616b}.band{font:700 20px Arial,'PingFang SC',sans-serif;fill:white}.section{font:700 19px Arial,'PingFang SC',sans-serif;fill:#1f2933}.label{font:700 16px Arial,'PingFang SC',sans-serif;fill:#1f2933}.text{font:14px Arial,'PingFang SC',sans-serif;fill:#334e5a}.small{font:12px Arial,'PingFang SC',sans-serif;fill:#52616b}.tiny{font:11px Arial,'PingFang SC',sans-serif;fill:#52616b}.flow{stroke:#1769aa;stroke-width:3;fill:none;marker-end:url(#arrow-blue)}.fact{stroke:#15806f;stroke-width:3;fill:none;marker-end:url(#arrow-green)}.guard{stroke:#7452a2;stroke-width:2.5;stroke-dasharray:8 6;fill:none;marker-end:url(#arrow-purple)}.todo{stroke:#8b98a4;stroke-width:2.5;stroke-dasharray:8 6;fill:none}.current{fill:#eef5fa;stroke:#1769aa;stroke-width:2.3}.storage{fill:#edf8f5;stroke:#15806f;stroke-width:2.3}.external{fill:#fff7e7;stroke:#b46a00;stroke-width:2.3}.governance{fill:#f6f0fb;stroke:#7452a2;stroke-width:2.3}.future{fill:#f5f6f7;stroke:#8b98a4;stroke-width:2.3;stroke-dasharray:8 6}
+    </style>
+  </defs>
+  <rect width="1600" height="1280" fill="white"/>
+  <text x="60" y="58" class="title">Mastra Current Capability Map / 当前原生产研实践能力图</text>
+  <text x="60" y="88" class="subtitle">面向“需求到交付”的受治理多 Agent 实践：展示已接入能力、人工门禁与明确未完成边界</text>
+
+  <rect x="50" y="120" width="94" height="148" rx="7" fill="#1769aa"/><text x="97" y="183" class="band" text-anchor="middle">交互与</text><text x="97" y="210" class="band" text-anchor="middle">入口</text>
+  <rect x="165" y="120" width="1385" height="148" rx="8" fill="#f8fbfd" stroke="#1769aa" stroke-width="2.3"/>
+  <rect x="195" y="154" width="250" height="80" rx="7" class="current"/><text x="320" y="184" class="label" text-anchor="middle">产研工作台</text><text x="320" y="208" class="text" text-anchor="middle">需求、澄清、人工确认</text>
+  <path d="M445 194 H520" class="flow"/>
+  <rect x="520" y="154" width="280" height="80" rx="7" class="current"/><text x="660" y="184" class="label" text-anchor="middle">Studio / 角色资源工作台</text><text x="660" y="208" class="text" text-anchor="middle">流程调试、受控 Agent/Skill 发布</text>
+  <path d="M800 194 H875" class="flow"/>
+  <rect x="875" y="154" width="300" height="80" rx="7" class="storage"/><text x="1025" y="184" class="label" text-anchor="middle">同一根 Run</text><text x="1025" y="208" class="text" text-anchor="middle">暂停、恢复、审批事实由 Store 保存</text>
+  <path d="M1175 194 H1250" class="flow"/>
+  <rect x="1250" y="154" width="260" height="80" rx="7" class="governance"/><text x="1380" y="184" class="label" text-anchor="middle">人工操作者</text><text x="1380" y="208" class="text" text-anchor="middle">确认范围、方案、质量与发布</text>
+
+  <rect x="50" y="300" width="94" height="485" rx="7" fill="#315b74"/><text x="97" y="462" class="band" text-anchor="middle">Mastra</text><text x="97" y="489" class="band" text-anchor="middle">原生编排</text>
+  <rect x="165" y="300" width="1385" height="485" rx="8" fill="#f8fbfd" stroke="#315b74" stroke-width="2.5"/>
+  <text x="195" y="335" class="section">productDevelopmentWorkflow / 固定图编排 + 局部受限自主循环</text>
+  <text x="195" y="359" class="small">当前主链保持一个 Run；角色在步骤内使用 Agent、Tool、Skill 与 Observational Memory，不能绕过阶段和审批。</text>
+
+  <rect x="195" y="395" width="240" height="145" rx="8" class="current"/><text x="315" y="428" class="label" text-anchor="middle">① 产品阶段</text><text x="315" y="454" class="text" text-anchor="middle">澄清与四产品角色</text><text x="315" y="477" class="text" text-anchor="middle">受控资料读取 / Skill</text><text x="315" y="510" class="small" text-anchor="middle">输出：产品稿、待决项、验收候选</text>
+  <path d="M435 467 H485" class="flow"/>
+  <rect x="485" y="395" width="225" height="145" rx="8" class="governance"/><text x="598" y="428" class="label" text-anchor="middle">产品与范围门</text><text x="598" y="454" class="text" text-anchor="middle">确认产品版本</text><text x="598" y="477" class="text" text-anchor="middle">冻结项目、文件与授权</text><text x="598" y="510" class="small" text-anchor="middle">未确认不得进入开发</text>
+  <path d="M710 467 H760" class="flow"/>
+  <rect x="760" y="395" width="260" height="145" rx="8" class="current"/><text x="890" y="428" class="label" text-anchor="middle">② 方案与动态组队</text><text x="890" y="454" class="text" text-anchor="middle">上下文、架构、任务依赖</text><text x="890" y="477" class="text" text-anchor="middle">就绪评估、已登记角色</text><text x="890" y="510" class="small" text-anchor="middle">模型不能自报权限或基线</text>
+  <path d="M1020 467 H1070" class="flow"/>
+  <rect x="1070" y="395" width="245" height="145" rx="8" class="governance"/><text x="1192" y="428" class="label" text-anchor="middle">方案批准门</text><text x="1192" y="454" class="text" text-anchor="middle">团队、范围、预算、工具</text><text x="1192" y="477" class="text" text-anchor="middle">自主策略显式绑定</text><text x="1192" y="510" class="small" text-anchor="middle">扩大授权必须回到人工</text>
+  <path d="M1315 467 H1365" class="flow"/>
+  <rect x="1365" y="395" width="145" height="145" rx="8" class="current"/><text x="1437" y="428" class="label" text-anchor="middle">③ 开发</text><text x="1437" y="454" class="text" text-anchor="middle">按依赖波次</text><text x="1437" y="477" class="text" text-anchor="middle">受限委派</text><text x="1437" y="510" class="small" text-anchor="middle">候选中修改</text>
+
+  <rect x="255" y="594" width="1020" height="148" rx="8" fill="white" stroke="#1769aa" stroke-width="2.5"/>
+  <text x="280" y="627" class="section">已接入的 Agent Harness：在批准范围内“能做事”也“不能越界”</text>
+  <rect x="285" y="650" width="178" height="61" rx="7" class="external"/><text x="374" y="676" class="label" text-anchor="middle">受控工具</text><text x="374" y="695" class="tiny" text-anchor="middle"><tspan x="374">批准路径读写 / 委派</tspan><tspan x="374" dy="14">登记检查</tspan></text>
+  <rect x="490" y="650" width="178" height="61" rx="7" class="storage"/><text x="579" y="676" class="label" text-anchor="middle">运行记忆与上下文</text><text x="579" y="695" class="tiny" text-anchor="middle"><tspan x="579">独立线程观察/反思</tspan><tspan x="579" dy="14">冻结资料 / 来源快照</tspan></text>
+  <rect x="695" y="650" width="178" height="61" rx="7" class="current"/><text x="784" y="676" class="label" text-anchor="middle">自主修复 Loop</text><text x="784" y="695" class="tiny" text-anchor="middle"><tspan x="784">检查证据 / 连续返工</tspan><tspan x="784" dy="14">重复失败停止</tspan></text>
+  <rect x="900" y="650" width="178" height="61" rx="7" class="governance"/><text x="989" y="676" class="label" text-anchor="middle">策略与预算</text><text x="989" y="695" class="tiny" text-anchor="middle"><tspan x="989">轮数 / 调用 / 检查</tspan><tspan x="989" dy="14">无进展门槛</tspan></text>
+  <rect x="1105" y="650" width="140" height="61" rx="7" class="storage"/><text x="1175" y="676" class="label" text-anchor="middle">版本绑定</text><text x="1175" y="695" class="tiny" text-anchor="middle"><tspan x="1175">Agent / Skill</tspan><tspan x="1175" dy="14">/ 制品</tspan></text>
+  <path d="M1437 540 V593 H1275" class="flow"/>
+  <path d="M784 650 V575 H1437" class="flow"/>
+
+  <rect x="1300" y="594" width="210" height="148" rx="8" class="current"/><text x="1405" y="627" class="section" text-anchor="middle">④ 独立质量</text><text x="1405" y="654" class="text" text-anchor="middle">测试计划与批准用例</text><text x="1405" y="680" class="text" text-anchor="middle">登记套件 / 浏览器 QA</text><text x="1405" y="706" class="small" text-anchor="middle">缺陷回送开发；机器失败</text><text x="1405" y="724" class="small" text-anchor="middle">不能由人工覆盖为通过</text>
+  <path d="M1275 668 H1298" class="flow"/>
+
+  <rect x="50" y="817" width="94" height="245" rx="7" fill="#15806f"/><text x="97" y="915" class="band" text-anchor="middle">事实、资料</text><text x="97" y="942" class="band" text-anchor="middle">与执行</text>
+  <rect x="165" y="817" width="1385" height="245" rx="8" fill="#f7fcfa" stroke="#15806f" stroke-width="2.5"/>
+  <rect x="195" y="852" width="295" height="160" rx="8" class="storage"/><text x="342" y="885" class="section" text-anchor="middle">Mastra + LibSQLStore</text><text x="342" y="915" class="text" text-anchor="middle">Workflow Run、暂停恢复、审批</text><text x="342" y="939" class="text" text-anchor="middle">阶段状态与历史事实</text><text x="342" y="974" class="small" text-anchor="middle">唯一流程事实源；不是文件投影</text>
+  <rect x="525" y="852" width="270" height="160" rx="8" class="storage"/><text x="660" y="885" class="section" text-anchor="middle">资料与交付投影</text><text x="660" y="915" class="text" text-anchor="middle">只读 Workspace / 来源快照</text><text x="660" y="939" class="text" text-anchor="middle">HRM 产物、版本、散列</text><text x="660" y="974" class="small" text-anchor="middle">查看/下载，不构成第二审批库</text>
+  <rect x="830" y="852" width="305" height="160" rx="8" class="external"/><text x="982" y="885" class="section" text-anchor="middle">隔离执行环境</text><text x="982" y="915" class="text" text-anchor="middle">HRM 候选副本、Docker/Compose</text><text x="982" y="939" class="text" text-anchor="middle">pnpm check / build / smoke</text><text x="982" y="974" class="small" text-anchor="middle">登记命令、路径与依赖受保护</text>
+  <rect x="1170" y="852" width="340" height="160" rx="8" class="external"/><text x="1340" y="885" class="section" text-anchor="middle">发布与外部系统</text><text x="1340" y="915" class="text" text-anchor="middle">阶段 Git 交接 / 已测代码回库</text><text x="1340" y="939" class="text" text-anchor="middle">发布、健康检查、回滚回执</text><text x="1340" y="974" class="small" text-anchor="middle">当前依赖人工外部回填，不自动执行 CI/CD</text>
+  <path d="M342 817 V790 H890 V742" class="fact"/><path d="M660 817 V790 H315 V742" class="fact"/><path d="M982 817 V790 H1437 V742" class="fact"/><path d="M1340 817 V790 H1405 V742" class="fact"/>
+
+  <rect x="50" y="1094" width="94" height="128" rx="7" fill="#7452a2"/><text x="97" y="1145" class="band" text-anchor="middle">评测、治理</text><text x="97" y="1172" class="band" text-anchor="middle">与边界</text>
+  <rect x="165" y="1094" width="1385" height="128" rx="8" fill="#fbf8fd" stroke="#7452a2" stroke-width="2.5"/>
+  <rect x="195" y="1124" width="315" height="68" rx="7" class="governance"/><text x="352" y="1152" class="label" text-anchor="middle">原生评测与可观察证据</text><text x="352" y="1175" class="small" text-anchor="middle">Dataset / Scorer / Experiment、回执、散列</text>
+  <rect x="540" y="1124" width="315" height="68" rx="7" class="governance"/><text x="697" y="1152" class="label" text-anchor="middle">受控恢复与执行状态</text><text x="697" y="1175" class="small" text-anchor="middle">失败分类、只读配置、有限取消、人工续办</text>
+  <rect x="885" y="1124" width="275" height="68" rx="7" class="future"/><text x="1022" y="1152" class="label" text-anchor="middle">未作为当前能力</text><text x="1022" y="1172" class="tiny" text-anchor="middle"><tspan x="1022">MCP Server/Registry</tspan><tspan x="1022" dy="14">向量 RAG、A2A</tspan></text>
+  <rect x="1190" y="1124" width="320" height="68" rx="7" class="future"/><text x="1350" y="1152" class="label" text-anchor="middle">仍待验收或未接入</text><text x="1350" y="1172" class="tiny" text-anchor="middle"><tspan x="1350">生产多实例、跨实例取消、自动 CI/CD</tspan><tspan x="1350" dy="14">真实业务全链路</tspan></text>
+  <path d="M352 1094 V1064 H342 V1014" class="guard"/><path d="M697 1094 V1064 H982 V1014" class="guard"/>
+
+  <text x="60" y="1258" class="small">主执行：工作台输入 → 固定 Workflow 与人工门 → 受限多角色开发/测试 → 同版本证据交付　　事实：原生 Store 持有 Run；资料/产物为受控投影　　图例：蓝=当前执行　绿=事实/资料　紫虚线=人工治理　灰虚线=未接入或待验收</text>
+</svg>

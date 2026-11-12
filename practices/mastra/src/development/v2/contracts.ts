@@ -6,12 +6,13 @@ import { modelCallDiagnosticSchema } from './model-diagnostic.js';
 import { outputDiagnosticSchema } from './output-diagnostic.js';
 import { correlationSchema } from '../../delivery/asset-identity.js';
 import { invocationEvidenceSchema } from '../../resources/projections.js';
+import { assertCapabilityGrant, capabilityGrantSchema, taskPlanSchema, artifactRecordSchema, approvalRecordSchema, evidenceRecordSchema } from '../../resources/governance.js';
 import { architectureSchema, commandEvidenceSchema, developmentInputSchema, developmentReviewSchema, executionIdentitySchema, recoveryReviewSchema, validateArchitecture, developmentHash } from '../contracts.js';
 
 export const productWorkflowIdSchema = z.enum(['product-delivery', 'product-delivery-v2']);
 /** 新Run显式选择自主政策；缺省不改变历史批准/恢复散列。 */
 export const autonomyPolicySchema = z.object({ version: z.literal('autonomy.v1'), maxCheckRuns: z.number().int().min(2).max(96).default(24), maxNoProgress: z.number().int().min(1).max(5).default(2) });
-export const inputV2Schema = developmentInputSchema.extend({ autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.enum(['product-delivery', 'product-delivery-v2', 'product-development']).optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+export const inputV2Schema = developmentInputSchema.extend({ autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.enum(['product-delivery', 'product-delivery-v2', 'product-development']).optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64), approval: approvalRecordSchema.optional(), capabilityGrant: capabilityGrantSchema.optional() }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -43,6 +44,7 @@ export const verificationRecordSchema = z.object({ sequence: z.number().int().po
 /** 返工保留失败签名和责任任务；源码变化本身不是进展。 */
 export const repairRecordSchema = z.object({ round: z.number().int().nonnegative(), sourceHash: hash, signature: hash, tasks: z.array(z.string()), noProgress: z.number().int().nonnegative(), kind: z.enum(['code', 'environment', 'business', 'authorization']) });
 export const stateV2Schema = z.object({
+  evidenceRecords: z.array(evidenceRecordSchema).max(1000).optional(),
   verificationHistory: z.array(verificationRecordSchema).optional(), repairHistory: z.array(repairRecordSchema).optional(),
   stopReason: z.enum(['business-decision', 'authorization-required', 'repair-budget', 'verification-budget', 'no-progress']).optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),
@@ -51,14 +53,14 @@ export const stateV2Schema = z.object({
   methodBundleHash: hash, phase: phaseSchema,
   requirements: z.array(z.object({ id: z.string(), line: z.number().int().positive(), text: z.string().min(1), hash })),
   verificationRefs: z.array(z.string()).min(1), context: contextV2Schema.nullable(),
-  plan: planV2Schema.nullable(), planHash: hash.nullable(), planSourceHash: hash.nullable(), approvalHash: hash.nullable(), approvedHash: hash.nullable(),
+  plan: planV2Schema.nullable(), planHash: hash.nullable(), planSourceHash: hash.nullable(), taskPlan: taskPlanSchema.nullable().optional(), planArtifact: artifactRecordSchema.nullable().optional(), approvalHash: hash.nullable(), approvedHash: hash.nullable(),
   readiness: reportSchema.nullable(), readinessHistory: z.array(reportSchema), findingsReviews: z.array(findingsReviewSchema), codeReviews: z.array(reportSchema),
   reviews: z.array(approvalV2Schema.extend({ authority: z.enum(['local-human-label', 'evaluation-policy']) })),
   resolutions: z.array(resolutionSchema.extend({ reportHash: hash, authority: z.enum(['reviewer', 'local-human-label']) })),
   checkpointHash: hash, completedTasks: z.array(z.string()), round: z.number().int().nonnegative(), route: z.enum(['all', 'frontend', 'backend', 'infrastructure', 'architecture', 'human']),
   contextBudgetLevel: z.number().int().min(0).max(4).optional(),
   calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  work: z.array(z.object({ role: roleV2Schema, round: z.number(), text: z.string(), tools: z.array(z.string()), steps: z.number(), modelId: z.string().nullable(), inputTokens: z.number().nullable(), outputTokens: z.number().nullable(), invocation: invocationEvidenceSchema.optional() })),
+  work: z.array(z.object({ role: roleV2Schema, round: z.number(), text: z.string(), tools: z.array(z.string()), steps: z.number(), modelId: z.string().nullable(), inputTokens: z.number().nullable(), outputTokens: z.number().nullable(), invocation: invocationEvidenceSchema.optional(), artifact: artifactRecordSchema.optional() })),
   faults: z.array(z.object({ sequence: z.number(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error', 'context-budget']), budget: contextBudgetFailureSchema.optional(), attempt: z.number(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
   recovery: z.object({ hash, checkpointHash: hash, phase: phaseSchema, role: roleV2Schema, kind: z.string(), budget: contextBudgetFailureSchema.optional(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), taskId: z.string().nullable() }).nullable(), recoveries: z.array(recoveryReviewSchema),
   checks: z.array(commandEvidenceSchema), checkedSourceHash: hash.nullable(), gates: z.array(gateDecisionSchema),
@@ -101,6 +103,15 @@ export function validatePlanV2(plan: z.infer<typeof planV2Schema>, state: StateV
     for (const ref of task.contextRefs) if (!context.has(ref)) throw new SyntaxError('任务引用未知上下文');
     for (const ref of task.verificationRefs) if (!state.verificationRefs.includes(ref)) throw new SyntaxError('任务引用未登记检查');
   }
+  const grant = state.input.scopeApproval?.capabilityGrant;
+  if (grant) {
+    const authorized = assertCapabilityGrant(grant, state.input.source.runId, state.input.source.hash);
+    for (const task of plan.tasks) {
+      if (!authorized.roles.includes(task.role)) throw new SyntaxError('任务角色超出能力授权');
+      for (const path of task.paths) if (!authorized.writablePaths.includes(path)) throw new SyntaxError('任务路径超出能力授权');
+      for (const check of task.verificationRefs) if (!authorized.registeredChecks.includes(check)) throw new SyntaxError('任务检查超出能力授权');
+    }
+  }
   if (!plan.blockers.length) for (const ref of requirements) {
     if (!plan.tasks.some(
       // 引用存在是最低门槛，不替代就绪阶段的双向语义检查。
@@ -111,7 +122,7 @@ export function validatePlanV2(plan: z.infer<typeof planV2Schema>, state: StateV
 
 /** 批准同时绑定上下文、任务、方法、就绪和模型身份；不绑定后续正常源码变化。 */
 export function approvalHashV2(state: StateV2): string {
-  return developmentHash({ input: state.input, baselineHash: state.planSourceHash, context: state.context, plan: state.plan, readiness: state.readiness, executionIdentity: state.executionIdentity, methodBundleHash: state.methodBundleHash, ...(state.team ? { team: state.team } : {}) });
+  return developmentHash({ input: state.input, baselineHash: state.planSourceHash, context: state.context, plan: state.plan, planArtifact: state.planArtifact, taskPlan: state.taskPlan, readiness: state.readiness, executionIdentity: state.executionIdentity, methodBundleHash: state.methodBundleHash, ...(state.team ? { team: state.team } : {}) });
 }
 
 /** 故障接续绑定失败阶段与完整证据，防止评审故障恢复时重放实现。 */

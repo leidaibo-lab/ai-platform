@@ -9,6 +9,7 @@ import { createInvocationEvidence, createRoleInvocation } from '../../resources/
 import { currentResources } from '../../resources/scope.js';
 import { frozenRuntimeResourceConfig, roleResource } from '../../resources/resource-config.js';
 import { resourceHash } from '../../resources/contracts.js';
+import { createArtifact } from '../../resources/governance.js';
 
 /**
  * 复合 Workflow 固定四个产品职责；角色内的工具循环由 Mastra Agent 执行。
@@ -85,9 +86,17 @@ export function createProductWorkflow(
         stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content,
         revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork,
       })).digest('hex');
+      const writing = inputData.productWork?.entries.at(-1);
+      const record = createArtifact({
+        id: `product:${hash}`,
+        kind: 'product-document',
+        schemaVersion: 'product-document.output.v1',
+        content,
+        evidenceRefs: writing?.invocation ? [{ id: writing.invocation.invocationId, kind: 'invocation', hash: resourceHash(writing.invocation) }] : [],
+      });
       return {
         ...inputData,
-        artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }],
+        artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const, record, evidenceRefs: record.evidenceRefs }],
       };
     },
   });

@@ -54,6 +54,37 @@
 - **THEN** 宿主 SHALL 将该角色调用证据与同一`bundleHash`写入相应产物
 - **AND** 最终交付 SHALL 拒绝缺少测试或运维调用证据、或证据版本不匹配的状态
 
+### Requirement: Run治理记录与冻结能力授权
+主Workflow SHALL 将跨阶段产物统一表示为带`schemaVersion`、内容散列和证据引用的Artifact记录；Run、Artifact、Evidence、Approval、CapabilityGrant和TaskPlan的职责不得混合。项目范围确认 SHALL 由宿主生成并冻结`CapabilityGrant`，绑定Run、产品Artifact、确认摘要、角色、可写路径、登记检查、调用预算和返工预算。模型不得生成、扩张或替换授权。
+
+#### Scenario: 经确认范围进入开发
+- **WHEN** 当前产品Artifact已批准，用户确认项目范围
+- **THEN** 宿主 SHALL 生成绑定该Run和产品版本的CapabilityGrant
+- **AND** 后续架构任务的角色、路径和检查引用必须是该授权的子集
+
+#### Scenario: 授权或交接物漂移
+- **WHEN** CapabilityGrant的内容、Run、产品版本或散列不匹配，或Artifact缺少其声明的证据引用
+- **THEN** Workflow SHALL 拒绝进入或继续受影响阶段
+- **AND** 不得从当前默认配置、模型文字或历史Run补造授权
+
+### Requirement: 统一人工关口、调用与证据投影
+主Workflow及其工作台 Adapter SHALL 从已保存的原生暂停材料、角色调用、检查与外部回执派生只读`HumanGate`、`ApprovalReceipt`、`AgentInvocation`、`EvidenceRecord`与`AgentRun`投影。投影 SHALL 引用同一Run、绑定hash和既有证据；不得成为恢复输入、并行审批库或第二事实源。`AgentInvocation` SHALL 明确记录可见Artifact/Context引用、冻结CapabilityGrant引用和预算快照。
+
+#### Scenario: 人工关口展示和提交
+- **WHEN** Workflow在已登记人工关口暂停或工作台提交有效resume数据
+- **THEN** 工作台 SHALL 投影绑定当前暂停材料的HumanGate
+- **AND** 提交 SHALL 在既有resume schema校验后投影ApprovalReceipt，不改变原生resume语义
+
+#### Scenario: 工具、检查和外部回执证据
+- **WHEN** 角色调用返回工具结果、登记检查完成，或人工提交部署/健康/回滚回执
+- **THEN** 宿主 SHALL 从已保存事实生成对应EvidenceRecord或ToolExecutionReceipt引用
+- **AND** 不得把模型私有推理、凭据、任意工具输入或未脱敏输出写入该投影
+
+#### Scenario: 外部写操作或跨实例执行
+- **WHEN** 需要执行外部写操作、任务级/调用级授权、授权撤销/过期或跨实例恢复
+- **THEN** 当前Run级CapabilityGrant不得被隐式扩展
+- **AND** 实施前 SHALL 建立新的方案决策与OpenSpec边界
+
 ### Requirement: 工具与可信制品执行前核验
 live宿主 SHALL 使用独立配置的可信公钥核验制品签名和内容清单，并核对Run绑定；工具引用、schema、实现制品及Skill blob不完整 SHALL 在调用前拒绝。工具闭包 SHALL 由当前Run/任务装配，不能从存储执行任意代码。
 

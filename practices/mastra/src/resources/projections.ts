@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { resourceHash } from './contracts.js';
 import type { RuntimeResourceConfig } from './resource-config.js';
 import type { FrozenResources } from './contracts.js';
+import { createEvidenceRecord, toolExecutionReceiptSchema } from './governance.js';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const text = z.string().trim().min(1).max(100000);
@@ -47,11 +48,11 @@ export const roleOutputSchemas = {
 } as const;
 
 export const resourceRefSchema = z.object({ resourceId: z.string().min(1), hash, version: z.string().min(1) }).strict();
-export const roleInvocationSchema = z.object({ version: z.literal('agent-invocation.v1'), runId: z.string().min(1), roleId: z.string().min(1), taskId: z.string().nullable(), round: z.number().int().nonnegative(), bundleHash: hash, inputContract: z.string().min(1), inputHash: hash, resourceRefs: z.array(resourceRefSchema).max(40), payload: z.record(z.string(), z.unknown()) }).strict();
+export const roleInvocationSchema = z.object({ version: z.literal('agent-invocation.v1'), runId: z.string().min(1), roleId: z.string().min(1), taskId: z.string().nullable(), round: z.number().int().nonnegative(), bundleHash: hash, inputContract: z.string().min(1), inputHash: hash, resourceRefs: z.array(resourceRefSchema).max(40), capabilityGrantHash: hash.nullable(), budget: z.object({ remainingCalls: z.number().int().nonnegative(), maxCalls: z.number().int().positive(), maxReworks: z.number().int().nonnegative() }).strict(), visibleArtifactRefs: z.array(hashRefSchema).max(100), visibleContextRefs: z.array(hashRefSchema).max(300), payload: z.record(z.string(), z.unknown()) }).strict();
 export type RoleInvocation = z.infer<typeof roleInvocationSchema>;
 
 /** 输出证据全部来自原生返回与宿主哈希，防止角色用文字伪造调用、工具或版本事实。 */
-export const invocationEvidenceSchema = z.object({ version: z.literal('invocation-evidence.v1'), invocationId: hash, roleId: z.string().min(1), bundleHash: hash, inputHash: hash, outputContract: z.string().min(1), outputHash: hash, toolEvidenceRefs: z.array(z.string().min(1)).max(64), usage: z.object({ inputTokens: z.number().int().nonnegative().nullable(), outputTokens: z.number().int().nonnegative().nullable(), steps: z.number().int().nonnegative(), modelId: z.string().nullable() }).strict() }).strict();
+export const invocationEvidenceSchema = z.object({ version: z.literal('invocation-evidence.v1'), invocationId: hash, roleId: z.string().min(1), bundleHash: hash, inputHash: hash, outputContract: z.string().min(1), outputHash: hash, toolEvidenceRefs: z.array(z.string().min(1)).max(64), toolReceipts: z.array(toolExecutionReceiptSchema).max(64).optional(), usage: z.object({ inputTokens: z.number().int().nonnegative().nullable(), outputTokens: z.number().int().nonnegative().nullable(), steps: z.number().int().nonnegative(), modelId: z.string().nullable() }).strict() }).strict();
 export type InvocationEvidence = z.infer<typeof invocationEvidenceSchema>;
 
 /** 根据冻结配置的角色合同解析DTO；没有配置、合同或字段即失败关闭。 */
@@ -69,11 +70,11 @@ function outputSchema(outputContract: string) {
 }
 
 /** 为当前角色建立不可变交接信封；不把配置正文、运行状态、工具实现或凭据放入模型输入。 */
-export function createRoleInvocation(input: { runId: string; roleId: RoleResourceId; taskId?: string | null; round?: number; bundleHash: string; inputContract: string; payload: Record<string, unknown>; resources: FrozenResources; config: RuntimeResourceConfig }): RoleInvocation {
+export function createRoleInvocation(input: { runId: string; roleId: RoleResourceId; taskId?: string | null; round?: number; bundleHash: string; inputContract: string; payload: Record<string, unknown>; resources: FrozenResources; config: RuntimeResourceConfig; capabilityGrantHash?: string | null; budget?: { remainingCalls: number; maxCalls: number; maxReworks: number }; visibleArtifactRefs?: { id: string; hash: string }[]; visibleContextRefs?: { id: string; hash: string }[] }): RoleInvocation {
   const configured = input.config.roles.find(role => role.id === input.roleId);
   if (!configured || configured.inputContract !== input.inputContract) throw new Error('角色输入契约与冻结配置不匹配');
   const payload = inputSchema(input.roleId, input.inputContract).parse(input.payload);
-  return roleInvocationSchema.parse({ version: 'agent-invocation.v1', runId: input.runId, roleId: input.roleId, taskId: input.taskId ?? null, round: input.round ?? 0, bundleHash: input.bundleHash, inputContract: input.inputContract, inputHash: resourceHash(payload), resourceRefs: Object.entries(input.resources.roles).map(([resourceId, role]) => ({ resourceId, version: role.versionId, hash: role.configHash })), payload });
+  return roleInvocationSchema.parse({ version: 'agent-invocation.v1', runId: input.runId, roleId: input.roleId, taskId: input.taskId ?? null, round: input.round ?? 0, bundleHash: input.bundleHash, inputContract: input.inputContract, inputHash: resourceHash(payload), resourceRefs: Object.entries(input.resources.roles).map(([resourceId, role]) => ({ resourceId, version: role.versionId, hash: role.configHash })), capabilityGrantHash: input.capabilityGrantHash ?? null, budget: input.budget ?? { remainingCalls: 0, maxCalls: 1, maxReworks: 0 }, visibleArtifactRefs: input.visibleArtifactRefs ?? [], visibleContextRefs: input.visibleContextRefs ?? [], payload });
 }
 
 /** 固化调用完成证据；输出合同和工具事实由宿主验证后再进入Workflow状态。 */
@@ -81,7 +82,13 @@ export function createInvocationEvidence(input: { invocation: RoleInvocation; ou
   const configured = input.config.roles.find(role => role.id === input.invocation.roleId);
   if (!configured || configured.outputContract !== input.outputContract) throw new Error('角色输出契约与冻结配置不匹配');
   const output = outputSchema(input.outputContract).parse(input.output);
-  return invocationEvidenceSchema.parse({ version: 'invocation-evidence.v1', invocationId: resourceHash({ runId: input.invocation.runId, roleId: input.invocation.roleId, taskId: input.invocation.taskId, round: input.invocation.round, inputHash: input.invocation.inputHash }), roleId: input.invocation.roleId, bundleHash: input.invocation.bundleHash, inputHash: input.invocation.inputHash, outputContract: input.outputContract, outputHash: resourceHash(output), toolEvidenceRefs: [...new Set(input.tools)].sort(), usage: { inputTokens: input.usage.inputTokens ?? null, outputTokens: input.usage.outputTokens ?? null, steps: input.usage.steps, modelId: input.usage.modelId ?? null } });
+  const invocationId = resourceHash({ runId: input.invocation.runId, roleId: input.invocation.roleId, taskId: input.invocation.taskId, round: input.invocation.round, inputHash: input.invocation.inputHash });
+  const toolNames = [...new Set(input.tools)].sort();
+  const toolReceipts = toolNames.map(toolId => {
+    const evidence = createEvidenceRecord({ kind: 'tool-receipt', runId: input.invocation.runId, sourceHash: input.invocation.inputHash, payloadHash: resourceHash({ invocationId, toolId }), refs: [] });
+    return { version: 'tool-execution-receipt.v1' as const, id: `tool:${evidence.hash.slice(0, 24)}`, runId: input.invocation.runId, invocationId, toolId, inputHash: null, outputHash: null, status: 'succeeded' as const, evidence };
+  });
+  return invocationEvidenceSchema.parse({ version: 'invocation-evidence.v1', invocationId, roleId: input.invocation.roleId, bundleHash: input.invocation.bundleHash, inputHash: input.invocation.inputHash, outputContract: input.outputContract, outputHash: resourceHash(output), toolEvidenceRefs: toolNames, toolReceipts, usage: { inputTokens: input.usage.inputTokens ?? null, outputTokens: input.usage.outputTokens ?? null, steps: input.usage.steps, modelId: input.usage.modelId ?? null } });
 }
 
 /** 恢复和下游门禁复核输入、输出和冻结bundle属于同一个调用。 */

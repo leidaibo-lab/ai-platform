@@ -12,14 +12,24 @@ import { validateIdentityV2 } from '../development/v2/gates.js';
 import type { createProductDevelopmentWorkflow } from '../mastra/workflows/product-development.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from '../mastra/workflows/delivery.js';
 import { describeRecovery } from './recovery.js';
-import { describeGate, validateGate, describeDevelopmentProgress } from './gates.js';
+import { describeGate, projectGateReceipt, describeDevelopmentProgress } from './gates.js';
 import { intakeSchema, validateAnswers } from './contracts.js';
 import { loadResources, resourceWorkflowConfig } from '../resources/runtime.js';
 import { currentResources, withResources } from '../resources/scope.js';
-import { ResourceError } from '../resources/contracts.js';
+import { frozenResourcesSchema, ResourceError } from '../resources/contracts.js';
+import { createApprovalReceipt, createHumanGate, projectAgentRun, type ApprovalReceipt, type HumanGate } from '../resources/governance.js';
 /** 仅公开本地业务输入校验，不透出模型或文件系统异常。 */
 export class GateInputError extends Error {}
 export type IntakeWorkflow = ReturnType<typeof createProductDevelopmentWorkflow>;
+/** 将专用产品/澄清暂停点也投影为统一关口，不改变它们各自的resume schema。 */
+function projectNativeGate(runId: string, gateType: HumanGate['gateType'], path: string, payload: unknown, artifactHash?: string): HumanGate {
+  return createHumanGate({ runId, gateType, requiredArtifactHashes: artifactHash && /^[a-f0-9]{64}$/.test(artifactHash) ? [artifactHash] : [], gateHash: developmentHash({ path, payload }), status: 'open' });
+}
+
+/** 把专用resume结果投影为统一回执；原生Workflow仍保存其实际状态和交接物。 */
+function projectNativeReceipt(gate: HumanGate, data: unknown, actor: string | null, decision: ApprovalReceipt['decision']): ApprovalReceipt {
+  return createApprovalReceipt({ gate, decision, actor, payload: data, bindingHashes: gate.requiredArtifactHashes });
+}
 /** 从已保存快照读取当前人工关口，不接收客户端替代正文或步骤。 */
 export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const snapshot = await workflow.getWorkflowRunById(runId);
@@ -33,7 +43,8 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const sync = repositorySyncPauseSchema.safeParse(payload);
   const intake = intakeSchema.safeParse(payload);
   const review = pendingSchema.safeParse(payload);
-  const gate = path && payload ? describeGate(path, payload) : undefined;
+  const gate = path && payload ? describeGate(path, payload, runId) : undefined;
+  const humanGate = gate?.humanGate ?? (path && intake.success ? projectNativeGate(runId, 'requirements', path, payload) : path && review.success ? projectNativeGate(runId, 'product', path, payload, review.data.artifact.hash) : undefined);
   if (gate?.key === 'confirm-project-scope') {
     const reviewed = snapshot.steps?.['review-product'];
     const approved = reviewed && !Array.isArray(reviewed) ? deliverySchema.safeParse(reviewed.output) : undefined;
@@ -42,12 +53,15 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const observed = readExecution(runId);
   const retry = observed?.phase === 'canceling' || observed?.phase === 'stopped' ? undefined : describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
   const development = stateV2Schema.safeParse((snapshot.result as { development?: unknown } | undefined)?.development);
+  const frozen = initial && !Array.isArray(initial) ? frozenResourcesSchema.safeParse((snapshot.steps?.['freeze-role-resources'] as any)?.output?.resources) : undefined;
+  const binding = currentResources()?.binding ?? (frozen?.success ? frozen.data : undefined);
+  const agentRun = development.success && binding ? projectAgentRun({ runId, bundleHash: binding.bundleHash, state: development.data }) : undefined;
   const blockers = development.success ? developmentBlockers(development.data) : [];
   const preparationRequired = development.success && !!development.data.input.project.preparationIssues?.length;
   const blockage = development.success && (development.data.outcome === 'clarification-required' || preparationRequired && development.data.outcome === 'manual-attention') && development.data.plan && blockers.length ? { phase: '技术方案生成', title: '技术方案已生成，开工条件未齐', summary: development.data.plan.summary, blockers, taskCount: development.data.plan.tasks.length, productContent: development.data.input.source.content, preparationRequired } : undefined;
   const clarify = snapshot.status === 'success' && blockage && !preparationRequired && development.success && development.data.completedTasks.length === 0 && !development.data.approvedHash ? { hash: developmentHash({ runId, development: development.data, outcome: (snapshot.result as any).outcome }), title: '补齐业务选择并修订产品稿' } : undefined;
   const reconfigure = snapshot.status === 'success' && blockage && preparationRequired && development.success && !development.data.completedTasks.length && !development.data.approvedHash && !development.data.delivery ? { hash: developmentHash({ runId, development: development.data, action: 'reconfirm-project' }) } : undefined;
-  return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, agentRun, humanGate, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig): Promise<Awaited<ReturnType<typeof readIntake>>> {
@@ -129,12 +143,15 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
   if (current.status !== 'suspended' || current.mode !== mode) throw new Error('状态或模型模式已变化，请刷新');
   let step: string | string[];
   let resumeData;
+  let receipt: ApprovalReceipt | undefined;
   if (current.step === 'guided-requirements' && current.intake) {
     resumeData = validateAnswers(current.intake, input);
+    if (current.humanGate) receipt = projectNativeReceipt(current.humanGate, resumeData, typeof resumeData.reviewer === 'string' ? resumeData.reviewer : null, 'submitted');
     step = ['guided-requirements', 'requirements-round', 'confirm-requirements'];
   } else if (current.step === 'review-product' && current.product) {
     resumeData = validateReview(current.product, reviewSchema.parse(input));
     if (resumeData.decision === 'rework') throw new Error('请另起需求完善；当前页面仅支持确认或终止');
+    if (current.humanGate) receipt = projectNativeReceipt(current.humanGate, resumeData, resumeData.reviewer, resumeData.decision);
     step = 'review-product';
   } else if (current.gate) {
     const snapshot = await workflow.getWorkflowRunById(runId);
@@ -147,11 +164,11 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
       const execution = executionResolver(config)(state.input);
       try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('澄清期间源码检查点已变化'); } finally { await execution.close(); }
     }
-    try { resumeData = validateGate(entry[0], entry[1].suspendPayload, input, entry[1].payload); }
+    try { const projected = projectGateReceipt(entry[0], entry[1].suspendPayload, input, entry[1].payload, runId); resumeData = projected.data; receipt = projected.receipt; }
     catch (error) { if (error instanceof Error && error.name !== 'ZodError') throw new GateInputError(error.message); throw error; }
     step = entry[0].split('.');
   } else throw new Error('当前没有可提交的人工确认，请刷新状态');
   const run = await workflow.createRun({ runId });
   await run.resume({ step, resumeData });
-  return readIntake(workflow, runId);
+  return { ...await readIntake(workflow, runId), ...(receipt ? { approvalReceipt: receipt } : {}) };
 }

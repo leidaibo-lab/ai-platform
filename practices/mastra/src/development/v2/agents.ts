@@ -3,6 +3,7 @@ import { assembleRole } from '../../resources/assembly.js';
 import { developmentResourceKey } from '../../resources/contracts.js';
 import { currentResources } from '../../resources/scope.js';
 import { createInvocationEvidence, createRoleInvocation, type RoleResourceId } from '../../resources/projections.js';
+import { createArtifact } from '../../resources/governance.js';
 import { frozenRuntimeResourceConfig, loadRuntimeResourceConfig, roleResource } from '../../resources/resource-config.js';
 import { LibSQLStore } from '@mastra/libsql';
 import { createTaskContext } from '../../delivery/task-context.js';
@@ -142,7 +143,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
     const runtimeConfig = scope ? frozenRuntimeResourceConfig(scope.binding.runtimeConfig) : config.runtimeResources ?? loadRuntimeResourceConfig(config.rootDir);
     const resourceRole = ['frontend', 'backend', 'infrastructure'].includes(role) ? runtime?.delegate ? 'implementation-owner' : 'implementation-member' : role;
     const configuredRole = roleResource(runtimeConfig, resourceRole as Parameters<typeof roleResource>[1]);
-    const invocation = scope ? createRoleInvocation({ runId: state.input.source.runId, roleId: configuredRole.id as RoleResourceId, taskId: runtime?.memberId ?? null, round: state.round, bundleHash: scope.binding.bundleHash, inputContract: configuredRole.inputContract, payload: developmentInvocationPayload(resourceRole, state, paths), resources: scope.binding, config: runtimeConfig }) : undefined;
+    const invocation = scope ? createRoleInvocation({ runId: state.input.source.runId, roleId: configuredRole.id as RoleResourceId, taskId: runtime?.memberId ?? null, round: state.round, bundleHash: scope.binding.bundleHash, inputContract: configuredRole.inputContract, payload: developmentInvocationPayload(resourceRole, state, paths), resources: scope.binding, config: runtimeConfig, capabilityGrantHash: state.input.scopeApproval?.capabilityGrant?.hash, budget: { remainingCalls: Math.max(0, state.maxCalls - state.calls), maxCalls: state.maxCalls, maxReworks: state.input.maxReworks }, visibleArtifactRefs: state.work.flatMap(entry => entry.artifact ? [{ id: entry.artifact.id, hash: entry.artifact.hash }] : []), visibleContextRefs: Object.entries(state.context?.files ?? {}).map(([id, hash]) => ({ id: `file:${id}`, hash })) }) : undefined;
     const taskContext = createTaskContext({ invocation, repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
       requirements: state.requirements.map(
         /** 需求与验收只消费批准原文锚点。 */
@@ -198,7 +199,9 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
     }
     const text = result.object ? JSON.stringify(result.object) : result.text;
     const evidence = invocation && scope ? createInvocationEvidence({ invocation, outputContract: configuredRole.outputContract, output: { content: text }, tools, usage: { inputTokens: result.usage?.inputTokens, outputTokens: result.usage?.outputTokens, steps: result.steps.length, modelId: result.response?.modelId }, config: runtimeConfig }) : undefined;
-    return { role, round: state.round, text, tools, steps: result.steps.length, modelId: result.response?.modelId ?? null, inputTokens: result.usage?.inputTokens ?? null, outputTokens: result.usage?.outputTokens ?? null, ...(evidence ? { invocation: evidence } : {}) };
+    const artifactKind = role === 'context' ? 'context' : role === 'architect' ? 'task-plan' : role === 'readiness' || role === 'reviewer' ? 'assessment' : role === 'self-check' ? 'self-check-summary' : 'implementation-summary';
+    const artifact = evidence ? createArtifact({ id: `${role}:${evidence.outputHash}`, kind: artifactKind, schemaVersion: evidence.outputContract, content: text, evidenceRefs: [{ id: evidence.invocationId, kind: 'invocation', hash: developmentHash(evidence) }] }) : undefined;
+    return { role, round: state.round, text, tools, steps: result.steps.length, modelId: result.response?.modelId ?? null, inputTokens: result.usage?.inputTokens ?? null, outputTokens: result.usage?.outputTokens ?? null, ...(evidence ? { invocation: evidence } : {}), ...(artifact ? { artifact } : {}) };
   } finally { await storage?.close(); }
 }
 /** 将宿主允许的引用绑定到本次结构化输出；方法资料和材料位置不进入事实引用域。 */

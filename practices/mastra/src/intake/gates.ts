@@ -10,6 +10,7 @@ import { autonomyPolicySchema, stateV2Schema, approvalHashV2, recoveryHashV2, fi
 import { applyFindingsReview, assertApprovalV2 } from '../development/v2/gates.js';
 import { validateCases, validateQualityReview } from '../delivery/testing.js';
 import { lifecycleSchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
+import { createApprovalReceipt, createHumanGate, type ApprovalReceipt, type HumanGate } from '../resources/governance.js';
 export const scopeFormSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 const definitions: Record<string, { title: string; description: string; schema: z.ZodType }> = {
   'retry-repository-sync': { title: '重试交付远端同步', description: '已保存角色资料或业务源码；仅重试提交和推送，成功后继续原流程，不重新调用模型或替代审批。', schema: repositoryRetrySchema },
@@ -28,6 +29,7 @@ const definitions: Record<string, { title: string; description: string; schema: 
   'execute-rollback-externally': { title: '填写回滚执行回执', description: '在外部平台完成回滚后填写真实回执；无法恢复时明确标为需要人工处理。', schema: rollbackReceiptSchema },
 };
 export type GatePayload = Record<string, any>;
+const gateTypes: Record<string, HumanGate['gateType']> = { 'retry-repository-sync': 'repository-sync', 'confirm-blocker-answers': 'blocker', 'review-revised-product': 'product', 'confirm-project-scope': 'project-scope', 'approve-architecture': 'architecture', 'resolve-readiness': 'finding-resolution', 'resolve-findings': 'finding-resolution', 'recover-development': 'recovery', 'approve-test-cases': 'test-cases', 'review-test-results': 'quality', 'approve-release-scope': 'release', 'execute-release-externally': 'deployment', 'verify-release-health': 'health', 'execute-rollback-externally': 'rollback' };
 const phaseNames: Record<string, string> = { 'analyze-blocker-questions': '待决问题整理', 'write-revised-product': '产品稿修订', 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
 const faultReasons: Record<string, string> = { 'model-timeout': '模型未在规定时间内完成响应', 'model-network': '与模型服务的连接未能完成', 'invalid-output': '模型返回的内容未通过结构或引用校验', 'model-error': '模型调用未成功' };
 /** 从持久化故障分类生成用户指引；不暴露模型原始错误、源码或内部恢复状态。 */
@@ -64,7 +66,14 @@ export function gateInitial(key: string, payload: GatePayload) {
   return fixed;
 }
 /** 只投影白名单关口和当前实际材料，未知暂停点保持不可操作。 */
-export function describeGate(path: string, payload: GatePayload) {
+/** 从当前暂停材料提取已展示的hash，形成只读Gate投影而不另存事实。 */
+function requiredHashes(payload: GatePayload): string[] {
+  const values = [payload.hash, payload.productHash, payload.packageHash, payload.releaseHash, payload.sourceHash, payload.deploymentReceiptHash, payload.rollbackArtifactRef, payload.plan?.hash].filter((value): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value));
+  return [...new Set(values)].sort();
+}
+
+/** 从原生暂停点派生HumanGate，给工作台统一展示但不替换原始resume协议。 */
+export function describeGate(path: string, payload: GatePayload, runId = 'unbound') {
   const nativeKey = path.split('.').at(-1)!;
   const stageRecovery = payload.recoveryState && stateV2Schema.safeParse(payload.recoveryState).success;
   const key = repositorySyncPauseSchema.safeParse(payload).success ? 'retry-repository-sync' : stageRecovery ? 'recover-development' : nativeKey;
@@ -88,7 +97,19 @@ export function describeGate(path: string, payload: GatePayload) {
   if (key === 'verify-release-health') initial.checks = (payload.requiredChecks ?? []).map(/** 检查清单是已批准事实，实际结果不预选。 */(item: GatePayload) => ({ id: item.id, status: '', evidence: '', observedAt: '' }));
   const recoveryInfo = key === 'recover-development' ? recoveryGuidance(payload) : undefined;
   const { recoveryState: _privateState, ...publicEvidence } = payload;
-  return { initial, key, title: recoveryInfo?.title ?? definition.title, description: recoveryInfo?.description ?? definition.description, recoveryInfo, gateHash: developmentHash({ path, payload }), evidence: publicEvidence, fixed, schema };
+  const gateHash = developmentHash({ path, payload });
+  const humanGate = createHumanGate({ runId, gateType: gateTypes[key] ?? 'blocker', requiredArtifactHashes: requiredHashes(payload), gateHash, status: 'open' });
+  return { initial, key, title: recoveryInfo?.title ?? definition.title, description: recoveryInfo?.description ?? definition.description, recoveryInfo, gateHash, humanGate, evidence: publicEvidence, fixed, schema };
+}
+
+/** 从已通过原有schema校验的resume数据派生统一回执，保留既有Workflow行为。 */
+export function projectGateReceipt(path: string, payload: GatePayload, input: unknown, savedState?: unknown, runId = 'unbound'): { data: GatePayload; gate: HumanGate; receipt: ApprovalReceipt } {
+  const gate = describeGate(path, payload, runId);
+  if (!gate) throw new Error('未登记的人工关口');
+  const data = validateGate(path, payload, input, savedState);
+  const decision = typeof data.decision === 'string' && ['approve', 'reject', 'rework', 'pass', 'resolve', 'stop'].includes(data.decision) ? data.decision as ApprovalReceipt['decision'] : 'submitted';
+  const actor = typeof data.reviewer === 'string' ? data.reviewer : typeof data.operator === 'string' ? data.operator : null;
+  return { data, gate: gate.humanGate, receipt: createApprovalReceipt({ gate: gate.humanGate, decision, actor, payload: data, bindingHashes: requiredHashes(payload) }) };
 }
 /** 输入结构与所有绑定值在恢复前核对，拒绝过期和跨关口请求。 */
 export function validateGate(path: string, payload: GatePayload, input: unknown, savedState?: unknown) {

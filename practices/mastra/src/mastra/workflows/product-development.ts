@@ -35,6 +35,8 @@ import { roleProxy } from '../../resources/assembly.js';
 import { staticRoles } from '../../resources/catalog.js';
 import { assertInvocationEvidence } from '../../resources/projections.js';
 import { currentResources } from '../../resources/scope.js';
+import { createApproval, createCapabilityGrant } from '../../resources/governance.js';
+import { frozenRuntimeResourceConfig } from '../../resources/resource-config.js';
 
 const inputSchema = z.object({ guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
 const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
@@ -124,7 +126,9 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
         (decision) => decision.role === 'product' && decision.decision === 'approve' && decision.artifactHash === product.hash,
       )) throw new Error('开发缺少当前产品批准');
       if (!resumeData) return suspend({ productHash: product.hash, instruction: '确认已关联仓库、当前代码版本与整体权限。技术文件拆分和实际团队由架构与开发Agent提出，后续方案批准后才实施；旧CLI的显式manifest仍兼容。', projectFields: ['id', 'files', 'writablePaths', 'checkFiles', 'roles'] });
-      return inputV2Schema.parse({ repositoryHandoff: inputData.repositoryHandoff, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
+      const approval = createApproval({ gate: 'project-scope', decision: 'approve', actor: resumeData.reviewer, artifactHash: product.hash, comment: resumeData.comment });
+      const capabilityGrant = createCapabilityGrant({ runId, sourceArtifactHash: product.hash, approvalHash: approval.hash, roles: resumeData.project.roles, writablePaths: resumeData.project.writablePaths, registeredChecks: resumeData.project.executionProfile === 'hrm-pnpm-docker-v1' ? ['project:check', 'project:build', 'project:smoke'] : [...Object.keys(resumeData.project.files).filter(path => path.startsWith('src/') && path.endsWith('.mjs')).sort().map(path => `syntax:${path}`), ...resumeData.project.checkFiles.map(path => `test:${path}`)], maxCalls: currentResources()?.binding ? frozenRuntimeResourceConfig(currentResources()!.binding.runtimeConfig).budgets.developmentMaxCalls : 72, maxReworks: resumeData.maxReworks });
+      return inputV2Schema.parse({ repositoryHandoff: inputData.repositoryHandoff, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash, approval, capabilityGrant } });
     },
   });
   const execution = createExecutionScope(executionResolver(config), config.mode === 'live' && !!config.hrmRepositoryRoot);

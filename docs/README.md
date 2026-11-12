@@ -20,6 +20,10 @@
 
 - [Mastra 完整产研流程](../practices/mastra/unified-workflow.md)：同一主 Run，工作台承接人工关口，Studio 用于调试，产品到动态团队、前后端并行/受限委派、评审、独立测试/缺陷回归、外部发布回执/健康与回滚、最终交付；[生命周期决策](./decisions/2026-11-07-mastra-full-delivery-lifecycle.md)，[统一团队选型](./decisions/2026-11-07-mastra-unified-development-team.md)。下文旧双流程与图保留为历史设计。
 
+- [Mastra 工作流中的局部 ReAct 自闭环 SVG](./assets/mastra-workflow-local-react-loops-v1.svg) / [PNG](./assets/mastra-workflow-local-react-loops-v1.png)：说明产品、开发、测试三类团队的受限推理—行动—观察循环，以及 Workflow 与人工门禁的边界。
+
+- [Mastra 当前原生产研实践能力图 SVG](./assets/mastra-current-capability-map-v1.svg) / [PNG](./assets/mastra-current-capability-map-v1.png)：总览工作台、固定 Workflow、受控多角色团队、事实/资料/隔离执行、评测与人工治理，并将 MCP、向量 RAG、自动 CI/CD 等未接入或待验收能力显式区分。
+
 - [Mastra六类开发独立节点评测](../practices/mastra/evaluations/native/development-nodes/README.md)：上下文、架构、就绪、实现、自检、代码评审的18例冻结数据集，原生Workflow/Experiment及真实代码证据。
 
 这个目录承接项目结构、架构说明和运维边界。`AGENTS.md` 只保留 AI 协作入口和路由，详细说明放在这里。

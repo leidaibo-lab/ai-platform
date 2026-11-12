@@ -19,6 +19,7 @@ import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { currentResources } from '../../resources/scope.js';
 import { frozenRuntimeResourceConfig } from '../../resources/resource-config.js';
 import { defaultLoopPolicy, type LoopPolicy } from '../../development/v2/loop-policy.js';
+import { createArtifact, createTaskPlan } from '../../resources/governance.js';
 
 /** 与团队和独立测试共用同一返工策略；保留既有公开入口。 */
 export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], phase: StateV2['phase'], loopPolicy: LoopPolicy = defaultLoopPolicy): StateV2 {
@@ -50,6 +51,8 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     // 初始化所有证据并确认候选与manifest一致，入口不能伪造批准。
     execute: async ({ inputData }) => {
       if (evaluationPolicy) validateEvaluationSource(inputData);
+      // 正式产研主链的代码能力只能来自已冻结的人工范围确认；旧隔离入口保持兼容。
+      if (inputData.source.workflowId === 'product-development' && !inputData.scopeApproval?.capabilityGrant) throw new Error('正式开发缺少冻结能力授权');
       const files = await execution.snapshot();
       const expected = Object.fromEntries(Object.entries(inputData.project.files).sort().map(
         // snapshot的文件值为原始字节SHA256，不能用JSON散列代替。
@@ -64,7 +67,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         (item) => item.text.trim().length > 0,
       );
       if (requirements.length > 300) throw new Error('v2产品原文超过试点锚点预算');
-      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? runtimeResources()?.budgets.developmentMaxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
+      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, taskPlan: null, planArtifact: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? runtimeResources()?.budgets.developmentMaxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
     },
   });
   const context = createStep({ id: 'prepare-context', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
@@ -109,7 +112,11 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         for (const task of plan.tasks) for (const path of task.paths) if (!(path in existing)) await execution.writeFile(path, '');
       }
       const checkpointHash = developmentHash(await execution.snapshot());
-      return { ...called.state, checkpointHash, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: preparationIssues?.length ? 'manual-attention' as const : plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
+      const planHash = developmentHash(plan);
+      const planArtifact = createArtifact({ id: `plan:${planHash}`, kind: 'task-plan', schemaVersion: 'plan.output.v1', content: JSON.stringify(plan), evidenceRefs: called.entry.invocation ? [{ id: called.entry.invocation.invocationId, kind: 'invocation', hash: developmentHash(called.entry.invocation) }] : [] });
+      const grant = inputData.input.scopeApproval?.capabilityGrant;
+      const taskPlan = grant ? createTaskPlan(planArtifact.hash, grant.hash, plan.tasks.map(task => task.id)) : null;
+      return { ...called.state, checkpointHash, plan, planHash, planSourceHash: inputData.checkpointHash, planArtifact, taskPlan, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: preparationIssues?.length ? 'manual-attention' as const : plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
     },
   });
   /** 先附加不可绕过的工程事实再校验任务包；未建工程时可保存零实施任务的受阻方案。 */

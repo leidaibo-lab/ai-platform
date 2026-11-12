@@ -1,5 +1,7 @@
 # 方案决策记录
 
+[固化 Mastra Run 治理记录与冻结能力授权](./2026-11-12-mastra-governed-run-records.md)：接受；以严格Artifact/Evidence/Approval/CapabilityGrant/TaskPlan DTO适配现有Mastra Store，正式范围确认生成冻结授权，模型不能扩权。
+
 [Mastra 可插拔自主 loop 与最小共享上下文](./2026-11-12-mastra-pluggable-autonomy-context.md)：接受；保留 Mastra 作为唯一实践运行事实源，以纯策略 Port 约束返工归因和跨角色事实引用，不共享完整 Session 或私有记忆。
 
 [原生角色版本与可信制品执行约束](./2026-11-11-mastra-stored-role-runtime.md)：接受；实施Stored Agent/Skill pin、Run绑定、恢复装配和工具完整性；历史Run兼容排除。

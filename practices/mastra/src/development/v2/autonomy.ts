@@ -6,6 +6,7 @@ import { verificationRecordSchema, type StateV2, type RoleV2 } from './contracts
 import type { ExecutionPort } from './execution-scope.js';
 import { unresolvedV2 } from './gates.js';
 import { defaultLoopPolicy, resolveLoopPolicy, type LoopPolicy } from './loop-policy.js';
+import { createEvidenceRecord } from '../../resources/governance.js';
 
 /** 预算异常只携带固定分类，不透传候选错误或宿主路径。 */
 export class VerificationBudgetError extends Error {
@@ -35,7 +36,8 @@ export async function runVerification(execution: ExecutionPort, state: StateV2, 
   if (developmentHash(await execution.snapshot()) !== sourceHash) throw new Error('检查执行修改了候选源码');
   checks = checks.map(/** 只保留契约字段，日志有界脱敏；裁剪同样使证据不可通过。 */check => commandEvidenceSchema.parse({ ...check, command: redact(check.command), stdout: redact(check.stdout), stderr: redact(check.stderr), stdoutTruncated: check.stdoutTruncated || check.stdout.length > 100000, stderrTruncated: check.stderrTruncated || check.stderr.length > 100000 })).map(/** 保持执行Port的完整进程字段，空退出码不能变成成功。 */check => ({ ...check, exitCode: check.exitCode ?? 1, processExitCode: check.processExitCode ?? check.exitCode ?? 1, timedOut: !!check.timedOut, stdoutTruncated: !!check.stdoutTruncated, stderrTruncated: !!check.stderrTruncated }));
   const record = verificationRecordSchema.parse({ sequence: history.length + 1, sourceHash, role, taskPaths, round: state.round, purpose, checks });
-  return { checks, record, state: { ...state, verificationHistory: [...history, record] } };
+  const evidence = createEvidenceRecord({ kind: 'check-result', runId: state.input.source.runId, sourceHash, payloadHash: developmentHash(record), refs: [] });
+  return { checks, record, evidence, state: { ...state, evidenceRecords: [...(state.evidenceRecords ?? []), evidence], verificationHistory: [...history, record] } };
 }
 
 /** 给一次角色调用提供共享检查账本；任务父子、失败重试均使用同一额度。 */
@@ -114,5 +116,5 @@ export function reworkState(state: StateV2, route: StateV2['route'], phase: Stat
   return { ...state, round: state.round + 1, route, phase, completedTasks: state.completedTasks.filter(
     // 独立任务保持完成证据，避免并行返工重放无关变更。
     (id) => !invalid.has(id),
-  ), checks: [], checkedSourceHash: null, ...(route === 'architecture' ? { plan: null, planHash: null, approvedHash: null, approvalHash: null, readiness: null, context: null, team: undefined } : {}) };
+  ), checks: [], checkedSourceHash: null, ...(route === 'architecture' ? { plan: null, planHash: null, planArtifact: null, taskPlan: null, approvedHash: null, approvalHash: null, readiness: null, context: null, team: undefined } : {}) };
 }

@@ -9,12 +9,15 @@ import { maxProductReworks, productReworkSchema, productWorkSchema } from './pro
 import { createProductWorkflow } from './product.js';
 import { correlationSchema } from '../../delivery/asset-identity.js';
 import { maxContextBudgetLevel } from '../../delivery/context-budget.js';
+import { artifactRecordSchema, evidenceRefSchema } from '../../resources/governance.js';
 
 export const stageSchema = z.enum(['product', 'development', 'testing', 'operations']);
 export type Stage = z.infer<typeof stageSchema>;
 export const artifactSchema = z.object({
   stage: stageSchema, content: z.string().min(1).max(100000), hash: z.string().length(64),
   evidence: z.enum(['fixture', 'model-proposal']),
+  record: artifactRecordSchema.optional(),
+  evidenceRefs: z.array(evidenceRefSchema).max(100).optional(),
 });
 /** 审批绑定内容散列；role/reviewer 是本地声明，不是认证身份。 */
 export const reviewSchema = z.object({

@@ -110,6 +110,22 @@
 
 `requirements`只包含批准版本的锚点、行号、原文与hash；`referenceGroups`从同一资源引用校验器派生。`priorBlockingFindings/findings`按任务与依赖闭包筛选，保留原发现ID、来源报告hash、证据引用和处理状态；禁止仅转述后丢失版本。`requiredContracts`只包含当前任务实现需要的接口与约束，不传整个计划和无关任务内容。模型输出不得写Run状态，宿主将通过输出schema与引用校验的结果合入新快照。
 
+## 5.1 Run治理记录与能力授权
+
+每个跨阶段交接物统一使用`Artifact`：`id`、`kind`、`schemaVersion`、正文、内容hash及`EvidenceRef[]`。调用证据、检查结果、人工批准、来源快照和其他Artifact只能以摘要引用进入下游，正文仍由对应最小DTO按需投影。Artifact不是第二个文件库或审批库；它与Workflow返回状态一起由Mastra Store持久化。
+
+项目范围确认后，宿主从已批准产品Artifact和表单生成冻结`CapabilityGrant`。它绑定Run ID、产品hash、范围确认hash、允许角色、可写路径、登记检查、模型调用上限与返工上限。架构任务只能选择授权范围的子集；模型、角色Skill、TaskPlan或恢复入口不能扩大它。`TaskPlan`只保存已校验计划Artifact、CapabilityGrant和任务ID的摘要，不能成为独立调度状态。
+
+历史或隔离评测入口可以读取旧DTO以验证旧Run，但不得伪造新的CapabilityGrant；正式`productDevelopmentWorkflow`缺少授权即拒绝进入开发。
+
+## 5.2 统一关口、调用与证据投影
+
+所有既有暂停点由工作台 Adapter 以`HumanGate`投影：它包含Run、关口类型、展示材料hash和所需Artifact hash。用户提交仍先经过原有resume schema与绑定hash校验；通过后再派生`ApprovalReceipt`。该回执是Mastra已保存暂停材料和resume结果的只读结构化视图，不创建第二份审批状态，也不替代认证身份。
+
+`AgentInvocation`在原有角色/资源/输入契约之外，显式包含冻结`CapabilityGrant` hash、剩余与上限预算、可见Artifact引用和可见Context引用。工具名映射为`ToolExecutionReceipt`，登记检查、部署、健康和回滚回执映射为`EvidenceRecord`；它们只保存摘要、来源hash和引用，原始持久化事实仍在Mastra Workflow状态。
+
+`AgentRun`是由已保存`StateV2`和冻结资源构造的只读聚合视图，不能作为恢复输入或写回Store。任务级/调用级CapabilityGrant、授权过期/撤销、任意外部写操作与跨实例恢复不在当前模型内；这些需要独立的身份、审计、幂等和补偿决策后再实现。
+
 ## 6. 接入步骤与迁移边界
 
 1. 契约先行：实现strict Zod配置、冻结bundle、Invocation及13种输入/输出注册契约；类型与可发布JSON Schema从同一Zod生成。配置示例不作为测试标准答案。
