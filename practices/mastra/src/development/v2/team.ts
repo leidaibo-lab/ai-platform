@@ -1,4 +1,5 @@
 import { stopAutonomy, reworkState } from './autonomy.js';
+import { defaultLoopPolicy, type LoopPolicy } from './loop-policy.js';
 /** 原生 foreach 执行一个依赖波次；每任务独占候选，屏障后校验并合并补丁。
  * ADR: docs/decisions/2026-11-07-mastra-unified-development-team.md
  */
@@ -124,7 +125,7 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
 }
 
 /** 原生调度与持久化 foreach 分支，业务代码仅选择依赖就绪任务并执行补丁屏障。 */
-export function createTeamExecution(config: PracticeConfig, execution: ExecutionPort, methods: DevelopmentMethods, generate: GeneratorV2 = generateV2, bind: <T extends Step<any, any, any, any, any, any>>(step: T) => T = (step) => step) {
+export function createTeamExecution(config: PracticeConfig, execution: ExecutionPort, methods: DevelopmentMethods, generate: GeneratorV2 = generateV2, bind: <T extends Step<any, any, any, any, any, any>>(step: T) => T = (step) => step, loopPolicy: LoopPolicy = defaultLoopPolicy) {
   const select = createStep({ id: 'dispatch-ready-tasks', description: '从批准团队选择依赖已完成的任务，最多3个并行', inputSchema: stateV2Schema, outputSchema: z.array(jobSchema),
     // 本波次所有分支读取同一源码基线，预留最坏父子调用预算。
     execute: async ({ inputData: state }) => {
@@ -214,7 +215,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
         // 任一实现成员遇到契约阻塞即重规划，不能继续自检交付。
         (result) => result.blocker,
       )) {
-        return reworkState(next, 'architecture', 'prepare-context');
+        return reworkState(next, 'architecture', 'prepare-context', loopPolicy);
       }
       const complete = next.plan!.tasks.every(
         // 仅全部批准任务完成后进入整体自检。

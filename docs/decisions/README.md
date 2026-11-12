@@ -1,5 +1,7 @@
 # 方案决策记录
 
+[Mastra 可插拔自主 loop 与最小共享上下文](./2026-11-12-mastra-pluggable-autonomy-context.md)：接受；保留 Mastra 作为唯一实践运行事实源，以纯策略 Port 约束返工归因和跨角色事实引用，不共享完整 Session 或私有记忆。
+
 [原生角色版本与可信制品执行约束](./2026-11-11-mastra-stored-role-runtime.md)：接受；实施Stored Agent/Skill pin、Run绑定、恢复装配和工具完整性；历史Run兼容排除。
 
 [运行诊断与只读生成取消](./2026-11-10-mastra-execution-control.md)：接受；原生取消与信号传播，进程内有界观察，不支持副作用阶段及跨实例取消。

@@ -18,10 +18,11 @@ import type { ExecutionPort } from '../../development/v2/execution-scope.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { currentResources } from '../../resources/scope.js';
 import { frozenRuntimeResourceConfig } from '../../resources/resource-config.js';
+import { defaultLoopPolicy, type LoopPolicy } from '../../development/v2/loop-policy.js';
 
 /** 与团队和独立测试共用同一返工策略；保留既有公开入口。 */
-export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], phase: StateV2['phase']): StateV2 {
-  return reworkState(state, route, phase);
+export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], phase: StateV2['phase'], loopPolicy: LoopPolicy = defaultLoopPolicy): StateV2 {
+  return reworkState(state, route, phase, loopPolicy);
 }
 
 /** 与v1隔离的原生步骤，复用执行Adapter；评测自动批准仅接受明确合成来源。 */
@@ -186,7 +187,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         state = { ...called.state, work: [...called.state.work, called.entry], completedTasks: [...called.state.completedTasks, task.id] };
         if (state.input.autonomy && called.entry.text.includes('BUSINESS_BLOCKER:')) return stopAutonomy(state, 'business-decision');
         if (state.input.autonomy && called.entry.text.includes('AUTHORIZATION_BLOCKER:')) return stopAutonomy(state, 'authorization-required');
-        if (called.entry.text.includes('ARCHITECTURE_BLOCKER:')) return reworkDevelopmentV2(state, 'architecture', 'prepare-context');
+        if (called.entry.text.includes('ARCHITECTURE_BLOCKER:')) return reworkDevelopmentV2(state, 'architecture', 'prepare-context', options.loopPolicy);
       }
       return { ...state, phase: 'development-self-check' as const };
     },
@@ -209,7 +210,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         try { route = z.object({ route: z.enum(['frontend', 'backend', 'infrastructure', 'architecture', 'human']) }).parse(parseDevelopmentJson(called.entry.text)).route; } catch { /* 新政策回批准团队定位，历史政策保留人工路由。 */ }
         if (state.input.autonomy && (route === 'human' || (route !== 'architecture' && !state.input.project.roles.includes(route)))) route = 'all';
         if (route === 'human' || (route !== 'architecture' && route !== 'all' && !state.input.project.roles.includes(route))) return { ...state, outcome: 'manual-attention' as const };
-        return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement');
+        return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement', options.loopPolicy);
       }
       return { ...state, phase: 'review-code' as const };
     },
@@ -280,7 +281,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
           // 完整性问题不提供接受风险后通过的旁路。
           (finding) => finding.category === 'integrity',
         ) ? 'manual-attention' as const : 'in-progress' as const };
-        return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement');
+        return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement', options.loopPolicy);
       }
       // 非PASS原报告只能在全部原发现已有明确处理后进入此处；原报告保留。
       return { ...inputData, outcome: 'development-delivered' as const, gates: [...inputData.gates, { decision: 'deliver' as const, reasons: [], sourceHash: inputData.checkpointHash, reportHash: latest.hash }], delivery: { version: 'development-delivery.v2' as const, productHash: inputData.input.source.hash, planHash: inputData.planHash!, approvalHash: inputData.approvalHash!, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hash, readinessHash: inputData.readiness!.hash, reviewHash: latest.hash, sourceHash: inputData.checkpointHash, files: await execution.snapshot(), checks: inputData.checks, resolutions: inputData.resolutions, limitations: ['受限研发交付；固定Node语法和登记smoke，不等于独立业务验收', '只读模型评审不证明完整业务质量；fixture仅验证原生控制流', '无生产部署、跨库原子交接和跨实例启动幂等'] } };
@@ -344,7 +345,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     };
     return step;
   }
-  const teamExecution = options.team ? createTeamExecution(config, execution, methods, generate, bind) : null;
+  const teamExecution = options.team ? createTeamExecution(config, execution, methods, generate, bind, options.loopPolicy) : null;
   const definition = createWorkflow({ id: options.id ? `${options.id}-iteration` : 'development-iteration-v2', inputSchema: stateV2Schema, outputSchema: stateV2Schema });
   let flow: any = definition;
   let prior: string | undefined;
@@ -397,6 +398,8 @@ export interface DevelopmentWorkflowOptions {
   /** 历史线性图兼容回归专用，正式入口不启用。 */
   legacySequential?: boolean;
   bind?: <T extends Step<any, any, any, any, any, any>>(step: T) => T;
+  /** 仅接收持久化失败事实的同步策略；正式动态注册前由宿主装配并随代码版本发布。 */
+  loopPolicy?: LoopPolicy;
 }
 
 /** 新开发 Run 从显式 manifest 初始化，不改变原有 CLI 输入契约。 */

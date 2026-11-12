@@ -1,10 +1,11 @@
 /** 自主开发的证据与停止策略；Adapter拥有执行，原生Store持有返回的新快照。
- * ADR: docs/decisions/2026-11-09-mastra-autonomous-development.md
+ * ADR: docs/decisions/2026-11-12-mastra-pluggable-autonomy-context.md
  */
 import { developmentHash, commandEvidenceSchema } from '../contracts.js';
 import { verificationRecordSchema, type StateV2, type RoleV2 } from './contracts.js';
 import type { ExecutionPort } from './execution-scope.js';
 import { unresolvedV2 } from './gates.js';
+import { defaultLoopPolicy, resolveLoopPolicy, type LoopPolicy } from './loop-policy.js';
 
 /** 预算异常只携带固定分类，不透传候选错误或宿主路径。 */
 export class VerificationBudgetError extends Error {
@@ -88,7 +89,7 @@ export function repairTasks(state: StateV2, route: StateV2['route']): Set<string
 }
 
 /** 记录可复核的失败签名；只比较失败检查/未解决问题，忽略运行时长与源码噪声。 */
-export function trackRepair(state: StateV2, route: StateV2['route']): StateV2 {
+export function trackRepair(state: StateV2, route: StateV2['route'], policy: LoopPolicy = defaultLoopPolicy): StateV2 {
   if (!state.input.autonomy) return state;
   const latest = state.verificationHistory?.filter(/** 分支探查不能冒充集成结论。 */record => record.purpose !== 'tool').at(-1);
   const checks = latest?.sourceHash === state.checkpointHash ? latest.checks : state.checks;
@@ -97,15 +98,16 @@ export function trackRepair(state: StateV2, route: StateV2['route']): StateV2 {
   const signature = developmentHash({ failures: failures.map(/** 输出保留可比较诊断，时间与临时路径归一化。 */item => ({ id: item.id, exitCode: item.exitCode, timedOut: !!item.timedOut, stdoutTruncated: !!item.stdoutTruncated, stderrTruncated: !!item.stderrTruncated, output: (item.stderr + item.stdout).replace(/\/[^\s]*mastra-[^\s/]+/g, '/candidate').replace(/duration_ms[:\s]+[\d.]+/g, 'duration_ms <duration>').replace(/\b\d+(?:\.\d+)?\s*ms\b/g, '<duration>') })).sort(/** 检查返回顺序变化不制造进展。 */(a, b) => a.id.localeCompare(b.id)), issues: [...new Map(issues.map(/** 同一未解决缺陷跨报告只比较一次。 */issue => [JSON.stringify(issue), issue])).values()].sort(/** 发现顺序变化不制造进展。 */(a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) });
   const prior = state.repairHistory?.at(-1);
   const noProgress = prior?.signature === signature ? prior.noProgress + 1 : 0;
-  const kind = failures.some(/** 环境错误只能通过现有检查重试或已批准infrastructure任务解决，不能擅自装依赖。 */item => item.id.startsWith('environment:') || /cannot connect to.*docker|docker daemon|ECONNREFUSED|ENOTFOUND|no space left|unable to.*(?:image|registry)/i.test(item.stderr + item.stdout)) ? 'environment' as const : 'code' as const;
+  // 策略仅观察已经脱敏并持久化的失败，不接触执行器或模型正文。
+  const kind = resolveLoopPolicy(policy).classifyRepair({ state, failures: failures.map(item => ({ id: item.id, stdout: item.stdout, stderr: item.stderr, timedOut: !!item.timedOut })) });
   const record = { round: state.round, sourceHash: state.checkpointHash, signature, tasks: [...repairTasks(state, route)], noProgress, kind };
   const next = { ...state, repairHistory: [...(state.repairHistory ?? []), record] };
   return noProgress >= state.input.autonomy.maxNoProgress ? stopAutonomy(next, 'no-progress') : next;
 }
 
 /** 有界业务返工；总次数不因架构重新规划而重置。 */
-export function reworkState(state: StateV2, route: StateV2['route'], phase: StateV2['phase']): StateV2 {
-  state = trackRepair(state, route);
+export function reworkState(state: StateV2, route: StateV2['route'], phase: StateV2['phase'], policy: LoopPolicy = defaultLoopPolicy): StateV2 {
+  state = trackRepair(state, route, policy);
   if (state.outcome !== 'in-progress') return state;
   if (state.round >= state.input.maxReworks) return state.input.autonomy ? stopAutonomy(state, 'repair-budget') : { ...state, outcome: 'rework-exhausted' };
   const invalid = repairTasks(state, route);

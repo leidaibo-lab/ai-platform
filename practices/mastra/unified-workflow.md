@@ -8,6 +8,10 @@
 
 日常操作按 [README](./README.md#启动)启动后端与前端，打开[产研工作台](http://127.0.0.1:4112/)；所有人工关口可在工作台完成。以下 Studio 图和 Resume JSON 供技术调试及契约查阅。
 
+![Workflow 中的局部 ReAct 自闭环](../../docs/assets/mastra-workflow-local-react-loops-v1.png)
+
+[可编辑 SVG：Workflow 中的局部 ReAct 自闭环](../../docs/assets/mastra-workflow-local-react-loops-v1.svg)
+
 启动后端 `npm run dev`，打开 `http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph`。首次输入 `{ "iterationId": "recruitment-001", "brief": "你的需求" }`；迭代未指定时默认 `unassigned`。图中的 Workflow 可展开查看产品、开发、测试与部署子步骤。主链保持一个 Run，各角色在自己的子流程内扩展。
 
 ```text
@@ -35,7 +39,7 @@
        方案阻塞 → 重新规划、组队与批准
        新业务决定/扩大授权/预算耗尽 → 保存证据并升级人工
   → testing：独立测试子流程
-       prepare-test-plan：测试角色读取需求与实际源码
+       prepare-test-plan：测试团队读取需求与实际源码
        approve-test-cases：确认用例、预期、需求与登记检查映射
        execute-tests：隔离环境重跑登记套件
        execute-browser-qa：QA Agent 加载固定方法并执行批准浏览器用例
@@ -110,6 +114,12 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 临时网络/超时按既有5次尝试及退避处理；格式错误携带安全诊断有界修正。代码缺陷按当前证据返工，环境错误保留分类并仅在原执行环境和权限内排障。失败检查和未解决发现发生变化才视为新证据，单纯修改源码、时长或报告顺序不算进展。达到返工、检查、模型或无进展预算后升级人工；业务缺口与权限/完整性问题立即停止。工作台展示具体停止原因、已消耗次数和最近检查输出。检查/返工停止保存终态和候选，本次未增加该终态的任意续办入口；既有模型阶段暂停仍沿原恢复入口处理。
 
 该闭环已覆盖真实 Workflow、隔离 Node 检查和持久化回归，尚未完成真实模型在 HRM 上的完整业务自主交付验收。独立测试用例批准、人工用例确认及发布审批/外部回执仍按各阶段约定处理。[选型、验收及剩余边界](../../docs/decisions/2026-11-09-mastra-autonomous-development.md)。
+
+### 可插拔策略与共享上下文边界
+
+自主 loop 的默认故障归因以版本化 `LoopPolicy` 表达：它只能读取已经持久化且脱敏的检查失败事实，返回既有的受控分类；不能执行命令、读取凭据、增加文件/角色/工具权限或改变预算。默认策略未识别的情况保守地归为代码返工，仍由登记检查、独立评审和无进展门禁决定是否继续。
+
+角色之间不共享完整 Session、模型推理或 Observational Memory。`ContextSharePolicy` 只交付带 `id/hash/source/audience/purpose` 的 `SharedContextRef`；具体正文仍从冻结的审批、任务、检查、评审或返工事实中按最小角色 DTO 读取。当前只有默认策略，策略接口是为后续受评测、按 Run 冻结的扩展准备，尚未开放动态插件安装或跨渠道共享会话。设计、风险和后续门禁见[可插拔自主 loop 与上下文决策](../../docs/decisions/2026-11-12-mastra-pluggable-autonomy-context.md)。
 
 ## 测试用例与质量确认
 
