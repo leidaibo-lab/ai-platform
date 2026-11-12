@@ -49,7 +49,7 @@ function RoleEditor({ role, refresh }: { role: RoleView; refresh: () => Promise<
 }
 
 /** 工作台入口：原生Agent版本是唯一事实源，页面只展示投影。 */
-export function RoleWorkbench() {
+export function RoleWorkbench({ close }: { close: () => void }) {
   const [roles, setRoles] = useState<RoleView[]>([]);
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
@@ -60,5 +60,5 @@ export function RoleWorkbench() {
   }
   useEffect(() => { void refresh(); }, []);
   const role = roles.find(item => item.agentId === selected);
-  return <main className="role-workbench"><header><div><div className="intake-eyebrow">原生 Stored Agent</div><h1>角色资源工作台</h1><p>配置只能增强或收紧已登记能力。发布创建新版本；已暂停或运行中的 Run 继续使用它们首步冻结的版本。</p></div><button onClick={() => void refresh()}>刷新版本</button></header>{error && <p className="intake-error">{error}</p>}<div className="role-workbench-layout"><nav aria-label="角色列表">{roles.map(item => <button className={item.agentId === selected ? 'selected' : ''} key={item.agentId} onClick={() => setSelected(item.agentId)}><strong>{item.key}</strong><small>v{item.versionNumber ?? '?'}</small></button>)}</nav>{role ? <RoleEditor role={role} refresh={refresh} /> : <section className="intake-card"><p>正在加载原生角色版本…</p></section>}</div></main>;
+  return <main className="role-workbench"><header><div><div className="intake-eyebrow">原生 Stored Agent</div><h1>角色资源工作台</h1><p>配置只能增强或收紧已登记能力。发布创建新版本；已暂停或运行中的 Run 继续使用它们首步冻结的版本。</p></div><div className="role-workbench-actions"><button onClick={close}>返回产研 Run</button><button onClick={() => void refresh()}>刷新版本</button></div></header>{error && <p className="intake-error">{error}</p>}<div className="role-workbench-layout"><nav aria-label="角色列表">{roles.map(item => <button className={item.agentId === selected ? 'selected' : ''} key={item.agentId} onClick={() => setSelected(item.agentId)}><strong>{item.key}</strong><small>v{item.versionNumber ?? '?'}</small></button>)}</nav>{role ? <RoleEditor role={role} refresh={refresh} /> : <section className="intake-card"><p>正在加载原生角色版本…</p></section>}</div></main>;
 }
