@@ -58,6 +58,12 @@ test('四个固定产品角色各自执行原生工具并持久化有序产物',
       assert.ok(entry.content.length > 0);
       assert.equal(entry.generation?.finishReason, 'stop');
       assert.equal(entry.generation?.attempts, 1);
+      assert.equal(entry.diagnostic?.version, 'product-diagnostic.v1');
+      assert.equal(entry.diagnostic?.phase, `product.${entry.role}`);
+      assert.equal(entry.diagnostic?.model.steps, 2);
+      assert.ok(entry.diagnostic?.output.contentHash);
+      assert.ok(entry.diagnostic?.output.contentChars > 0);
+      assert.ok(entry.diagnostic?.tools.some(tool => tool.name === 'practiceInfo'));
     }
     assert.equal(document.artifact?.content, document.productWork!.entries.at(-1)!.content);
     assert.equal(document.canReview, true);

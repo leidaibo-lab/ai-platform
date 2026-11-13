@@ -1,0 +1,6 @@
+- [x] 定义并接入 `product-diagnostic.v1` Schema。
+- [x] 在四个产品角色完成后持久化阶段、模型、工具和输出事实。
+- [x] 将持久化诊断事实投影到工作台诊断模块。
+- [x] 增加产品角色回归断言。
+- [ ] 完成 OpenSpec strict 校验并补充变更验收证据。
+- [ ] 设计 findings/decisions 结构化业务分析输出。

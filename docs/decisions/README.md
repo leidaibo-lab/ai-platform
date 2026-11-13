@@ -1,5 +1,7 @@
 # 方案决策记录
 
+[为 Mastra 产品角色持久化细粒度诊断事实](./2026-11-13-mastra-durable-product-diagnostics.md)：接受；在产品角色产物内持久化阶段目标、输入引用、模型、工具、输出结构和失败事实，开发/测试阶段不兼容旧历史 Run。
+
 [固化 Mastra Run 治理记录与冻结能力授权](./2026-11-12-mastra-governed-run-records.md)：接受；以严格Artifact/Evidence/Approval/CapabilityGrant/TaskPlan DTO适配现有Mastra Store，正式范围确认生成冻结授权，模型不能扩权。
 
 [Mastra 可插拔自主 loop 与最小共享上下文](./2026-11-12-mastra-pluggable-autonomy-context.md)：接受；保留 Mastra 作为唯一实践运行事实源，以纯策略 Port 约束返工归因和跨角色事实引用，不共享完整 Session 或私有记忆。

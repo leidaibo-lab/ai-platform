@@ -31,15 +31,23 @@ type DiagnosticItem = {
   summary: string;
   evidence: string[];
   nextAction?: string;
-  tools?: { name: string; inputHash?: string; returned?: boolean; repeated?: boolean }[];
+  tools?: { name: string; inputHash?: string; returned?: boolean; repeated?: boolean; callCount?: number }[];
 };
 
 /** 从已保存角色产物、执行观察和人工关口拼装统一诊断轨迹，不暴露工具入参或模型原始错误。 */
 function buildDiagnosticTrace(input: { state?: any; development?: any; execution?: ReturnType<typeof readExecution>; progress?: any; gate?: any; retry?: any }): { enabled: true; items: DiagnosticItem[] } {
   const items: DiagnosticItem[] = [];
   for (const entry of input.state?.productWork?.entries ?? []) {
-    const tools = (entry.toolNames ?? []).map((name: string) => ({ name }));
-    items.push({ id: `product-${entry.role}`, status: 'completed', phase: '产品方案', role: `产品${entry.role}`, summary: `已完成${entry.role}角色交付，输出已保存并进入下一节点。`, evidence: [`模型步骤 ${entry.modelSteps}`, ...(tools.length ? [`实际调用工具：${tools.map((tool: { name: string }) => tool.name).join('、')}`] : ['本节点未记录工具调用'])], tools });
+    const diagnostic = entry.diagnostic;
+    const detailedTools = diagnostic.tools;
+    const evidence = [
+      `阶段目标：${diagnostic.objective}`,
+      `模型：${diagnostic.model.modelId ?? '未返回模型标识'} · ${diagnostic.model.steps} 个步骤 · ${diagnostic.durationMs}ms`,
+      `输入引用：${diagnostic.input.sourceRefs.length} 个 · 需求轮次 ${diagnostic.input.intakeRound}`,
+      ...(diagnostic.output.headings.length ? [`输出结构：${diagnostic.output.headings.join('、')}`] : []),
+      ...(diagnostic.failures.length ? diagnostic.failures.map((failure: { attempt: number; kind: string; durationMs: number; detail: string }) => `第 ${failure.attempt} 次尝试失败：${failure.kind} · ${failure.durationMs}ms · ${failure.detail}`) : []),
+    ];
+    items.push({ id: `product-${entry.role}`, status: 'completed', phase: diagnostic.phase, role: `产品${entry.role}`, summary: `已完成${entry.role}阶段：${diagnostic.objective}。输出 ${diagnostic.output.contentChars} 字，结果已绑定版本指纹。`, evidence, tools: detailedTools, nextAction: diagnostic.nextAction });
   }
   for (const entry of input.development?.work ?? []) {
     const tools = (entry.tools ?? []).map((name: string) => ({ name }));

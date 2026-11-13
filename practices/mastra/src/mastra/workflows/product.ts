@@ -4,7 +4,7 @@ import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
 import { z } from 'zod';
 import type { createAgents } from '../agents/index.js';
 import type { deliverySchema, Delivery } from './delivery.js';
-import { productRoles } from './product-contract.js';
+import { productDiagnosticSchema, productRoles } from './product-contract.js';
 import { createInvocationEvidence, createRoleInvocation } from '../../resources/projections.js';
 import { currentResources } from '../../resources/scope.js';
 import { frozenRuntimeResourceConfig, roleResource } from '../../resources/resource-config.js';
@@ -14,6 +14,30 @@ import { assertClarificationHandoff, CLARIFICATION_HANDOFF_CONVENTION, type Clar
 
 /** 产品角色的只读资料复用约定；不缩减工具权限或按步骤强制输出。 */
 export const productToolReuseInstruction = '每次只读工具成功返回后应在本次调用上下文复用其结果；同一工具、同一入参且已有成功结果时不得重复调用，除非已有结果明确表明内容不完整且新调用会使用不同的分页或读取位置。资料已足够支撑当前角色交付时直接输出正文，不再继续检索。';
+
+/** 提取正文标题，作为不暴露正文的结构摘要供诊断和后续导航使用。 */
+function extractHeadings(content: string): string[] {
+  return [...content.matchAll(/^#{1,6}\s+(.+?)\s*#*\s*$/gm)].map(match => match[1].trim()).filter(Boolean).slice(0, 100);
+}
+
+/** 从模型步骤投影工具调用事实，只保留名称、参数指纹和是否收到结果。 */
+function projectDiagnosticTools(result: any) {
+  const tools = new Map<string, { name: string; inputHash?: string; returned: boolean; repeated: boolean; callCount: number }>();
+  for (const step of result.steps ?? []) {
+    for (const call of step.toolCalls ?? []) {
+      const payload = call.payload ?? {};
+      const name = typeof payload.toolName === 'string' ? payload.toolName : 'unknown';
+      const inputHash = createHash('sha256').update(JSON.stringify(payload.args ?? null)).digest('hex');
+      const key = `${name}:${inputHash}`;
+      const existing = tools.get(key);
+      const returned = (step.toolResults ?? []).some((item: any) => String(item.payload?.toolCallId ?? '') === String(payload.toolCallId ?? ''));
+      tools.set(key, existing
+        ? { ...existing, returned: existing.returned || returned, repeated: true, callCount: existing.callCount + 1 }
+        : { name, inputHash, returned, repeated: false, callCount: 1 });
+    }
+  }
+  return [...tools.values()].slice(0, 80);
+}
 
 /**
  * 复合 Workflow 固定四个产品职责；角色内的工具循环由 Mastra Agent 执行。
@@ -71,13 +95,28 @@ export function createProductWorkflow(
         }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, { runId: inputData.correlation?.runId ?? runId, abortSignal });
         abortSignal.throwIfAborted();
         const content = z.string().trim().min(1).max(100000).parse(result.text);
+        const diagnosticStartedAt = new Date(Date.now() - result.generation.durationMs).toISOString();
         // 资源主链的已确认需求使用固定交接；旧提案/评测入口保持原正文契约。
         const fixedHandoff = !!scope && role === 'clarification' && !!inputData.intake?.ready;
         if (fixedHandoff) assertClarificationHandoff(content);
         const toolNames = new Set<string>();
         for (const toolResult of result.toolResults) toolNames.add(toolResult.payload.toolName);
         const evidence = invocation && runtimeConfig && configured ? createInvocationEvidence({ invocation, outputContract: configured.outputContract, output: { content }, tools: [...toolNames], usage: { inputTokens: result.usage?.inputTokens, outputTokens: result.usage?.outputTokens, steps: result.steps.length, modelId: result.response?.modelId }, config: runtimeConfig }) : undefined;
-        const entry = { role, content, toolNames: [...toolNames], modelSteps: result.steps.length, ...(fixedHandoff ? { handoffSections: [...CLARIFICATION_HANDOFF_CONVENTION.sections] as ClarificationHandoffSections } : {}), generation: result.generation, ...(evidence ? { invocation: evidence } : {}) };
+        const diagnostic = productDiagnosticSchema.parse({
+          version: 'product-diagnostic.v1',
+          phase: `product.${role}`,
+          objective: role === 'coordinator' ? '识别目标、对象、主流程和未决业务规则' : role === 'clarification' ? '整理业务缺口、确认规则和待回答问题' : role === 'closure' ? '检查方案闭环、异常处理和交付影响' : '形成可审阅的产品需求稿',
+          startedAt: diagnosticStartedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: result.generation.durationMs,
+          input: { briefHash: createHash('sha256').update(inputData.brief).digest('hex'), sourceRefs: scope ? [{ id: 'source-snapshot', hash: scope.binding.sourceSnapshotHash }] : [], priorRoles: prior.map(item => item.role), intakeRound: inputData.intake?.round ?? 0 },
+          model: { modelId: result.response?.modelId ?? null, attempts: result.generation.attempts, steps: result.steps.length, finishReason: result.generation.finishReason, inputTokens: result.usage?.inputTokens ?? null, outputTokens: result.usage?.outputTokens ?? null },
+          tools: projectDiagnosticTools(result),
+          output: { contentHash: createHash('sha256').update(content).digest('hex'), contentChars: content.length, headings: extractHeadings(content), contract: configured?.outputContract ?? 'product-work.output.v1' },
+          failures: result.generation.failures.map(failure => ({ attempt: failure.attempt, kind: failure.kind, durationMs: failure.durationMs, detail: JSON.stringify(failure.failure) })),
+          nextAction: role === 'writing' ? '等待人工审阅产品需求稿。' : '将本阶段产物交给下一个产品角色继续检查。',
+        });
+        const entry = { role, content, toolNames: [...toolNames], modelSteps: result.steps.length, ...(fixedHandoff ? { handoffSections: [...CLARIFICATION_HANDOFF_CONVENTION.sections] as ClarificationHandoffSections } : {}), generation: result.generation, diagnostic, ...(evidence ? { invocation: evidence } : {}) };
         return {
           ...inputData,
           productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] },

@@ -7,6 +7,55 @@ import { invocationEvidenceSchema } from '../../resources/projections.js';
 export const productRoles = ['coordinator', 'clarification', 'closure', 'writing'] as const;
 export const maxProductReworks = 3;
 
+const diagnosticHash = z.string().regex(/^[a-f0-9]{64}$/);
+const diagnosticRefSchema = z.object({ id: z.string().trim().min(1).max(200), hash: diagnosticHash }).strict();
+const diagnosticToolSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  inputHash: diagnosticHash.optional(),
+  returned: z.boolean(),
+  repeated: z.boolean(),
+  callCount: z.number().int().positive().max(80),
+}).strict();
+
+/** 角色阶段的可审计执行事实；不保存原始 prompt、工具正文或模型私有思维链。 */
+export const productDiagnosticSchema = z.object({
+  version: z.literal('product-diagnostic.v1'),
+  phase: z.string().trim().min(1).max(100),
+  objective: z.string().trim().min(1).max(1000),
+  startedAt: z.iso.datetime(),
+  completedAt: z.iso.datetime(),
+  durationMs: z.number().int().nonnegative(),
+  input: z.object({
+    briefHash: diagnosticHash,
+    sourceRefs: z.array(diagnosticRefSchema).max(100),
+    priorRoles: z.array(z.enum(productRoles)).max(4),
+    intakeRound: z.number().int().nonnegative(),
+  }).strict(),
+  model: z.object({
+    modelId: z.string().trim().min(1).max(200).nullable(),
+    attempts: z.number().int().positive().max(2),
+    steps: z.number().int().nonnegative().max(PRODUCT_MAX_STEPS),
+    finishReason: z.string().trim().min(1).max(100),
+    inputTokens: z.number().int().nonnegative().nullable(),
+    outputTokens: z.number().int().nonnegative().nullable(),
+  }).strict(),
+  tools: z.array(diagnosticToolSchema).max(80),
+  output: z.object({
+    contentHash: diagnosticHash,
+    contentChars: z.number().int().positive().max(100000),
+    headings: z.array(z.string().trim().min(1).max(300)).max(100),
+    contract: z.string().trim().min(1).max(200),
+  }).strict(),
+  failures: z.array(z.object({
+    attempt: z.number().int().positive().max(2),
+    kind: z.string().trim().min(1).max(100),
+    durationMs: z.number().int().nonnegative(),
+    detail: z.string().trim().min(1).max(500),
+  }).strict()).max(1),
+  nextAction: z.string().trim().min(1).max(1000),
+}).strict();
+export type ProductDiagnostic = z.infer<typeof productDiagnosticSchema>;
+
 /** 角色产物由原生子流程按顺序写入；工具名和步数只表达执行事实。 */
 export const productWorkSchema = z.object({
   version: z.literal('product-graph.v1'),
@@ -22,6 +71,8 @@ export const productWorkSchema = z.object({
     ]).optional(),
     // 旧产物不补造完成证据；后续产物记录正常结束及有界重试事实。
     generation: productGenerationSchema.optional(),
+    // 新产品角色产物必须写入诊断事实；空 productWork 仅用于工作流初始化输入。
+    diagnostic: productDiagnosticSchema.optional(),
     // 正式资源主链由宿主写入输入/输出/工具/版本证据，非资源旧入口不补造。
     invocation: invocationEvidenceSchema.optional(),
   })).max(4),

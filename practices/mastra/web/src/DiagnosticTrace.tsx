@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-interface DiagnosticTool { name: string; inputHash?: string; returned?: boolean; repeated?: boolean }
+interface DiagnosticTool { name: string; inputHash?: string; returned?: boolean; repeated?: boolean; callCount?: number }
 interface DiagnosticItem { id: string; status: 'completed' | 'running' | 'waiting' | 'failed'; phase: string; role: string; summary: string; evidence: string[]; nextAction?: string; tools?: DiagnosticTool[] }
 interface DiagnosticTraceProps { trace?: { enabled: boolean; items: DiagnosticItem[] } }
 
@@ -19,7 +19,7 @@ export function DiagnosticTrace({ trace }: DiagnosticTraceProps) {
       <div className="diagnostic-status"><span className="diagnostic-dot" />{statusLabel[item.status]}</div>
       <div className="diagnostic-body"><div className="diagnostic-title"><strong>{item.phase}</strong><span>{item.role}</span></div><p>{item.summary}</p>
         {item.evidence.length > 0 && <details><summary>查看依据与运行事实（{item.evidence.length}）</summary><ul>{item.evidence.map((fact, index) => <li key={`${item.id}-evidence-${index}`}>{fact}</li>)}</ul></details>}
-        {item.tools && item.tools.length > 0 && <details open={item.status === 'running'}><summary>工具调用审计（{item.tools.length}）</summary><div className="diagnostic-tools">{item.tools.map((tool, index) => <div className="diagnostic-tool" key={`${item.id}-tool-${index}`}><strong>{tool.name}</strong><span>{tool.inputHash ? `入参指纹 ${tool.inputHash}` : '已记录调用事实'}</span><em>{tool.returned === false ? '未收到结果' : tool.repeated ? '重复签名' : '已返回'}</em></div>)}</div></details>}
+        {item.tools && item.tools.length > 0 && <details open={item.status === 'running'}><summary>工具调用审计（{item.tools.length} 个签名）</summary><div className="diagnostic-tools">{item.tools.map((tool, index) => <div className="diagnostic-tool" key={`${item.id}-tool-${index}`}><strong>{tool.name}</strong><span>{tool.inputHash ? `入参指纹 ${tool.inputHash}` : '已记录调用事实'}</span><em>{tool.returned === false ? '未收到结果' : tool.repeated ? `重复 ${tool.callCount ?? 2} 次` : '已返回'}</em></div>)}</div></details>}
         {item.nextAction && <div className="diagnostic-next"><span>下一步</span>{item.nextAction}</div>}
       </div>
     </article>)}</div>}

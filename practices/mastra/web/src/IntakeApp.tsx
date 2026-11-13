@@ -12,7 +12,36 @@ import { QuestionFlow, type ClarificationQuestion as Question, type Clarificatio
 import { RoleWorkbench } from './RoleWorkbench';
 import { DiagnosticTrace } from './DiagnosticTrace';
 import './intake.css';
-interface Document { diagnostics?: { enabled: boolean; items: { id: string; status: 'completed' | 'running' | 'waiting' | 'failed'; phase: string; role: string; summary: string; evidence: string[]; nextAction?: string; tools?: { name: string; inputHash?: string; returned?: boolean; repeated?: boolean }[] }[] }; execution?: ExecutionView; executionSettings?: ExecutionSettings; developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; delivery?: { branch?: string; candidateCommit?: string; candidateStatus?: 'candidate' | 'quality-attested'; qualityHash?: string | null; releaseHash?: string | null; releaseStatus?: string; healthPassed?: boolean; pullRequest?: { url: string; status: string; mergeCommit: string; targetBranchHead: string; approvedBy: string } | null }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+interface Document { diagnostics?: { enabled: boolean; items: { id: string; status: 'completed' | 'running' | 'waiting' | 'failed'; phase: string; role: string; summary: string; evidence: string[]; nextAction?: string; tools?: { name: string; inputHash?: string; returned?: boolean; repeated?: boolean; callCount?: number }[] }[] }; execution?: ExecutionView; executionSettings?: ExecutionSettings; developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; delivery?: { branch?: string; candidateCommit?: string; candidateStatus?: 'candidate' | 'quality-attested'; qualityHash?: string | null; releaseHash?: string | null; releaseStatus?: string; healthPassed?: boolean; pullRequest?: { url: string; status: string; mergeCommit: string; targetBranchHead: string; approvedBy: string } | null }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+
+interface AnalysisProgressProps { operation: { label: string; startedAt: number }; uncertain: boolean; document?: Document }
+
+/** 展示可验证的高层执行进度；不把模型内部思维链伪装成前端事实。 */
+function AnalysisProgress({ operation, uncertain, document }: AnalysisProgressProps) {
+  const [now, setNow] = useState(Date.now());
+  /** 每秒刷新经过时间，帮助用户判断后台是否仍在处理。 */
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [operation.startedAt]);
+  const elapsed = Math.max(0, Math.floor((now - operation.startedAt) / 1000));
+  const execution = document?.execution;
+  const activeDiagnostic = document?.diagnostics?.items.find(item => item.status === 'running');
+  const current = activeDiagnostic?.phase ?? document?.progress?.phase ?? (operation.label.includes('产品稿') ? '产品需求稿生成' : operation.label.includes('完善方案') ? '方案修订' : '需求分析与方案生成');
+  const steps = [
+    { label: '读取需求', detail: '整理用户输入与迭代标识' },
+    { label: '分析上下文', detail: '核对项目资料、角色和方法约束' },
+    { label: '生成方案', detail: '形成摘要、假设与待确认问题' },
+    { label: '检查结果', detail: '保存证据并准备下一个人工节点' },
+  ];
+  const stepIndex = current.includes('产品') || current.includes('修订') ? 2 : current.includes('检查') || document?.progress ? 3 : elapsed > 3 ? 1 : 0;
+  return <section className="analysis-progress intake-card" aria-label="分析过程" role="status">
+    <div className="analysis-progress-heading"><div><div className="intake-eyebrow">可观察执行进度</div><h2>{uncertain ? '连接暂时中断，正在确认后台进度' : '正在分析需求并生成方案…'}</h2></div><span>{elapsed}s</span></div>
+    <p className="analysis-progress-current"><strong>当前阶段：</strong>{current}{execution ? ` · 第 ${execution.attempt} 次尝试` : ''}</p>
+    <div className="analysis-progress-steps">{steps.map(/** 渲染一个可观察阶段及其完成状态。 */(step, index) => <div className={`analysis-progress-step ${index < stepIndex ? 'done' : ''} ${index === stepIndex ? 'current' : ''}`} key={step.label}><span className="analysis-progress-marker">{index < stepIndex ? '✓' : index + 1}</span><div><strong>{step.label}</strong><small>{step.detail}</small></div></div>)}</div>
+    <p className="analysis-progress-note">页面展示阶段、工具调用和结果证据；模型的私有逐字推理不会直接展示。{activeDiagnostic?.summary ? ` 当前摘要：${activeDiagnostic.summary}` : ' 服务端结果返回后会补充真实执行记录。'}</p>
+  </section>;
+}
 /** 从实际关口映射业务阶段，避免进入开发后仍高亮需求输入。 */
 function intakeStage(document?: Document): number {
   if (document?.progress?.phase === '产品稿修订') return 1;
@@ -194,6 +223,7 @@ export function IntakeApp() {
     <main className="intake-main"><header><span>产研交付 · 业务流程</span><div className="intake-actions"><button disabled={busy || uncertain} onClick={openRoleWorkbench}>角色资源管理</button><button disabled={busy} onClick={/** 管理仓库字典不改变当前Run。 */() => setShowRepositoryManagement(true)}>项目仓库管理</button><button disabled={busy} onClick={/** 设置只影响后续同步节点。 */() => setShowSyncSettings(true)}>远端同步设置</button><button disabled={busy} onClick={/** 刷新只回读事实。 */() => void refresh()}>刷新状态</button></div></header>
       <div className="intake-progress"><span className={intakeStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={intakeStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={intakeStage(document) === 2 ? 'active' : ''}>03 开发授权与实施</span><span className={intakeStage(document) === 3 ? 'active' : ''}>04 测试与发布</span></div>
       {error && <div role="alert" className="intake-error">{error}</div>}
+      {(busy || uncertain || document?.status === 'running') && <AnalysisProgress operation={operation} uncertain={uncertain} document={document} />}
       {busy && <p role="status">提交请求处理中；下方独立同步后台状态，请勿重复提交。</p>}
       {document && (intake || document.gate) && !busy && <InlineDecisionCard document={document} questions={questions} answers={answers} busy={busy || uncertain} onOpen={openInlineDecision} />}
       {!id ? <section className="intake-card"><div className="intake-eyebrow">先描述问题，让方案逐步清晰</div><h1>你想解决什么问题？</h1><p>说明使用者、当前困难和期望结果。我们会先给出方案建议，再请你确认关键选择。</p>

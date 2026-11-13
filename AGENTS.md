@@ -122,6 +122,7 @@ scripts/test-chat.sh -> LiteLLM Proxy -> 上游 OpenAI-compatible API
 - 新需求或行为变更先判断是否影响稳定契约；影响时补 OpenSpec，再改实现。
 - 只改文案、说明、局部样式且不改变接口/配置/安全边界时，可以只更新 docs 或 README。
 - 验证优先级：`openspec validate --specs --strict`、相关脚本 smoke test、必要时再启动 Demo 验证。
+- 当前处于开发与测试阶段，新的数据契约、Run 记录和诊断字段可以直接升级，不要求兼容旧历史 Run；旧历史 Run 允许删除，禁止为了兼容旧数据保留旧字段回退、双写或伪造默认诊断事实。进入正式发布或需要保留历史数据前，再单独建立迁移和兼容决策。
 
 ## 当前关键文件
 
