@@ -30,6 +30,7 @@ import {
   ArchiveRestore,
   ArrowDown,
   Bot,
+  Check,
   Brain,
   CircleAlert,
   Copy,
@@ -149,6 +150,7 @@ export default function App() {
   const [imagePreparing, setImagePreparing] = useState(false);
   const [runError, setRunError] = useState("");
   const [lastLatency, setLastLatency] = useState(null);
+  const [progressNow, setProgressNow] = useState(Date.now());
   const [conversationQuery, setConversationQuery] = useState("");
   const [conversationFilter, setConversationFilter] = useState("active");
   const [conversationLimit, setConversationLimit] = useState(CONVERSATION_PAGE_SIZE);
@@ -175,6 +177,13 @@ export default function App() {
   const imagePreparationTasksRef = useRef(new Map());
   const cancelRequestedRef = useRef(false);
   const gatewayStatusRequestRef = useRef(0);
+
+  // 活动 Run 期间刷新经过时间，让进度卡能识别长时间无事件的等待。
+  useEffect(() => {
+    if (!activeRun) return undefined;
+    const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [activeRun]);
 
   // 首次挂载时复用唯一初始化 Promise，并忽略卸载后的异步结果。
   useEffect(() => {
@@ -1062,6 +1071,7 @@ export default function App() {
       requestId: payload.requestId,
       runId: null,
       status: "starting",
+      startedAt: Date.now(),
       model: payload.model,
       operation: payload.operation,
       requestedOperation: payload.operation,
@@ -1760,6 +1770,9 @@ export default function App() {
             <EmptyConversation onPromptClick={handlePromptClick} />
           ) : (
             <>
+              {activeRun && activeRun.conversationId === currentConversationId ? (
+                <RunProgressCard activeRun={activeRun} now={progressNow} />
+              ) : null}
               {messageWindow.hasMore ? (
                 <Button className="load-earlier-messages" size="small" onClick={handleLoadEarlierMessages}>
                   加载更早消息 · {messageWindow.hiddenCount}
@@ -2208,6 +2221,40 @@ function MessageBody({
       ) : null}
       {message.status === "interrupted" ? <Tag className="message-status-tag">已停止</Tag> : null}
     </div>
+  );
+}
+
+/** 将活动 Run 映射为用户可读的工作流阶段，避免把等待过程隐藏成单一 loading。 */
+function RunProgressCard({ activeRun, now }) {
+  const elapsed = Math.max(0, Math.round((now - (activeRun.startedAt || now)) / 1000));
+  const stages = [
+    { key: "start", label: "接收需求", role: "协调器", detail: "确认输入、会话和执行策略" },
+    { key: "context", label: "整理上下文", role: "上下文规划器", detail: "筛选记忆、引用和最近消息" },
+    { key: "work", label: activeRun.status === "tool-running" ? "调用工具" : "形成回答", role: activeRun.status === "tool-running" ? "工具代理" : "回答代理", detail: activeRun.toolTitle || (activeRun.partialText ? "正在流式组织结果" : "正在等待模型返回") },
+  ];
+  const currentIndex = activeRun.status === "starting" ? 0 : activeRun.status === "tool-running" ? 2 : activeRun.partialText ? 2 : 1;
+  const stalled = elapsed >= 12 && !activeRun.partialText && activeRun.status !== "tool-running" && activeRun.status !== "stopping";
+  return (
+    <section className={`run-progress-card${stalled ? " is-stalled" : ""}`} aria-label="实时工作流进度">
+      <div className="run-progress-topline">
+        <div>
+          <span className="run-progress-kicker">实时工作流</span>
+          <strong>{stalled ? "等待时间较长，仍在处理" : stages[currentIndex].label}</strong>
+        </div>
+        <span className="run-progress-elapsed">{elapsed}s</span>
+      </div>
+      <div className="run-progress-track" role="list">
+        {stages.map((stage, index) => (
+          <div className={`run-progress-step ${index < currentIndex ? "is-done" : ""} ${index === currentIndex ? "is-current" : ""}`} key={stage.key} role="listitem">
+            <span className="run-progress-icon">{index < currentIndex ? <Check size={13} /> : index === currentIndex ? <LoaderCircle size={14} className="message-generation-spinner" /> : <span />}</span>
+            <div><strong>{stage.label}</strong><span>{index === currentIndex ? `${stage.role} · ${stalled ? "检查模型是否仍在响应" : stage.detail}` : stage.role}</span></div>
+          </div>
+        ))}
+      </div>
+      <div className="run-progress-footnote">
+        <span className="run-progress-live-dot" /> 当前节点会随服务端事件实时更新 · 可以继续观察，或点击停止
+      </div>
+    </section>
   );
 }
 

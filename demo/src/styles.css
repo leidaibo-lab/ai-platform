@@ -711,6 +711,93 @@ textarea {
   line-height: 18px;
 }
 
+.run-progress-card {
+  width: min(680px, calc(100% - 32px));
+  margin: 12px auto 8px;
+  padding: 14px 16px 12px;
+  color: #24292f;
+  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 72%);
+  border: 1px solid #c9d9ef;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(31, 35, 40, 0.06);
+}
+
+.run-progress-card.is-stalled {
+  border-color: #e3b341;
+  background: #fffdf5;
+}
+
+.run-progress-topline,
+.run-progress-footnote,
+.run-progress-step,
+.run-progress-step > div {
+  display: flex;
+  align-items: center;
+}
+
+.run-progress-topline {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.run-progress-kicker {
+  display: block;
+  color: #6e7781;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.run-progress-topline strong {
+  display: block;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.run-progress-elapsed {
+  color: #57606a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.run-progress-track {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.run-progress-step {
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: #8c959f;
+}
+
+.run-progress-step.is-current { color: #0969da; }
+.run-progress-step.is-done { color: #1a7f37; }
+.run-progress-step > div { display: block; min-width: 0; }
+.run-progress-step strong,
+.run-progress-step span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-progress-step strong { font-size: 12px; line-height: 18px; }
+.run-progress-step > div > span { color: #6e7781; font-size: 11px; line-height: 16px; }
+.run-progress-step.is-current > div > span { color: #57606a; }
+
+.run-progress-icon {
+  display: grid;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.run-progress-icon > span { width: 6px; height: 6px; background: currentColor; border-radius: 50%; opacity: 0.45; }
+.run-progress-footnote { gap: 6px; margin-top: 12px; color: #8c959f; font-size: 11px; }
+.run-progress-live-dot { width: 6px; height: 6px; background: #238636; border-radius: 50%; animation: progress-pulse 1.4s ease-in-out infinite; }
+
+@keyframes progress-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
 .message-generation-spinner {
   flex: 0 0 auto;
   color: #1677ff;

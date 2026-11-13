@@ -201,7 +201,8 @@ for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${fai
     for await (const _chunk of request) { /* 消费请求，不记录正文或凭据。 */ }
     if (++calls >= 2 && !allowRecovery && failureKind === 'timeout') { response.writeHead(408, { 'content-type': 'application/json' }); response.end(JSON.stringify({ error: { message: 'synthetic timeout' } })); return; }
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ id: 'synthetic', object: 'chat.completion', created: 1, model: 'synthetic', choices: [{ index: 0, message: { role: 'assistant', content: calls === 2 ? 'invalid structured output' : JSON.stringify(plan) }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } }));
+    const invalid = calls === 2 || (failureKind === 'invalid-output' && calls === 3);
+    response.end(JSON.stringify({ id: 'synthetic', object: 'chat.completion', created: 1, model: 'synthetic', choices: [{ index: 0, message: { role: 'assistant', content: invalid ? 'invalid structured output' : JSON.stringify(plan) }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } }));
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const pair = generateKeyPairSync('ed25519'); const manifest = captureArtifact(resolve('.'), true);
@@ -221,6 +222,36 @@ for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${fai
     current = await respondIntake(workflow, 'live', run.runId, { retryHash: current.retry.hash });
     assert.equal(current.status, 'suspended'); assert.equal(current.intake?.history.length, 1); assert.equal(current.intake.history[0].response.supplement, '真实人工补充（合成测试）');
     assert.equal(current.intake.round, 2); assert.equal(current.intake.ready, false); assert.equal(current.product, undefined); assert.ok(calls >= 3);
+  } finally { await app.storage.close(); server.closeAllConnections(); await new Promise<void>(/** 等待本地测试服务释放端口。 */done => server.close(/** 关闭回执无需传播测试请求。 */() => done())); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('需求分析非 JSON 输出自动修复一次并继续澄清', /** 验证兼容端点返回自然语言时由同一模型调用一次格式修复，且不形成无限重试。 */async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'guided-json-repair-'));
+  let calls = 0;
+  const plan = { maturity: { decisions: { clear: true, evidence: '合成' }, mainFlow: { clear: true, evidence: '合成' }, exceptions: { clear: true, evidence: '合成' }, delivery: { clear: true, evidence: '合成' } }, summary: '修复后的合成方案', assumptions: [], questions: [] };
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* 消费请求，不记录正文或凭据。 */ }
+    calls += 1;
+    const content = calls === 2 ? '下面是分析说明，暂未按 JSON 输出。' : JSON.stringify(plan);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ id: 'synthetic', object: 'chat.completion', created: 1, model: 'synthetic', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 } }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const pair = generateKeyPairSync('ed25519'); const manifest = captureArtifact(resolve('.'), true);
+  const manifestPath = resolve(directory, 'manifest.json'); const publicKeyPath = resolve(directory, 'public.pem');
+  writeFileSync(publicKeyPath, pair.publicKey.export({ type: 'spki', format: 'pem' }));
+  writeFileSync(manifestPath, JSON.stringify({ manifest, signature: sign(null, Buffer.from(canonical(manifest)), pair.privateKey).toString('base64') }));
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'live', modelId: 'openai/synthetic', apiKey: 'synthetic', baseUrl: `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}/v1`, resourceTrust: { manifestPath, publicKeyPath }, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const app = createStudioApplicationOptions(config); const workflow = app.workflows.productDevelopmentWorkflow;
+  new Mastra(app);
+  try {
+    const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成 JSON 修复需求', iterationId: 'json-repair', guidedIntake: true } });
+    const first = await readIntake(workflow, run.runId);
+    const current = await respondIntake(workflow, 'live', run.runId, { hash: first.intake!.hash, action: 'refine', reviewer: 'test-human', answers: [], supplement: '触发一次格式修复' });
+    assert.equal(current.status, 'suspended');
+    assert.equal(current.step, 'guided-requirements');
+    assert.equal(current.intake?.plan?.summary, plan.summary);
+    assert.equal(calls, 3, '首次生成、修复调用和后续流程的调用次数应有界');
   } finally { await app.storage.close(); server.closeAllConnections(); await new Promise<void>(/** 等待本地测试服务释放端口。 */done => server.close(/** 关闭回执无需传播测试请求。 */() => done())); rmSync(directory, { recursive: true, force: true }); }
 });
 

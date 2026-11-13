@@ -56,8 +56,8 @@ cd /Users/lei/code/ai-platform/practices/mastra
 npm ci --ignore-scripts --no-audit --no-fund
 npm --prefix web ci --ignore-scripts --no-audit --no-fund
 
-# 终端一：无密钥固定模式，使用独立数据目录。
-MASTRA_MODE=fixture MASTRA_DATA_DIR=.data/fixture npm run dev
+# 终端一：默认真实模型模式，使用独立数据目录。
+MASTRA_MODE=live MASTRA_DATA_DIR=.data/live npm run dev
 
 # 终端二：启动产研工作台。
 npm run review:dev
@@ -65,18 +65,20 @@ npm run review:dev
 
 打开工作台，填写需求与迭代标识。页面默认开启需求澄清；fixture 使用固定响应，只能验证控制流，不理解业务输入。阅读和恢复已有 Run 时，后端必须使用创建时的模式与数据目录。前端代理固定连接 `127.0.0.1:4111`。
 
+如需离线验证控制流，必须显式指定 `MASTRA_MODE=fixture` 并使用独立数据目录，例如 `MASTRA_MODE=fixture MASTRA_DATA_DIR=.data/fixture npm run dev`；该模式不应作为日常产研入口。
+
 ## 配置真实模型
 
 只使用本实践自己的 `.env`，按下表设置模型配置，不要复制根目录密钥。进程环境变量优先。
 
 | 配置 | 默认 / 要求 |
 | --- | --- |
-| `MASTRA_MODE` | `fixture`；显式设置 `live` 才调用远程模型 |
+| `MASTRA_MODE` | `live`；显式设置 `fixture` 仅用于离线控制流验证 |
 | `OPENAI_API_KEY` | live 必填 |
 | `MASTRA_MODEL` | 真实模式必填；未匹配角色的默认模型，参见 `.env.example` |
 | `MASTRA_BASE_URL` | 可选 OpenAI-compatible API 基址 |
 | `MASTRA_PORT` | `4111`；修改后需同步前端代理 |
-| `MASTRA_DATA_DIR` | `.data`，相对本实践根目录，也可为绝对路径 |
+| `MASTRA_DATA_DIR` | `.data/live`，相对本实践根目录，也可为绝对路径；fixture 请使用独立目录 |
 | `MASTRA_HRM_REPOSITORY` | 可选 HRM checkout 绝对路径；默认同级 `hrm`，origin 必须匹配 `leidaibo-lab/hrm` |
 | `MASTRA_REMOTE_SYNC_TARGETS` | 可选 JSON 数组，登记额外目标：`id`、`label`、`root`、`origin`；服务重启后在“远端同步设置”选择 |
 

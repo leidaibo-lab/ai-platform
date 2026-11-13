@@ -35,6 +35,33 @@ function normalizeGeneratedPlan(value: unknown): unknown {
   }) : draft.questions;
   return { ...draft, assumptions: Array.isArray(draft.assumptions) ? draft.assumptions.slice(0, 12) : draft.assumptions, questions };
 }
+/** 将模型文本解析并收敛为已通过业务 Schema 的需求方案。 */
+function validateGeneratedPlanText(value: string) {
+  const candidate = normalizeGeneratedPlan(parseGeneratedPlanText(value));
+  return generatedPlanSchema.parse(candidate);
+}
+/**
+ * 对非 JSON 或不符合业务 Schema 的首次输出执行一次有界修复。
+ * 修复调用只允许提交 JSON，不使用工具，也不把模型输出直接写入持久化事实。
+ */
+async function generateValidatedPlan(
+  agent: ReturnType<typeof createAgents>['productCoordinatorAgent'],
+  prompt: string,
+  options: Record<string, unknown>,
+  signal: AbortSignal,
+  onStepFinish?: (event: unknown) => Promise<void> | void,
+) {
+  const baseOptions = { ...options, abortSignal: signal, maxSteps: 24, modelSettings: { maxRetries: 0, timeout: { totalMs: 1800000, stepMs: 600000 } }, onStepFinish };
+  const first = await agent.generate(prompt, baseOptions as never);
+  try { return validateGeneratedPlanText(first.text); }
+  catch (firstError) {
+    const original = first.text.trim().slice(0, 12000);
+    const repairPrompt = `${prompt}\n\n这是一次严格的格式修复调用。上一次模型输出未通过 JSON 或业务 Schema 校验。请只修复格式和字段结构，不新增事实、不回答用户、不调用工具。只输出一个可直接 JSON.parse 的 JSON 对象，不要 Markdown、代码围栏或解释文字；必须完整符合需求方案字段和约束。上一次输出如下：\n${original}`;
+    const repaired = await agent.generate(repairPrompt, { ...baseOptions, maxSteps: 1, toolChoice: 'none' } as never);
+    try { return validateGeneratedPlanText(repaired.text); }
+    catch { throw firstError; }
+  }
+}
 /** 在主 Run 中持久保存方案和多轮回答；旧入口原样跳过。 */
 export function createIntakeWorkflow(agents: ReturnType<typeof createAgents>, mode: 'fixture' | 'live', bind: <T extends Step<any, any, any, any, any, any>>(step: T) => T = identity) {
   const analyze = createStep({ id: 'analyze-requirements', inputSchema: deliverySchema, outputSchema: deliverySchema,
@@ -50,14 +77,11 @@ export function createIntakeWorkflow(agents: ReturnType<typeof createAgents>, mo
       try {
         observation.check();
         const defaults = await agents.productCoordinatorAgent.getDefaultOptions?.();
-        const result = mode === 'fixture' ? fixture : parseGeneratedPlanText((await agents.productCoordinatorAgent.generate(taskContext.prompt, { ...taskContext.options, abortSignal: observation.signal,
+        const result = mode === 'fixture' ? generatedPlanSchema.parse(fixture) : await generateValidatedPlan(agents.productCoordinatorAgent, taskContext.prompt, taskContext.options as Record<string, unknown>, observation.signal,
           // 记录原生模型步骤完成，不公开业务正文。
-          onStepFinish: async event => { observation.activity(); await defaults?.onStepFinish?.(event); }, maxSteps: 24, modelSettings: { maxRetries: 0, timeout: { totalMs: 1800000, stepMs: 600000 } },
-          // 兼容端点不保证 Mastra structured-output 的 object 通道；使用文本 JSON 并在本地进行唯一的业务 schema 校验。
-        })).text);
+          async event => { observation.activity(); await defaults?.onStepFinish?.(event as never); });
         observation.check();
-        const candidate = normalizeGeneratedPlan(result);
-        const plan = generatedPlanSchema.parse(candidate);
+        const plan = result;
         const next = { ...intake, round: intake.round + 1, plan };
         return { ...inputData, intake: { ...next, hash: intakeHash(inputData.brief, next) } };
       } catch (error) {

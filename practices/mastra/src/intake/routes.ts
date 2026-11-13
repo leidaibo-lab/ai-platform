@@ -24,7 +24,12 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
   }
   /** 不返回模型响应、业务输入或内部堆栈。 */
   function failure(c: ContextWithMastra, error: unknown) {
-    return c.json({ error: error instanceof GateInputError ? error.message : error instanceof z.ZodError ? '有内容未填完整或不符合要求，请检查必填、文件范围和列表中的每一项' : '操作未完成，请刷新确认版本、必答项及流程状态；不要自动重试批准。' }, 409);
+    const message = error instanceof ResourceError && error.code === 'ARTIFACT_DRIFT'
+      ? '当前运行版本与可信制品不一致，请重新发布或启动新 Run。旧 Run 已保留，不能直接用新代码恢复。'
+      : error instanceof GateInputError ? error.message
+        : error instanceof z.ZodError ? '有内容未填完整或不符合要求，请检查必填、文件范围和列表中的每一项'
+          : '操作未完成，请刷新确认版本、必答项及流程状态；不要自动重试批准。';
+    return c.json({ error: message }, 409);
   }
   /** 工作台角色服务只使用本次HTTP上下文绑定的原生Store；没有完整宿主依赖时失败关闭。 */
   async function roleService(c: ContextWithMastra) {
