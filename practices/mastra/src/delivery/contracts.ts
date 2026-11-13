@@ -7,6 +7,7 @@ import { findingSchema, stateV2Schema } from '../development/v2/contracts.js';
 import { invocationEvidenceSchema } from '../resources/projections.js';
 import { artifactRecordSchema } from '../resources/governance.js';
 import { evidenceRecordSchema } from '../resources/governance.js';
+import { roleExecutionSchema, testingRoleExtensionSchema, operationsRoleExtensionSchema } from '../diagnostics/role-execution.js';
 
 export const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 /** 原生 Store 拥有源码推送回执；版本与质量门绑定，不能由模型自行声明。 */
@@ -16,7 +17,7 @@ const text = z.string().trim().min(1).max(2000);
 export const actorSchema = z.object({ reviewer: z.string().trim().min(1).max(100), comment: text });
 export const testCaseSchema = z.object({ id: z.string().min(1).max(100), requirementRefs: z.array(z.string()).min(1), expected: text, method: z.enum(['registered-check', 'manual', 'browser']), checkRefs: z.array(z.string()), browser: browserCaseSchema.optional() });
 export const caseResultSchema = z.object({ caseId: z.string().min(1), status: z.enum(['passed', 'failed', 'blocked']), evidence: text, authority: z.enum(['sandbox-process', 'local-human-report', 'browser-process']) });
-export const testPlanSchema = z.object({ content: z.string().min(1).max(100000), sourceHash: hashSchema, hash: hashSchema, browserMethodHash: hashSchema.optional(), invocation: invocationEvidenceSchema.optional(), artifact: artifactRecordSchema.optional() });
+export const testPlanSchema = z.object({ content: z.string().min(1).max(100000), sourceHash: hashSchema, hash: hashSchema, browserMethodHash: hashSchema.optional(), invocation: invocationEvidenceSchema.optional(), artifact: artifactRecordSchema.optional(), execution: roleExecutionSchema.optional(), roleExtension: z.union([testingRoleExtensionSchema, operationsRoleExtensionSchema]).optional() });
 export const planApprovalSchema = actorSchema.extend({ hash: hashSchema, decision: z.enum(['approve', 'stop']), cases: z.array(testCaseSchema).min(1).max(100) });
 export const qualityReviewSchema = actorSchema.extend({ hash: hashSchema, decision: z.enum(['pass', 'rework', 'stop']), manualResults: z.array(caseResultSchema.omit({ authority: true })).max(100), findings: z.array(findingSchema).max(30) });
 export const browserQualitySchema = z.object({ methodHash: hashSchema, receipts: z.array(browserReceiptSchema).max(3), report: z.string().max(10000), tools: z.array(z.string()), hash: hashSchema });

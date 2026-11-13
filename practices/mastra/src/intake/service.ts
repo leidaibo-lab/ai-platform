@@ -34,10 +34,24 @@ type DiagnosticItem = {
   tools?: { name: string; inputHash?: string; returned?: boolean; repeated?: boolean; callCount?: number }[];
 };
 
+/** 将统一角色执行事实投影为前端可审计的阶段摘要。 */
+function projectRoleExecution(items: DiagnosticItem[], id: string, execution: any, roleLabel: string, extension?: any) {
+  if (!execution) return;
+  items.push({ id, status: execution.status, phase: execution.phase, role: roleLabel, summary: `${execution.objective}；模型 ${execution.model.steps} 步，耗时 ${execution.durationMs}ms。`, evidence: [
+    `输入引用：产物 ${execution.input.artifactRefs.length} · 需求 ${execution.input.requirementRefs.length} · 源码 ${execution.input.sourceRefs.length} · 任务 ${execution.input.taskRefs.length} · 上下文 ${execution.input.contextRefs.length}`,
+    `输出结构：${execution.outputs.sections.length ? execution.outputs.sections.join('、') : '未登记章节摘要'}${execution.outputs.contentChars != null ? ` · ${execution.outputs.contentChars} 字` : ''}`,
+    ...(execution.findings.length ? [`阶段发现：${execution.findings.length} 项`] : []),
+    ...(extension ? [`角色扩展：${extension.kind}`] : []),
+    ...(execution.failures.length ? execution.failures.map((failure: any) => `失败尝试：${failure.kind} · ${failure.durationMs}ms · ${failure.detail}`) : []),
+  ], tools: execution.tools, nextAction: execution.nextAction });
+}
+
 /** 从已保存角色产物、执行观察和人工关口拼装统一诊断轨迹，不暴露工具入参或模型原始错误。 */
-function buildDiagnosticTrace(input: { state?: any; development?: any; execution?: ReturnType<typeof readExecution>; progress?: any; gate?: any; retry?: any }): { enabled: true; items: DiagnosticItem[] } {
+function buildDiagnosticTrace(input: { state?: any; development?: any; quality?: any; release?: any; execution?: ReturnType<typeof readExecution>; progress?: any; gate?: any; retry?: any }): { enabled: true; items: DiagnosticItem[] } {
   const items: DiagnosticItem[] = [];
   for (const entry of input.state?.productWork?.entries ?? []) {
+    projectRoleExecution(items, `product-execution-${entry.role}`, entry.execution, `产品${entry.role}`, entry.extension);
+    if (entry.execution) continue;
     const diagnostic = entry.diagnostic;
     const detailedTools = diagnostic.tools;
     const evidence = [
@@ -51,8 +65,11 @@ function buildDiagnosticTrace(input: { state?: any; development?: any; execution
   }
   for (const entry of input.development?.work ?? []) {
     const tools = (entry.tools ?? []).map((name: string) => ({ name }));
-    items.push({ id: `development-${entry.role}-${entry.round}`, status: 'completed', phase: '开发实施', role: entry.role, summary: `已完成${entry.role}角色的本轮交付，结果绑定当前源码检查点。`, evidence: [`模型步骤 ${entry.steps}`, ...(entry.modelId ? [`模型：${entry.modelId}`] : []), ...(tools.length ? [`实际调用工具：${tools.map((tool: { name: string }) => tool.name).join('、')}`] : ['本节点未记录工具调用'])], tools });
+    projectRoleExecution(items, `development-execution-${entry.role}-${entry.round}`, entry.execution, `开发${entry.role}`, entry.extension);
+    if (!entry.execution) items.push({ id: `development-${entry.role}-${entry.round}`, status: 'completed', phase: '开发实施', role: entry.role, summary: `已完成${entry.role}角色的本轮交付，结果绑定当前源码检查点。`, evidence: [`模型步骤 ${entry.steps}`, ...(entry.modelId ? [`模型：${entry.modelId}`] : []), ...(tools.length ? [`实际调用工具：${tools.map((tool: { name: string }) => tool.name).join('、')}`] : ['本节点未记录工具调用'])], tools });
   }
+  projectRoleExecution(items, 'testing-execution', input.quality?.plan?.execution, '测试testing', input.quality?.plan?.roleExtension);
+  projectRoleExecution(items, 'operations-execution', input.release?.plan?.execution, '发布operations', input.release?.plan?.roleExtension);
   if (input.execution && !input.execution.settled) {
     const toolTrace = input.execution.toolTrace.map(item => ({ name: item.toolName, inputHash: item.inputHash.slice(0, 12), returned: item.returned, repeated: !item.newCallSignature }));
     items.push({ id: 'active-execution', status: 'running', phase: '实时执行', role: input.execution.role, summary: `当前正在进行第 ${input.execution.attempt} 次模型尝试，已完成 ${input.execution.steps} 个模型步骤。`, evidence: [`最近真实活动：${new Date(input.execution.lastActivityAt).toISOString()}`], tools: toolTrace, nextAction: toolTrace.length ? '等待工具结果后继续生成；重复签名仅标记事实，不自动判定业务错误。' : '等待模型返回下一步决策。' });
@@ -106,7 +123,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const reconfigure = snapshot.status === 'success' && blockage && preparationRequired && development.success && !development.data.completedTasks.length && !development.data.approvedHash && !development.data.delivery ? { hash: developmentHash({ runId, development: development.data, action: 'reconfirm-project' }) } : undefined;
   const delivery = lifecycle.success ? { branch: lifecycle.data.codePublication?.receipt.branch, candidateCommit: lifecycle.data.codePublication?.receipt.commit, candidateStatus: lifecycle.data.codePublication?.status, qualityHash: lifecycle.data.codePublication?.qualityHash, releaseHash: lifecycle.data.release.hash, releaseStatus: lifecycle.data.release.receipt?.status, healthPassed: lifecycle.data.release.health?.checks.every(check => check.status === 'passed'), pullRequest: lifecycle.data.release.pullRequest } : undefined;
   const progress = describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {});
-  const diagnostics = buildDiagnosticTrace({ state: state?.success ? state.data : undefined, development: development.success ? development.data : undefined, execution: observed, progress, gate, retry });
+  const diagnostics = buildDiagnosticTrace({ state: state?.success ? state.data : undefined, development: development.success ? development.data : undefined, quality: lifecycle.success ? lifecycle.data.quality : undefined, release: lifecycle.success ? lifecycle.data.release : undefined, execution: observed, progress, gate, retry });
   return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, agentRun, diagnostics, humanGate, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, delivery, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress, retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */

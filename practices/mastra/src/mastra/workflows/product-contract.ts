@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { PRODUCT_MAX_STEPS } from '../agents/skills.js';
 import { productGenerationSchema } from '../../delivery/product-generation-contract.js';
 import { invocationEvidenceSchema } from '../../resources/projections.js';
+import { roleExecutionSchema, productRoleExtensionSchema } from '../../diagnostics/role-execution.js';
 
 export const productRoles = ['coordinator', 'clarification', 'closure', 'writing'] as const;
 export const maxProductReworks = 3;
@@ -73,6 +74,8 @@ export const productWorkSchema = z.object({
     generation: productGenerationSchema.optional(),
     // 新产品角色产物必须写入诊断事实；空 productWork 仅用于工作流初始化输入。
     diagnostic: productDiagnosticSchema.optional(),
+    execution: roleExecutionSchema.optional(),
+    extension: productRoleExtensionSchema.optional(),
     // 正式资源主链由宿主写入输入/输出/工具/版本证据，非资源旧入口不补造。
     invocation: invocationEvidenceSchema.optional(),
   })).max(4),

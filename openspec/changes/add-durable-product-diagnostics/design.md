@@ -1,17 +1,19 @@
 ## Design
 
-`product-diagnostic.v1` 由宿主在角色模型调用成功后生成。它不改变角色正文、人工审批或下游交接协议。
+`role-execution.v1` 由宿主在角色模型调用后生成，作为产品、开发、测试和发布角色共享的执行事实基座；每个角色再附加带 `kind` 的严格专属扩展。它不改变角色正文、人工审批或下游交接协议。
 
 ```text
 Mastra product role
   -> product generation result
-  -> product-diagnostic.v1
-  -> productWork.entries[].diagnostic
+  -> role-execution.v1 + role extension
+  -> product/development/quality/release artifact
   -> readIntake() diagnostic projection
   -> web DiagnosticTrace
 ```
 
-诊断字段包含：阶段目标、需求 Hash、来源引用、前置角色、需求轮次、模型标识、尝试次数、步骤数、finish reason、token 统计、工具名称/参数指纹/返回状态/重复次数、正文 Hash、正文长度、标题结构、失败尝试和下一步。
+公共字段包含：阶段目标、输入引用、模型调用统计、工具事实、输出摘要、发现、失败尝试、阻塞原因和下一步。角色扩展分别承接产品需求假设与待决问题、开发任务与文件检查点、测试用例与质量计数、发布环境与部署健康和回滚引用。
+
+不同角色不得通过公共字段堆叠专属属性，也不得退化为无约束 `metadata`；新增角色应新增版本化扩展 Schema，并保持公共基座可被统一投影。
 
 `execution-control` 仍是进程内实时取消观察，不承担历史诊断。Workflow 快照是当前开发/测试阶段的唯一持久化事实源。
 

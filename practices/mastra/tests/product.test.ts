@@ -59,6 +59,9 @@ test('四个固定产品角色各自执行原生工具并持久化有序产物',
       assert.equal(entry.generation?.finishReason, 'stop');
       assert.equal(entry.generation?.attempts, 1);
       assert.equal(entry.diagnostic?.version, 'product-diagnostic.v1');
+      assert.equal(entry.execution?.version, 'role-execution.v1');
+      assert.equal(entry.extension?.kind, 'product-role-execution.v1');
+      assert.ok(entry.extension?.openQuestions);
       assert.equal(entry.diagnostic?.phase, `product.${entry.role}`);
       assert.equal(entry.diagnostic?.model.steps, 2);
       assert.ok(entry.diagnostic?.output.contentHash);

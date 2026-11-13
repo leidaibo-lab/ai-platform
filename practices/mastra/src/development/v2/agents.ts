@@ -19,6 +19,7 @@ import { noopLogger } from '@mastra/core/logger';
 import { z } from 'zod';
 import { resolveModelId, type PracticeConfig } from '../../mastra/config.js';
 import type { ExecutionPort } from './execution-scope.js';
+import { roleExecutionSchema, developmentRoleExtensionSchema } from '../../diagnostics/role-execution.js';
 import { developmentInstructions } from '../agents.js';
 import { classifyDevelopmentError, DevelopmentModelError } from '../errors.js';
 import { assessmentSchema, contextDraftSchema, planV2Schema, type RoleV2, type StateV2, type EntryV2 } from './contracts.js';
@@ -179,6 +180,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
         throw error;
       }
     }
+    const startedAt = new Date().toISOString();
     const result = await call();
     if (result.finishReason !== 'stop') throw new DevelopmentModelError(result.finishReason === 'error' ? classifyDevelopmentError(result.error) : 'model-error', diagnoseModelResult(result, developmentMaxSteps));
     const tools = result.toolResults.map(
@@ -201,7 +203,17 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
     const evidence = invocation && scope ? createInvocationEvidence({ invocation, outputContract: configuredRole.outputContract, output: { content: text }, tools, usage: { inputTokens: result.usage?.inputTokens, outputTokens: result.usage?.outputTokens, steps: result.steps.length, modelId: result.response?.modelId }, config: runtimeConfig }) : undefined;
     const artifactKind = role === 'context' ? 'context' : role === 'architect' ? 'task-plan' : role === 'readiness' || role === 'reviewer' ? 'assessment' : role === 'self-check' ? 'self-check-summary' : 'implementation-summary';
     const artifact = evidence ? createArtifact({ id: `${role}:${evidence.outputHash}`, kind: artifactKind, schemaVersion: evidence.outputContract, content: text, evidenceRefs: [{ id: evidence.invocationId, kind: 'invocation', hash: developmentHash(evidence) }] }) : undefined;
-    return { role, round: state.round, text, tools, steps: result.steps.length, modelId: result.response?.modelId ?? null, inputTokens: result.usage?.inputTokens ?? null, outputTokens: result.usage?.outputTokens ?? null, ...(evidence ? { invocation: evidence } : {}), ...(artifact ? { artifact } : {}) };
+    const completedAt = new Date().toISOString();
+    const executionRecord = roleExecutionSchema.parse({
+      version: 'role-execution.v1', runId: state.input.source.runId, phaseId: `development.${state.phase}`, phase: state.phase, role,
+      objective: role === 'context' ? '建立受引用约束的项目上下文' : role === 'architect' ? '形成可执行技术方案和任务边界' : role === 'readiness' ? '检查实现前的覆盖、冲突和缺口' : role === 'reviewer' ? '独立检查实现与批准方案的一致性' : role === 'self-check' ? '执行已登记检查并确认源码状态' : '完成批准任务范围内的实现工作',
+      status: 'completed', round: state.round, attempt: 1, startedAt, completedAt, durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
+      input: { artifactRefs: state.work.flatMap(entry => entry.artifact ? [{ id: `artifact:${entry.role}:${entry.round}`, hash: developmentHash(entry.artifact) }] : []), requirementRefs: state.requirements.map(item => ({ id: item.id, hash: item.hash })), sourceRefs: [{ id: 'source', hash: state.checkpointHash }], taskRefs: state.plan?.tasks.filter(task => paths.some(path => task.paths.includes(path))).map(task => ({ id: `task:${task.id}`, hash: developmentHash(task) })) ?? [], contextRefs: Object.keys(state.context?.files ?? {}).map(path => ({ id: `file:${path}`, hash: state.context!.files[path] })) },
+      model: { modelId: result.response?.modelId ?? null, inputTokens: result.usage?.inputTokens ?? null, outputTokens: result.usage?.outputTokens ?? null, steps: result.steps.length, finishReason: result.finishReason },
+      tools: tools.map(name => ({ name, returned: true, repeated: false, callCount: 1 })), outputs: { ...(evidence ? { artifactRefs: [{ id: evidence.invocationId, hash: evidence.invocationId }] } : { artifactRefs: [] }), contentHash: developmentHash(text), contentChars: text.length, sections: [] }, findings: [], failures: [], blockers: [], nextAction: role === 'self-check' ? '继续进入独立评审或质量门。' : '将本阶段产物交给后续阶段继续验证。',
+    });
+    const extension = developmentRoleExtensionSchema.parse({ kind: 'development-role-execution.v1', taskId: typeof extra === 'object' && extra && 'taskId' in extra ? String((extra as { taskId?: unknown }).taskId) : null, taskPaths: paths, changedFiles: [], checkpointHash: state.checkpointHash, dependencyRefs: state.work.flatMap(entry => entry.artifact ? [{ id: `artifact:${entry.role}:${entry.round}`, hash: developmentHash(entry.artifact) }] : []), checkRefs: state.verificationRefs });
+    return { role, round: state.round, text, tools, steps: result.steps.length, modelId: result.response?.modelId ?? null, inputTokens: result.usage?.inputTokens ?? null, outputTokens: result.usage?.outputTokens ?? null, execution: executionRecord, extension, ...(evidence ? { invocation: evidence } : {}), ...(artifact ? { artifact } : {}) };
   } finally { await storage?.close(); }
 }
 /** 将宿主允许的引用绑定到本次结构化输出；方法资料和材料位置不进入事实引用域。 */

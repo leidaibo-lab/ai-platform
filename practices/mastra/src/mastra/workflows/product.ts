@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { createAgents } from '../agents/index.js';
 import type { deliverySchema, Delivery } from './delivery.js';
 import { productDiagnosticSchema, productRoles } from './product-contract.js';
+import { roleExecutionSchema, productRoleExtensionSchema } from '../../diagnostics/role-execution.js';
 import { createInvocationEvidence, createRoleInvocation } from '../../resources/projections.js';
 import { currentResources } from '../../resources/scope.js';
 import { frozenRuntimeResourceConfig, roleResource } from '../../resources/resource-config.js';
@@ -116,7 +117,17 @@ export function createProductWorkflow(
           failures: result.generation.failures.map(failure => ({ attempt: failure.attempt, kind: failure.kind, durationMs: failure.durationMs, detail: JSON.stringify(failure.failure) })),
           nextAction: role === 'writing' ? '等待人工审阅产品需求稿。' : '将本阶段产物交给下一个产品角色继续检查。',
         });
-        const entry = { role, content, toolNames: [...toolNames], modelSteps: result.steps.length, ...(fixedHandoff ? { handoffSections: [...CLARIFICATION_HANDOFF_CONVENTION.sections] as ClarificationHandoffSections } : {}), generation: result.generation, diagnostic, ...(evidence ? { invocation: evidence } : {}) };
+        const execution = roleExecutionSchema.parse({
+          version: 'role-execution.v1', runId, phaseId: `draft-product.product-${role}`, phase: `product.${role}`, role: `product-${role}`,
+          objective: diagnostic.objective, status: 'completed', round: inputData.intake?.round ?? 0, attempt: result.generation.attempts,
+          startedAt: diagnosticStartedAt, completedAt: diagnostic.completedAt, durationMs: diagnostic.durationMs,
+          input: { artifactRefs: prior.map(item => ({ id: `role:${item.role}`, hash: createHash('sha256').update(item.content).digest('hex') })), requirementRefs: [], sourceRefs: diagnostic.input.sourceRefs, taskRefs: [], contextRefs: [] },
+          model: diagnostic.model, tools: diagnostic.tools,
+          outputs: { artifactRefs: evidence ? [{ id: evidence.invocationId, hash: evidence.invocationId }] : [], contentHash: diagnostic.output.contentHash, contentChars: diagnostic.output.contentChars, sections: diagnostic.output.headings },
+          findings: [], failures: diagnostic.failures, blockers: [], nextAction: diagnostic.nextAction,
+        });
+        const extension = productRoleExtensionSchema.parse({ kind: 'product-role-execution.v1', intakeRound: inputData.intake?.round ?? 0, priorRoles: prior.map(item => item.role), assumptions: inputData.intake?.plan?.assumptions ?? [], openQuestions: inputData.intake?.plan?.questions.map(question => ({ id: question.id, title: question.title, required: question.required })) ?? [] });
+        const entry = { role, content, toolNames: [...toolNames], modelSteps: result.steps.length, ...(fixedHandoff ? { handoffSections: [...CLARIFICATION_HANDOFF_CONVENTION.sections] as ClarificationHandoffSections } : {}), generation: result.generation, diagnostic, execution, extension, ...(evidence ? { invocation: evidence } : {}) };
         return {
           ...inputData,
           productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] },

@@ -112,6 +112,16 @@ for (const scenario of ['success', 'resources-enhanced', 'health-failure', 'reje
       assert.equal(result.status, 'success', JSON.stringify(result));
       assert.equal(result.result.outcome, scenario === 'browser-failure' ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
       if (scenario === 'success') baselineHash = result.result.development.checkpointHash;
+      if (scenario === 'success') {
+        assert.ok(result.result.quality.plan?.execution);
+        assert.equal(result.result.quality.plan?.execution.version, 'role-execution.v1');
+        assert.equal(result.result.quality.plan?.roleExtension?.kind, 'testing-role-execution.v1');
+        assert.ok(result.result.release.plan?.execution);
+        assert.equal(result.result.release.plan?.execution.version, 'role-execution.v1');
+        assert.equal(result.result.release.plan?.roleExtension?.kind, 'operations-role-execution.v1');
+        assert.ok(result.result.development.work.every((entry: any) => entry.execution?.version === 'role-execution.v1'));
+        assert.ok(result.result.development.work.every((entry: any) => entry.extension?.kind === 'development-role-execution.v1'));
+      }
       if (scenario === 'resources-enhanced') { assert.equal(result.result.development.checkpointHash, baselineHash); assert.equal(visited.length, 8); }
       if (['qa-rework', 'qa-fixed'].includes(scenario)) { assert.equal(result.result.qualityHistory.length, 1); assert.equal(result.result.development.round, 1); }
       if (scenario === 'success') { assert.equal(result.result.development.delegations.length, 2); assert.equal(result.result.quality.status, 'passed'); assert.ok(visited.includes('verify-release-health')); }
