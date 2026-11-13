@@ -21,6 +21,25 @@ export function describeRecovery(runId: string, status: string, steps: Record<st
   const parsed = deliverySchema.safeParse(entry.payload);
   if (!parsed.success || parsed.data.artifacts.length || parsed.data.reviews.length) return undefined;
   const state = parsed.data;
+  // 澄清分析只读取已保存的 brief 与历史回答；格式校验失败后允许从同一节点重放，避免已确认轮次丢失。
+  if (path === 'guided-requirements.requirements-round.analyze-requirements') {
+    const failure = describeProductFailure(entry.error, state.contextBudgetLevel ?? 0);
+    return {
+      kind: 'requirements-analysis' as const,
+      hash: developmentHash({ runId, step: path, state, endedAt: entry.endedAt, error: entry.error?.name, details: entry.error?.details }),
+      step: path,
+      title: titles[path],
+      savedAnswers: state.intake?.history.length ?? 0,
+      preserved: [{ label: '已确认的业务选择', role: 'requirements' }],
+      reason: failure?.reason ?? '本次模型输出未通过格式校验',
+      attemptDetails: failure?.details,
+      next: failure?.next,
+      additionalContextLevel: failure?.additionalContextLevel,
+      retryBlocked: failure?.retryBlocked,
+      message: '可从“需求分析”的已保存输入继续，无需重填已确认信息。',
+      impact: '重新执行当前需求分析；已保存的澄清回答保留，完成后仍停在对应人工确认关口。',
+    };
+  }
   const entries = state.productWork?.entries ?? [];
   const roleIndex = path === 'draft-product.publish-product' ? 4 : productRoles.findIndex(/** 本次只重做失败角色及后续，之前产物必须顺序完整。 */role => path === `draft-product.product-${role}`);
   if (path.startsWith('draft-product.') && (roleIndex < 0 || entries.length !== roleIndex || entries.some(/** 防止缺少前序或混入重复角色的快照直接恢复。 */(value, index) => value.role !== productRoles[index]))) return undefined;

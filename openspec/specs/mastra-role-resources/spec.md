@@ -96,6 +96,37 @@ live宿主 SHALL 使用独立配置的可信公钥核验制品签名和内容清
 - **WHEN** fixture使用明确标识的非签名测试制品
 - **THEN** 仅允许fixture执行；live缺少独立可信签名配置必须拒绝
 
+### Requirement: Run分支代码交接与人工PR合并
+
+主Workflow SHALL 在研发交付和自检通过后，将已批准路径内的候选源码提交到`codex/workflow/<RunId>`；该提交 SHALL 标记为待测试，不能被视为已合并或已发布。独立测试通过后，宿主 SHALL 将质量散列绑定到同一候选commit。live Run在发布与健康检查均通过后 SHALL 暂停等待人工外部PR合并回执；Workflow、模型和浏览器 SHALL NOT 创建、审批或合并PR，也不得直接写入`main`。
+
+#### Scenario: 候选代码在测试前交接
+
+- **WHEN** 当前开发版本具备产品/范围/架构批准、研发交付和通过的登记自检
+- **THEN** 宿主 SHALL 使用隔离Git index提交并推送允许路径中的候选源码到当前Run分支
+- **AND** 回执 SHALL 使用显式`status=candidate`和`candidate.json`证据文件，绑定基线commit、sourceHash、分支、commit和文件散列；初始质量散列为空
+- **AND** 用户checkout、暂存区、当前分支和`main` SHALL 不被修改
+
+#### Scenario: 独立测试绑定候选commit
+
+- **WHEN** 独立测试和质量审阅通过当前候选源码
+- **THEN** 宿主 SHALL 仅将当前qualityHash绑定到sourceHash一致的候选回执
+- **AND** 发布 SHALL 拒绝缺少该绑定、质量散列不一致或候选源码漂移的状态
+
+#### Scenario: 人工合并发布成功的Run分支
+
+- **WHEN** live Run的发布回执和全部批准健康检查已通过
+- **THEN** Workflow SHALL 暂停并请求人工在外部Git平台创建、审批和合并从当前Run分支到`main`的PR
+- **AND** 恢复数据 SHALL 包含源分支、源commit、目标`main`、外部PR链接、操作者、完成时间和`merged`状态
+- **AND** 只有回执与已发布候选commit精确匹配时，Workflow才可形成最终交付
+- **AND** 回执 SHALL 额外记录审批人、PR链接、merge commit和合并后的`main` HEAD，供操作者在同一Run状态中核对
+
+#### Scenario: 发布失败或PR未合并
+
+- **WHEN** 发布或健康检查失败，或PR未产生有效的`merged`回执
+- **THEN** Workflow SHALL 保留Run分支和已有证据，不得修改`main`
+- **AND** Run SHALL 进入既有回滚、修复或人工等待路径，不得伪造最终交付
+
 ### Requirement: 模型与凭据边界
 模型名称与生成参数 SHALL 从冻结Agent版本解析；凭据 SHALL 仅由宿主提供且不进入Run快照；模型端点身份变化 SHALL 拒绝，凭据轮换 SHALL 不改变版本绑定。业务调用 SHALL 不得用临时model覆盖冻结模型。
 

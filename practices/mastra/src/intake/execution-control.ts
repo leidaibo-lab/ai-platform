@@ -1,7 +1,7 @@
 /** 只读产品生成的有界易失观察 Adapter；终态与恢复仍由 Mastra 拥有。
  * ADR: docs/decisions/2026-11-10-mastra-execution-control.md
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ProductAttempt } from '../delivery/product-generation-contract.js';
 
 /** 一次调用的公开投影；时间均为服务端毫秒，失败只包含既有白名单。 */
@@ -9,8 +9,10 @@ export interface ExecutionObservation {
   token: string; role: string; startedAt: number; lastActivityAt: number;
   attempt: number; attemptStartedAt: number; steps: number;
   phase: 'generating' | 'retrying' | 'canceling' | 'stopped' | 'settled';
-  failures: ProductAttempt[]; settled: boolean;
+  failures: ProductAttempt[]; toolTrace: ToolTraceEntry[]; settled: boolean;
 }
+/** 不保存工具入参或输出正文的调用轨迹；仅用于判断是否出现重复调用。 */
+export interface ToolTraceEntry { step: number; toolName: string; inputHash: string; returned: boolean; newCallSignature: boolean }
 interface ActiveExecution { view: ExecutionObservation; controller: AbortController; requested: boolean }
 const observations = new Map<string, ActiveExecution>();
 
@@ -23,7 +25,7 @@ export function beginExecution(runId: string, role: string, nativeSignal?: Abort
   }
   if (observations.size >= 200) throw new Error('活动观察容量已满');
   const now = Date.now();
-  const entry: ActiveExecution = { controller: new AbortController(), requested: false, view: { token: randomUUID(), role, startedAt: now, lastActivityAt: now, attempt: 1, attemptStartedAt: now, steps: 0, phase: 'generating', failures: [], settled: false } };
+  const entry: ActiveExecution = { controller: new AbortController(), requested: false, view: { token: randomUUID(), role, startedAt: now, lastActivityAt: now, attempt: 1, attemptStartedAt: now, steps: 0, phase: 'generating', failures: [], toolTrace: [], settled: false } };
   observations.set(runId, entry);
   const signal = nativeSignal ? AbortSignal.any([nativeSignal, entry.controller.signal]) : entry.controller.signal;
   return {
@@ -32,8 +34,19 @@ export function beginExecution(runId: string, role: string, nativeSignal?: Abort
     check() { if (entry.requested) throw new DOMException('用户取消生成', 'AbortError'); signal.throwIfAborted(); },
     /** 只记录真实尝试开始，不以轮询伪造模型活动。 */
     attempt(attempt: number) { entry.view.attempt = attempt; entry.view.attemptStartedAt = Date.now(); entry.view.steps = 0; entry.view.lastActivityAt = Date.now(); if (!entry.requested) entry.view.phase = 'generating'; },
-    /** 记录实际模型步骤完成；不保存正文、工具参数或凭据。 */
-    activity() { entry.view.steps++; entry.view.lastActivityAt = Date.now(); },
+    /** 记录实际模型步骤和脱敏工具轨迹；签名重复仅表示调用重复，不判断业务证据是否充分。 */
+    activity(event?: unknown) {
+      entry.view.steps++; entry.view.lastActivityAt = Date.now();
+      const step = event as { toolCalls?: { payload?: { toolName?: unknown; args?: unknown; toolCallId?: unknown } }[]; toolResults?: { payload?: { toolCallId?: unknown } }[] } | undefined;
+      const returned = new Set((step?.toolResults ?? []).map(result => String(result.payload?.toolCallId ?? '')));
+      for (const call of step?.toolCalls ?? []) {
+        const payload = call.payload;
+        const toolName = typeof payload?.toolName === 'string' ? payload.toolName : 'unknown';
+        const inputHash = createHash('sha256').update(JSON.stringify(payload?.args ?? null)).digest('hex');
+        const newCallSignature = !entry.view.toolTrace.some(item => item.toolName === toolName && item.inputHash === inputHash);
+        if (entry.view.toolTrace.length < 80) entry.view.toolTrace.push({ step: entry.view.steps, toolName, inputHash, returned: returned.has(String(payload?.toolCallId ?? '')), newCallSignature });
+      }
+    },
     /** 失败采用既有脱敏契约，重试等待与生成明确区分。 */
     failure(detail: ProductAttempt, retry: boolean) { entry.view.failures.push(detail); entry.view.lastActivityAt = Date.now(); if (!entry.requested && retry) entry.view.phase = 'retrying'; },
     /** 只有实际调用退出才确认本地停止，不宣称上游计算或计费已停止。 */

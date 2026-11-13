@@ -114,6 +114,10 @@ test('可信制品：签名、代码、依赖、额外文件与live降级均严�
     const routed: PracticeConfig = { ...config, resourceTrust: { manifestPath: staleManifestPath, publicKeyPath, routes: { [resourceHash(manifest)]: { manifestPath, publicKeyPath } } } };
     assert.equal(verifyArtifact(routed, resourceHash(manifest)).digest, resourceHash(manifest), '冻结摘要应选择对应可信清单');
     assert.throws(/** 未登记的冻结摘要不能借默认清单继续。 */() => verifyArtifact(routed, 'f'.repeat(64)), /ARTIFACT_DRIFT/);
+    const historicalDigest = resourceHash(staleManifest);
+    const continued: PracticeConfig = { ...config, resourceTrust: { manifestPath, publicKeyPath, continuations: { [historicalDigest]: { manifestPath, publicKeyPath } } } };
+    assert.equal(verifyArtifact(continued, historicalDigest).digest, resourceHash(manifest), '部署配置可显式授权历史制品续接到当前签名制品');
+    assert.throws(/** 未在部署配置登记的历史制品不能续接。 */() => verifyArtifact(config, historicalDigest), /ARTIFACT_DRIFT/);
     assert.throws(/** live不可借fixture降级绕过独立签名。 */() => verifyArtifact({ ...config, resourceTrust: undefined }), /TRUST_REQUIRED/);
     for (const path of ['src/tool.ts', 'node_modules/dependency.js']) {
       const original = path.startsWith('src') ? 'export const schema = 1' : 'original';

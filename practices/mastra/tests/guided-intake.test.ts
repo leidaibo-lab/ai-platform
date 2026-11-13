@@ -14,6 +14,9 @@ import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { readIntake, respondIntake } from '../src/intake/service.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
 import { ContextBudgetError } from '../src/delivery/context-budget.js';
+import { createRoleInvocation } from '../src/resources/projections.js';
+import { loadRuntimeResourceConfig } from '../src/resources/resource-config.js';
+import { beginExecution, readExecution } from '../src/intake/execution-control.js';
 
 test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修订、产品批准与重复拒绝', /** 隔离 LibSQL 的主流程，证明 HTTP 所依赖的服务事实。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-intake-'));
@@ -99,18 +102,43 @@ test('需求 HTTP：同源、固定标识创建、坏答案与完整稿版本门
   } finally { void mastra; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-import { validateAnswers, planSchema } from '../src/intake/contracts.js';
+import { canFinalizePlan, validateAnswers, planSchema } from '../src/intake/contracts.js';
+import { CLARIFICATION_HANDOFF_CONVENTION } from '../src/intake/product-generation.js';
+
+test('需求梳理交接约定：使用有界生成并保留固定章节', /** 防止中间角色重新承担完整PRD写作导致无界调用。 */() => {
+  assert.deepEqual(CLARIFICATION_HANDOFF_CONVENTION.sections, ['已确认规则索引', '核心对象与关系', '状态与权限要点', '异常规则索引', '页面与验收待展开清单']);
+});
 
 test('澄清约束：坏表单、单多选、文本、重复问题与继续澄清', /** 纯边界断言避免用模型声明替代输入校验。 */() => {
   const plan = planSchema.parse({ summary: '方案', assumptions: [], questions: [{ id: 'a', title: '选择', reason: '影响范围', required: true, kind: 'single', options: [{ id: 'x', label: 'X' }, { id: 'y', label: 'Y' }], recommendation: 'X' }] });
   const intake = { enabled: true, ready: false, round: 4, plan, hash: 'a'.repeat(64), history: [] };
   const response = { hash: intake.hash, action: 'finalize', reviewer: 'test', answers: [{ questionId: 'a', selected: ['x'], custom: '' }], supplement: '' };
   assert.equal(validateAnswers(intake, response).action, 'finalize');
+  assert.equal(canFinalizePlan({ ...plan, questions: [], maturity: { decisions: { clear: true, evidence: '已确认' }, mainFlow: { clear: true, evidence: '已确认' }, exceptions: { clear: false, evidence: '留给正式产品稿组合验收' }, delivery: { clear: false, evidence: '留给正式产品稿整理' } } }), true, '没有必答业务缺口时应允许进入正式稿，而非困在澄清循环');
   for (const answers of [[], [{ questionId: 'unknown', selected: ['x'], custom: '' }], [{ questionId: 'a', selected: ['x', 'y'], custom: '' }], [{ questionId: 'a', selected: ['bad'], custom: '' }], [response.answers[0], response.answers[0]]]) assert.throws(/** 非法答案不得被当作业务确认。 */() => validateAnswers(intake, { ...response, answers }));
   assert.equal(validateAnswers(intake, { ...response, action: 'refine' }).action, 'refine');
   assert.throws(/** 每轮仍然最多八题。 */() => planSchema.parse({ ...plan, questions: Array.from({ length: 9 }, /** 为每题提供独立标识。 */(_, index) => ({ ...plan.questions[0], id: String(index) })) }));
   assert.throws(/** 同一表单不能生成重复问题标识。 */() => planSchema.parse({ ...plan, questions: [plan.questions[0], plan.questions[0]] }));
 });
+
+test('产品闭环交接：接受上游长正文但不放宽开发短文本字段', /** 防止产品角色在模型调用前因错误复用任务标签限制而失败。 */() => {
+  const config = loadRuntimeResourceConfig('/nonexistent');
+  const resources = { roles: {}, sourceSnapshotHash: 'a'.repeat(64) } as never;
+  const content = '总产品统筹正文'.repeat(200);
+  const invocation = createRoleInvocation({ runId: 'test', roleId: 'product-closure', bundleHash: 'b'.repeat(64), inputContract: 'product-closure.input.v1', payload: { brief: 'HRM', sourceRefs: [], clarification: { id: 'clarification', hash: 'c'.repeat(64), content: '固定交接' }, coordinationDecisions: [content], reworkFeedback: null }, resources, config });
+  assert.equal((invocation.payload.coordinationDecisions as string[])[0], content);
+});
+
+test('工具轨迹观察：仅保存散列并标记重复调用', /** 观察循环不读取或回传工具入参、结果正文和任何凭据。 */() => {
+  const runId = randomUUID(); const observation = beginExecution(runId, 'closure');
+  const event = { toolCalls: [{ payload: { toolName: 'skill_read', args: { skillName: 'product-pm-test-scenarios' }, toolCallId: 'call-1' } }], toolResults: [{ payload: { toolCallId: 'call-1' } }] };
+  observation.activity(event); observation.activity(event);
+  const trace = readExecution(runId)!.toolTrace;
+  assert.equal(trace.length, 2); assert.equal(trace[0]!.returned, true); assert.equal(trace[0]!.newCallSignature, true); assert.equal(trace[1]!.newCallSignature, false);
+  assert.doesNotMatch(JSON.stringify(trace), /product-pm-test-scenarios/);
+  observation.finish();
+});
+
 
 for (const scenario of ['success', 'rollback']) test(`业务前端接口连续推进：${scenario}，非法输入保留暂停点`, /** 合成项目通过 HTTP handler 串联真实检查与人工回执。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-all-gates-'));

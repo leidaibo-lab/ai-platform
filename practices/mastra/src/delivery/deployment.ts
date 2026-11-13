@@ -11,7 +11,7 @@ import type { createExecutionScope } from '../development/v2/execution-scope.js'
 import { validateIdentityV2 } from '../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
 import { assertCandidate } from './testing.js';
-import { lifecycleSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema, releaseHash, qualityHash, type Lifecycle } from './contracts.js';
+import { lifecycleSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema, pullRequestReceiptSchema, releaseHash, qualityHash, type Lifecycle } from './contracts.js';
 import { withRepositoryAssets } from './repository-assets.js';
 import { createInvocationEvidence, createRoleInvocation } from '../resources/projections.js';
 import { currentResources } from '../resources/scope.js';
@@ -30,7 +30,7 @@ export function createDeploymentWorkflow(agents: ReturnType<typeof createAgents>
   /** 恢复暂停节点后重新检查模型身份、测试版本与实际候选。 */
   async function guard(state: Lifecycle): Promise<void> {
     assertReleaseInput(state);
-    if (config.mode === 'live' && (!state.codePublication || state.codePublication.sourceHash !== state.development.checkpointHash || state.codePublication.qualityHash !== state.quality.reportHash)) throw new Error('发布缺少同版本业务源码远端提交回执');
+    if (config.mode === 'live' && (!state.codePublication || state.codePublication.sourceHash !== state.development.checkpointHash || state.codePublication.qualityHash !== state.quality.reportHash)) throw new Error('发布缺少同版本候选源码与质量绑定回执');
     validateIdentityV2(state.development, config, methods.hash);
     await assertCandidate(state, scope.port);
   }
@@ -142,7 +142,20 @@ export function createDeploymentWorkflow(agents: ReturnType<typeof createAgents>
       return { ...state, release: { ...state.release, rollback: receipt, rollbackEvidence }, outcome: receipt.status === 'rolled-back' ? 'rolled-back' as const : 'manual-attention' as const };
     },
   });
-  const cycle = createWorkflow({ id: 'deployment-and-rollback-cycle', description: '发布授权 → 外部执行回执 → 健康确认 → 失败回滚', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).then(withRepositoryAssets(scope.bind(prepare), config)).then(withRepositoryAssets(scope.bind(approve), config)).then(withRepositoryAssets(scope.bind(execute), config)).then(withRepositoryAssets(scope.bind(health), config)).then(withRepositoryAssets(rollback, config)).commit();
+  const merge = createStep({ id: 'confirm-pull-request-merge', description: '发布健康通过后等待人工创建、审批并合并Run分支PR', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema, suspendSchema: z.object({ sourceBranch: z.string(), sourceCommit: z.string(), targetBranch: z.literal('main'), instruction: z.string() }), resumeSchema: pullRequestReceiptSchema,
+    /** GitHub/CI平台是外部权限边界；只收集绑定回执，不使用凭据创建或合并PR。 */
+    execute: async ({ inputData: state, resumeData, suspend }) => {
+      if (state.outcome !== 'delivery-confirmed') return state;
+      if (config.mode === 'fixture') return state;
+      const publication = state.codePublication;
+      if (!publication || !state.release.health?.checks.every(check => check.status === 'passed')) throw new Error('PR合并缺少同版本源码或健康证据');
+      if (!resumeData) return suspend({ sourceBranch: publication.receipt.branch, sourceCommit: publication.receipt.commit, targetBranch: 'main', instruction: '在外部Git平台创建并审批从Run分支到main的PR；只回填已合并回执。此节点不持有凭据、不创建PR也不合并main。' });
+      const receipt = pullRequestReceiptSchema.parse(resumeData);
+      if (receipt.status !== 'merged' || receipt.sourceBranch !== publication.receipt.branch || receipt.sourceCommit !== publication.receipt.commit) throw new Error('PR合并回执与已发布候选版本不匹配');
+      return { ...state, release: { ...state.release, pullRequest: receipt } };
+    },
+  });
+  const cycle = createWorkflow({ id: 'deployment-and-rollback-cycle', description: '发布授权 → 外部执行回执 → 健康确认 → PR人工合并或失败回滚', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).then(withRepositoryAssets(scope.bind(prepare), config)).then(withRepositoryAssets(scope.bind(approve), config)).then(withRepositoryAssets(scope.bind(execute), config)).then(withRepositoryAssets(scope.bind(health), config)).then(withRepositoryAssets(scope.bind(merge), config)).then(withRepositoryAssets(rollback, config)).commit();
   return createWorkflow({ id: 'deployment', description: '部署：方案、发布审批、外部执行、健康检查与回滚', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).dountil(cycle,
     // 发布成功、回滚或需要人工处理时退出，不伪造生产成功状态。
     async ({ inputData }) => inputData.outcome !== 'in-progress',

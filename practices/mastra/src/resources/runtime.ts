@@ -43,7 +43,9 @@ export async function loadResources(storage: MastraCompositeStore, config: Pract
   if (!parsed.success || parsed.data.runId !== runId) throw new ResourceError('BINDING_MISSING');
   const binding = parsed.data;
   if (binding.mode !== config.mode || binding.endpointHash !== endpointHash(config.baseUrl)) throw new ResourceError('TRANSPORT_DRIFT');
-  if (resourceHash(binding.artifact) !== resourceHash(verifyArtifact(config, binding.artifact.digest))) throw new ResourceError('ARTIFACT_DRIFT');
+  const verifiedArtifact = verifyArtifact(config, binding.artifact.digest);
+  // 显式续接仍保持原绑定的签名者与保障级别；只允许部署配置预先批准的当前签名制品摘要发生变化。
+  if (verifiedArtifact.assurance !== binding.artifact.assurance || verifiedArtifact.signer !== binding.artifact.signer) throw new ResourceError('ARTIFACT_DRIFT');
   verifySourceSnapshot(config, runId, binding.sourceSnapshotHash);
   const runtimeConfig = frozenRuntimeResourceConfig(binding.runtimeConfig);
   if (binding.configHash !== runtimeConfigHash(runtimeConfig)) throw new ResourceError('FROZEN_BUNDLE_MISMATCH');

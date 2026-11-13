@@ -35,9 +35,9 @@ export const answerSchema = z.object({ questionId: text, selected: z.array(text)
 export const responseSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), action: z.enum(['refine', 'finalize']), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(8), supplement: z.string().trim().max(4000) });
 export const intakeSchema = z.object({ enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })) });
 export type Intake = z.infer<typeof intakeSchema>;
-/** 最新分析各业务维度均明确且没有必答缺口时，才允许请求结束澄清。 */
+/** 显式结束澄清只要求没有未回答的业务必答题；交付整理成熟度应由后续正式产品稿检查，不能反向制造澄清死循环。 */
 export function canFinalizePlan(plan: z.infer<typeof planSchema>): boolean {
-  return !!plan.maturity && Object.values(plan.maturity).every(/** 每个维度均需有判断。 */item => item.clear) && !plan.questions.some(/** 必答问题仍然表示关键缺口。 */question => question.required);
+  return !plan.questions.some(/** 必答问题仍然表示关键业务缺口。 */question => question.required);
 }
 /** 散列绑定原始需求、轮次、建议与历史，避免旧卡片答案用于新方案。 */
 export function intakeHash(brief: string, intake: Intake): string {

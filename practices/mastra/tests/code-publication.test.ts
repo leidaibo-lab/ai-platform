@@ -73,16 +73,14 @@ test('通过质量门的源码真实提交到远端、检出可运行，并隔�
   } finally { await f.engine.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });
 
-test('拒绝质量缺失、检查失败、候选漂移及批准后任务变更', /** 不合格输入不能产生远端提交。 */async () => {
+test('候选提交拒绝自检失败、候选漂移及批准后任务变更，质量不再是提交前置条件', /** 测试后质量回执另行绑定同一commit。 */async () => {
   const f = await fixture();
   try {
     for (const change of [
       /** 修改批准后的任务不能继续借旧批准推代码。 */
       (s: Lifecycle) => { s.development.plan!.tasks[0].paths = ['checks.mjs']; },
-      /** 自报通过不能覆盖失败的进程事实。 */
-      (s: Lifecycle) => { s.quality.checks[0].exitCode = 1; s.quality.reportHash = qualityHash(s); },
-      /** 旧质量记录不能配新源码。 */
-      (s: Lifecycle) => { s.quality.sourceHash = '0'.repeat(64); },
+      /** 自检失败不能由后续质量记录掩盖。 */
+      (s: Lifecycle) => { s.development.checks[0].exitCode = 1; },
     ]) { const state = structuredClone(f.state); change(state); await assert.rejects(publishQualifiedCode(state, f.engine, f.root)); }
     await f.engine.writeFile('src/solution.mjs', 'export const drift=1;');
     await assert.rejects(publishQualifiedCode(f.state, f.engine, f.root), /漂移/);
@@ -130,16 +128,16 @@ test('原生暂停、关闭Store后重试同一源码提交，并在Store保存�
     const hook = join(f.remote, 'hooks/pre-receive'); writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
     let { workflow } = await open(); let run = await workflow.createRun(); const runId = run.runId;
     const failed = await run.start({ inputData: f.state }); assert.equal(failed.status, 'suspended');
-    const payload = (failed as any).steps['publish-tested-code'].suspendPayload;
+    const payload = (failed as any).steps['publish-candidate-code'].suspendPayload;
     const commit = f.git(['for-each-ref', '--format=%(objectname)', 'refs/workflow-handoffs/']); assert.ok(commit);
     await storage!.close(); rmSync(hook);
     ({ workflow } = await open()); run = await workflow.createRun({ runId });
-    const success = await run.resume({ step: 'publish-tested-code', resumeData: { repositoryRetry: payload.retryKey } });
+    const success = await run.resume({ step: 'publish-candidate-code', resumeData: { repositoryRetry: payload.retryKey } });
     assert.equal(success.status, 'success');
     const result = (success as any).result;
     assert.equal(result.codePublication.receipt.commit, commit);
     assert.equal(result.codePublication.sourceHash, f.state.development.checkpointHash);
-    assert.equal(result.codePublication.qualityHash, f.state.quality.reportHash);
+    assert.equal(result.codePublication.qualityHash, null);
     assert.match(f.git(['ls-remote', 'origin', `refs/heads/${result.codePublication.receipt.branch}`]), new RegExp(`^${commit}`));
   } finally { await storage?.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });

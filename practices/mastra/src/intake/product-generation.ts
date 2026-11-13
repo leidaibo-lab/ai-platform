@@ -10,7 +10,11 @@ import { ContextBudgetError } from '../delivery/context-budget.js';
 import { ProductGenerationFailure, canRetryProductAttempt, classifyProductError, isPlanOnlyProductOutput, safeFinishReason } from './product-failure.js';
 import type { ProductAttempt, ProductFailureKind } from '../delivery/product-generation-contract.js';
 export const WRITING_MODEL_SETTINGS = { maxRetries: 0, maxOutputTokens: 16000, timeout: { totalMs: 1800000, stepMs: 600000 } } as const;
-/** 四角色统一验证原生结束事实；只读临时故障最多两次，单节点共享30分钟截止时间。 */
+/** 需求梳理的简短固定交接约定：只将可追溯规则移交给后续闭环与写作，不重复生成完整PRD。 */
+export const CLARIFICATION_HANDOFF_CONVENTION = {
+  sections: ['已确认规则索引', '核心对象与关系', '状态与权限要点', '异常规则索引', '页面与验收待展开清单'],
+} as const;
+/** 四角色统一验证原生结束事实；只读临时故障最多两次，单节点共享一小时截止时间。 */
 export async function generateProductContent(agent: ReturnType<typeof createAgents>['productAgent'], prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, execution?: { runId: string; abortSignal: AbortSignal }) {
   const observation = execution ? beginExecution(execution.runId, role, execution.abortSignal) : undefined;
   const signal = observation?.signal ?? execution?.abortSignal;
@@ -32,7 +36,8 @@ export async function generateProductContent(agent: ReturnType<typeof createAgen
         const defaults = await agent.getDefaultOptions?.();
         const options = { ...context.options, abortSignal: signal,
           // 步骤完成才更新最近活动，不把轮询当作模型心跳。
-          onStepFinish: async (event: Parameters<NonNullable<Awaited<ReturnType<typeof agent.getDefaultOptions>>['onStepFinish']>>[0]) => { observation?.activity(); await defaults?.onStepFinish?.(event); }, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
+          onStepFinish: async (event: Parameters<NonNullable<Awaited<ReturnType<typeof agent.getDefaultOptions>>['onStepFinish']>>[0]) => { observation?.activity(event); await defaults?.onStepFinish?.(event); }, maxSteps: PRODUCT_MAX_STEPS,
+          modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
         const result = role === 'writing' && mode === 'live'
           ? await (await agent.stream(context.prompt, options)).getFullOutput()
           : await agent.generate(context.prompt, options);

@@ -48,10 +48,8 @@ function codePath(path: string): boolean {
 
 /** 复用 Git 发布链写入实际源码；完整候选与质量版本进入幂等身份。 */
 export async function publishCodeHandoff(root: string, runId: string, input: CodeHandoffInput): Promise<RemoteHandoff> {
-  if (!/^[a-f0-9]{40,64}$/.test(input.baselineCommit) || ![input.sourceHash, input.qualityHash].every(
-    /** 散列不能被插入 Git 表达式或归档路径。 */
-    hash => /^[a-f0-9]{64}$/.test(hash),
-  )) throw new Error('非法源码交付版本');
+  if (!/^[a-f0-9]{40,64}$/.test(input.baselineCommit) || !/^[a-f0-9]{64}$/.test(input.sourceHash) || !(/^[a-f0-9]{64}$/.test(input.qualityHash) || input.qualityHash === 'candidate'))
+    throw new Error('非法源码交付版本');
   const baseline = treeFiles(root, input.baselineCommit);
   const files: Record<string, string> = {};
   const candidateHashes: Record<string, string> = {};
@@ -69,8 +67,8 @@ export async function publishCodeHandoff(root: string, runId: string, input: Cod
   }
   for (const path of Object.keys(input.baselineFiles)) if (!Object.hasOwn(input.candidateFiles, path)) throw new Error('源码交付不支持删除文件');
   if (!Object.keys(input.candidateFiles).length) throw new Error('源码候选为空');
-  const evidencePath = `product/runs/${runId}/code/${input.sourceHash}/${input.qualityHash}.json`;
-  files[evidencePath] = JSON.stringify({ version: 'code-publication.v1', baselineCommit: input.baselineCommit, sourceHash: input.sourceHash, qualityHash: input.qualityHash, files: candidateHashes }, null, 2) + '\n';
+  const evidencePath = `product/runs/${runId}/code/${input.sourceHash}/${input.qualityHash === 'candidate' ? 'candidate' : `quality-${input.qualityHash}`}.json`;
+  files[evidencePath] = JSON.stringify({ version: 'code-publication.v2', status: input.qualityHash === 'candidate' ? 'candidate' : 'quality-attested', baselineCommit: input.baselineCommit, sourceHash: input.sourceHash, qualityHash: input.qualityHash === 'candidate' ? null : input.qualityHash, files: candidateHashes }, null, 2) + '\n';
   return publishFiles(root, runId, files, input);
 }
 

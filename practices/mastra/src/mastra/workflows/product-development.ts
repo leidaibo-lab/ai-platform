@@ -150,10 +150,10 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       if (!state.bundleHash || !state.quality.plan?.invocation || !state.release.plan?.invocation) throw new Error('最终交付缺少角色严格调用证据');
       assertInvocationEvidence(state.quality.plan.invocation, state.bundleHash, 'test-plan.output.v1');
       assertInvocationEvidence(state.release.plan.invocation, state.bundleHash, 'release-plan.output.v1');
-      if (state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || state.quality.reportHash !== qualityHash(state) || state.release.qualityHash !== state.quality.reportHash || state.release.hash !== releaseHash(state) || state.release.receipt?.status !== 'succeeded' || state.release.receipt.releaseHash !== state.release.hash || state.release.receipt.sourceHash !== state.development.checkpointHash || state.release.health?.releaseHash !== state.release.hash || state.release.health.deploymentReceiptHash !== developmentHash(state.release.receipt) || !state.release.health.checks.length || !state.release.health.checks.every(
+      if (state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || state.quality.reportHash !== qualityHash(state) || (config.mode === 'live' && state.codePublication?.qualityHash !== state.quality.reportHash) || state.release.qualityHash !== state.quality.reportHash || state.release.hash !== releaseHash(state) || state.release.receipt?.status !== 'succeeded' || state.release.receipt.releaseHash !== state.release.hash || state.release.receipt.sourceHash !== state.development.checkpointHash || state.release.health?.releaseHash !== state.release.hash || state.release.health.deploymentReceiptHash !== developmentHash(state.release.receipt) || !state.release.health.checks.length || !state.release.health.checks.every(
         // 只有批准的发布后检查全部有成功回执才形成成功终态。
         (check) => check.status === 'passed',
-      )) throw new Error('最终交付缺少同版本质量、发布或健康证据');
+      ) || (config.mode === 'live' && (state.release.pullRequest?.status !== 'merged' || state.release.pullRequest.sourceCommit !== state.codePublication?.receipt.commit))) throw new Error('最终交付缺少同版本质量、发布、健康或PR合并证据');
       return { ...state, outcome: config.mode === 'fixture' ? 'fixture-completed' as const : 'delivery-confirmed' as const };
     },
   });
@@ -166,5 +166,14 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     )).then(withRepositoryAssets(review, config)).then(withRepositoryAssets(scope, config)).then(development);
   // 旧图选项仅用于持久化迁移回归，正式入口始终接通澄清。
   const ready = options.legacyBlocked ? main : main.then(openClarification).branch([[/** 只有尚未实施的业务阻塞进入产品澄清循环。 */async ({ inputData }) => inputData.development.outcome === 'clarification-required' && inputData.development.completedTasks.length === 0, clarification]]).map(/** 未阻塞时不调用产品模型，直接继续现有交付。 */async ({ inputData, getStepResult }) => inputData['resolve-development-blockers']?.development ?? getStepResult(openClarification).development, { id: 'continue-after-clarification' });
-  return guardResourceWorkflow(ready.then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, execution, generate)).then(execution.bind(createCodePublicationStep(config, execution.port))).then(createDeploymentWorkflow(agents, config, execution)).then(withRepositoryAssets(execution.bind(finish), config)).commit(), config);
+  const publishCandidate = execution.bind(createCodePublicationStep(config, execution.port));
+  const attestQuality = createStep({ id: 'attest-tested-code', description: '将独立测试质量回执绑定已提交候选源码', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema,
+    /** 质量确认不再重写源码；只把不可变候选commit与本轮质量散列关联。 */
+    execute: async ({ inputData: state }) => {
+      if (state.outcome !== 'in-progress' || !state.codePublication) return state;
+      if (state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || state.quality.reportHash !== qualityHash(state) || state.codePublication.sourceHash !== state.development.checkpointHash) throw new Error('候选源码缺少同版本独立测试通过证据');
+      return { ...state, codePublication: { ...state.codePublication, status: 'quality-attested' as const, qualityHash: state.quality.reportHash } };
+    },
+  });
+  return guardResourceWorkflow(ready.then(withRepositoryAssets(lifecycle, config)).then(withRepositoryAssets(publishCandidate, config)).then(createTestingWorkflow(agents, config, execution, generate)).then(withRepositoryAssets(attestQuality, config)).then(createDeploymentWorkflow(agents, config, execution)).then(withRepositoryAssets(execution.bind(finish), config)).commit(), config);
 }

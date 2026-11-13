@@ -6,6 +6,7 @@ import { blockerCycleSchema, developmentBlockers } from './blocker-contracts.js'
 import { executionResolver } from '../mastra/workflows/product-development.js';
 import type { PracticeConfig } from '../mastra/config.js';
 import { stateV2Schema } from '../development/v2/contracts.js';
+import { lifecycleSchema } from '../delivery/contracts.js';
 import { developmentHash } from '../development/contracts.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
 import { validateIdentityV2 } from '../development/v2/gates.js';
@@ -53,6 +54,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const observed = readExecution(runId);
   const retry = observed?.phase === 'canceling' || observed?.phase === 'stopped' ? undefined : describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
   const development = stateV2Schema.safeParse((snapshot.result as { development?: unknown } | undefined)?.development);
+  const lifecycle = lifecycleSchema.safeParse(snapshot.result);
   const frozen = initial && !Array.isArray(initial) ? frozenResourcesSchema.safeParse((snapshot.steps?.['freeze-role-resources'] as any)?.output?.resources) : undefined;
   const binding = currentResources()?.binding ?? (frozen?.success ? frozen.data : undefined);
   const agentRun = development.success && binding ? projectAgentRun({ runId, bundleHash: binding.bundleHash, state: development.data }) : undefined;
@@ -61,7 +63,8 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const blockage = development.success && (development.data.outcome === 'clarification-required' || preparationRequired && development.data.outcome === 'manual-attention') && development.data.plan && blockers.length ? { phase: '技术方案生成', title: '技术方案已生成，开工条件未齐', summary: development.data.plan.summary, blockers, taskCount: development.data.plan.tasks.length, productContent: development.data.input.source.content, preparationRequired } : undefined;
   const clarify = snapshot.status === 'success' && blockage && !preparationRequired && development.success && development.data.completedTasks.length === 0 && !development.data.approvedHash ? { hash: developmentHash({ runId, development: development.data, outcome: (snapshot.result as any).outcome }), title: '补齐业务选择并修订产品稿' } : undefined;
   const reconfigure = snapshot.status === 'success' && blockage && preparationRequired && development.success && !development.data.completedTasks.length && !development.data.approvedHash && !development.data.delivery ? { hash: developmentHash({ runId, development: development.data, action: 'reconfirm-project' }) } : undefined;
-  return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, agentRun, humanGate, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  const delivery = lifecycle.success ? { branch: lifecycle.data.codePublication?.receipt.branch, candidateCommit: lifecycle.data.codePublication?.receipt.commit, candidateStatus: lifecycle.data.codePublication?.status, qualityHash: lifecycle.data.codePublication?.qualityHash, releaseHash: lifecycle.data.release.hash, releaseStatus: lifecycle.data.release.receipt?.status, healthPassed: lifecycle.data.release.health?.checks.every(check => check.status === 'passed'), pullRequest: lifecycle.data.release.pullRequest } : undefined;
+  return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, agentRun, humanGate, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, delivery, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig): Promise<Awaited<ReturnType<typeof readIntake>>> {
@@ -136,6 +139,11 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
       try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('澄清期间源码检查点已变化'); } finally { await execution.close(); }
     }
     const run = await workflow.createRun({ runId });
+    if ('kind' in current.retry && current.retry.kind === 'requirements-analysis') {
+      // 需求分析没有副作用，原 Run 的确认历史已在输入快照中；仅回放失败分析节点。
+      await run.timeTravel({ step: current.retry.step.split('.') });
+      return readIntake(workflow, runId);
+    }
     // 从原生循环容器恢复，但输入是已保存的architecture状态；不依赖本轮未选中的前序分支，也不重做context。
     await run.timeTravel({ step: current.retry.step.split('.'), ...(checkpointInput ? { inputData: checkpointInput } : {}) });
     return readIntake(workflow, runId);

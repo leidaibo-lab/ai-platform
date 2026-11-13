@@ -9,6 +9,8 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const text = z.string().trim().min(1).max(100000);
 const identifier = z.string().trim().min(1).max(200);
 const stringList = z.array(z.string().trim().min(1).max(1000)).max(300);
+// 产品角色传递的是已保存的上游正文，不适用开发任务标签的千字短文本限制。
+const productDecisionList = z.array(text).max(4);
 const contentRefSchema = z.object({ id: identifier, hash, content: text }).strict();
 const hashRefSchema = z.object({ id: identifier, hash }).strict();
 const requirementSchema = z.object({ id: identifier, text, hash }).strict();
@@ -20,8 +22,8 @@ const findingSchema = z.object({ id: identifier, category: identifier, route: id
 export const roleInputSchemas = {
   'product-coordinator': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), intakeReady: z.boolean(), priorEntries: z.array(contentRefSchema).max(4), reworkFeedback: text.nullable() }).strict(),
   'product-clarification': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), coordination: contentRefSchema, priorEntries: z.array(contentRefSchema).max(4), reworkFeedback: text.nullable() }).strict(),
-  'product-closure': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), clarification: contentRefSchema, coordinationDecisions: stringList, reworkFeedback: text.nullable() }).strict(),
-  'product-writing': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), clarification: contentRefSchema, closure: contentRefSchema, coordinationDecisions: stringList, reworkFeedback: text.nullable() }).strict(),
+  'product-closure': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), clarification: contentRefSchema, coordinationDecisions: productDecisionList, reworkFeedback: text.nullable() }).strict(),
+  'product-writing': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), clarification: contentRefSchema, closure: contentRefSchema, coordinationDecisions: productDecisionList, reworkFeedback: text.nullable() }).strict(),
   context: z.object({ approvedProduct: contentRefSchema, requirements: z.array(requirementSchema).max(300), projectScope: z.object({ id: identifier, files: z.array(fileSchema).max(300), writablePaths: stringList, checkFiles: stringList, roles: z.array(z.enum(['frontend', 'backend', 'infrastructure'])).max(3) }).strict(), fileManifest: z.array(hashRefSchema).max(300) }).strict(),
   architect: z.object({ approvedProduct: contentRefSchema, requirements: z.array(requirementSchema).max(300), context: z.array(contentRefSchema).max(300), projectScope: z.object({ id: identifier, writablePaths: stringList, checkFiles: stringList, roles: z.array(z.enum(['frontend', 'backend', 'infrastructure'])).max(3) }).strict(), referenceGroups: z.object({ requirements: stringList, contextFiles: stringList, registeredChecks: stringList }).strict(), priorBlockingFindings: z.array(findingSchema).max(30) }).strict(),
   readiness: z.object({ approvedProduct: contentRefSchema, requirements: z.array(requirementSchema).max(300), context: z.array(contentRefSchema).max(300), plan: z.object({ hash, summary: text, tasks: z.array(taskSchema).max(30) }).strict(), taskPackages: z.array(taskSchema).max(30), referenceGroups: z.object({ requirements: stringList, contextFiles: stringList, registeredChecks: stringList }).strict() }).strict(),

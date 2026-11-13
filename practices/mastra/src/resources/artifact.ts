@@ -44,7 +44,14 @@ export function verifyArtifact(config: PracticeConfig, expectedDigest?: string) 
     const actual = captureArtifact(config.rootDir, true);
     if (resourceHash(actual) !== resourceHash(document.manifest)) throw new ResourceError('ARTIFACT_DRIFT');
     const digest = resourceHash(actual);
-    if (expectedDigest && digest !== expectedDigest) throw new ResourceError('ARTIFACT_DRIFT');
+    if (expectedDigest && digest !== expectedDigest) {
+      // 历史 Run 只能使用部署配置显式登记的续接制品继续；Run、浏览器与数据库均不能自行授权代码漂移。
+      const continuation = config.resourceTrust?.continuations?.[expectedDigest];
+      if (!continuation) throw new ResourceError('ARTIFACT_DRIFT');
+      const continuationDocument = z.object({ manifest: artifactManifestSchema, signature: z.string() }).strict().parse(JSON.parse(readFileSync(continuation.manifestPath, 'utf8')));
+      const continuationKey = createPublicKey(readFileSync(continuation.publicKeyPath));
+      if (continuationKey.asymmetricKeyType !== 'ed25519' || !verify(null, Buffer.from(canonical(continuationDocument.manifest)), continuationKey, Buffer.from(continuationDocument.signature, 'base64')) || resourceHash(continuationDocument.manifest) !== digest) throw new ResourceError('ARTIFACT_DRIFT');
+    }
     return { digest, assurance: 'signed' as const, signer: bytesHash(key.export({ type: 'spki', format: 'der' })) };
   } catch (error) { if (error instanceof ResourceError) throw error; throw new ResourceError('ARTIFACT_INVALID'); }
 }
