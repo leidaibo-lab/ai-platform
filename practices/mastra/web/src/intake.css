@@ -94,6 +94,25 @@
   gap:12px;
   margin-top:25px}
 .intake-context{padding:6px 4px 25px}
+.diagnostic-trace{border-color:#b8d2c8;background:#fbfefd}
+.diagnostic-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.diagnostic-heading h2{margin-bottom:0}
+.diagnostic-list{display:grid;gap:14px;margin-top:20px}
+.diagnostic-item{display:grid;grid-template-columns:94px minmax(0,1fr);gap:14px;padding:15px 0;border-top:1px solid #e3ece8}
+.diagnostic-status{display:flex;align-items:flex-start;gap:7px;color:#667772;font-size:12px;line-height:1.6}
+.diagnostic-dot{width:8px;height:8px;margin-top:5px;border-radius:50%;background:#9aa8a3;box-shadow:0 0 0 3px #edf1ef}
+.diagnostic-completed .diagnostic-dot{background:#2d8a70;box-shadow:0 0 0 3px #dcefe7}.diagnostic-running .diagnostic-dot{background:#2f78b7;box-shadow:0 0 0 3px #e0effa}.diagnostic-waiting .diagnostic-dot{background:#b27a26;box-shadow:0 0 0 3px #f7ecd8}.diagnostic-failed .diagnostic-dot{background:#bf4b4b;box-shadow:0 0 0 3px #fae4e4}
+.diagnostic-title{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.diagnostic-title strong{color:#205b4d;font-size:15px}.diagnostic-title span{color:#718079;font-size:12px}.diagnostic-body p{margin:5px 0 8px;font-size:13px}.diagnostic-body details{margin-top:8px;font-size:12px;color:#52645f}.diagnostic-body ul{margin:8px 0 0;padding-left:20px}.diagnostic-body li{line-height:1.7}.diagnostic-tools{display:grid;gap:6px;margin-top:9px}.diagnostic-tool{display:grid;grid-template-columns:minmax(120px,.6fr) minmax(130px,1fr) auto;gap:8px;align-items:center;padding:8px 10px;background:#f5f9f7;border:1px solid #e1ebe6;border-radius:7px}.diagnostic-tool span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#718079;font-family:ui-monospace,monospace;font-size:11px}.diagnostic-tool em{color:#276b5b;font-style:normal;font-size:11px}.diagnostic-next{margin-top:10px;padding:9px 11px;background:#f3f7f5;border-radius:7px;color:#48645b;font-size:12px;line-height:1.6}.diagnostic-next span{margin-right:8px;color:#205b4d;font-weight:700}
+@media(max-width:600px){.diagnostic-item{grid-template-columns:1fr;gap:5px}.diagnostic-tool{grid-template-columns:1fr}.diagnostic-tool span{white-space:normal}}
+.inline-decision-card{display:flex;align-items:center;gap:18px;margin:0 0 24px;padding:18px 20px;background:linear-gradient(110deg,#f0f8f4,#fff);border:1px solid #9fc6b7;border-radius:14px;box-shadow:0 6px 18px #173d3a0b}
+.inline-decision-marker{display:flex;align-items:center;gap:7px;flex:0 0 auto;color:#276b5b;font-size:12px;font-weight:700;white-space:nowrap}
+.inline-decision-marker span{width:8px;height:8px;border-radius:50%;background:#2d8a70;box-shadow:0 0 0 4px #dcefe7}
+.inline-decision-content{min-width:0;flex:1}
+.inline-decision-content strong{display:block;color:#173d3a;font-size:16px;line-height:1.5}
+.inline-decision-content p{margin:4px 0;color:#4e625d;font-size:13px;line-height:1.6}
+.inline-decision-content small{color:#718079;font-size:11px}
+.inline-decision-card button{flex:0 0 auto;white-space:nowrap}
+@media(max-width:600px){.inline-decision-card{align-items:flex-start;flex-direction:column;gap:10px;padding:16px}.inline-decision-card button{width:100%}}
 .intake-context small{color:#667772}
 .intake-context p{line-height:1.6}
 .intake-context code,.intake-card code{font-size:11px;

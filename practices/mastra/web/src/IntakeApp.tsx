@@ -10,8 +10,9 @@ import { RemoteSyncSettings } from './RemoteSyncSettings';
 import { RepositoryManagement } from './RepositoryManagement';
 import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
 import { RoleWorkbench } from './RoleWorkbench';
+import { DiagnosticTrace } from './DiagnosticTrace';
 import './intake.css';
-interface Document { execution?: ExecutionView; executionSettings?: ExecutionSettings; developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; delivery?: { branch?: string; candidateCommit?: string; candidateStatus?: 'candidate' | 'quality-attested'; qualityHash?: string | null; releaseHash?: string | null; releaseStatus?: string; healthPassed?: boolean; pullRequest?: { url: string; status: string; mergeCommit: string; targetBranchHead: string; approvedBy: string } | null }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+interface Document { diagnostics?: { enabled: boolean; items: { id: string; status: 'completed' | 'running' | 'waiting' | 'failed'; phase: string; role: string; summary: string; evidence: string[]; nextAction?: string; tools?: { name: string; inputHash?: string; returned?: boolean; repeated?: boolean }[] }[] }; execution?: ExecutionView; executionSettings?: ExecutionSettings; developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; delivery?: { branch?: string; candidateCommit?: string; candidateStatus?: 'candidate' | 'quality-attested'; qualityHash?: string | null; releaseHash?: string | null; releaseStatus?: string; healthPassed?: boolean; pullRequest?: { url: string; status: string; mergeCommit: string; targetBranchHead: string; approvedBy: string } | null }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
 /** 从实际关口映射业务阶段，避免进入开发后仍高亮需求输入。 */
 function intakeStage(document?: Document): number {
   if (document?.progress?.phase === '产品稿修订') return 1;
@@ -22,6 +23,31 @@ function intakeStage(document?: Document): number {
   if (document?.gate) return ['confirm-project-scope', 'approve-architecture', 'resolve-readiness', 'resolve-findings', 'recover-development'].includes(document.gate.key) ? 2 : 3;
   return document?.outcome ? 3 : 0;
 }
+
+/** 将人工关口以内嵌节点卡呈现在主流程中，处理动作仍由下方原生表单提交。 */
+function InlineDecisionCard({ document, questions, answers, busy, onOpen }: { document?: Document; questions: Question[]; answers: Record<string, Answer>; busy: boolean; onOpen: () => void }) {
+  const gateTitle = document?.gate?.title;
+  const intakeTitle = document?.intake ? '请确认这轮关键业务选择' : gateTitle || '当前节点需要你的确认';
+  const answered = questions.filter(question => answers[question.id]?.selected.length || answers[question.id]?.custom.trim()).length;
+  const missing = questions.filter(question => question.required && !answers[question.id]?.selected.length && !answers[question.id]?.custom.trim()).length;
+  const detail = document?.intake
+    ? `已回答 ${answered} / ${questions.length}，还有 ${missing} 个必答项待补充。`
+    : document?.gate
+      ? '流程已暂停在人工关口，确认后才会进入下一步。'
+      : '流程会在这里展示需要你决定的内容。';
+  return (
+    <section className="inline-decision-card" aria-live="polite">
+      <div className="inline-decision-marker"><span /> 人机协作节点</div>
+      <div className="inline-decision-content">
+        <strong>{intakeTitle}</strong>
+        <p>{detail}</p>
+        <small>{document?.gate?.key ? `当前关口：${document.gate.key}` : '推荐方案仅供参考，提交后才会形成确认记录。'}</small>
+      </div>
+      <button type="button" className="primary" disabled={busy} onClick={onOpen}>{busy ? '处理中…' : '在这里处理 →'}</button>
+    </section>
+  );
+}
+
 /** 主流程需求入口；只有未提交表单属于 React，所有已确认内容来自快照。 */
 export function IntakeApp() {
   const [view, setView] = useState(new URLSearchParams(location.search).get('view') === 'roles' ? 'roles' : 'runs');
@@ -136,6 +162,10 @@ export function IntakeApp() {
   const intake = document?.intake;
   const questions = intake?.plan.questions ?? [];
   const complete = questions.every(/** 必答必须显式选择或填写，不读取推荐作为默认。 */q => !q.required || !!answers[q.id]?.selected.length || !!answers[q.id]?.custom.trim());
+  /** 把主流程视线移到当前内嵌卡对应的真实表单，不创建第二份状态。 */
+  function openInlineDecision() {
+    globalThis.document.querySelector('.requirement-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   /** 业务问题与当前 hash 一起提交，服务端重复执行相同校验。 */
   function respond(action: 'refine' | 'finalize') {
     void submit({ hash: intake!.hash, action, reviewer, answers: Object.values(answers), supplement });
@@ -165,6 +195,7 @@ export function IntakeApp() {
       <div className="intake-progress"><span className={intakeStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={intakeStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={intakeStage(document) === 2 ? 'active' : ''}>03 开发授权与实施</span><span className={intakeStage(document) === 3 ? 'active' : ''}>04 测试与发布</span></div>
       {error && <div role="alert" className="intake-error">{error}</div>}
       {busy && <p role="status">提交请求处理中；下方独立同步后台状态，请勿重复提交。</p>}
+      {document && (intake || document.gate) && !busy && <InlineDecisionCard document={document} questions={questions} answers={answers} busy={busy || uncertain} onOpen={openInlineDecision} />}
       {!id ? <section className="intake-card"><div className="intake-eyebrow">先描述问题，让方案逐步清晰</div><h1>你想解决什么问题？</h1><p>说明使用者、当前困难和期望结果。我们会先给出方案建议，再请你确认关键选择。</p>
         <label>需求描述<textarea value={brief} maxLength={12000} rows={8} placeholder="例如：招聘同事希望统一处理候选人初筛和面试邀约，目前靠表格记录，容易遗漏跟进…" onChange={/** 保留原始输入。 */e => setBrief(e.target.value)} /></label>
         <label>迭代标识<input value={iterationId} maxLength={100} onChange={/** 标识显式绑定本次主流程。 */e => setIterationId(e.target.value)} /></label>
@@ -172,6 +203,7 @@ export function IntakeApp() {
       </section> : <>
         <section className="intake-context"><details><summary>原始需求 · {document?.mode === 'fixture' ? '固定样例，不理解业务输入' : document?.mode === 'live' ? '真实模型提案，待人工审核' : '正在载入'}</summary><p>{document?.brief || brief}</p><code>{id}</code></details></section>
         {document && <ExecutionStatus execution={document.execution} settings={document.executionSettings} status={document.status} cancel={cancelCurrent} cancelBusy={cancelBusy} />}
+        {document && <DiagnosticTrace trace={document.diagnostics} />}
         {intake && <RequirementWorkspace title="澄清待确认项" panel={<fieldset className="requirement-inputs" disabled={busy || uncertain}><legend className="sr-only">本轮问题与补充</legend>
 <QuestionFlow key={intake.hash} questions={questions} answers={answers} activeId={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question" />
           <label>其他补充<textarea value={supplement} maxLength={4000} onChange={/** 补充与当前问题回答一并保存。 */e => setSupplement(e.target.value)} /></label>

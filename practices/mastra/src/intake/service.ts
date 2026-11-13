@@ -22,6 +22,38 @@ import { createApprovalReceipt, createHumanGate, projectAgentRun, type ApprovalR
 /** 仅公开本地业务输入校验，不透出模型或文件系统异常。 */
 export class GateInputError extends Error {}
 export type IntakeWorkflow = ReturnType<typeof createProductDevelopmentWorkflow>;
+
+type DiagnosticItem = {
+  id: string;
+  status: 'completed' | 'running' | 'waiting' | 'failed';
+  phase: string;
+  role: string;
+  summary: string;
+  evidence: string[];
+  nextAction?: string;
+  tools?: { name: string; inputHash?: string; returned?: boolean; repeated?: boolean }[];
+};
+
+/** 从已保存角色产物、执行观察和人工关口拼装统一诊断轨迹，不暴露工具入参或模型原始错误。 */
+function buildDiagnosticTrace(input: { state?: any; development?: any; execution?: ReturnType<typeof readExecution>; progress?: any; gate?: any; retry?: any }): { enabled: true; items: DiagnosticItem[] } {
+  const items: DiagnosticItem[] = [];
+  for (const entry of input.state?.productWork?.entries ?? []) {
+    const tools = (entry.toolNames ?? []).map((name: string) => ({ name }));
+    items.push({ id: `product-${entry.role}`, status: 'completed', phase: '产品方案', role: `产品${entry.role}`, summary: `已完成${entry.role}角色交付，输出已保存并进入下一节点。`, evidence: [`模型步骤 ${entry.modelSteps}`, ...(tools.length ? [`实际调用工具：${tools.map((tool: { name: string }) => tool.name).join('、')}`] : ['本节点未记录工具调用'])], tools });
+  }
+  for (const entry of input.development?.work ?? []) {
+    const tools = (entry.tools ?? []).map((name: string) => ({ name }));
+    items.push({ id: `development-${entry.role}-${entry.round}`, status: 'completed', phase: '开发实施', role: entry.role, summary: `已完成${entry.role}角色的本轮交付，结果绑定当前源码检查点。`, evidence: [`模型步骤 ${entry.steps}`, ...(entry.modelId ? [`模型：${entry.modelId}`] : []), ...(tools.length ? [`实际调用工具：${tools.map((tool: { name: string }) => tool.name).join('、')}`] : ['本节点未记录工具调用'])], tools });
+  }
+  if (input.execution && !input.execution.settled) {
+    const toolTrace = input.execution.toolTrace.map(item => ({ name: item.toolName, inputHash: item.inputHash.slice(0, 12), returned: item.returned, repeated: !item.newCallSignature }));
+    items.push({ id: 'active-execution', status: 'running', phase: '实时执行', role: input.execution.role, summary: `当前正在进行第 ${input.execution.attempt} 次模型尝试，已完成 ${input.execution.steps} 个模型步骤。`, evidence: [`最近真实活动：${new Date(input.execution.lastActivityAt).toISOString()}`], tools: toolTrace, nextAction: toolTrace.length ? '等待工具结果后继续生成；重复签名仅标记事实，不自动判定业务错误。' : '等待模型返回下一步决策。' });
+  }
+  if (input.progress) items.push({ id: 'progress', status: input.progress.title.includes('失败') ? 'failed' : 'running', phase: input.progress.phase, role: '当前执行角色', summary: input.progress.detail, evidence: input.progress.attemptDetails ?? [], nextAction: input.progress.next });
+  if (input.gate) items.push({ id: `gate-${input.gate.key}`, status: 'waiting', phase: '人工确认', role: '用户', summary: input.gate.description, evidence: [`当前关口：${input.gate.key}`, ...(input.gate.humanGate?.requiredArtifactHashes?.length ? [`绑定版本数：${input.gate.humanGate.requiredArtifactHashes.length}`] : [])], nextAction: '完成当前内嵌确认卡后继续流程。' });
+  if (input.retry) items.push({ id: 'retry', status: 'failed', phase: input.retry.title, role: '系统', summary: input.retry.reason, evidence: input.retry.attemptDetails ?? [], nextAction: input.retry.next });
+  return { enabled: true, items };
+}
 /** 将专用产品/澄清暂停点也投影为统一关口，不改变它们各自的resume schema。 */
 function projectNativeGate(runId: string, gateType: HumanGate['gateType'], path: string, payload: unknown, artifactHash?: string): HumanGate {
   return createHumanGate({ runId, gateType, requiredArtifactHashes: artifactHash && /^[a-f0-9]{64}$/.test(artifactHash) ? [artifactHash] : [], gateHash: developmentHash({ path, payload }), status: 'open' });
@@ -65,7 +97,9 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const clarify = snapshot.status === 'success' && blockage && !preparationRequired && development.success && development.data.completedTasks.length === 0 && !development.data.approvedHash ? { hash: developmentHash({ runId, development: development.data, outcome: (snapshot.result as any).outcome }), title: '补齐业务选择并修订产品稿' } : undefined;
   const reconfigure = snapshot.status === 'success' && blockage && preparationRequired && development.success && !development.data.completedTasks.length && !development.data.approvedHash && !development.data.delivery ? { hash: developmentHash({ runId, development: development.data, action: 'reconfirm-project' }) } : undefined;
   const delivery = lifecycle.success ? { branch: lifecycle.data.codePublication?.receipt.branch, candidateCommit: lifecycle.data.codePublication?.receipt.commit, candidateStatus: lifecycle.data.codePublication?.status, qualityHash: lifecycle.data.codePublication?.qualityHash, releaseHash: lifecycle.data.release.hash, releaseStatus: lifecycle.data.release.receipt?.status, healthPassed: lifecycle.data.release.health?.checks.every(check => check.status === 'passed'), pullRequest: lifecycle.data.release.pullRequest } : undefined;
-  return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, agentRun, humanGate, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, delivery, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  const progress = describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {});
+  const diagnostics = buildDiagnosticTrace({ state: state?.success ? state.data : undefined, development: development.success ? development.data : undefined, execution: observed, progress, gate, retry });
+  return { executionSettings: observed ? { maxAttempts: observed?.role === 'requirements' ? 1 : 2, totalMs: 1800000, stepMs: 600000, retryDelayMs: 1000, sdkRetries: 0, outputTokens: observed?.role === 'requirements' ? undefined : 16000 } : undefined, execution: observed, agentRun, diagnostics, humanGate, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, delivery, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress, retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, brief: state?.success ? state.data.brief : '', step, intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig): Promise<Awaited<ReturnType<typeof readIntake>>> {
