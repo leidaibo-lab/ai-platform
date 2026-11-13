@@ -4,6 +4,7 @@ import { resourceHash } from './contracts.js';
 import type { RuntimeResourceConfig } from './resource-config.js';
 import type { FrozenResources } from './contracts.js';
 import { createEvidenceRecord, toolExecutionReceiptSchema } from './governance.js';
+import { planSchema, responseSchema } from '../intake/contracts.js';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const text = z.string().trim().min(1).max(100000);
@@ -17,13 +18,15 @@ const requirementSchema = z.object({ id: identifier, text, hash }).strict();
 const fileSchema = z.object({ path: z.string().trim().min(1).max(400), hash, content: z.string().max(100000) }).strict();
 const taskSchema = z.object({ id: identifier, role: z.enum(['frontend', 'backend', 'infrastructure']), paths: stringList, dependsOn: stringList, requirementRefs: stringList, acceptanceRefs: stringList, contextRefs: stringList, constraints: stringList, verificationRefs: stringList }).strict();
 const findingSchema = z.object({ id: identifier, category: identifier, route: identifier, detail: text, refs: stringList }).strict();
+/** 只投影确认轮次和人工回答；不把运行状态、哈希或调度字段交给产品角色。 */
+const confirmedIntakeSchema = z.object({ ready: z.boolean(), round: z.number().int().nonnegative(), history: z.array(z.object({ plan: planSchema, response: responseSchema }).strict()) }).strict();
 
 /** 十三种固定职责分别声明字段；未知字段、Store、执行器和凭据在边界被拒绝。 */
 export const roleInputSchemas = {
-  'product-coordinator': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), intakeReady: z.boolean(), priorEntries: z.array(contentRefSchema).max(4), reworkFeedback: text.nullable() }).strict(),
-  'product-clarification': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), coordination: contentRefSchema, priorEntries: z.array(contentRefSchema).max(4), reworkFeedback: text.nullable() }).strict(),
-  'product-closure': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), clarification: contentRefSchema, coordinationDecisions: productDecisionList, reworkFeedback: text.nullable() }).strict(),
-  'product-writing': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), clarification: contentRefSchema, closure: contentRefSchema, coordinationDecisions: productDecisionList, reworkFeedback: text.nullable() }).strict(),
+  'product-coordinator': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), intakeReady: z.boolean(), confirmedIntake: confirmedIntakeSchema, priorEntries: z.array(contentRefSchema).max(4), reworkFeedback: text.nullable() }).strict(),
+  'product-clarification': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), confirmedIntake: confirmedIntakeSchema, coordination: contentRefSchema, priorEntries: z.array(contentRefSchema).max(4), reworkFeedback: text.nullable() }).strict(),
+  'product-closure': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), confirmedIntake: confirmedIntakeSchema, clarification: contentRefSchema, coordinationDecisions: productDecisionList, reworkFeedback: text.nullable() }).strict(),
+  'product-writing': z.object({ brief: text, sourceRefs: z.array(hashRefSchema).max(100), confirmedIntake: confirmedIntakeSchema, clarification: contentRefSchema, closure: contentRefSchema, coordinationDecisions: productDecisionList, reworkFeedback: text.nullable() }).strict(),
   context: z.object({ approvedProduct: contentRefSchema, requirements: z.array(requirementSchema).max(300), projectScope: z.object({ id: identifier, files: z.array(fileSchema).max(300), writablePaths: stringList, checkFiles: stringList, roles: z.array(z.enum(['frontend', 'backend', 'infrastructure'])).max(3) }).strict(), fileManifest: z.array(hashRefSchema).max(300) }).strict(),
   architect: z.object({ approvedProduct: contentRefSchema, requirements: z.array(requirementSchema).max(300), context: z.array(contentRefSchema).max(300), projectScope: z.object({ id: identifier, writablePaths: stringList, checkFiles: stringList, roles: z.array(z.enum(['frontend', 'backend', 'infrastructure'])).max(3) }).strict(), referenceGroups: z.object({ requirements: stringList, contextFiles: stringList, registeredChecks: stringList }).strict(), priorBlockingFindings: z.array(findingSchema).max(30) }).strict(),
   readiness: z.object({ approvedProduct: contentRefSchema, requirements: z.array(requirementSchema).max(300), context: z.array(contentRefSchema).max(300), plan: z.object({ hash, summary: text, tasks: z.array(taskSchema).max(30) }).strict(), taskPackages: z.array(taskSchema).max(30), referenceGroups: z.object({ requirements: stringList, contextFiles: stringList, registeredChecks: stringList }).strict() }).strict(),

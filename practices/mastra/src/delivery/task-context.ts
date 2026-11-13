@@ -7,6 +7,7 @@ import { nativeInvocationMemory } from '../mastra/context-memory.js';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { readHandoffFile, type RemoteHandoff, contentHash } from './remote-handoff.js';
+import { reuseReadOnlyToolResults } from '../resources/readonly-tool-reuse.js';
 
 export const contextLimits = Object.freeze(materialPolicy.reading);
 const invocationToolsets = new WeakSet<object>();
@@ -67,8 +68,13 @@ export function createTaskContext(input: Record<string, unknown>, enabled = true
     /** 只查本调用已登记固定版本，不能扩大文件权限。 */
     execute: async (input) => locate(input),
   });
-  const readSchema = z.object({ id: z.string(), offset: z.number().int().nonnegative().default(0), length: z.number().int().min(1).max(limits.readChars).default(limits.readChars) });
-  /** 只接受本调用登记引用；单次返回有界、累计读取不限，不接受路径或 Git 表达式。 */
+  const readSchema = z.object({
+    id: z.string(),
+    offset: z.number().int().nonnegative().default(0),
+    // 模型常按资料剩余长度请求整段；超出服务端页长时收敛为上限，不把可恢复的分页请求变成工具错误循环。
+    length: z.coerce.number().int().min(1).transform(/** 超长读取请求转换为分页，不扩大实际返回长度。 */length => Math.min(length, limits.readChars)).default(limits.readChars),
+  });
+  /** 只接受本调用登记引用；单次返回始终有界，超长请求按服务端页长截断并通过nextOffset续读。 */
   function read(input: z.input<typeof readSchema>) {
     const { id, offset, length } = readSchema.parse(input);
     const text = materials.get(id);
@@ -80,6 +86,8 @@ export function createTaskContext(input: Record<string, unknown>, enabled = true
     /** 框架只向宿主已注册的资料闭包分派，不能读任意文件。 */
     execute: async (input) => read(input),
   });
+  // 同一调用内相同分页读取共享成功结果；不同offset仍是真实的新读取，失败结果不缓存。
+  reuseReadOnlyToolResults({ read: readTool, locate: locateTool });
   const toolsets = Object.freeze({ handoff: Object.freeze({ read: readTool, locate: locateTool }) });
   invocationToolsets.add(toolsets);
   return { prompt, manifest, read, locate, options: enabled ? { memory: nativeInvocationMemory(), toolsets } : {} };

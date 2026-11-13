@@ -8,7 +8,8 @@ import { describeProductFailure, isPlanOnlyProductOutput } from './product-failu
 const titles: Record<string, string> = { 'guided-requirements.requirements-round.analyze-requirements': '需求分析', 'draft-product.product-coordinator': '总产品统筹', 'draft-product.product-clarification': '需求梳理', 'draft-product.product-closure': '产品闭环检查', 'draft-product.product-writing': '产品写作', 'draft-product.publish-product': '产品稿发布' };
 /** 从失败叶节点与已保存输入派生恢复计划；下游存在批准或交付时不开放重放。 */
 export function describeRecovery(runId: string, status: string, steps: Record<string, any>) {
-  if (status !== 'failed') return undefined;
+  // 只读产品节点的本机取消在原生Run中同样保留失败叶节点；允许凭新哈希恢复同一Run，绝不扩展到已写入开发/发布步骤。
+  if (status !== 'failed' && status !== 'canceled') return undefined;
   const sync = describeLegacySyncRecovery(runId, steps);
   if (sync) return sync;
   const blocker = describeBlockerGenerationRecovery(runId, steps);

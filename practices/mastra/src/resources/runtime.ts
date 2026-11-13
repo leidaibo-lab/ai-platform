@@ -42,7 +42,9 @@ export async function loadResources(storage: MastraCompositeStore, config: Pract
   const parsed = frozenResourcesSchema.safeParse(output?.resources);
   if (!parsed.success || parsed.data.runId !== runId) throw new ResourceError('BINDING_MISSING');
   const binding = parsed.data;
-  if (binding.mode !== config.mode || binding.endpointHash !== endpointHash(config.baseUrl)) throw new ResourceError('TRANSPORT_DRIFT');
+  const currentEndpointHash = endpointHash(config.baseUrl);
+  // 历史Run仅可由部署配置把其原端点显式续接到当前端点，不能由Run或浏览器自行放宽传输身份。
+  if (binding.mode !== config.mode || (binding.endpointHash !== currentEndpointHash && config.endpointContinuations?.[binding.endpointHash] !== currentEndpointHash)) throw new ResourceError('TRANSPORT_DRIFT');
   const verifiedArtifact = verifyArtifact(config, binding.artifact.digest);
   // 显式续接仍保持原绑定的签名者与保障级别；只允许部署配置预先批准的当前签名制品摘要发生变化。
   if (verifiedArtifact.assurance !== binding.artifact.assurance || verifiedArtifact.signer !== binding.artifact.signer) throw new ResourceError('ARTIFACT_DRIFT');

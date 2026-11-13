@@ -11,9 +11,24 @@ import { ProductGenerationFailure, canRetryProductAttempt, classifyProductError,
 import type { ProductAttempt, ProductFailureKind } from '../delivery/product-generation-contract.js';
 export const WRITING_MODEL_SETTINGS = { maxRetries: 0, maxOutputTokens: 16000, timeout: { totalMs: 1800000, stepMs: 600000 } } as const;
 /** 需求梳理的简短固定交接约定：只将可追溯规则移交给后续闭环与写作，不重复生成完整PRD。 */
-export const CLARIFICATION_HANDOFF_CONVENTION = {
+export type ClarificationHandoffSections = ['已确认规则索引', '核心对象与关系', '状态与权限要点', '异常规则索引', '页面与验收待展开清单'];
+export const CLARIFICATION_HANDOFF_CONVENTION: { readonly sections: ClarificationHandoffSections } = {
   sections: ['已确认规则索引', '核心对象与关系', '状态与权限要点', '异常规则索引', '页面与验收待展开清单'],
-} as const;
+};
+
+/** 检查模型实际交接正文的五章标题和内容，不用宿主目录标签冒充已生成章节。 */
+export function assertClarificationHandoff(content: string): void {
+  const headings = [...content.matchAll(/^#{1,6}\s+(?:[一二三四五1-5][、.．)）]\s*)?(.+?)\s*#*\s*$/gm)];
+  const sections = CLARIFICATION_HANDOFF_CONVENTION.sections;
+  const selected = headings.filter(/** 顶层文档标题可保留，交接章节必须来自固定目录。 */heading => sections.includes(heading[1].trim() as ClarificationHandoffSections[number]));
+  if (selected.length !== sections.length || selected.some(/** 拒绝缺章、重复章和错序交接。 */(heading, index) => heading[1].trim() !== sections[index])) throw new Error('需求梳理未生成五章固定交接正文');
+  for (let index = 0; index < selected.length; index++) {
+    const heading = selected[index];
+    const next = selected[index + 1];
+    const body = content.slice(heading.index! + heading[0].length, next?.index ?? content.length).trim();
+    if (!body) throw new Error('需求梳理固定交接章节缺少正文');
+  }
+}
 /** 四角色统一验证原生结束事实；只读临时故障最多两次，单节点共享一小时截止时间。 */
 export async function generateProductContent(agent: ReturnType<typeof createAgents>['productAgent'], prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, execution?: { runId: string; abortSignal: AbortSignal }) {
   const observation = execution ? beginExecution(execution.runId, role, execution.abortSignal) : undefined;

@@ -17,7 +17,7 @@ test('十三个角色均有严格输入与输出契约登记', () => {
 /** 角色调用拒绝整状态与未知字段，输出证据固定同一输入和冻结bundle。 */
 test('角色调用信封拒绝未知字段并核验输出证据的bundle', () => {
   const role = config.roles.find(item => item.id === 'product-coordinator')!;
-  const payload = { brief: '验证严格DTO', sourceRefs: [{ id: 'source', hash }], intakeReady: true, priorEntries: [], reworkFeedback: null };
+  const payload = { brief: '验证严格DTO', sourceRefs: [{ id: 'source', hash }], intakeReady: true, confirmedIntake: { ready: true, round: 0, history: [] }, priorEntries: [], reworkFeedback: null };
   const invocation = createRoleInvocation({ runId: 'contract-run', roleId: 'product-coordinator', bundleHash: hash, inputContract: role.inputContract, payload, resources, config });
   assert.throws(() => createRoleInvocation({ runId: 'contract-run', roleId: 'product-coordinator', bundleHash: hash, inputContract: role.inputContract, payload: { ...payload, state: { secret: true } }, resources, config }), /Unrecognized key/);
   const evidence = createInvocationEvidence({ invocation, outputContract: role.outputContract, output: { content: '角色正文' }, tools: ['practiceInfo'], usage: { steps: 1, inputTokens: 3, outputTokens: 5, modelId: 'fixture' }, config });

@@ -22,6 +22,19 @@ function parseGeneratedPlanText(value: string): unknown {
     catch { throw new Error('需求分析模型返回的 JSON 格式无效'); }
   }
 }
+/** 对模型偶发超出交互容量的列表做无语义扩张的本地收敛；字段、枚举、必答关系仍交由严格Schema拒绝。 */
+function normalizeGeneratedPlan(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const draft = value as Record<string, unknown>;
+  const questions = Array.isArray(draft.questions) ? draft.questions.slice(0, 8).map(question => {
+    if (!question || typeof question !== 'object') return question;
+    const item = question as Record<string, unknown>;
+    return { ...item, options: Array.isArray(item.options) ? item.options.slice(0, 8) : item.options,
+      // 阻断阶段是必答属性的唯一事实源，避免兼容端点重复字段不一致。
+      required: item.decision && typeof item.decision === 'object' && (item.decision as { blocks?: unknown }).blocks ? (item.decision as { blocks: unknown }).blocks !== 'none' : item.required };
+  }) : draft.questions;
+  return { ...draft, assumptions: Array.isArray(draft.assumptions) ? draft.assumptions.slice(0, 12) : draft.assumptions, questions };
+}
 /** 在主 Run 中持久保存方案和多轮回答；旧入口原样跳过。 */
 export function createIntakeWorkflow(agents: ReturnType<typeof createAgents>, mode: 'fixture' | 'live', bind: <T extends Step<any, any, any, any, any, any>>(step: T) => T = identity) {
   const analyze = createStep({ id: 'analyze-requirements', inputSchema: deliverySchema, outputSchema: deliverySchema,
@@ -43,9 +56,7 @@ export function createIntakeWorkflow(agents: ReturnType<typeof createAgents>, mo
           // 兼容端点不保证 Mastra structured-output 的 object 通道；使用文本 JSON 并在本地进行唯一的业务 schema 校验。
         })).text);
         observation.check();
-        const candidate = result && typeof result === 'object' && Array.isArray((result as { questions?: unknown }).questions)
-          ? { ...(result as Record<string, unknown>), questions: (result as { questions: unknown[] }).questions.map(/** 以阻断阶段为唯一事实源修复冗余必答标记。 */question => question && typeof question === 'object' && (question as { decision?: { blocks?: unknown } }).decision?.blocks ? { ...(question as Record<string, unknown>), required: (question as { decision: { blocks: unknown } }).decision.blocks !== 'none' } : question) }
-          : result;
+        const candidate = normalizeGeneratedPlan(result);
         const plan = generatedPlanSchema.parse(candidate);
         const next = { ...intake, round: intake.round + 1, plan };
         return { ...inputData, intake: { ...next, hash: intakeHash(inputData.brief, next) } };

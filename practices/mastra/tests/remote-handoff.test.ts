@@ -75,7 +75,9 @@ test('资料读取不受旧累计额度或档位限制，目录总量也不阻�
   for (let offset = 0; offset < text.length; offset += contextLimits.readChars) collected += context.read({ id, offset }).content;
   assert.equal(collected, text);
   assert.throws(/** 取消累计预算不扩大引用权限。 */() => context.read({ id: 'unknown' }));
-  assert.throws(/** 单次返回仍使用分页边界。 */() => context.read({ id, length: contextLimits.readChars + 1 }));
+  const capped = context.read({ id, length: contextLimits.readChars + 1 });
+  assert.equal(capped.content.length, contextLimits.readChars, '超长页请求必须收敛为服务端单页上限，并由nextOffset提示续读');
+  assert.equal(capped.nextOffset, contextLimits.readChars);
   const many = createTaskContext(Object.fromEntries(Array.from({ length: 500 }, /** 合法大目录不再触发旧inlineBytes门槛。 */(_, i) => [`file-${i}`, text])));
   assert.equal(many.manifest.length, 500); assert.ok(Buffer.byteLength(many.prompt) > 24000);
   assert.equal('inputProcessors' in context.options, false);

@@ -15,6 +15,11 @@ export const productWorkSchema = z.object({
     content: z.string().trim().min(1).max(100000),
     toolNames: z.array(z.string().min(1)).max(30),
     modelSteps: z.number().int().min(1).max(PRODUCT_MAX_STEPS),
+    // 需求梳理只交接固定五章目录；正文仍由角色模型生成并由后续角色展开。
+    handoffSections: z.tuple([
+      z.literal('已确认规则索引'), z.literal('核心对象与关系'), z.literal('状态与权限要点'),
+      z.literal('异常规则索引'), z.literal('页面与验收待展开清单'),
+    ]).optional(),
     // 旧产物不补造完成证据；后续产物记录正常结束及有界重试事实。
     generation: productGenerationSchema.optional(),
     // 正式资源主链由宿主写入输入/输出/工具/版本证据，非资源旧入口不补造。

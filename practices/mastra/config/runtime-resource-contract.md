@@ -86,14 +86,14 @@
 
 所有角色payload是宿主从事实状态创建的独立不可变快照；JSON结构用strict schema拒绝额外字段。内部编排可持有StateV2/Lifecycle，模型和角色工具闭包只持有本角色投影与限定Port，不持有原Store或整份状态。
 
-共同元数据是`AgentInvocation`信封。默认payload不含审批人的身份/自由评论、完整历史或其他角色系统指令。必需上游资源缺失时停止；可选来源没有时使用显式空数组，不能用undefined混同“未验证”。所有读取限于本次scope，工具扩展读取也必须登记证据。
+共同元数据是`AgentInvocation`信封。默认payload不含审批人的身份/自由评论或其他角色系统指令；产品四角色额外接收严格裁剪的`confirmedIntake`，其中只保留`ready,round,history[{plan,response}]`，用于恢复时继续使用已确认事实，不能写入Store或替代人工批准。必需上游资源缺失时停止；可选来源没有时使用显式空数组，不能用undefined混同“未验证”。所有读取限于本次scope，工具扩展读取也必须登记证据。
 
 | 角色模板 / inputContract | payload允许字段 | 输出契约与消费者 |
 | --- | --- | --- |
-| 总产品 / `product-coordinator.input.v1` | `brief,sourceRefs,reworkFeedback` | `product-work.output.v1`，供需求梳理 |
-| 需求梳理 / `product-clarification.input.v1` | `brief,sourceRefs,coordination,reworkFeedback` | 同上，供闭环 |
-| 产品闭环 / `product-closure.input.v1` | `brief,sourceRefs,clarification,coordinationDecisions,reworkFeedback` | 同上，供写作 |
-| 产品写作 / `product-writing.input.v1` | `brief,sourceRefs,clarification,closure,coordinationDecisions,reworkFeedback` | `product-document.output.v1`，供产品审批 |
+| 总产品 / `product-coordinator.input.v1` | `brief,sourceRefs,intakeReady,confirmedIntake,priorEntries,reworkFeedback` | `product-work.output.v1`，供需求梳理 |
+| 需求梳理 / `product-clarification.input.v1` | `brief,sourceRefs,confirmedIntake,coordination,priorEntries,reworkFeedback` | 同上，供闭环 |
+| 产品闭环 / `product-closure.input.v1` | `brief,sourceRefs,confirmedIntake,clarification,coordinationDecisions,reworkFeedback` | 同上，供写作 |
+| 产品写作 / `product-writing.input.v1` | `brief,sourceRefs,confirmedIntake,clarification,closure,coordinationDecisions,reworkFeedback` | `product-document.output.v1`，供产品审批 |
 | 上下文 / `context.input.v1` | `approvedProduct,requirements,projectScope,fileManifest` | `context.output.v1`，宿主校验后保存ProjectContext |
 | 架构 / `architect.input.v1` | `approvedProduct,requirements,context,projectScope,referenceGroups,priorBlockingFindings` | `plan.output.v1`，供组队/就绪/方案审批 |
 | 就绪 / `readiness.input.v1` | `approvedProduct,requirements,context,plan,taskPackages,referenceGroups` | `assessment.output.v1`，供就绪门；不含作者的自评结论 |

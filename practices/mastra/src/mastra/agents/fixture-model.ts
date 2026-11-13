@@ -5,7 +5,7 @@ const drafts: Record<string, string> = {
   reading: '这是固定样例阅读助手（fixture）。当前文档描述标题长度及空白校验；请重点检查边界、计数口径和异常反馈。此回复未作真实需求推理，也没有修改正文或提交审阅决定。',
   product: '# 产品交接样例（fixture）\n需求：工单标题去首尾空格后为 1–80 字符。\n验收：空白拒绝，长度边界通过，超长拒绝。\n此为固定样例，真实需求须使用 live 模式并人工确认。',
   'product-coordinator': '# 总产品统筹（fixture）\n本轮按需求梳理、产品闭环、产品写作顺序推进。检查目标、规则缺口与人工反馈；未执行审批。',
-  'product-clarification': '# 需求梳理（fixture）\n用户诉求：工单标题校验。已给定：去首尾空格、1–80 字符。其他未提供的业务选择交人工确认。',
+  'product-clarification': '# 需求梳理（fixture）\n\n## 已确认规则索引\n- 工单标题去首尾空格后长度为 1–80 字符。\n\n## 核心对象与关系\n- 工单包含待校验的标题字段。\n\n## 状态与权限要点\n- 其他状态和权限规则待后续确认。\n\n## 异常规则索引\n- 空白、超长输入应拒绝；反馈口径待闭环确认。\n\n## 页面与验收待展开清单\n- 页面提示和完整验收用例由后续角色展开。',
   'product-closure': '# 产品闭环（fixture）\n正常、空白、长度边界及超长路径分别验收；字符计数与失败反馈按实际输入确认，不自行补造。',
   development: '# 代码提案样例（fixture，未执行）\n```ts\n/** 校验工单标题的长度边界。 */\nexport function validTitle(title: string): boolean {\n  const length = title.trim().length;\n  return length >= 1 && length <= 80;\n}\n```\n开发需审查需求一致性、字符计数口径和错误处理；未创建分支或执行构建。',
   testing: '# 测试计划样例（fixture，未执行）\n需求映射：标题长度→空串、空白、1、80、81 字符；去空格→前后空格。\n尚缺：Unicode 计数口径、接口集成、实际运行报告。\n测试人员确认的是计划覆盖，不能视为测试通过。',

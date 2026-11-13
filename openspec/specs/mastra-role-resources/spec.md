@@ -54,6 +54,20 @@
 - **THEN** 宿主 SHALL 将该角色调用证据与同一`bundleHash`写入相应产物
 - **AND** 最终交付 SHALL 拒绝缺少测试或运维调用证据、或证据版本不匹配的状态
 
+### Requirement: 产品交接角色使用调用期受限Agent
+需求梳理、产品闭环和产品写作 SHALL 在每次调用从冻结角色版本的指令、模型和默认模型参数重建独立交接Agent；该实例不得配置冻结角色的Skill、Workspace或原角色工具集，只能接收本次`createTaskContext()`提供的`handoff.read`/`handoff.locate`和已登记的`practiceInfo`。总产品统筹继续使用完整冻结角色。产品四角色输入投影 SHALL 包含严格裁剪的`confirmedIntake`（`ready`、`round`和`history[{plan,response}]`），供恢复后的角色继续使用确认事实。
+
+#### Scenario: 受限角色请求工具
+- **WHEN** 需求梳理、产品闭环或产品写作进入模型循环
+- **THEN** 模型请求工具面 SHALL 只出现`handoff.read`、`handoff.locate`和必要的`practiceInfo`
+- **AND** 请求中不得出现`skill`、`skill_read`或`mastra_workspace_*`
+- **AND** 同一调用内相同只读工具和相同参数的成功结果 SHALL 只执行一次，后续模型步骤继续收到真实工具结果
+
+#### Scenario: 产品节点失败后恢复
+- **WHEN** `draft-product.product-clarification`失败并按恢复哈希创建新执行段
+- **THEN** 总产品统筹不得重跑，确认历史和已完成统筹产物必须进入梳理输入
+- **AND** 梳理必须生成五章固定交接目录，闭环和写作继续使用该交接物并进入原产品人工关口
+
 ### Requirement: Run治理记录与冻结能力授权
 主Workflow SHALL 将跨阶段产物统一表示为带`schemaVersion`、内容散列和证据引用的Artifact记录；Run、Artifact、Evidence、Approval、CapabilityGrant和TaskPlan的职责不得混合。项目范围确认 SHALL 由宿主生成并冻结`CapabilityGrant`，绑定Run、产品Artifact、确认摘要、角色、可写路径、登记检查、调用预算和返工预算。模型不得生成、扩张或替换授权。
 

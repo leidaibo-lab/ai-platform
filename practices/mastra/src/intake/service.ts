@@ -52,7 +52,8 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
     if (approved?.success) gate.evidence = { ...gate.evidence, approvedProduct: approved.data.artifacts.at(-1)?.content };
   }
   const observed = readExecution(runId);
-  const retry = observed?.phase === 'canceling' || observed?.phase === 'stopped' ? undefined : describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
+  // 已完成的本机取消不应永久封死没有副作用的产品节点；恢复仍由原生失败叶节点和恢复哈希共同约束。
+  const retry = observed?.phase === 'canceling' ? undefined : describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
   const development = stateV2Schema.safeParse((snapshot.result as { development?: unknown } | undefined)?.development);
   const lifecycle = lifecycleSchema.safeParse(snapshot.result);
   const frozen = initial && !Array.isArray(initial) ? frozenResourcesSchema.safeParse((snapshot.steps?.['freeze-role-resources'] as any)?.output?.resources) : undefined;
@@ -102,7 +103,7 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
     await run.timeTravel({ step: 'open-development-clarification', inputData: state });
     return readIntake(workflow, runId);
   }
-  if (current.status === 'failed' && current.retry && current.mode === mode) {
+  if ((current.status === 'failed' || current.status === 'canceled') && current.retry && current.mode === mode) {
     if (!input || typeof input !== 'object' || !('retryHash' in input) || input.retryHash !== current.retry.hash) throw new GateInputError('恢复版本已变化，请刷新');
     if ('additionalContextLevel' in input) throw new GateInputError('资料预算门槛已移除，请刷新后直接恢复');
     let checkpointInput: unknown;

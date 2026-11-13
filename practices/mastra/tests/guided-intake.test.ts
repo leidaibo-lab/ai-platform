@@ -17,6 +17,7 @@ import { ContextBudgetError } from '../src/delivery/context-budget.js';
 import { createRoleInvocation } from '../src/resources/projections.js';
 import { loadRuntimeResourceConfig } from '../src/resources/resource-config.js';
 import { beginExecution, readExecution } from '../src/intake/execution-control.js';
+import { productToolReuseInstruction } from '../src/mastra/workflows/product.js';
 
 test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修订、产品批准与重复拒绝', /** 隔离 LibSQL 的主流程，证明 HTTP 所依赖的服务事实。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-intake-'));
@@ -103,10 +104,15 @@ test('需求 HTTP：同源、固定标识创建、坏答案与完整稿版本门
 });
 
 import { canFinalizePlan, validateAnswers, planSchema } from '../src/intake/contracts.js';
-import { CLARIFICATION_HANDOFF_CONVENTION } from '../src/intake/product-generation.js';
+import { assertClarificationHandoff, CLARIFICATION_HANDOFF_CONVENTION } from '../src/intake/product-generation.js';
 
 test('需求梳理交接约定：使用有界生成并保留固定章节', /** 防止中间角色重新承担完整PRD写作导致无界调用。 */() => {
   assert.deepEqual(CLARIFICATION_HANDOFF_CONVENTION.sections, ['已确认规则索引', '核心对象与关系', '状态与权限要点', '异常规则索引', '页面与验收待展开清单']);
+  const sections = CLARIFICATION_HANDOFF_CONVENTION.sections.map(/** 用实际正文验证固定章节，而不是检查宿主贴的目录标签。 */title => `## ${title}\n- 已确认依据或待决项。`);
+  assert.doesNotThrow(/** 五章有正文且顺序正确时允许交接。 */() => assertClarificationHandoff(sections.join('\n\n')));
+  for (const content of [sections.slice(1).join('\n\n'), [...sections].reverse().join('\n\n'), sections.join('\n\n') + '\n\n## 已确认规则索引\n重复', sections.join('\n\n').replace('## 核心对象与关系\n- 已确认依据或待决项。', '## 核心对象与关系\n')]) {
+    assert.throws(/** 缺章、错序、重复章和空章不得形成成功交接。 */() => assertClarificationHandoff(content), /需求梳理/);
+  }
 });
 
 test('澄清约束：坏表单、单多选、文本、重复问题与继续澄清', /** 纯边界断言避免用模型声明替代输入校验。 */() => {
@@ -125,7 +131,7 @@ test('产品闭环交接：接受上游长正文但不放宽开发短文本字�
   const config = loadRuntimeResourceConfig('/nonexistent');
   const resources = { roles: {}, sourceSnapshotHash: 'a'.repeat(64) } as never;
   const content = '总产品统筹正文'.repeat(200);
-  const invocation = createRoleInvocation({ runId: 'test', roleId: 'product-closure', bundleHash: 'b'.repeat(64), inputContract: 'product-closure.input.v1', payload: { brief: 'HRM', sourceRefs: [], clarification: { id: 'clarification', hash: 'c'.repeat(64), content: '固定交接' }, coordinationDecisions: [content], reworkFeedback: null }, resources, config });
+  const invocation = createRoleInvocation({ runId: 'test', roleId: 'product-closure', bundleHash: 'b'.repeat(64), inputContract: 'product-closure.input.v1', payload: { brief: 'HRM', sourceRefs: [], confirmedIntake: { ready: true, round: 0, history: [] }, clarification: { id: 'clarification', hash: 'c'.repeat(64), content: '固定交接' }, coordinationDecisions: [content], reworkFeedback: null }, resources, config });
   assert.equal((invocation.payload.coordinationDecisions as string[])[0], content);
 });
 
@@ -137,6 +143,10 @@ test('工具轨迹观察：仅保存散列并标记重复调用', /** 观察循�
   assert.equal(trace.length, 2); assert.equal(trace[0]!.returned, true); assert.equal(trace[0]!.newCallSignature, true); assert.equal(trace[1]!.newCallSignature, false);
   assert.doesNotMatch(JSON.stringify(trace), /product-pm-test-scenarios/);
   observation.finish();
+});
+
+test('产品角色执行约定：已成功的相同只读调用必须复用', /** 以提示补足模型行为边界，不关闭工具或缩减步骤预算。 */() => {
+  assert.match(productToolReuseInstruction, /同一工具、同一入参且已有成功结果时不得重复调用/);
 });
 
 
@@ -241,6 +251,84 @@ test('产品写作 Time travel：前序三角色不重跑、旧令牌拒绝、�
     const snapshot = await workflow.getWorkflowRunById(run.runId);
     const writing = snapshot!.steps!['draft-product.product-writing'] as any;
     assert.equal(writing.output.productWork.entries.length, 4); assert.equal(writing.output.reviews.length, 0);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('需求梳理失败恢复：保留七轮确认，只重跑梳理及下游并交接五章对象', /** 新Run从失败叶节点恢复，统筹产物和澄清历史来自同一原生快照。 */async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'product-clarification-retry-'));
+  const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
+  const calls: Record<string, number> = {};
+  for (const name of ['productCoordinatorAgent', 'productClarificationAgent', 'productClosureAgent', 'productAgent'] as const) {
+    const agent = app.agents[name]; const original = agent.getModel.bind(agent);
+    // 在模型装配处注入一次梳理失败，并统计恢复是否重复执行上游。
+    agent.getModel = async () => {
+      calls[name] = (calls[name] ?? 0) + 1;
+      if (name === 'productClarificationAgent' && calls[name] === 1) throw new Error('synthetic clarification failure');
+      return original();
+    };
+  }
+  new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
+  try {
+    const run = await workflow.createRun();
+    let current = await run.start({ inputData: { brief: '合成需求梳理恢复', iterationId: 'clarification-recovery', guidedIntake: true } }).then(/** 从原生快照读取当前暂停点。 */() => readIntake(workflow, run.runId));
+    assert.equal(current.step, 'guided-requirements');
+    const first = { hash: current.intake!.hash, action: 'refine' as const, reviewer: 'test-human', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }], supplement: '' };
+    current = await respondIntake(workflow, 'fixture', run.runId, first);
+    for (let round = 2; round <= 6; round++) {
+      current = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake!.hash, action: 'refine', reviewer: 'test-human', answers: [], supplement: `第${round}轮确认` });
+    }
+    current = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake!.hash, action: 'finalize', reviewer: 'test-human', answers: [], supplement: '' });
+    assert.equal(current.status, 'failed');
+    assert.equal(current.retry?.step, 'draft-product.product-clarification');
+    assert.equal(current.retry?.preserved.length, 1);
+    const failedSnapshot = await workflow.getWorkflowRunById(run.runId);
+    assert.equal((failedSnapshot?.steps?.['draft-product.product-clarification'] as any)?.payload.intake.history.length, 7);
+    assert.equal((failedSnapshot?.steps?.['draft-product.product-coordinator'] as any)?.output.productWork.entries.length, 1);
+
+    current = await respondIntake(workflow, 'fixture', run.runId, { retryHash: current.retry!.hash });
+    assert.equal(current.status, 'suspended');
+    assert.equal(current.step, 'review-product');
+    const recoveredSnapshot = await workflow.getWorkflowRunById(run.runId);
+    assert.equal((recoveredSnapshot?.steps?.['draft-product.product-writing'] as any)?.output.intake.history.length, 7);
+    const productWork = (recoveredSnapshot?.steps?.['draft-product.product-writing'] as any)?.output.productWork;
+    assert.deepEqual(productWork?.entries.map(/** 核对恢复后四角色的唯一顺序。 */(entry: any) => entry.role), ['coordinator', 'clarification', 'closure', 'writing']);
+    assert.deepEqual(productWork?.entries[1].handoffSections, CLARIFICATION_HANDOFF_CONVENTION.sections);
+    assert.equal(calls.productCoordinatorAgent, 1, '恢复不得重跑总产品统筹');
+    assert.equal(calls.productClarificationAgent, 2);
+    assert.equal(calls.productClosureAgent, 1);
+    assert.equal(calls.productAgent, 1);
+    // 同一个恢复Run继续走正式业务服务；所有批准与发布回执只属于隔离fixture。
+    const actor = { reviewer: 'test-human', comment: '合成恢复链路验证，不代表真实部署' };
+    const productHash = current.product!.artifact.hash;
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { ...actor, role: 'product', artifactHash: '0'.repeat(64), decision: 'approve' }));
+    current = await respondIntake(workflow, 'fixture', run.runId, { ...actor, role: 'product', artifactHash: productHash, decision: 'approve' });
+    const project = { id: 'recovered-chain', files: { 'src/a.mjs': 'export const initial=0;', 'src/b.mjs': 'export const initial=0;', 'check.mjs': 'import {test} from "node:test"; import assert from "node:assert/strict"; import {fixtureValue as a} from "./src/a.mjs"; import {fixtureValue as b} from "./src/b.mjs"; test("two modules",/** 验证实际实现的两个模块。 */()=>{assert.equal(a(),1);assert.equal(b(),1)});' }, writablePaths: ['src/a.mjs', 'src/b.mjs'], checkFiles: ['check.mjs'], roles: ['frontend', 'backend'] };
+    const visited: string[] = [];
+    while (current.gate && visited.length < 10) {
+      const gate = current.gate; const evidence = gate.evidence as any; visited.push(gate.key);
+      let data: any = { ...actor, ...gate.fixed };
+      if (gate.key === 'confirm-project-scope') data = { ...data, project, maxReworks: 1 };
+      else if (gate.key === 'approve-architecture') data = { ...data, decision: 'approve', resolutions: [] };
+      else if (gate.key === 'approve-test-cases') data = { ...data, decision: 'approve', cases: [{ id: 'recovered', requirementRefs: evidence.requirements.map(/** 测试覆盖本次批准的需求引用。 */(item: any) => item.id), expected: '两个模块返回1', method: 'registered-check', checkRefs: evidence.registeredChecks }] };
+      else if (gate.key === 'review-test-results') data = { ...data, decision: 'pass', manualResults: [], findings: [] };
+      else if (gate.key === 'approve-release-scope') data = { ...data, decision: 'approve', scope: { environment: 'synthetic', artifactDigest: 'a'.repeat(64), artifactRef: 'synthetic://build', rollbackArtifactRef: 'synthetic://previous', healthChecks: [{ id: 'ready', expected: '可用' }] } };
+      else if (gate.key === 'execute-release-externally') data = { ...data, status: 'succeeded', jobRef: 'synthetic://job', operator: 'test', finishedAt: '2026-11-13T00:00:00Z', notes: '合成回执，未实际部署' };
+      else if (gate.key === 'verify-release-health') data = { ...data, operator: 'test', checks: [{ id: 'ready', status: 'passed', evidence: '合成健康检查', observedAt: '2026-11-13T00:00:00Z' }] };
+      else assert.fail(`恢复后出现未预期关口 ${gate.key}`);
+      await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { gateHash: '0'.repeat(64), data }));
+      assert.equal((await readIntake(workflow, run.runId)).gate?.gateHash, gate.gateHash);
+      current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: gate.gateHash, data });
+    }
+    assert.equal(current.status, 'success', JSON.stringify(current));
+    const completed = await workflow.getWorkflowRunById(run.runId);
+    const result = completed!.result as any;
+    assert.equal(result.outcome, 'fixture-completed', JSON.stringify(result.development.checks));
+    assert.deepEqual(visited, ['confirm-project-scope', 'approve-architecture', 'approve-test-cases', 'review-test-results', 'approve-release-scope', 'execute-release-externally', 'verify-release-health']);
+    assert.equal(result.development.input.source.hash, productHash);
+    assert.equal(result.development.outcome, 'development-delivered');
+    assert.equal(result.quality.status, 'passed');
+    assert.equal(calls.productCoordinatorAgent, 1);
+    assert.equal(calls.productAgent, 1);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
