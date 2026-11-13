@@ -64,6 +64,7 @@
   margin:0 0 10px}
 .intake-card p{line-height:1.8;
   color:#59666b}
+.intake-boundary-note{padding:13px 16px;border-left:4px solid #518d7b;background:#eff7f3;color:#315c50!important;font-size:14px}
 .intake-card label{display:block;
   font-size:14px;
   color:#435254;
@@ -257,3 +258,9 @@
 .question-decision-required{background:#fbf6ed;color:#805e2a}
 .intake-card .question-decision p{font-size:13px;line-height:1.65;margin:6px 0 0}
 .question-group-title{font-size:16px;color:#205b4d;margin-top:24px}
+.confirmed-rules ul{list-style:none;padding:0;margin:18px 0 0}
+.confirmed-rules li{display:flex;flex-direction:column;gap:6px;padding:14px 0;border-top:1px solid #e1e9e4}
+.confirmed-rules li:first-child{border-top:0;padding-top:0}
+.confirmed-rules li strong{color:#205b4d;font-size:14px}
+.confirmed-rules li span{color:#273b38;line-height:1.7}
+.confirmed-rules li small{color:#718079;font-size:12px}

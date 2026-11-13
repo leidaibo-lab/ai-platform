@@ -10,6 +10,17 @@ import { RepositoryManagement } from './RepositoryManagement';
 import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
 import './intake.css';
 interface Document { developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+/** 从已提交历史中投影确认基线；当前轮推荐、假设和未提交草稿不进入列表。 */
+function confirmedRules(intake: NonNullable<Document['intake']>) {
+  return intake.history.flatMap((entry, round) => entry.response.answers.flatMap(answer => {
+    const question = entry.plan.questions.find(item => item.id === answer.questionId);
+    if (!question) return [];
+    const selected = answer.selected.map(id => question.options.find(option => option.id === id)?.label ?? id);
+    const custom = answer.custom.trim();
+    const value = [...selected, custom].filter(Boolean).join('；');
+    return value ? [{ round: round + 1, question: question.title, value, reviewer: entry.response.reviewer }] : [];
+  }));
+}
 /** 从实际关口映射业务阶段，避免进入开发后仍高亮需求输入。 */
 function intakeStage(document?: Document): number {
   if (document?.progress?.phase === '产品稿修订') return 1;
@@ -124,6 +135,7 @@ export function IntakeApp() {
   }
   const intake = document?.intake;
   const questions = intake?.plan.questions ?? [];
+  const confirmed = intake ? confirmedRules(intake) : [];
   const complete = questions.every(/** 必答必须显式选择或填写，不读取推荐作为默认。 */q => !q.required || !!answers[q.id]?.selected.length || !!answers[q.id]?.custom.trim());
   /** 业务问题与当前 hash 一起提交，服务端重复执行相同校验。 */
   function respond(action: 'refine' | 'finalize') {
@@ -163,7 +175,8 @@ export function IntakeApp() {
           <ClarificationProgress questions={questions} answers={answers} prefix="intake-question" onSelect={setActiveQuestion} />
           <p>本轮答完仍需检查业务缺口，有缺口会继续澄清。可随时离开，已提交记录保留；未提交输入请先提交保存。缩小范围须由你明确确认。</p>
           {intake.plan.maturity && <section className="intake-card"><h2>本轮业务检查</h2>{Object.entries(intake.plan.maturity).map(/** 模型判断与人工确认分开展示。 */([key, item]) => <p key={key}><strong>{{ decisions: '关键业务决策', mainFlow: '主流程', exceptions: '异常处理', delivery: '交付影响' }[key] ?? key}：{item.clear ? '模型评估已明确，待你核对' : '仍有缺口'}</strong> · {item.evidence}</p>)}</section>}
-          <section className="intake-card"><div className="intake-eyebrow">第 {intake.round} 轮 · 方案建议</div><h1>先对齐方向，再完善需求</h1><Markdown>{intake.plan.summary}</Markdown>{intake.plan.assumptions.length > 0 && <div className="intake-assumptions"><strong>当前假设 · 尚未作为事实确认</strong>{intake.plan.assumptions.map(/** 假设与方案明确区分。 */(item, index) => <p key={index}>{item}</p>)}</div>}</section>
+          <section className="intake-card"><div className="intake-eyebrow">第 {intake.round} 轮 · 方案建议</div><h1>先对齐方向，再完善需求</h1><p className="intake-boundary-note">系统基于当前上下文给出推荐，帮助降低决策成本；推荐不等于事实，也不等于批准。只有你明确选择或填写并提交后，才会进入本项目的确认基线。</p><Markdown>{intake.plan.summary}</Markdown>{intake.plan.assumptions.length > 0 && <div className="intake-assumptions"><strong>当前假设 · 尚未作为事实确认</strong>{intake.plan.assumptions.map(/** 假设与方案明确区分。 */(item, index) => <p key={index}>{item}</p>)}</div>}</section>
+          {confirmed.length > 0 && <section className="intake-card confirmed-rules"><div className="intake-eyebrow">已提交 · 确认基线</div><h2>已确认业务规则</h2><p>以下内容来自用户已提交的明确选择或填写，将作为下一轮分析和产品稿的业务依据；系统推荐和未提交草稿不在此列。</p><ul>{confirmed.map(/** 只展示已提交的确认事实，不展示推荐值。 */item => <li key={`${item.round}-${item.question}`}><strong>第 {item.round} 轮 · {item.question}</strong><span>{item.value}</span><small>确认人：{item.reviewer}</small></li>)}</ul></section>}
           {intake.history.length > 0 && <section className="intake-card"><details><summary>查看已提交的确认记录（{intake.history.length} 轮）</summary>{intake.history.map(/** 回答原样回读，选择标签来自对应历史方案。 */(entry, index) => <div className="intake-assumptions" key={index}><strong>第 {index + 1} 轮 · {entry.response.reviewer}</strong>{entry.response.answers.map(/** 用本轮选项解释已确认答案。 */answer => { const q = entry.plan.questions.find(/** 按历史 ID 查找问题。 */item => item.id === answer.questionId); return <p key={answer.questionId}>{q?.title}：{answer.selected.map(/** 展示历史选项标签。 */id => q?.options.find(/** 按 ID 查找本轮选项。 */option => option.id === id)?.label ?? id).join('、')} {answer.custom}</p>; })}{entry.response.supplement && <p>补充：{entry.response.supplement}</p>}</div>)}</details></section>}
         </RequirementWorkspace>}
         {document?.product && <RequirementWorkspace title="审核与确认产品稿" panel={<><p>对照左侧正文核对需求，在这里填写审阅意见。确认只作用于当前产品版本。</p>

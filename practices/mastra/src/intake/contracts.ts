@@ -35,6 +35,35 @@ export const answerSchema = z.object({ questionId: text, selected: z.array(text)
 export const responseSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), action: z.enum(['refine', 'finalize']), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(8), supplement: z.string().trim().max(4000) });
 export const intakeSchema = z.object({ enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })) });
 export type Intake = z.infer<typeof intakeSchema>;
+/** 已确认规则是由人工提交答案派生的只读视图，不把推荐或假设升级为业务事实。 */
+export const confirmedDecisionSchema = z.object({
+  round: z.number().int().min(1),
+  questionId: text,
+  question: text,
+  selected: z.array(z.object({ id: text, label: text })).max(8),
+  custom: z.string().trim().max(4000),
+  reviewer: z.string().trim().min(1).max(100),
+});
+export type ConfirmedDecision = z.infer<typeof confirmedDecisionSchema>;
+
+/** 将历史中的显式选择/填写规范化为产品稿可消费的确认基线；未回答推荐不进入结果。 */
+export function collectConfirmedDecisions(intake: Intake): ConfirmedDecision[] {
+  const decisions: ConfirmedDecision[] = [];
+  intake.history.forEach((entry, index) => {
+    entry.response.answers.forEach(answer => {
+      const question = entry.plan.questions.find(item => item.id === answer.questionId);
+      if (!question) return;
+      const selected = answer.selected.flatMap(id => {
+        const option = question.options.find(item => item.id === id);
+        return option ? [{ id: option.id, label: option.label }] : [];
+      });
+      const custom = answer.custom.trim();
+      if (!selected.length && !custom) return;
+      decisions.push(confirmedDecisionSchema.parse({ round: index + 1, questionId: question.id, question: question.title, selected, custom, reviewer: entry.response.reviewer }));
+    });
+  });
+  return decisions;
+}
 /** 最新分析各业务维度均明确且没有必答缺口时，才允许请求结束澄清。 */
 export function canFinalizePlan(plan: z.infer<typeof planSchema>): boolean {
   return !!plan.maturity && Object.values(plan.maturity).every(/** 每个维度均需有判断。 */item => item.clear) && !plan.questions.some(/** 必答问题仍然表示关键缺口。 */question => question.required);

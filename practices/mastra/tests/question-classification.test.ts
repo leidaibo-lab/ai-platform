@@ -1,7 +1,7 @@
 /** 分类契约与恢复边界：不调用真实模型，不改写历史问题和确认事实。 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generatedPlanSchema, planSchema, validateAnswers, intakeHash, canFinalizePlan } from '../src/intake/contracts.js';
+import { generatedPlanSchema, planSchema, validateAnswers, intakeHash, canFinalizePlan, collectConfirmedDecisions } from '../src/intake/contracts.js';
 import { generatedBlockerPlanSchema, validateBlockerPlan } from '../src/intake/blocker-contracts.js';
 import { createIntakeWorkflow } from '../src/intake/workflow.js';
 import { Mastra } from '@mastra/core';
@@ -46,6 +46,20 @@ test('业务成熟度：任一维度未闭合、仍有关键问题或旧稿缺�
     assert.equal(canFinalizePlan({ ...plan, questions: [], maturity: { ...maturity, [key]: { clear: false, evidence: '仍缺必要业务决定' } } }), false);
   }
   assert.throws(/** 新输出缺少成熟度不能发布成可确认方案。 */() => generatedPlanSchema.parse({ ...plan, maturity: undefined }));
+});
+
+test('确认基线只收录用户显式选择或填写，不收录推荐、假设和未回答问题', /** 推荐只能降低决策成本，不能越过人工确认。 */() => {
+  const state = {
+    enabled: true,
+    ready: false,
+    round: 2,
+    plan: generatedPlanSchema.parse({ ...plan, questions: [optional] }),
+    hash: 'a'.repeat(64),
+    history: [{ plan: generatedPlanSchema.parse({ ...plan, questions: [optional] }), response: { hash: 'a'.repeat(64), action: 'refine' as const, reviewer: '业务负责人', answers: [{ questionId: 'preference', selected: ['minimal'], custom: '' }], supplement: '' } }],
+  };
+  const decisions = collectConfirmedDecisions(state);
+  assert.deepEqual(decisions, [{ round: 1, questionId: 'preference', question: '展示偏好', selected: [{ id: 'minimal', label: '最小范围' }], custom: '', reviewer: '业务负责人' }]);
+  assert.equal(decisions.some(/** 未回答的必答/可选项不能被推荐自动填入。 */decision => decision.questionId === 'scope'), false);
 });
 
 test('开发业务阻塞不能降级；附加可选细节不覆盖业务阻塞', /** 模型分类不能移除宿主实际记录的开工阻塞。 */() => {
