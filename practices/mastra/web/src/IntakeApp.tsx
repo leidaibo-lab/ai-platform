@@ -8,6 +8,7 @@ import { ClarificationProgress, RequirementWorkspace } from './components/Requir
 import { RemoteSyncSettings } from './RemoteSyncSettings';
 import { RepositoryManagement } from './RepositoryManagement';
 import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
+import { getRunFlowStage, RunFlowMini } from './components/RunFlowMini';
 import './intake.css';
 interface Document { developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
 /** 从已提交历史中投影确认基线；当前轮推荐、假设和未提交草稿不进入列表。 */
@@ -20,16 +21,6 @@ function confirmedRules(intake: NonNullable<Document['intake']>) {
     const value = [...selected, custom].filter(Boolean).join('；');
     return value ? [{ round: round + 1, question: question.title, value, reviewer: entry.response.reviewer }] : [];
   }));
-}
-/** 从实际关口映射业务阶段，避免进入开发后仍高亮需求输入。 */
-function intakeStage(document?: Document): number {
-  if (document?.progress?.phase === '产品稿修订') return 1;
-  if (document?.gate?.key === 'confirm-blocker-answers') return 0;
-  if (document?.gate?.key === 'review-revised-product') return 1;
-  if (document?.blockage) return 2;
-  if (document?.product || document?.retry?.step.startsWith('draft-product.')) return 1;
-  if (document?.gate) return ['confirm-project-scope', 'approve-architecture', 'resolve-readiness', 'resolve-findings', 'recover-development'].includes(document.gate.key) ? 2 : 3;
-  return document?.outcome ? 3 : 0;
 }
 /** 主流程需求入口；只有未提交表单属于 React，所有已确认内容来自快照。 */
 export function IntakeApp() {
@@ -154,7 +145,7 @@ export function IntakeApp() {
       <small>所有确认在此工作台完成</small>
     </aside>
     <main className="intake-main"><header><span>产研交付 · 业务流程</span><div className="intake-actions"><button disabled={busy} onClick={/** 管理仓库字典不改变当前Run。 */() => setShowRepositoryManagement(true)}>项目仓库管理</button><button disabled={busy} onClick={/** 设置只影响后续同步节点。 */() => setShowSyncSettings(true)}>远端同步设置</button><button disabled={busy} onClick={/** 刷新只回读事实。 */() => void refresh()}>刷新状态</button></div></header>
-      <div className="intake-progress"><span className={intakeStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={intakeStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={intakeStage(document) === 2 ? 'active' : ''}>03 开发授权与实施</span><span className={intakeStage(document) === 3 ? 'active' : ''}>04 测试与发布</span></div>
+      <div className="intake-progress"><span className={getRunFlowStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={getRunFlowStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={getRunFlowStage(document) === 2 || getRunFlowStage(document) === 3 ? 'active' : ''}>03 开发授权与实施</span><span className={getRunFlowStage(document) >= 4 ? 'active' : ''}>04 测试与发布</span></div>
       {error && <div role="alert" className="intake-error">{error}</div>}
       {busy && <p role="status">正在处理，请勿重复提交。完成后会自动展示下一步…</p>}
       {!id ? <section className="intake-card"><div className="intake-eyebrow">先描述问题，让方案逐步清晰</div><h1>你想解决什么问题？</h1><p>说明使用者、当前困难和期望结果。我们会先给出方案建议，再请你确认关键选择。</p>
@@ -163,6 +154,7 @@ export function IntakeApp() {
         <button className="primary" disabled={busy || uncertain || !brief.trim() || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)} onClick={start}>分析需求，形成初步方案 →</button>
       </section> : <>
         <section className="intake-context"><details><summary>原始需求 · {document?.mode === 'fixture' ? '固定样例，不理解业务输入' : document?.mode === 'live' ? '真实模型提案，待人工审核' : '正在载入'}</summary><p>{document?.brief || brief}</p><code>{id}</code></details></section>
+        {document && <RunFlowMini document={document} />}
         {intake && <RequirementWorkspace title="澄清待确认项" panel={<fieldset className="requirement-inputs" disabled={busy || uncertain}><legend className="sr-only">本轮问题与补充</legend>
 <QuestionFlow key={intake.hash} questions={questions} answers={answers} activeId={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question" />
           <label>其他补充<textarea value={supplement} maxLength={4000} onChange={/** 补充与当前问题回答一并保存。 */e => setSupplement(e.target.value)} /></label>
