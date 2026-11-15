@@ -13,7 +13,7 @@ export const productAttemptSchema = z.object({
 });
 export const productFailureSchema = z.object({ version: z.literal('product-generation-failure.v1'), attempts: z.array(productAttemptSchema).min(1).max(2) });
 /** 已接受生成的最小结束证据；失败尝试可选保存，最多对应一次有界自动重试。 */
-export const productGenerationSchema = z.object({ version: z.literal('product-generation.v1'), finishReason: z.literal('stop'), attempts: z.number().int().min(1).max(2), durationMs: z.number().int().nonnegative(), failures: z.array(productAttemptSchema).max(1) });
+export const productGenerationSchema = z.object({ version: z.literal('product-generation.v1'), finishReason: z.literal('stop'), attempts: z.number().int().min(1).max(2), durationMs: z.number().int().nonnegative(), startedAt: z.iso.datetime().optional(), endedAt: z.iso.datetime().optional(), failures: z.array(productAttemptSchema).max(1) });
 export type ProductAttempt = z.infer<typeof productAttemptSchema>;
 export type ProductFailureKind = z.infer<typeof productFailureKindSchema>;
 export type ProductFailureEvidence = z.infer<typeof productFailureSchema>;

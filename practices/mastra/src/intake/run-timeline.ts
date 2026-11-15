@@ -1,0 +1,295 @@
+import type { WorkflowRunStatus } from '@mastra/core/workflows';
+import { stateV2Schema } from '../development/v2/contracts.js';
+
+/** 对外公开的执行节点状态；不包含 Mastra 内部错误和模型隐藏内容。 */
+export type RunTimelineStatus = 'pending' | 'running' | 'completed' | 'failed' | 'waiting' | 'suspended' | 'cancelled';
+
+/** 工作台可消费的单个执行节点事实。 */
+export interface RunTimelineNode {
+  id: string;
+  kind: 'step' | 'agent' | 'check';
+  title: string;
+  status: RunTimelineStatus;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  tools: string[];
+  files: string[];
+  modelSteps?: number;
+  check?: { id: string; exitCode: number | null };
+}
+
+/** Run 时间线的稳定只读投影；Workflow/Store 仍是事实所有者。 */
+export interface RunTimeline {
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  nodes: RunTimelineNode[];
+  tools: string[];
+  files: string[];
+}
+
+/** 面向浏览器的瞬时 Workflow 活动摘要；不包含原始事件 payload。 */
+export interface RunActivityEvent {
+  type: 'workflow-step';
+  stepId: string | null;
+  title: string;
+  status: RunTimelineStatus;
+  summary: string;
+  occurredAt: string;
+}
+
+interface SnapshotLike {
+  status: WorkflowRunStatus | string;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+  result?: unknown;
+  steps?: Record<string, unknown>;
+}
+
+interface StepResultLike {
+  status?: string;
+  startedAt?: number;
+  endedAt?: number;
+}
+
+interface WorkFact {
+  role: string;
+  tools: string[];
+  files: string[];
+  steps: number;
+  round?: number;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+}
+
+const roleTitles: Record<string, string> = {
+  analysis: '产品经理：需求分析',
+  clarification: '产品经理：需求澄清',
+  'scope-priority': '产品经理：范围与优先级',
+  writing: '产品经理：产品稿写作',
+  context: '上下文 Agent',
+  architect: '架构 Agent',
+  readiness: '就绪评估 Agent',
+  frontend: '前端实现 Agent',
+  backend: '后端实现 Agent',
+  infrastructure: '基础设施 Agent',
+  'self-check': '研发自检 Agent',
+  reviewer: '代码评审 Agent',
+};
+
+const stepTitles: Record<string, string> = {
+  'initialize-product-development': '初始化产研流程',
+  'initialize-delivery-lifecycle': '初始化交付生命周期',
+  'product-analysis': '需求分析',
+  'product-clarification': '需求澄清整理',
+  'product-scope-priority': '范围与优先级',
+  'product-writing': '产品稿写作',
+  'review-product-quality': '产品质量审查',
+  'guided-requirements': '需求澄清',
+  'review-product': '产品稿审阅',
+  'development-team': '研发团队执行',
+  'testing-team': '测试团队执行',
+  'deployment-team': '发布团队执行',
+  'delivery-team': '交付汇总',
+  'confirm-final-delivery': '确认最终交付',
+};
+
+/** 将 Mastra Step 状态映射为工作台有限状态集合。 */
+function mapStatus(status: string | undefined): RunTimelineStatus {
+  if (status === 'success') return 'completed';
+  if (status === 'failed' || status === 'tripwire') return 'failed';
+  if (status === 'suspended') return 'suspended';
+  if (status === 'waiting' || status === 'paused') return 'waiting';
+  if (status === 'canceled' || status === 'cancelled' || status === 'bailed') return 'cancelled';
+  if (status === 'running') return 'running';
+  return 'pending';
+}
+
+/** 将 Unix 毫秒时间转换为稳定 ISO 字符串。 */
+function isoTime(value: number | Date | string | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/** 计算已结束或正在运行节点的安全耗时。 */
+function durationMs(startedAt: number | null, endedAt: number | null, now = Date.now()): number | null {
+  if (startedAt === null) return null;
+  return Math.max(0, (endedAt ?? now) - startedAt);
+}
+
+/** 将嵌套步骤名压缩为用户可理解的节点标题。 */
+export function titleForStep(path: string): string {
+  const leaf = path.split('.').at(-1) ?? path;
+  return stepTitles[leaf] ?? leaf.replaceAll('-', ' ');
+}
+
+/** 将原生 Workflow 事件压缩为可直接展示的安全活动摘要。 */
+export function projectWorkflowActivity(eventType: string, stepId: string | null, status: string | null, occurredAt = new Date().toISOString()): RunActivityEvent {
+  const eventStatus = eventType === 'workflow-step-start'
+    ? 'running'
+    : eventType === 'workflow-step-suspended'
+      ? 'suspended'
+      : eventType === 'workflow-step-waiting'
+        ? 'waiting'
+        : eventType === 'workflow-step-finish' || eventType === 'workflow-step-result'
+          ? 'completed'
+          : mapStatus(status ?? undefined);
+  const title = stepId ? titleForStep(stepId) : eventType === 'workflow-start' ? '初始化产研流程' : '整理当前阶段结果';
+  const summary = eventStatus === 'running'
+    ? `正在处理“${title}”，整理当前阶段的公开执行事实。`
+    : eventStatus === 'completed'
+      ? `已完成“${title}”，正在同步下一步。`
+      : eventStatus === 'suspended'
+        ? `“${title}”已暂停，等待后续确认。`
+        : eventStatus === 'waiting'
+          ? `“${title}”正在等待继续执行。`
+          : `“${title}”当前状态：${eventStatus}。`;
+  return { type: 'workflow-step', stepId, title, status: eventStatus, summary, occurredAt };
+}
+
+/** 从快照结果和已提交步骤输出中提取业务状态，而不递归展示完整模型结果。 */
+/** 从 Agent 工具结果中提取白名单工具和文件路径，拒绝把参数或结果正文带到 UI。 */
+export function projectToolFacts(toolResults: unknown): { tools: string[]; files: string[] } {
+  const tools = new Set<string>();
+  const files = new Set<string>();
+  if (!Array.isArray(toolResults)) return { tools: [], files: [] };
+  for (const item of toolResults) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const payload = record.payload && typeof record.payload === 'object' ? record.payload as Record<string, unknown> : record;
+    const toolName = typeof payload.toolName === 'string' ? payload.toolName : undefined;
+    if (!toolName) continue;
+    tools.add(toolName);
+    const args = payload.args ?? payload.input ?? record.args ?? record.input;
+    if (!args || typeof args !== 'object') continue;
+    const path = (args as Record<string, unknown>).path;
+    if (typeof path === 'string' && path.length > 0 && !path.startsWith('/') && !path.includes('..')) files.add(path);
+  }
+  return { tools: [...tools].sort(), files: [...files].sort() };
+}
+
+/** 从结果和步骤输出中提取已保存的业务执行元数据，并按事实指纹去重。 */
+function collectFacts(snapshot: SnapshotLike): { work: WorkFact[]; files: string[]; checks: Array<{ id: string; exitCode: number | null; durationMs: number }> } {
+  const candidates: unknown[] = [snapshot.result];
+  for (const value of Object.values(snapshot.steps ?? {})) {
+    if (Array.isArray(value)) candidates.push(...value);
+    else candidates.push(value);
+  }
+  const work = new Map<string, WorkFact>();
+  const files = new Set<string>();
+  const checks: Array<{ id: string; exitCode: number | null; durationMs: number }> = [];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const record = candidate as Record<string, unknown>;
+    const possibleStates = [record, record.output, record.payload, (record.output as Record<string, unknown> | undefined)?.development];
+    for (const possible of possibleStates) {
+      if (!possible || typeof possible !== 'object') continue;
+      const possibleRecord = possible as Record<string, unknown>;
+      const parsed = stateV2Schema.safeParse(possible);
+      if (parsed.success) {
+        for (const entry of parsed.data.work) {
+          const fact = entry as typeof entry & Partial<Pick<WorkFact, 'files' | 'round' | 'startedAt' | 'endedAt' | 'durationMs'>>;
+          const normalized: WorkFact = { role: entry.role, tools: entry.tools, files: fact.files ?? [], steps: entry.steps, ...(fact.round === undefined ? {} : { round: fact.round }), ...(fact.startedAt ? { startedAt: fact.startedAt } : {}), ...(fact.endedAt ? { endedAt: fact.endedAt } : {}), ...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }) };
+          const key = JSON.stringify(normalized);
+          work.set(key, normalized);
+        }
+        for (const path of Object.keys(parsed.data.context?.files ?? {})) files.add(path);
+        for (const check of parsed.data.checks) checks.push({ id: check.id, exitCode: check.exitCode ?? null, durationMs: check.durationMs });
+        for (const history of parsed.data.verificationHistory ?? []) {
+          for (const check of history.checks) checks.push({ id: check.id, exitCode: check.exitCode ?? null, durationMs: check.durationMs });
+        }
+      }
+      const productWork = (possibleRecord.productWork as { entries?: Array<{ role: string; toolNames: string[]; modelSteps: number; files?: string[]; startedAt?: string; endedAt?: string; durationMs?: number }> } | undefined)?.entries;
+      for (const entry of productWork ?? []) {
+        const fact: WorkFact = { role: entry.role, tools: entry.toolNames, files: entry.files ?? [], steps: entry.modelSteps, ...(entry.startedAt ? { startedAt: entry.startedAt } : {}), ...(entry.endedAt ? { endedAt: entry.endedAt } : {}), ...(entry.durationMs === undefined ? {} : { durationMs: entry.durationMs }) };
+        work.set(JSON.stringify(fact), fact);
+      }
+    }
+  }
+  return { work: [...work.values()], files: [...files].sort(), checks };
+}
+
+/** 从原生 Workflow 快照生成工作台的节点、工具和文件读取投影。 */
+export function projectRunTimeline(snapshot: SnapshotLike): RunTimeline {
+  const now = Date.now();
+  const nodes: RunTimelineNode[] = [];
+  const timelineTools = new Set<string>();
+  const facts = collectFacts(snapshot);
+  const files = new Set(facts.files);
+  for (const entry of facts.work) {
+    for (const tool of entry.tools) timelineTools.add(tool);
+    for (const path of entry.files) files.add(path);
+  }
+
+  for (const [path, raw] of Object.entries(snapshot.steps ?? {})) {
+    const results = Array.isArray(raw) ? raw : [raw];
+    results.forEach((value, index) => {
+      if (!value || typeof value !== 'object') return;
+      const result = value as StepResultLike;
+      const started = typeof result.startedAt === 'number' ? result.startedAt : null;
+      const ended = typeof result.endedAt === 'number' ? result.endedAt : null;
+      nodes.push({
+        id: results.length > 1 ? `${path}#${index + 1}` : path,
+        kind: 'step',
+        title: titleForStep(path),
+        status: mapStatus(result.status),
+        startedAt: isoTime(started ?? undefined),
+        endedAt: isoTime(ended ?? undefined),
+        durationMs: durationMs(started, ended, now),
+        tools: [],
+        files: [],
+      });
+    });
+  }
+
+  facts.work.forEach((entry, index) => {
+    for (const tool of entry.tools) timelineTools.add(tool);
+    nodes.push({
+      id: `agent:${index + 1}`,
+      kind: 'agent',
+      title: roleTitles[entry.role] ?? `${entry.role} Agent`,
+      status: 'completed',
+      startedAt: entry.startedAt ?? null,
+      endedAt: entry.endedAt ?? null,
+      durationMs: entry.durationMs ?? (entry.startedAt ? durationMs(Date.parse(entry.startedAt), entry.endedAt ? Date.parse(entry.endedAt) : null, now) : null),
+      tools: [...entry.tools],
+      files: [...entry.files],
+      modelSteps: entry.steps,
+    });
+  });
+
+  facts.checks.forEach((check, index) => nodes.push({
+    id: `check:${check.id}:${index + 1}`,
+    kind: 'check',
+    title: `检查：${check.id}`,
+    status: check.exitCode === 0 ? 'completed' : 'failed',
+    startedAt: null,
+    endedAt: null,
+    durationMs: check.durationMs,
+    tools: ['runChecks'],
+    files: [],
+    check: { id: check.id, exitCode: check.exitCode },
+  }));
+
+  nodes.sort((left, right) => {
+    if (!left.startedAt && !right.startedAt) return left.id.localeCompare(right.id);
+    if (!left.startedAt) return 1;
+    if (!right.startedAt) return -1;
+    return left.startedAt.localeCompare(right.startedAt);
+  });
+  const startedAt = isoTime(snapshot.createdAt);
+  const endedAt = ['running', 'pending', 'waiting'].includes(snapshot.status) ? null : isoTime(snapshot.updatedAt);
+  const startMs = startedAt ? Date.parse(startedAt) : null;
+  const endMs = endedAt ? Date.parse(endedAt) : null;
+  return {
+    startedAt,
+    endedAt,
+    durationMs: durationMs(startMs, endMs, now),
+    nodes,
+    tools: [...timelineTools].sort(),
+    files: [...files].sort(),
+  };
+}

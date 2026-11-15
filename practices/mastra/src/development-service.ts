@@ -1,4 +1,4 @@
-/** 原生开发运行装配；业务入口必须验证已保存产品批准，不自动消费未确认提案。 */
+/** 独立研发执行评测装配；正式业务入口由 productDevelopmentWorkflow 负责。 */
 import { Mastra } from '@mastra/core';
 import { LibSQLStore } from '@mastra/libsql';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
@@ -6,28 +6,8 @@ import { resolve } from 'node:path';
 import type { PracticeConfig } from './mastra/config.js';
 import { DevelopmentExecution } from './development-execution.js';
 import { createDevelopmentWorkflow } from './mastra/workflows/development.js';
-import { developmentHash, developmentInputSchema, developmentReviewSchema, developmentStateSchema, projectSchema, recoveryReviewSchema, validateDevelopmentIdentity, validateEvaluationSource, type DevelopmentInput } from './development/contracts.js';
-import { deliveryStatus, type DeliveryContext } from './delivery-service.js';
+import { developmentHash, developmentInputSchema, developmentReviewSchema, developmentStateSchema, recoveryReviewSchema, validateDevelopmentIdentity, validateEvaluationSource, type DevelopmentInput } from './development/contracts.js';
 import { developmentRecoveryHash, type DevelopmentGenerator } from './development/recovery.js';
-
-/** 从产品存储派生批准事实，不能使用调用者提供的正文/hash伪造。 */
-export async function approvedDevelopmentInput(app: DeliveryContext, productRunId: string, project: unknown): Promise<DevelopmentInput> {
-  const status = await deliveryStatus(app, productRunId);
-  const snapshot = await app.deliveryWorkflow.getWorkflowRunById(productRunId);
-  const candidate = snapshot?.steps?.['review-product'];
-  const output = candidate && !Array.isArray(candidate) ? candidate.output : null;
-  const state = output as { artifacts?: { stage: string; hash: string; content: string; evidence: 'fixture' | 'model-proposal' }[]; reviews?: { role: string; decision: string; artifactHash: string }[] } | null;
-  const artifact = state?.artifacts?.find(
-    // 只接受产品稿，不用开发/测试提案代替需求。
-    (item) => item.stage === 'product',
-  );
-  const approved = state?.reviews?.some(
-    // 已保存批准绑定同一产品hash。
-    (item) => item.role === 'product' && item.decision === 'approve' && item.artifactHash === artifact?.hash,
-  );
-  if (!artifact || !approved || status.mode !== app.config.mode) throw new Error('产品版本未在当前模式下批准');
-  return developmentInputSchema.parse({ source: { kind: 'approved-product', runId: productRunId, hash: artifact.hash, content: artifact.content, evidence: artifact.evidence }, project: projectSchema.parse(project), maxReworks: 1 });
-}
 
 /** 新目录只复制显式输入，不复制仓库、配置或环境文件。 */
 export function seedDevelopment(directory: string, input: DevelopmentInput): void {
@@ -97,8 +77,8 @@ export async function recoverDevelopment(app: DevelopmentApplication, runId: str
   return run.resume({ step: ['development-iteration', 'recover-development'], resumeData: review });
 }
 
-/** 新需求来源显式区分真实产品批准与合成评测组织者修订。 */
-export type DevelopmentRevision = { productApp: DeliveryContext; productRunId: string } | { evaluationSource: DevelopmentInput['source'] };
+/** 评测澄清只允许复用显式登记的合成输入，不创建独立产品批准路径。 */
+export type DevelopmentRevision = { evaluationSource: DevelopmentInput['source'] };
 
 /**
  * 澄清后创建带来源链的新目录，不迁移旧方案批准或覆盖旧Run。
@@ -116,16 +96,11 @@ export async function clarifyDevelopment(app: DevelopmentApplication, runId: str
   for (const path of Object.keys(app.input.project.files)) files[path] = await app.execution.readFile(path);
   const project = { ...app.input.project, files };
   let source: DevelopmentInput['source'];
-  if ('productApp' in revision) {
-    if (state.input.source.kind !== 'approved-product' || revision.productApp.config.mode !== app.config.mode) throw new Error('产品澄清来源或模式不匹配');
-    source = (await approvedDevelopmentInput(revision.productApp, revision.productRunId, project)).source;
-  } else {
-    if (!app.evaluationPolicy || state.input.source.kind !== 'evaluation' || revision.evaluationSource.kind !== 'evaluation' || revision.evaluationSource.evidence !== 'evaluation-input' || revision.evaluationSource.hash !== developmentHash(revision.evaluationSource.content)) throw new Error('仅评测组织者入口允许合成需求修订');
-    source = revision.evaluationSource;
-  }
+  if (!app.evaluationPolicy || state.input.source.kind !== 'evaluation' || revision.evaluationSource.kind !== 'evaluation' || revision.evaluationSource.evidence !== 'evaluation-input' || revision.evaluationSource.hash !== developmentHash(revision.evaluationSource.content)) throw new Error('仅评测组织者入口允许合成需求修订');
+  source = revision.evaluationSource;
   if (source.hash === state.input.source.hash) throw new Error('澄清必须提供新的已确认需求版本');
   const input = developmentInputSchema.parse({ source, project, maxReworks: state.input.maxReworks,
-    continuation: { runId, sourceHash: state.input.source.hash, candidateHash, reason, authority: source.kind === 'approved-product' ? 'approved-product-version' : 'evaluation-revision' } });
+    continuation: { runId, sourceHash: state.input.source.hash, candidateHash, reason, authority: 'evaluation-revision' } });
   seedDevelopment(directory, input);
   return input;
 }

@@ -1,12 +1,8 @@
 import { remoteHandoffSchema } from '../../delivery/remote-handoff.js';
-import { intakeSchema } from '../../intake/contracts.js';
-import { createHash } from 'node:crypto';
-import { createStep, createWorkflow } from '@mastra/core/workflows';
+import { intakeSchema, intakeModeSchema } from '../../intake/contracts.js';
 import { z } from 'zod';
-import type { createAgents } from '../agents/index.js';
-import { revisionSourceSchema } from './revision.js';
-import { maxProductReworks, productReworkSchema, productWorkSchema } from './product-contract.js';
-import { createProductWorkflow } from './product.js';
+import { revisionSourceSchema } from './revision-contract.js';
+import { maxProductReworks, productQualityReviewSchema, productReworkSchema, productWorkSchema } from './product-contract.js';
 import { correlationSchema } from '../../delivery/asset-identity.js';
 import { maxContextBudgetLevel } from '../../delivery/context-budget.js';
 
@@ -25,12 +21,15 @@ export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
   intake: intakeSchema.optional(),
+  // 顶层保留入口策略，便于恢复和页面投影不依赖当前暂停点。
+  intakeMode: intakeModeSchema.optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),
   correlation: correlationSchema.optional(),
   brief: z.string().trim().min(1).max(12000),
   mode: z.enum(['fixture', 'live']),
   revision: revisionSourceSchema.optional(),
   productWork: productWorkSchema.optional(),
+  productQualityReview: productQualityReviewSchema.optional(),
   productRework: productReworkSchema.optional(),
   contextBudgetLevel: z.number().int().min(0).max(maxContextBudgetLevel).optional(),
   artifacts: z.array(artifactSchema).max(4),
@@ -42,7 +41,7 @@ export type PendingReview = z.infer<typeof pendingSchema>;
 export type Delivery = z.infer<typeof deliverySchema>;
 export const stages: readonly Stage[] = ['product', 'development', 'testing', 'operations'];
 export const deliveryInputSchema = deliverySchema.pick({ brief: true, revision: true, productRework: true }).refine(
-  // 预览稿原样应用与四角色返工是两条明确路径，不接受含混的双来源。
+  // 修订稿原样应用与产品团队返工是两条明确路径，不接受含混的双来源。
   (input) => !(input.revision && input.productRework),
   '修订预览与产品返工不能同时作为输入来源',
 );
@@ -55,65 +54,4 @@ export function validateReview(pending: PendingReview, input: unknown): Review {
   if (review.decision === 'rework' && pending.role !== 'product') throw new Error('只有产品阶段支持退回修改');
   if (review.decision === 'rework' && pending.productReworkRound >= maxProductReworks) throw new Error('产品返工已达三次上限，请人工整理后另起需求，或批准/终止当前轮次');
   return review;
-}
-
-/** 用原生复合 Workflow 和 suspend/resume 表达交接，不实现另一套调度器。 */
-export function createDeliveryWorkflow(agents: ReturnType<typeof createAgents>, mode: Delivery['mode'], exportProduct?: (runId: string, state: Delivery) => Promise<unknown>) {
-  const stageAgents = { development: agents.developmentAgent, testing: agents.testingAgent, operations: agents.operationsAgent };
-  const initialize = createStep({
-    id: 'initialize', inputSchema: deliveryInputSchema, outputSchema: deliverySchema,
-    // 模式和空记录来自应用配置，入口不能伪造已确认内容或证据级别。
-    execute: async ({ inputData }) => ({ ...inputData, mode, artifacts: [], reviews: [], outcome: 'in-progress' as const }),
-  });
-  /** 生成提案并绑定需求及全部上游已确认交接物，生成行为没有工程副作用。 */
-  function draft(stage: Exclude<Stage, 'product'>) {
-    return createStep({
-      id: `draft-${stage}`, inputSchema: deliverySchema, outputSchema: deliverySchema,
-      // 将已确认内容交给对应原生 Agent，检查非空输出后生成内容版本。
-      execute: async ({ inputData }) => {
-        if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式继续生成交接物');
-        const result = await stageAgents[stage].generate(JSON.stringify({ brief: inputData.brief, approvedArtifacts: inputData.artifacts, ...(inputData.revision ? { confirmedRevision: { decisions: inputData.revision.confirmedDecisions, sourceRunId: inputData.revision.sourceRunId, note: '原始 brief 用于溯源；已确认修订及当前批准交接物是本轮规则依据。' } } : {}) }), { maxSteps: stage === 'development' ? 3 : 1 });
-        const content = z.string().trim().min(1).max(100000).parse(result.text);
-        const hash = createHash('sha256').update(JSON.stringify({ stage, brief: inputData.brief, upstream: inputData.artifacts, content, ...(inputData.revision ? { revision: inputData.revision } : {}) })).digest('hex');
-        return { ...inputData, artifacts: [...inputData.artifacts, { stage, content, hash, evidence: inputData.mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };
-      },
-    });
-  }
-  /** 人工确认点由 Mastra 保存；终止和返工分别落为终态，新轮次由服务启动。 */
-  function gate(stage: Stage) {
-    return createStep({
-      id: `review-${stage}`, inputSchema: deliverySchema, outputSchema: deliverySchema,
-      suspendSchema: pendingSchema, resumeSchema: reviewSchema,
-      // 第一次暂停，恢复时核对版本和角色；拒绝不会生成下一阶段。
-      execute: async ({ inputData, resumeData, suspend, bail, runId }) => {
-        if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式继续审批');
-        const artifact = inputData.artifacts.at(-1)!;
-        const pending = pendingSchema.parse({ role: stage, artifact, productReworkRound: inputData.productRework?.round ?? 0 });
-        if (!resumeData) {
-          if (stage === 'product' && exportProduct) {
-            try { await exportProduct(runId, inputData); }
-            catch { console.warn('Workspace 产物导出失败；人工暂停点保留，可使用 workspace export-run 补导出。'); }
-          }
-          return suspend(pending);
-        }
-        const review = validateReview(pending, resumeData);
-        const next = { ...inputData, reviews: [...inputData.reviews, review] };
-        if (review.decision === 'reject') return bail({ ...next, outcome: 'rejected' as const });
-        if (review.decision === 'rework') return bail({ ...next, outcome: 'rework-requested' as const });
-        return next;
-      },
-    });
-  }
-  const finish = createStep({
-    id: 'finish', inputSchema: deliverySchema, outputSchema: deliverySchema,
-    // 终态仅表示四次方案确认，不代表代码、测试或部署已执行。
-    execute: async ({ inputData }) => ({ ...inputData, outcome: 'plan-approved' as const }),
-  });
-  return createWorkflow({ id: 'product-delivery', inputSchema: deliveryInputSchema, outputSchema: deliverySchema })
-    .then(initialize)
-    .then(createProductWorkflow(agents, mode, deliverySchema)).then(gate('product'))
-    .then(draft('development')).then(gate('development'))
-    .then(draft('testing')).then(gate('testing'))
-    .then(draft('operations')).then(gate('operations'))
-    .then(finish).commit();
 }

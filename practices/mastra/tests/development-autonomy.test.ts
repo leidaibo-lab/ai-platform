@@ -12,7 +12,7 @@ import { seedDevelopment } from '../src/development-service.js';
 import { developmentHash } from '../src/development/contracts.js';
 import { inputV2Schema, stateV2Schema, type InputV2, type StateV2 } from '../src/development/v2/contracts.js';
 import { createDevelopmentWorkflowV2 } from '../src/mastra/workflows/development-v2.js';
-import { createAgentV2, generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
+import { createAgentV2, developmentAgentKind, generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
 import { loadDevelopmentMethods } from '../src/development/v2/methods.js';
 import { runVerification, verificationScope, VerificationBudgetError } from '../src/development/v2/autonomy.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
@@ -49,7 +49,6 @@ for (const scenario of ['repair', 'changing-error', 'no-progress']) {
         const value = scenario === 'no-progress' || state.round === 0 ? 0 : scenario === 'changing-error' && state.round === 1 ? 2 : 1;
         await args[1].writeFile(args[4][0], source(value, state.round));
       }
-      if (args[2] === 'self-check') return { ...entry, text: JSON.stringify({ summary: '固定检查失败时由批准团队协同定位', route: scenario === 'repair' ? 'frontend' : 'human' }) };
       return entry;
     };
     await harness(input(), generate, /** 交付与停止必须由真实Workflow决定。 */async (result, execution, config, workflow, storage) => {
@@ -96,6 +95,17 @@ test('跨前后端共同修复并重跑依赖下游，无关已完成任务保�
     assert.equal(executions.filter(/** 无关基础设施任务保持完成。 */item => item.endsWith('src/unrelated.mjs')).length, 1);
     assert.ok(executions.includes('1:src/downstream.mjs')); assert.equal(state.resolutions.length, 2); assert.equal(state.codeReviews.length, 2);
   });
+});
+
+test('研发阶段角色只映射三类 Agent，自检保留为确定性 Workflow 门禁', () => {
+  assert.equal(developmentAgentKind('context'), 'development-lead-agent');
+  assert.equal(developmentAgentKind('architect'), 'development-lead-agent');
+  assert.equal(developmentAgentKind('readiness'), 'development-reviewer-agent');
+  assert.equal(developmentAgentKind('reviewer'), 'development-reviewer-agent');
+  assert.equal(developmentAgentKind('frontend'), 'development-implementer-agent');
+  assert.equal(developmentAgentKind('backend'), 'development-implementer-agent');
+  assert.equal(developmentAgentKind('infrastructure'), 'development-implementer-agent');
+  assert.equal(developmentAgentKind('self-check'), null);
 });
 
 test('环境失败保留分类证据，下一轮只在原授权内重试检查', /** 不把环境异常正文写入模型或日志，也不回退宿主命令。 */async () => {

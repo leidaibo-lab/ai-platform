@@ -19,7 +19,7 @@ export interface ReviewDocument {
   reworkRunId?: string;
   productWork?: {
     version: 'product-graph.v1';
-    entries: { role: 'coordinator' | 'clarification' | 'closure' | 'writing'; content: string; toolNames: string[]; modelSteps: number }[];
+    entries: { role: 'analysis' | 'clarification' | 'scope-priority' | 'writing'; content: string; toolNames: string[]; modelSteps: number }[];
   };
   productRework?: {
     sourceRunId: string;

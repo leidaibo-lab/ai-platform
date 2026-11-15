@@ -2,6 +2,9 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 const text = z.string().trim().min(1).max(4000);
+/** 需求入口的两种协作策略；clarify 保留人工逐项对齐，autofill 由 AI 先生成可审阅初稿。 */
+export const intakeModeSchema = z.enum(['clarify', 'autofill']);
+export type IntakeMode = z.infer<typeof intakeModeSchema>;
 /** 模型解释未决项的业务影响；历史问题可缺省，不补写旧判断。 */
 export const questionDecisionSchema = z.object({ blocks: z.enum(['product', 'development', 'none']), reason: text, unanswered: text });
 /** 两处澄清复用同一判断标准，具体业务证据仍由当前输入提供。 */
@@ -33,7 +36,7 @@ export const generatedPlanSchema = planSchema.safeExtend({ maturity: maturitySch
 });
 export const answerSchema = z.object({ questionId: text, selected: z.array(text).max(8), custom: z.string().trim().max(4000) });
 export const responseSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), action: z.enum(['refine', 'finalize']), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(8), supplement: z.string().trim().max(4000) });
-export const intakeSchema = z.object({ enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })) });
+export const intakeSchema = z.object({ intakeMode: intakeModeSchema.optional(), enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })) });
 export type Intake = z.infer<typeof intakeSchema>;
 /** 已确认规则是由人工提交答案派生的只读视图，不把推荐或假设升级为业务事实。 */
 export const confirmedDecisionSchema = z.object({

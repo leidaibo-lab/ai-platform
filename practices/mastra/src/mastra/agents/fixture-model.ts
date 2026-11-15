@@ -4,9 +4,11 @@ import { MastraLanguageModelV2Mock, createMockModel } from '@mastra/core/test-ut
 const drafts: Record<string, string> = {
   reading: '这是固定样例阅读助手（fixture）。当前文档描述标题长度及空白校验；请重点检查边界、计数口径和异常反馈。此回复未作真实需求推理，也没有修改正文或提交审阅决定。',
   product: '# 产品交接样例（fixture）\n需求：工单标题去首尾空格后为 1–80 字符。\n验收：空白拒绝，长度边界通过，超长拒绝。\n此为固定样例，真实需求须使用 live 模式并人工确认。',
-  'product-coordinator': '# 总产品统筹（fixture）\n本轮按需求梳理、产品闭环、产品写作顺序推进。检查目标、规则缺口与人工反馈；未执行审批。',
+  'product-analysis': '# 需求分析（fixture）\n提取目标、用户、场景、约束、范围和待决事项；未执行审批。',
   'product-clarification': '# 需求梳理（fixture）\n用户诉求：工单标题校验。已给定：去首尾空格、1–80 字符。其他未提供的业务选择交人工确认。',
-  'product-closure': '# 产品闭环（fixture）\n正常、空白、长度边界及超长路径分别验收；字符计数与失败反馈按实际输入确认，不自行补造。',
+  'product-scope-priority': '# 范围与优先级（fixture）\n明确首期范围、非目标、优先级和可检查验收边界；不自行补造业务决定。',
+  'product-manager': '# 产品经理阶段（fixture）\n本轮由同一个产品经理 Agent 完成需求分析、范围与优先级整理或产品稿写作；固定样例不代表真实业务判断。',
+  'product-reviewer': '# 产品独立审查（fixture）\n检查目标、范围、规则、异常流程和验收条件；固定样例不代表真实质量结论，最终仍需人工产品负责人批准。',
   development: '# 代码提案样例（fixture，未执行）\n```ts\n/** 校验工单标题的长度边界。 */\nexport function validTitle(title: string): boolean {\n  const length = title.trim().length;\n  return length >= 1 && length <= 80;\n}\n```\n开发需审查需求一致性、字符计数口径和错误处理；未创建分支或执行构建。',
   testing: '# 测试计划样例（fixture，未执行）\n需求映射：标题长度→空串、空白、1、80、81 字符；去空格→前后空格。\n尚缺：Unicode 计数口径、接口集成、实际运行报告。\n测试人员确认的是计划覆盖，不能视为测试通过。',
   operations: '# 部署方案样例（fixture，未执行）\n前提：明确代码提交、构建制品、环境与权限。\n步骤：CI 检查→预发部署→健康探测→人工授权后发布。\n回滚：保留上一制品，探测失败立即切回并复验。\n当前无制品、无部署执行，运维确认只针对方案。',

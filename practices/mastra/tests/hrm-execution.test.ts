@@ -136,7 +136,7 @@ test('产品资料项目可先规划，工程缺口不能误送产品澄清，�
     current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { project, reviewer: 'test', comment: '合成工程准备完成，重新确认范围' } }, config);
     assert.equal(current.status, 'suspended'); assert.equal(current.gate?.key, 'approve-architecture');
     assert.deepEqual(calls, ['context', 'architect', 'context', 'architect', 'readiness']);
-    const resumed = await workflow.getWorkflowRunById(run.runId); const reviewed = (resumed!.steps!['review-product'] as any).output;
+    const resumed = await workflow.getWorkflowRunById(run.runId); const reviewed = (resumed!.steps!['product-team.review-product'] as any).output;
     assert.equal(reviewed.reviews.length, 1); assert.equal(reviewed.reviews[0].artifactHash, productHash);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });

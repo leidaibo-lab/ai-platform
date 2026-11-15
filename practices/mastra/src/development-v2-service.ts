@@ -8,43 +8,17 @@ import type { PracticeConfig } from './mastra/config.js';
 import { DevelopmentExecution } from './development-execution.js';
 import { developmentHash, recoveryReviewSchema, validateEvaluationSource } from './development/contracts.js';
 import { createDevelopmentWorkflowV2 } from './mastra/workflows/development-v2.js';
-import { approvalV2Schema, findingsHashV2, findingsReviewSchema, inputV2Schema, productWorkflowIdSchema, recoveryHashV2, stateV2Schema, type StateV2 } from './development/v2/contracts.js';
+import { approvalV2Schema, findingsHashV2, findingsReviewSchema, inputV2Schema, recoveryHashV2, stateV2Schema, type StateV2 } from './development/v2/contracts.js';
 import { applyRecoveryDecision } from './development/v2/recovery-policy.js';
 import { applyFindingsReview, assertApprovalV2, validateIdentityV2 } from './development/v2/gates.js';
 import { loadDevelopmentMethods } from './development/v2/methods.js';
 import type { GeneratorV2 } from './development/v2/agents.js';
-import { deliverySchema } from './mastra/workflows/delivery.js';
-import type { DeliveryContext } from './delivery-service.js';
-import type { ProductV2Context } from './product-delivery-v2-service.js';
-import { productDeliveryV2Schema } from './mastra/workflows/product-delivery-v2.js';
-import { seedDevelopment } from './development-service.js';
 
 export const runLocatorSchema = z.object({ runId: z.string().min(1), mode: z.enum(['fixture', 'live']), version: z.enum(['development-execution', 'development-execution-v2']).default('development-execution') });
 
 /** 旧缺省只映射v1；未知版本拒绝，run.json只作定位，不提供批准事实。 */
 export function readDevelopmentLocator(directory: string) {
   return runLocatorSchema.parse(JSON.parse(readFileSync(resolve(directory, 'run.json'), 'utf8')));
-}
-
-/** 只从已注册的allowlist工作流读取真实批准，不能信任客户端传入的正文和hash。 */
-export async function approvedInputV2(app: DeliveryContext & ProductV2Context, runId: string, project: unknown, workflowId: unknown = 'product-delivery-v2') {
-  const id = productWorkflowIdSchema.parse(workflowId);
-  const workflow = id === 'product-delivery-v2' ? app.productDeliveryV2 : app.deliveryWorkflow;
-  const snapshot = await workflow.getWorkflowRunById(runId);
-  const step = snapshot?.steps?.['review-product'];
-  if (!step || Array.isArray(step) || step.status !== 'success') throw new Error('产品版本未在指定Workflow中批准');
-  const state = deliverySchema.parse(step.output);
-  const artifact = state.artifacts.find(
-    // 原生批准引用必须对应唯一产品稿。
-    (item) => item.stage === 'product',
-  );
-  const approved = artifact && state.reviews.some(
-    // 人工批准绑定产物版本，不能用其他阶段意见替代。
-    (review) => review.role === 'product' && review.decision === 'approve' && review.artifactHash === artifact.hash,
-  );
-  if (!artifact || !approved || state.mode !== app.config.mode) throw new Error('产品版本未在当前模式下批准');
-  if (id === 'product-delivery-v2' && (snapshot?.status !== 'success' || productDeliveryV2Schema.parse(snapshot.result).outcome !== 'product-approved-for-development')) throw new Error('产品v2尚未保存研发交接终态');
-  return inputV2Schema.parse({ source: { kind: 'approved-product', workflowId: id, runId, hash: artifact.hash, content: artifact.content, evidence: artifact.evidence }, project, maxReworks: 1 });
 }
 
 /** 按固定目录装配v2；输入文件只是启动参数，后续必须与原生payload核对。 */
@@ -100,22 +74,6 @@ export async function recoverDevelopmentV2(app: ApplicationV2, runId: string, in
   const path = Object.entries(status.steps ?? {}).find(/** 恢复当前实际暂停点，不让调用方指定任意阶段。 */([, value]) => !Array.isArray(value) && value.status === 'suspended' && (value.suspendPayload?.recoveryState || value.suspendPayload?.hash === review.hash))?.[0];
   if (!path) throw new Error('v2故障暂停点已变化');
   return run.resume({ step: path.split('.'), resumeData: review });
-}
-
-/** 澄清创建新输入/Run；只继承候选与来源关系，不复制旧批准或重置旧Run。 */
-export async function clarifyDevelopmentV2(app: ApplicationV2, runId: string, directory: string, product: DeliveryContext & ProductV2Context, productRunId: string, reason: string, productWorkflowId: unknown = 'product-delivery-v2') {
-  const status = await developmentStatusV2(app, runId);
-  const state = status.result;
-  if (status.status !== 'success' || state?.outcome !== 'clarification-required' || state.input.source.kind !== 'approved-product') throw new Error('v2只有已保存业务澄清Run可以创建后继');
-  validateIdentityV2(state, app.config, app.methodsHash);
-  if (developmentHash(app.input) !== developmentHash(state.input) || state.checkpointHash !== developmentHash(await app.execution.snapshot())) throw new Error('v2澄清输入或源码漂移');
-  const files: Record<string, string> = {};
-  for (const path of Object.keys(state.input.project.files)) files[path] = await app.execution.readFile(path);
-  const input = await approvedInputV2(product, productRunId, { ...state.input.project, files }, productWorkflowId);
-  if (input.source.hash === state.input.source.hash) throw new Error('澄清必须使用新的批准产品版本');
-  const next = inputV2Schema.parse({ ...input, maxReworks: state.input.maxReworks, continuation: { runId, sourceHash: state.input.source.hash, candidateHash: state.checkpointHash, reason, authority: 'approved-product-version' } });
-  seedDevelopment(directory, next);
-  return next;
 }
 
 /** 原生发现裁决暂停点；先做同样的硬校验，非法处理不会消耗暂停。 */

@@ -8,9 +8,21 @@ import { ClarificationProgress, RequirementWorkspace } from './components/Requir
 import { RemoteSyncSettings } from './RemoteSyncSettings';
 import { RepositoryManagement } from './RepositoryManagement';
 import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
-import { getRunFlowStage, RunFlowMini } from './components/RunFlowMini';
+import { RunFlowMini } from './components/RunFlowMini';
+import { RunActivityFeed, type LiveActivity, type RunTimelineDocument } from './components/RunActivityFeed';
+import { InlineClarificationNode } from './components/InlineClarificationNode';
 import './intake.css';
-interface Document { developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; brief: string; step?: string; intake?: { round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+interface Document { developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; intakeMode?: 'clarify' | 'autofill'; brief: string; step?: string; createdAt?: string; updatedAt?: string; timeline?: RunTimelineDocument; intake?: { intakeMode?: 'clarify' | 'autofill'; round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
+
+/** 将当前 Run 快照归到工作台的四个展示阶段，不重新实现 Workflow 状态机。 */
+function getWorkbenchStage(document?: Document): number {
+  if (!document) return 0;
+  const gate = document.gate?.key ?? '';
+  if (['approve-test-cases', 'review-test-results', 'approve-release-scope', 'execute-release-externally', 'verify-release-health', 'execute-rollback-externally'].includes(gate) || /testing|deployment|delivery/.test(document.retry?.step ?? '') || /测试|质量|发布|健康|回滚/.test(document.progress?.phase ?? '') || ['delivery-confirmed', 'fixture-completed', 'rolled-back'].includes(document.outcome ?? '') || document.status === 'success') return 3;
+  if (gate === 'confirm-project-scope' || ['approve-architecture', 'resolve-readiness', 'resolve-findings', 'recover-development'].includes(gate) || document.developmentStop || document.blockage || /development|architecture/.test(document.retry?.step ?? '') || /开发|方案|架构|代码|开工/.test(document.progress?.phase ?? '') || document.outcome === 'blocked') return 2;
+  if (document.product || document.step === 'review-product' || document.outcome === 'rejected') return 1;
+  return 0;
+}
 /** 从已提交历史中投影确认基线；当前轮推荐、假设和未提交草稿不进入列表。 */
 function confirmedRules(intake: NonNullable<Document['intake']>) {
   return intake.history.flatMap((entry, round) => entry.response.answers.flatMap(answer => {
@@ -29,6 +41,7 @@ export function IntakeApp() {
   const [runs, setRuns] = useState<Document[]>([]);
   const [brief, setBrief] = useState('');
   const [iterationId, setIterationId] = useState('unassigned');
+  const [intakeMode, setIntakeMode] = useState<'clarify' | 'autofill'>('clarify');
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const [activeQuestion, setActiveQuestion] = useState('');
   const [reviewer, setReviewer] = useState('');
@@ -43,9 +56,10 @@ export function IntakeApp() {
   const [recoveryConfirm, setRecoveryConfirm] = useState(false);
   const [showSyncSettings, setShowSyncSettings] = useState(false);
   const [showRepositoryManagement, setShowRepositoryManagement] = useState(false);
+  const [liveActivity, setLiveActivity] = useState<LiveActivity>();
   /** 深链接与所选 Run 一致，刷新恢复当前人工节点。 */
   function choose(value: string) {
-    setNotice(''); setUncertain(false); setRecoveryConfirm(false); setId(value); setDocument(undefined); setAnswers({}); setSupplement(''); setComment(''); setError(''); setApproving(false);
+    setNotice(''); setUncertain(false); setRecoveryConfirm(false); setId(value); setDocument(undefined); setLiveActivity(undefined); setAnswers({}); setSupplement(''); setComment(''); setError(''); setApproving(false);
     const url = new URL(location.href); value ? url.searchParams.set('run', value) : url.searchParams.delete('run'); history.replaceState(null, '', url);
   }
   /** 回读不重发用户决定，网络失败保留表单。 */
@@ -77,7 +91,7 @@ export function IntakeApp() {
   }, [id]);
   // 已在服务端运行的记录可刷新恢复观察，不需要重复提交。
   useEffect(() => {
-    if (busy || (!uncertain && document?.status !== 'running') || !id) return;
+    if ((!busy && !uncertain && document?.status !== 'running') || !id) return;
     let active = true; let reading = false;
     /** 一次只执行一个只读查询，终态或新暂停点会自然停止轮询。 */
     async function poll() {
@@ -90,6 +104,25 @@ export function IntakeApp() {
     // 切换记录或离开运行态后取消观察。
     return () => { active = false; window.clearInterval(timer); };
   }, [busy, id, document?.status, uncertain]);
+  // 运行期间订阅 Mastra 原生 Workflow.watch 的工作台 SSE；断线由快照轮询兜底。
+  useEffect(() => {
+    if (!id || (!busy && !uncertain && document?.status !== 'running')) return;
+    let active = true;
+    const source = new EventSource(`/intake-api/runs/${encodeURIComponent(id)}/events`);
+    /** 事件只触发权威快照回读，不把 SSE payload 当作执行事实。 */
+    source.onmessage = event => {
+      try {
+        const payload = JSON.parse(event.data) as { activity?: LiveActivity };
+        if (active && payload.activity) setLiveActivity(payload.activity);
+      } catch { /* 非活动 SSE 事件不影响快照同步。 */ }
+      void request<Document>(`/${id}`).then(next => {
+        if (active) setDocument(next);
+      }).catch(() => { /* SSE 断线期间保留当前 UI，轮询会继续尝试。 */ });
+    };
+    /** 事件流错误不覆盖当前 Run 状态，避免网络抖动伪造失败。 */
+    source.onerror = () => { /* REST fallback remains active. */ };
+    return () => { active = false; source.close(); };
+  }, [busy, document?.status, id, uncertain]);
   /** 超时只代表连接结束；先回读状态，再决定展示运行、失败或输入错误。 */
   async function recoverResponse(runId: string, reason: unknown) {
     const result = await reconcileWrite(/** 仅回读原Run，不重发写入。 */() => request<Document>(`/${runId}`));
@@ -104,14 +137,15 @@ export function IntakeApp() {
   }
   /** 创建前固定 UUID，即使响应丢失仍可按地址找回同一流程。 */
   async function start() {
-    const runId = crypto.randomUUID(); choose(runId); setOperation({ label: '正在分析需求并生成方案…', startedAt: Date.now() }); setNotice(''); setBusy(true); setError('');
-    try { const next = await request<Document>('', { runId, brief, iterationId }); setDocument(next); setRuns([next, ...runs]); }
+    const runId = crypto.randomUUID(); choose(runId); setOperation({ label: intakeMode === 'autofill' ? '正在自主补全需求并生成产品稿…' : '正在分析需求并生成澄清方案…', startedAt: Date.now() }); setNotice(''); setBusy(true); setError('');
+    try { const next = await request<Document>('', { runId, brief, iterationId, intakeMode }); setDocument(next); setRuns([next, ...runs]); }
     catch (reason) { await recoverResponse(runId, reason); }
     finally { setBusy(false); }
   }
   /** 仅在版本变化后清空回答，失败时保留当前输入用于检查。 */
   async function submit(body: unknown) {
     const action = (body as { action?: string; retryHash?: string }).action;
+    setLiveActivity(undefined);
     setOperation({ label: (body as { clarifyHash?: string }).clarifyHash ? '正在整理待决问题、关联工程资料并准备选择卡片…' : (body as { retryHash?: string }).retryHash ? `正在从${document?.retry?.title ?? '已保存检查点'}恢复…` : action === 'refine' ? '正在根据你的回答完善方案…' : action === 'finalize' ? '正在检查业务缺口，满足条件后生成产品需求稿…' : '正在保存决定并处理下一步…', startedAt: Date.now() }); setNotice('');
     setBusy(true); setError('');
     try {
@@ -145,17 +179,21 @@ export function IntakeApp() {
       <small>所有确认在此工作台完成</small>
     </aside>
     <main className="intake-main"><header><span>产研交付 · 业务流程</span><div className="intake-actions"><button disabled={busy} onClick={/** 管理仓库字典不改变当前Run。 */() => setShowRepositoryManagement(true)}>项目仓库管理</button><button disabled={busy} onClick={/** 设置只影响后续同步节点。 */() => setShowSyncSettings(true)}>远端同步设置</button><button disabled={busy} onClick={/** 刷新只回读事实。 */() => void refresh()}>刷新状态</button></div></header>
-      <div className="intake-progress"><span className={getRunFlowStage(document) === 0 ? 'active' : ''}>01 需求方案</span><span className={getRunFlowStage(document) === 1 ? 'active' : ''}>02 产品确认</span><span className={getRunFlowStage(document) === 2 || getRunFlowStage(document) === 3 ? 'active' : ''}>03 开发授权与实施</span><span className={getRunFlowStage(document) >= 4 ? 'active' : ''}>04 测试与发布</span></div>
       {error && <div role="alert" className="intake-error">{error}</div>}
       {busy && <p role="status">正在处理，请勿重复提交。完成后会自动展示下一步…</p>}
-      {!id ? <section className="intake-card"><div className="intake-eyebrow">先描述问题，让方案逐步清晰</div><h1>你想解决什么问题？</h1><p>说明使用者、当前困难和期望结果。我们会先给出方案建议，再请你确认关键选择。</p>
+      {!id ? <section className="intake-card"><div className="intake-eyebrow">先描述问题，让方案逐步清晰</div><h1>你想解决什么问题？</h1><p>说明使用者、当前困难和期望结果。你可以逐项对齐，也可以让 AI 先补全一版完整需求稿。</p>
         <label>需求描述<textarea value={brief} maxLength={12000} rows={8} placeholder="例如：招聘同事希望统一处理候选人初筛和面试邀约，目前靠表格记录，容易遗漏跟进…" onChange={/** 保留原始输入。 */e => setBrief(e.target.value)} /></label>
         <label>迭代标识<input value={iterationId} maxLength={100} onChange={/** 标识显式绑定本次主流程。 */e => setIterationId(e.target.value)} /></label>
-        <button className="primary" disabled={busy || uncertain || !brief.trim() || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)} onClick={start}>分析需求，形成初步方案 →</button>
+        <label className="intake-mode-toggle"><input type="checkbox" checked={intakeMode === 'autofill'} onChange={/** 只选择本次需求的入口策略，提交后由服务端持久化。 */event => setIntakeMode(event.target.checked ? 'autofill' : 'clarify')} /><span><strong>AI 主动补全需求</strong><small>开启后，AI 会基于你的想法自主补齐推荐闭环，直接生成待审阅产品稿；推断内容会标记为建议或待确认。</small></span></label>
+        <button className="primary" disabled={busy || uncertain || !brief.trim() || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)} onClick={start}>{intakeMode === 'autofill' ? '自主补全并生成需求稿 →' : '分析需求，形成初步方案 →'}</button>
       </section> : <>
         <section className="intake-context"><details><summary>原始需求 · {document?.mode === 'fixture' ? '固定样例，不理解业务输入' : document?.mode === 'live' ? '真实模型提案，待人工审核' : '正在载入'}</summary><p>{document?.brief || brief}</p><code>{id}</code></details></section>
         {document && <RunFlowMini document={document} />}
-        {intake && <RequirementWorkspace title="澄清待确认项" panel={<fieldset className="requirement-inputs" disabled={busy || uncertain}><legend className="sr-only">本轮问题与补充</legend>
+        {document && <RunActivityFeed timeline={document.timeline} status={document.status} liveActivity={liveActivity} progressText={document.progress?.detail} nextText={document.progress?.next}>
+          {intake && <InlineClarificationNode questions={questions} questionKey={intake.hash} answers={answers} activeQuestion={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question" supplement={supplement} onSupplementChange={setSupplement} reviewer={reviewer} onReviewerChange={setReviewer} complete={complete} missingRequired={questions.filter(/** 只统计未显式回答的必答项。 */question => question.required && !answers[question.id]?.selected.length && !answers[question.id]?.custom.trim()).length} busy={busy} onRefine={/** 回答后重新形成方案，仍须确认。 */() => respond('refine')} onFinalize={/** 显式结束澄清，进入完整稿生成。 */() => respond('finalize')} />}
+          {intake && <p className="run-activity-copy inline-continuation">保存后，系统会根据你的决定继续完善当前阶段结果。</p>}
+        </RunActivityFeed>}
+        {intake && <RequirementWorkspace contentOnly title="澄清待确认项" panel={<fieldset className="requirement-inputs" disabled={busy || uncertain}><legend className="sr-only">本轮问题与补充</legend>
 <QuestionFlow key={intake.hash} questions={questions} answers={answers} activeId={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question" />
           <label>其他补充<textarea value={supplement} maxLength={4000} onChange={/** 补充与当前问题回答一并保存。 */e => setSupplement(e.target.value)} /></label>
           </fieldset>} actions={<>

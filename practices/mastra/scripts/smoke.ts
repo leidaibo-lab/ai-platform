@@ -1,20 +1,17 @@
 import assert from 'node:assert/strict';
-import { createApplication } from '../src/mastra/app.js';
+import { createAgents } from '../src/mastra/agents/index.js';
 import { readConfig } from '../src/mastra/config.js';
 
 /** 验证一次原生 Agent/工具调用；失败不打印可能含凭据的上游异常对象。 */
 async function main() {
-  if (process.argv.includes('--live')) process.env.MASTRA_MODE = 'live';
-  const app = createApplication(readConfig());
-  try {
-    await app.storage.init();
-    const result = await app.mastra.getAgent('minimalAgent').generate('请调用 practiceInfo，然后说明本实践范围。', { maxSteps: 3 });
-    assert.ok(result.text.trim(), '缺少模型终答');
-    assert.ok(result.toolResults.length > 0, '未观察到实际工具执行');
-    console.log(JSON.stringify({ mode: app.config.mode, text: result.text, toolResults: result.toolResults }, null, 2));
-  } finally {
-    await app.storage.close();
-  }
+  // 默认固定模式，不因本机 .env 的 live 配置意外产生真实模型调用。
+  process.env.MASTRA_MODE = process.argv.includes('--live') ? 'live' : 'fixture';
+  const config = readConfig();
+  // 最小 Agent 不依赖团队 Run 的 threadId，专门验证原生工具循环和模型配置边界。
+  const result = await createAgents(config, { workspace: false }).minimalAgent.generate('请调用 practiceInfo，然后说明本实践范围。', { maxSteps: 3 });
+  assert.ok(result.text.trim(), '缺少模型终答');
+  assert.ok(result.toolResults.length > 0, '未观察到实际工具执行');
+  console.log(JSON.stringify({ mode: config.mode, text: result.text, toolResults: result.toolResults }, null, 2));
 }
 // 报告可操作的配置错误，其余失败仅提供类别，避免上游响应泄露秘密。
 main().catch((error: unknown) => {

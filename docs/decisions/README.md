@@ -8,6 +8,14 @@
 
 [产研 Run 生命周期档案](./2026-11-09-mastra-run-archive.md)：接受；项目内不可变状态投影、交接分支同步与 Workspace 只读查看，Mastra 保留事实所有权。
 
+[Mastra Workflow 团队职责边界](./2026-11-14-mastra-workflow-team-boundaries.md)：接受；用五个嵌套团队 Workflow 承担产品、研发、测试、部署和最终交付职责，新 Run 不兼容旧平铺路径。
+
+[Mastra 研发团队 Agent 职责](./2026-11-14-mastra-development-agent-boundaries.md)：接受；负责人、动态实施者、独立审查者三类 Agent；自检与交付评估由确定性 Workflow 门禁完成。
+
+[Mastra Workflow 执行时间线](./2026-11-14-mastra-workflow-execution-timeline.md)：接受；适配原生 `Workflow.watch()` 与快照时间字段，工作台展示实时节点、耗时、工具和文件元数据。
+
+[需求入口双模式：逐项澄清与 AI 主动补全](./2026-11-15-mastra-dual-requirement-intake.md)：接受；保留逐项澄清，新增 `autofill` 主动补全入口，直接生成带假设和待确认项的产品稿并停在人工审批。
+
 [Mastra 原生上下文管理](./2026-11-09-mastra-native-context.md)：接受；原生观察记忆接管执行上下文，取消资料字节门槛，旧预算失败无需升档恢复。
 
 ## 使用方式

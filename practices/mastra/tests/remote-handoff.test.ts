@@ -101,8 +101,8 @@ test('原生暂停恢复：远端失败后只重试同步，不重新运行角�
     const publisher = (_root: string, run: string, files: Record<string, string>) => publishHandoff(f.root, run, files);
     /** 重建所有原生节点，保证恢复不依赖旧Workflow对象的内存。 */
     function buildFlow() {
-    const generate = createStep({ id: 'product-coordinator', inputSchema: deliverySchema, outputSchema: deliverySchema,
-      /** 合成角色仅计算一次正文，不能因网络故障重复。 */execute: async ({ inputData }) => { calls++; return { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [{ role: 'coordinator' as const, content: '合成角色正文', toolNames: [], modelSteps: 1 }] } }; },
+    const generate = createStep({ id: 'product-analysis', inputSchema: deliverySchema, outputSchema: deliverySchema,
+      /** 合成阶段仅计算一次正文，不能因网络故障重复。 */execute: async ({ inputData }) => { calls++; return { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [{ role: 'analysis' as const, content: '合成阶段正文', toolNames: [], modelSteps: 1 }] } }; },
     });
     const gate = createStep({ id: 'review-product', inputSchema: deliverySchema, outputSchema: deliverySchema, resumeSchema: z.object({ decision: z.literal('approve') }), suspendSchema: z.object({ waitingForApproval: z.literal(true) }),
       /** 同步恢复不能替代显式业务批准。 */execute: async ({ inputData, resumeData, suspend }) => { if (!resumeData) return suspend({ waitingForApproval: true }); return inputData; },
@@ -115,10 +115,10 @@ test('原生暂停恢复：远端失败后只重试同步，不重新运行角�
     new Mastra({ workflows: { flow }, storage });
     let run = await flow.createRun({ runId: 'native-sync' });
     const paused = await run.start({ inputData: source }); assert.equal(paused.status, 'suspended'); assert.equal(calls, 1);
-    const payload = (paused.steps['product-coordinator'] as any).suspendPayload;
+    const payload = (paused.steps['product-analysis'] as any).suspendPayload;
     assert.equal(payload.kind, 'repository-sync');
-    const display = describeGate('product-coordinator', payload)!; assert.equal(display.key, 'retry-repository-sync');
-    assert.throws(/** 旧同步版本不能恢复。 */() => validateGate('product-coordinator', payload, { gateHash: display.gateHash, data: { repositoryRetry: '0'.repeat(64) } }));
+    const display = describeGate('product-analysis', payload)!; assert.equal(display.key, 'retry-repository-sync');
+    assert.throws(/** 旧同步版本不能恢复。 */() => validateGate('product-analysis', payload, { gateHash: display.gateHash, data: { repositoryRetry: '0'.repeat(64) } }));
     const { readIntake } = await import('../src/intake/service.js');
     const view = await readIntake(flow as any, 'native-sync');
     assert.equal(view.mode, 'live'); assert.equal(view.gate?.key, 'retry-repository-sync');
@@ -128,7 +128,7 @@ test('原生暂停恢复：远端失败后只重试同步，不重新运行角�
     new Mastra({ workflows: { flow }, storage });
     run = await flow.createRun({ runId: 'native-sync' });
     rmSync(hook);
-    const resumed = await run.resume({ resumeData: validateGate('product-coordinator', payload, { gateHash: display.gateHash, data: display.fixed }) });
+    const resumed = await run.resume({ resumeData: validateGate('product-analysis', payload, { gateHash: display.gateHash, data: display.fixed }) });
     assert.equal(calls, 1); assert.equal(resumed.status, 'suspended');
     assert.equal((resumed.steps['review-product'] as any).suspendPayload.waitingForApproval, true);
     await assert.rejects(/** 不能拿同步恢复令牌绕过原始业务resumeSchema。 */() => flow.steps['review-product'].execute({ runId: 'native-sync', inputData: source, resumeData: { repositoryRetry: payload.retryKey } } as any), /不能替代业务审批/);

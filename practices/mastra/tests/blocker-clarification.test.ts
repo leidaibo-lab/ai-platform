@@ -63,7 +63,7 @@ for (const legacy of [false, true]) test(legacy ? '旧blocked同Run接续，回�
     assert.equal(approval.payload.input.source.hash, revisedHash); assert.equal(approval.payload.input.continuation.sourceHash, originalHash); assert.ok(approval.payload.calls > oldCalls); assert.equal(approval.payload.maxCalls, 72); assert.equal(approval.payload.completedTasks.length, 0);
     assert.deepEqual(approval.payload.input.project.writablePaths, project.writablePaths);
     const oldCandidate = executionResolver(fixture.config)(oldInput); try { assert.equal(await oldCandidate.readFile('src/a.mjs'), project.files['src/a.mjs']); } finally { await oldCandidate.close(); }
-    assert.equal((next!.steps!['review-product'] as any).output.artifacts[0].hash, originalHash);
+    assert.equal((next!.steps!['product-team.review-product'] as any).output.artifacts[0].hash, originalHash);
   } finally { await app.storage.close(); rmSync(fixture.directory, { recursive: true, force: true }); }
 });
 
@@ -89,7 +89,7 @@ test('答案提交前拒绝源码漂移，修订失败时已提交回答仍可�
     const restore = executionResolver(fixture.config)(input); try { await restore.writeFile('src/a.mjs', project.files['src/a.mjs']); } finally { await restore.close(); }
     const root = app.workflow as any;
     // 只模拟写作节点失败，故意不附带请求数据，以验证原生回答保留与恢复白名单。
-    root.steps['resolve-development-blockers'].steps['blocker-round'].steps['write-revised-product'].execute = async () => { throw new Error('synthetic-write-failure'); };
+    root.steps['development-team'].steps['resolve-development-blockers'].steps['blocker-round'].steps['write-revised-product'].execute = async () => { throw new Error('synthetic-write-failure'); };
     const doc = await respondIntake(app.workflow, 'fixture', started.runId, fixture.answers(started.doc), fixture.config);
     assert.equal(doc.status, 'failed'); assert.equal(doc.retry!.title, '产品稿修订'); assert.equal(doc.retry!.preserved.at(-1)!.role, 'answers');
     const failed = await app.workflow.getWorkflowRunById(started.runId); const write = failed!.steps![doc.retry!.step] as any;
@@ -105,7 +105,7 @@ test('历史架构同步失败复用同版本阻塞结果，拒绝篡改且不�
   try {
     const { runId } = await f.start(app);
     const native = await app.workflow.getWorkflowRunById(runId);
-    const path = 'development-team.development-team-iteration.architecture';
+    const path = 'development-team.development-execution.development-execution-iteration.architecture';
     const entry = native!.steps![path] as any;
     const saved = validateLegacyArchitectureResult(entry.payload, entry.output);
     assert.ok(saved.plan?.blockers.length); assert.equal(saved.calls, entry.payload.calls + 1);

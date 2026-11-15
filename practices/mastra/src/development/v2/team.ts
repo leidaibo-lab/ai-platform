@@ -223,5 +223,5 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
       return { ...next, phase: complete ? 'development-self-check' as const : 'implement' as const };
     },
   });
-  return createWorkflow({ id: 'execute-agent-team', description: '动态团队按依赖波次并发实现，受限委派并合并', inputSchema: stateV2Schema, outputSchema: stateV2Schema }).then(bind(select)).foreach(worker, { concurrency: 3 }).then(bind(merge)).commit();
+  return createWorkflow({ id: 'execute-agent-team', description: 'develop-and-check｜execute-agent-team｜development-implementer-agent 按依赖波次动态实施、委派并合并', inputSchema: stateV2Schema, outputSchema: stateV2Schema }).then(bind(select)).foreach(worker, { concurrency: 3 }).then(bind(merge)).commit();
 }

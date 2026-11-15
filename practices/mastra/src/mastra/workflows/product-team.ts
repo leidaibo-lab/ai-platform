@@ -1,0 +1,49 @@
+import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
+import type { createAgents } from '../agents/index.js';
+import type { PracticeConfig } from '../config.js';
+import { withRepositoryAssets } from '../../delivery/repository-assets.js';
+import { createProductManagerWorkflow } from './product-manager.js';
+import { deliverySchema, pendingSchema, reviewSchema, validateReview } from './delivery.js';
+
+type StepBinder = <T extends Step<any, any, any, any, any, any>>(step: T) => T;
+
+/** 产品团队的唯一边界：draft-product 内完成产品经理工作和独立闭环检查，随后进入人工审批。 */
+export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig) {
+  const bind: StepBinder = (step) => withRepositoryAssets(step, config);
+  const review = createStep({
+    id: 'review-product',
+    description: 'review-product｜产品负责人人工审批',
+    inputSchema: deliverySchema,
+    outputSchema: deliverySchema,
+    suspendSchema: pendingSchema,
+    resumeSchema: reviewSchema,
+    // 产品审批属于产品团队的人工质量门，未批准版本不能交给研发团队。
+    execute: async ({ inputData, resumeData, suspend, bail }) => {
+      if (inputData.mode !== config.mode) throw new Error('产品运行模式发生变化');
+      const pending = pendingSchema.parse({ role: 'product', artifact: inputData.artifacts.at(-1), productReworkRound: 0 });
+      if (!resumeData) return suspend(pending);
+      const decision = validateReview(pending, resumeData);
+      const next = { ...inputData, reviews: [...inputData.reviews, decision] };
+      if (decision.decision !== 'approve') return bail({ ...next, outcome: decision.decision === 'reject' ? 'rejected' as const : 'rework-requested' as const });
+      return next;
+    },
+  });
+  const complete = createStep({
+    id: 'complete-product-team',
+    inputSchema: deliverySchema,
+    outputSchema: deliverySchema,
+    // 团队边界负责把产品拒绝/退回终态传给主编排，阻止研发团队误接未批准版本。
+    execute: async ({ inputData, bail }) => inputData.outcome === 'in-progress' ? inputData : bail(inputData),
+  });
+  return createWorkflow({
+    id: 'product-team',
+    description: 'product-team｜draft-product（product-manager-agent、product-reviewer-agent）→ review-product（人工审批）',
+    inputSchema: deliverySchema,
+    outputSchema: deliverySchema,
+  })
+    // draft-product 内部包含 guided-requirements，需求澄清不再与产品成稿平级。
+    .then(createProductManagerWorkflow(agents, config.mode, bind, config.hrmRepositoryRoot))
+    .then(bind(review))
+    .then(bind(complete))
+    .commit();
+}

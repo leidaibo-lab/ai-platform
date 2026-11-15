@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { MastraLanguageModelV2Mock } from '@mastra/core/test-utils/llm-mock';
 import { createAgents } from '../src/mastra/agents/index.js';
 import { loadGovernedSkill, loadProductSkills } from '../src/mastra/agents/skills.js';
-import { productRoleProfiles, type ProductRole } from '../src/mastra/agents/product-roles.js';
+import { productManagerProfile, productReviewerProfile } from '../src/mastra/agents/product-roles.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const skillsRoot = resolve(root, '.agents/skills');
@@ -121,14 +121,11 @@ function scriptedModel(plan: { name: string; input: Record<string, unknown>; pre
   });
 }
 
-// 各角色通过自己的正式注册实例读取对应方法，避免只验证写作Agent就声称全角色可用。
-for (const role of Object.keys(productRoleProfiles) as ProductRole[]) {
-  // 每个角色独立执行原生生成，方法输出与注册配置一并验证。
-  test(`${productRoleProfiles[role].name} 可发现完整套件并实际读取角色方法与交接检查`, async () => {
+// 两个产品 Agent 通过正式注册实例读取对应方法；产品经理承担全部产品阶段，审查 Agent 保持独立。
+for (const [agentKey, profile] of [['productManagerAgent', productManagerProfile], ['productReviewerAgent', productReviewerProfile]] as const) {
+  test(`${profile.name} 可发现完整套件并实际读取角色方法与交接检查`, async () => {
     const registered = agents();
-    const roleAgents = { coordinator: registered.productCoordinatorAgent, clarification: registered.productClarificationAgent, closure: registered.productClosureAgent, writing: registered.productAgent };
-    const agent = roleAgents[role];
-    const profile = productRoleProfiles[role];
+    const agent = registered[agentKey];
     const listed = await agent.listSkills();
     const names = new Set(
       // 检查完整集合而非只检查优先列表，保留角色自主选择其他方法的能力。
@@ -162,9 +159,9 @@ for (const role of Object.keys(productRoleProfiles) as ProductRole[]) {
   });
 }
 
-// 超过旧的3/6步预算，证明流程→方法→原文→嵌套资源的调用链可实际走完。
+// 产品经理可在单一 Agent 内完成方法→原文→嵌套资源的调用链。
 test('正式产品Agent原生多步加载流程、原子方法、嵌套参考与交接方法', async () => {
-  const agent = agents().productAgent;
+  const agent = agents().productManagerAgent;
   const result = await agent.generate('根据提供的需求写PRD并检查风险；本测试只验证工具链', { model: scriptedModel([
     { name: 'skill', input: { name: 'product-pm-flow-write-prd' } },
     { name: 'skill_read', input: { skillName: 'product-pm-flow-write-prd', path: 'references/upstream.md' }, previous: 'product-pm-create-prd' },
@@ -182,7 +179,7 @@ test('正式产品Agent原生多步加载流程、原子方法、嵌套参考与
 
 // 嵌套参考在Studio流式入口仍可读取，并且任意路径没有宿主文件读取能力。
 test('流式产品Agent可读shipping辅助参考，未知路径返回缺失且越界路径被拒绝', async () => {
-  const result = await agents().productAgent.stream('检查可用辅助方法', { model: scriptedModel([
+  const result = await agents().productManagerAgent.stream('检查可用辅助方法', { model: scriptedModel([
     { name: 'skill_read', input: { skillName: 'product-pm-catalog', path: 'references/shipping/test-harness/references/coverage-map.md' } },
     { name: 'skill_search', input: { query: 'coverage', skillNames: ['product-pm-catalog'], topK: 2 }, previous: 'coverage' },
     { name: 'skill_read', input: { skillName: 'product-pm-create-prd', path: '../../../../../package.json' }, previous: 'product-pm-catalog' },

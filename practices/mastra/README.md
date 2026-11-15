@@ -6,7 +6,7 @@
 
 日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案、测试与发布回执等人工确认。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
 
-需求输入与澄清 → 四产品角色成稿 → 产品确认 → 项目范围授权 → 上下文、架构、动态组队与就绪评估 → 方案批准 → 按依赖开发 → 自检与独立评审 → 独立测试与缺陷返工 → 发布审批、外部执行回执与健康检查/回滚 → 最终交付。
+需求输入与澄清 → `product-team`（需求、产品稿、产品确认）→ `development-team`（项目范围、负责人规划、动态实施、确定性自检、独立代码审查与研发交付）→ `test-team`（测试与回归）→ `deployment-team`（部署与回滚）→ `delivery-team`（最终交付确认）。研发团队只使用 `development-lead-agent`、按任务动态创建的 `development-implementer-agent` 和 `development-reviewer-agent`；团队内部步骤只表达团队内职责和人工关口，不再作为主流程的平行团队节点。
 
 新工作台输入显式批准自主开发策略：团队可在候选内运行登记检查、携带失败证据连续排障，多角色缺陷联合修复并重跑下游。默认3轮返工、72次开发模型调用、24次检查套件执行，连续2次重复失败且无新证据时停止；新增业务决定、扩大授权或预算耗尽升级人工。旧输入保持原政策。原生 Workflow 与真实隔离检查回归已验证，真实模型完整业务交付尚未验收。详见[自主开发与排障](./unified-workflow.md#批准范围内自主开发与排障)及[决策记录](../../docs/decisions/2026-11-09-mastra-autonomous-development.md)。
 
@@ -96,20 +96,17 @@ npm run build
 
 这些是可执行的检查命令，不表示本次文档整理重新运行了它们。测试数量和具体通过结果以对应验证记录为准，固定模型控制流、真实模型质量与实际工程交付分别记录。
 
-- [可靠性回归与架构续验](./evaluations/reliability/2026-11-07.md)
 - [需求工作台验证证据](./guided-intake.md)
-- [原生节点评测](./evaluations/native/README.md)、[开发角色评测](./evaluations/native/development-nodes/README.md)、[独立评审与返工](./evaluations/native/review-rework/README.md)
-- [产品 Skill 配对评测](./evaluations/product-skills/README.md)、[招聘管理验证项目](./projects/pm-hrm-recruitment/README.md)
+- [开发角色评测](./evaluations/native/development-nodes/README.md)、[独立评审与返工](./evaluations/native/review-rework/README.md)
+- [招聘管理验证项目](./projects/pm-hrm-recruitment/README.md)
 - [资源配置归属](./config/README.md)与[资源输入契约](./config/runtime-resource-contract.md)：配置规范仍是定义稿，未作为统一运行时配置加载。
 - [产品角色与 Skill](./src/mastra/agents/product-roles.ts)、[PM 技能套件](./.agents/skills/README.md)、[第三方声明](./web/THIRD_PARTY_NOTICES.md)
 
 Mastra 提供 Agent、工具循环、Workflow 与存储；本实践维护业务 schema、版本绑定、人工关口、权限边界和 I/O 适配。不将文件投影另建为审批库，不以评测计数替代业务质量验收。
 
-## 历史与兼容资料
+## 研发执行说明
 
-旧四阶段提案链、独立产品/开发 CLI 和旧审阅页的启动、测试计数及阶段观察移至[历史记录](./README-history-2026-11-07.md)。这些资料用于追溯旧 Run，不作为当前操作步骤。
-
-[旧审阅页](./review-page.md)、[独立开发设计](./development-workflow-design.md)和[BMAD 双流程设计](./bmad-workflow-integration.md)保留版本边界；当前操作统一以上文工作台与完整产研流程为准。
+[独立开发设计](./development-workflow-design.md)补充研发团队的受限执行说明；当前操作统一以上文工作台与完整产研流程为准。
 
 ### 按角色配置模型
 
@@ -121,7 +118,7 @@ MASTRA_PRODUCT_MODEL=openai/gpt-6-luna
 MASTRA_DEVELOPMENT_MODEL=openai/gpt-5.6-luna
 ```
 
-复用 Mastra 原生 Agent 的 model 配置。产品四角色使用产品覆盖；开发提案及开发 v1/v2 全部角色（含评审和受限委派）使用开发覆盖；其他角色和评测裁判使用默认模型。角色变量缺省或为空时回退 `MASTRA_MODEL`。真实模式要求显式设置默认模型；fixture 缺少默认配置时仅使用模拟模型占位标识。代码不内置上述业务模型名称，端点和凭据沿用原配置。
+复用 Mastra 原生 Agent 的 model 配置。产品经理和产品审查 Agent 使用产品覆盖；研发团队及其评审/委派角色使用开发覆盖；其他角色和评测裁判使用默认模型。角色变量缺省或为空时回退 `MASTRA_MODEL`。真实模式要求显式设置默认模型；fixture 缺少默认配置时仅使用模拟模型占位标识。代码不内置上述业务模型名称，端点和凭据沿用原配置。
 
 重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。模型可用性与真实质量仍需上游验证。
 

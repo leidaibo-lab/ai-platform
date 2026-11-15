@@ -1,12 +1,12 @@
 # 在 Mastra 产研流程中适配 BMAD 方法资产
 
-2026-11-07 演进：[完整产研与动态团队](./2026-11-07-mastra-unified-development-team.md)替代本文 Studio 双入口和串行实现边界；方法适配与来源锁继续有效。旧 CLI 与历史证据保留。
+> 历史记录：本文所述的产品独立入口和四角色模型已于 2026-11-14 被[团队职责边界决策](./2026-11-14-mastra-workflow-team-boundaries.md)替代。下文仅保留当时的选型和验证事实，不构成当前实践入口或兼容承诺。
 
 - 状态：接受（2026-11-06 用户明确要求“修改运行流程”；工程接入已验，真实模型质量与净收益另评）
 - 日期：2026-11-06
 - 负责人：Mastra 实践维护者
 - 所属区域：`practices/mastra` 独立原生实践及根通用开发 Skill
-- 关联需求：[BMAD 工作流融合设计](../../practices/mastra/bmad-workflow-integration.md)
+- 当前关联：[Mastra Workflow 团队职责边界](./2026-11-14-mastra-workflow-team-boundaries.md)
 - 关联 OpenSpec：本轮更新独立实践 v2 本地契约与实现，不改变探索主线稳定契约；若扩至探索主线再评估 OpenSpec。
 - 替代记录：无；细化[固定产品角色](./2026-11-06-mastra-fixed-product-roles.md)、[受限开发执行](./2026-11-06-mastra-development-execution.md)，不撤销旧流程。
 
@@ -65,7 +65,7 @@
 
 ## 实施边界与计划
 
-详见[融合设计](../../practices/mastra/bmad-workflow-integration.md)的节点表、契约、门禁、迁移和代码映射。
+当前的团队节点、契约和门禁见[团队职责边界决策](./2026-11-14-mastra-workflow-team-boundaries.md)及[完整产研流程](../../practices/mastra/unified-workflow.md)。
 
 1. 固定上游资产、许可证、引用与散列。通用方法进入根 `.agents/skills/development/bmad-*`；当前实践 `product-pm` 的例外不自动扩展。同步根 Skill 索引及治理校验。
 2. 新建 v2 契约与 `development-execution-v2`：上下文 → 架构/任务 → 就绪 → 批准 → 实现 → 检查 → 只读评审 → 交付。自检不再直接写 v2 交付终态。
@@ -112,5 +112,5 @@
 - [BMAD v6.12.0 README](https://github.com/bmad-code-org/BMAD-METHOD/blob/v6.12.0/README.md)
 - [BMAD v6.12.0 CHANGELOG](https://github.com/bmad-code-org/BMAD-METHOD/blob/v6.12.0/CHANGELOG.md)
 - [BMAD v6.12.0 LICENSE](https://github.com/bmad-code-org/BMAD-METHOD/blob/v6.12.0/LICENSE)
-- 当前原生版本：`practices/mastra/package.json`；当前事实与目标对应见融合设计。
+- 当前原生版本：`practices/mastra/package.json`；当前事实与目标对应见[团队职责边界决策](./2026-11-14-mastra-workflow-team-boundaries.md)。
 - 用户明确要求“修改运行流程”，授权实现融合；这不替代每份产品/技术方案的运行态人工批准。

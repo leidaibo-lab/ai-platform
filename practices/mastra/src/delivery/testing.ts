@@ -243,7 +243,7 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
   });
   const cycle = createWorkflow({ id: 'test-and-regression-cycle', description: '独立测试 → 缺陷修复 → 回归，沿用累计返工预算', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema })
     .then(extract).then(continued).then(withRepositoryAssets(attach, config)).then(withRepositoryAssets(scope.bind(plan), config)).then(withRepositoryAssets(scope.bind(approve), config)).then(withRepositoryAssets(scope.bind(execute), config)).then(withRepositoryAssets(scope.bind(browser), config)).then(withRepositoryAssets(scope.bind(review), config)).then(withRepositoryAssets(route, config)).commit();
-  return createWorkflow({ id: 'testing', description: '测试：计划、用例确认、执行、质量确认及缺陷回归', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).dountil(cycle,
+  return createWorkflow({ id: 'test-team', description: '测试团队：测试计划、用例确认、执行、质量确认及缺陷回归', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).dountil(cycle,
     // 未通过质量门不能进入部署；业务阻塞和预算耗尽明确停止。
     async ({ inputData }) => inputData.quality.status === 'passed' || inputData.outcome !== 'in-progress',
   ).commit();

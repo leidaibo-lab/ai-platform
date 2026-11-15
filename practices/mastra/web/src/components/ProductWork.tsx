@@ -1,7 +1,7 @@
 import type { ReviewDocument } from '../lib';
 import { Markdown } from './Markdown';
 
-const roleLabels = { coordinator: '总产品统筹', clarification: '需求梳理', closure: '产品闭环', writing: '产品写作' };
+const roleLabels = { analysis: '需求分析', clarification: '需求澄清', 'scope-priority': '范围与优先级', writing: '产品稿写作' };
 
 /** 展示各角色的已保存产物，便于产品经理定位遗漏来自哪个环节。 */
 export function ProductWork({ document }: { document: ReviewDocument }) {

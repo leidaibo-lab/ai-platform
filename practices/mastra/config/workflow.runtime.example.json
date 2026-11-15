@@ -14,9 +14,9 @@
   },
   "roles": [
     {
-      "id": "product-coordinator",
-      "cardRef": "product-coordinator.card.v1",
-      "inputContract": "product-coordinator.input.v1",
+      "id": "product-analysis",
+      "cardRef": "product-analysis.card.v1",
+      "inputContract": "product-analysis.input.v1",
       "outputContract": "product-work.output.v1",
       "methodRefs": [
         "product-method-catalog.v1",
@@ -44,9 +44,9 @@
       "maxSteps": 24
     },
     {
-      "id": "product-closure",
-      "cardRef": "product-closure.card.v1",
-      "inputContract": "product-closure.input.v1",
+      "id": "product-scope-priority",
+      "cardRef": "product-scope-priority.card.v1",
+      "inputContract": "product-scope-priority.input.v1",
       "outputContract": "product-work.output.v1",
       "methodRefs": [
         "product-method-catalog.v1",

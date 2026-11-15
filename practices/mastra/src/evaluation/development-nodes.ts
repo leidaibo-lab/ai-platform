@@ -1,4 +1,4 @@
-/** 六类开发单节点评测：冻结上游、正式generateV2、真实受限I/O、原生Workflow/Store拥有结果。 */
+/** 六类开发节点评测：Agent 阶段使用 generateV2；自检使用同一确定性门禁和真实受限 I/O。 */
 import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
@@ -92,12 +92,22 @@ export async function runDevelopmentNode(config: PracticeConfig, item: Developme
       readFile: async (path) => { reads.push(path); return engine.readFile(path); },
       /** 写入仍受角色与执行器双重精确白名单限制。 */
       writeFile: async (path, content) => { writes.push(path); return engine.writeFile(path, content); },
-      /** 记录Agent真正请求执行的检查，独立复跑不会冒充Agent调用。 */
+      /** 记录当前节点实际执行的检查，独立复跑不会冒充门禁证据。 */
       runChecks: async () => { const result = await engine.runChecks(); toolChecks.push(result); return result; },
     };
     let entry: EntryV2 | null = null, error: string | null = null;
-    const extra = item.role === 'self-check' ? { instruction: loadDevelopmentNodeCases(config.rootDir).protocol.instruction } : item.role === 'backend' ? state.plan!.tasks[0] : item.role === 'context' ? { files: item.files } : null;
-    try { entry = await generate(config, port, item.role, state, item.role === 'backend' ? ['src/solution.mjs'] : [], extra, methods); }
+    const extra = item.role === 'backend' ? state.plan!.tasks[0] : item.role === 'context' ? { files: item.files } : null;
+    try {
+      if (item.role === 'self-check') {
+        const startedAt = new Date().toISOString();
+        const checked = await port.runChecks();
+        const failed = checked.filter(
+          // 只从实际执行结果派生失败清单，不接受模型自报。
+          (check) => check.exitCode !== 0 || check.processExitCode !== 0 || check.timedOut || check.stdoutTruncated || check.stderrTruncated,
+        );
+        entry = { role: 'self-check', round: state.round, text: JSON.stringify({ summary: failed.length ? '实际检查失败' : '实际检查通过', route: failed.length ? 'backend' : 'human' }), tools: ['runChecks'], startedAt, endedAt: new Date().toISOString(), durationMs: 0, steps: 0, modelId: null, inputTokens: null, outputTokens: null };
+      } else entry = await generate(config, port, item.role, state, item.role === 'backend' ? ['src/solution.mjs'] : [], extra, methods);
+    }
     catch { error = 'node-generation-failed'; }
     const after = await engine.snapshot();
     const files: Record<string, string> = {};

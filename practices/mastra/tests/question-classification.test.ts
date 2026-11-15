@@ -75,7 +75,7 @@ test('开发业务阻塞不能降级；附加可选细节不覆盖业务阻塞',
 
 test('新Run原生链路：生成分类、暂停、仅答必答后继续，不补造可选答案', /** 脚本模型验证完整数据链，不把结构测试当作真实模型判断质量。 */async () => {
   const storage = new LibSQLStore({ id: 'question-classification-regression', url: 'file::memory:' });
-  const agents = { productCoordinatorAgent: { generate: /** 返回混合分类，确认业务入口确实请求严格结构输出。 */async (_prompt: unknown, options: any) => {
+  const agents = { productManagerAgent: { generate: /** 返回混合分类，确认业务入口确实请求严格结构输出。 */async (_prompt: unknown, options: any) => {
     assert.ok(options.structuredOutput.schema);
     return { object: JSON.parse(String(_prompt)).history?.length ? { ...plan, questions: [optional] } : plan };
   } } } as any;

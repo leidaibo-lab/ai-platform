@@ -1,17 +1,29 @@
 /** 组合式布局：正文、澄清表单和操作区各自拥有内容，布局不读取或修改 Workflow 事实。 */
-import { useId, useState, type ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 import { isQuestionAnswered } from './QuestionFlow';
 
 /** 插槽只承载当前关口的展示内容；操作与版本绑定由调用方拥有。 */
-interface WorkspaceProps { children: ReactNode; title: string; panel: ReactNode; actions: ReactNode }
+interface WorkspaceProps { children: ReactNode; title: string; panel: ReactNode; actions: ReactNode; contentOnly?: boolean }
 
 /** 处理区随页面展开；专注模式只切换布局，保留表单节点和未提交草稿。 */
-export function RequirementWorkspace({ children, title, panel, actions }: WorkspaceProps) {
+export function RequirementWorkspace({ children, title, panel, actions, contentOnly = false }: WorkspaceProps) {
   const panelId = useId();
+  const viewerRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
+  /** 将正文查看区滚回顶部，不改变当前 Run 或表单草稿。 */
+  function scrollViewerToTop() {
+    viewerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  if (contentOnly) return <details className="requirement-content-only analysis-evidence-collapse">
+    <summary><span><strong>查看分析依据</strong><small>方案、业务检查与确认基线</small></span><em>展开</em></summary>
+    <div className="analysis-evidence-content"><div className="content-viewer-scroll" ref={viewerRef}>{children}</div></div>
+  </details>;
   return <div className={`requirement-workspace${focused ? ' requirement-focused' : ''}`}>
     <a className="requirement-jump" href={`#${panelId}`}>前往{title} ↓</a>
-    <div className="requirement-overview">{children}</div>
+    <div className="requirement-overview content-viewer">
+      <div className="content-viewer-toolbar"><div><span className="intake-eyebrow">内容查看区</span><strong>{title}</strong><small>滚动查看完整内容；执行活动保留在上方正文流中。</small></div><button type="button" onClick={scrollViewerToTop}>回到顶部</button></div>
+      <div className="content-viewer-scroll" ref={viewerRef}>{children}</div>
+    </div>
     <aside className="intake-card requirement-panel" id={panelId} aria-label={title} tabIndex={-1}>
       <div className="requirement-panel-heading"><div><div className="intake-eyebrow">当前待办</div><h2>{title}</h2></div><button type="button" aria-pressed={focused} aria-controls={panelId} onClick={/** 仅切换呈现，不提交或重置回答。 */() => setFocused(!focused)}>{focused ? '并排查看方案' : '展开处理区'}</button></div>
       <div className="requirement-panel-body">{panel}</div>

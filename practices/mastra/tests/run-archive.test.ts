@@ -67,7 +67,7 @@ test('实际产研入口自动归档角色阶段与根暂停', /** 使用真实f
     const result = await run.start({ inputData: { brief: '合成需求', iterationId: 'actual-main' } });
     assert.equal(result.status, 'suspended');
     const history = f.history(run.runId);
-    assert.ok(history.some(/** 四角色实际返回应留下阶段记录。 */e => e.scope === 'step' && e.stage === 'product-writing'));
+    assert.ok(history.some(/** 产品经理阶段实际返回应留下阶段记录。 */e => e.scope === 'step' && e.stage === 'product-writing'));
     assert.ok(history.some(/** 产品审批暂停必须明确记录。 */e => e.scope === 'run' && e.status === 'suspended'));
     assert.ok(history.every(/** 嵌套Workflow不得另建根Run档案。 */e => e.runId === 'main-run' && e.iterationId === 'actual-main'));
   } finally { await options.storage.close(); rmSync(f.directory, { recursive: true, force: true }); }

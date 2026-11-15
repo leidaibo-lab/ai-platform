@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mastra 正文流式执行 UI 草图</title>
+  <style>
+    :root {
+      --bg: #f7f9f8;
+      --surface: #ffffff;
+      --surface-soft: #fbfcfb;
+      --ink: #263732;
+      --muted: #7c8983;
+      --subtle: #a3ada8;
+      --line: #e2e9e5;
+      --green: #3f8b72;
+      --green-soft: #edf7f2;
+      --blue: #3d78ad;
+      --blue-soft: #edf5fc;
+      --amber: #a97835;
+      --amber-soft: #fff7e9;
+      --shadow: 0 12px 28px rgba(39, 69, 59, .05);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--bg); }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+
+    .app { min-height: 100vh; display: grid; grid-template-columns: 238px minmax(0, 1fr); }
+    .sidebar { padding: 24px 16px; border-right: 1px solid var(--line); background: var(--surface-soft); }
+    .brand { display: flex; align-items: center; gap: 9px; margin: 0 10px 28px; font-weight: 750; }
+    .brand-mark { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; color: #fff; background: #304d43; font-size: 12px; }
+    .sidebar-subtitle { margin: -17px 10px 25px; color: var(--muted); font-size: 12px; }
+    .new-run { width: 100%; padding: 11px 12px; border: 1px solid #d6e0db; border-radius: 10px; color: #315c4d; background: var(--surface); text-align: left; }
+    .sidebar-label { margin: 27px 10px 9px; color: var(--subtle); font-size: 11px; letter-spacing: .08em; }
+    .run { display: block; width: 100%; padding: 11px 10px; border: 0; border-radius: 10px; color: var(--ink); background: transparent; text-align: left; }
+    .run + .run { margin-top: 3px; }
+    .run.active { background: #e8f1ec; }
+    .run-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .run-meta { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .sidebar-foot { margin: 28px 10px 0; color: var(--subtle); font-size: 11px; line-height: 1.6; }
+
+    .main { min-width: 0; padding: 27px 28px 60px; }
+    .topbar, .workflow-overview, .content { max-width: 940px; margin: 0 auto; }
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .eyebrow { color: var(--subtle); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { margin: 5px 0 0; font-size: 22px; letter-spacing: -.025em; }
+    .actions { display: flex; gap: 8px; }
+    .action { padding: 8px 11px; border: 1px solid #d7e1dc; border-radius: 9px; color: #66766f; background: var(--surface); font-size: 12px; }
+
+    .workflow-overview { margin-top: 22px; padding: 17px 19px 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+    .workflow-overview-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .workflow-overview-head strong { display: block; margin-top: 4px; color: #29483c; font-size: 15px; }
+    .workflow-overview-head small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .workflow-detail-button { padding: 7px 10px; border: 1px solid #d3e1da; border-radius: 8px; color: #4e7868; background: #fff; font-size: 11px; white-space: nowrap; }
+    .workflow-svg { display: block; width: 100%; height: 108px; margin-top: 7px; overflow: visible; }
+    .workflow-track { fill: none; stroke: #dce7e1; stroke-width: 3; stroke-linecap: round; }
+    .workflow-progress { fill: none; stroke: var(--green); stroke-width: 3; stroke-linecap: round; }
+    .workflow-node { cursor: pointer; outline: none; pointer-events: all; }
+    .workflow-node circle { fill: #fff; stroke: #bdcbc3; stroke-width: 2; transition: all .2s ease; }
+    .workflow-node text { fill: #87948e; font-size: 12px; text-anchor: middle; pointer-events: none; }
+    .workflow-node .workflow-node-state { fill: #a4afa9; font-size: 10px; }
+    .workflow-node.done circle { fill: var(--green); stroke: var(--green); }
+    .workflow-node.done text, .workflow-node.current text { fill: #315948; font-weight: 700; }
+    .workflow-node.done .workflow-node-state { fill: var(--green); font-weight: 500; }
+    .workflow-node.current circle { fill: #fff; stroke: var(--blue); stroke-width: 3; filter: drop-shadow(0 0 0 #d5e8f8); }
+    .workflow-node.current .workflow-node-state { fill: var(--blue); font-weight: 700; }
+    .workflow-node.pending text { fill: #a4afa9; }
+    .workflow-node:hover circle, .workflow-node:focus circle { stroke-width: 4; }
+    .workflow-node-check { fill: #fff; font-size: 11px; text-anchor: middle; pointer-events: none; }
+    .workflow-current { display: flex; align-items: center; gap: 8px; margin-top: -2px; color: var(--muted); font-size: 11px; }
+    .workflow-current strong { color: #496e5f; font-weight: 650; }
+
+    .workflow-dialog[hidden] { display: none; }
+    .workflow-dialog { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; background: rgba(35, 55, 47, .22); }
+    .workflow-dialog-card { width: min(720px, 100%); max-height: min(690px, calc(100vh - 40px)); overflow: auto; padding: 21px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 24px 70px rgba(31, 57, 47, .18); }
+    .workflow-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
+    .workflow-dialog-head h2 { margin: 4px 0 0; font-size: 20px; }
+    .workflow-dialog-close { width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 7px; color: #718079; background: #fff; }
+    .workflow-dialog-current { margin: 17px 0; padding: 12px 13px; border-radius: 10px; color: #3f6757; background: var(--green-soft); font-size: 13px; line-height: 1.6; }
+    .team-flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; align-items: stretch; margin-top: 15px; }
+    .team-step { position: relative; padding: 14px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfb; }
+    .team-step:not(:last-child)::after { content: "→"; position: absolute; top: 50%; right: -13px; color: #9ca9a2; transform: translateY(-50%); z-index: 1; }
+    .team-step.current { border-color: #b8d2e7; background: var(--blue-soft); }
+    .team-step.done { border-color: #c9e0d4; background: var(--green-soft); }
+    .team-step small { display: block; color: var(--muted); font-size: 10px; }
+    .team-step strong { display: block; margin-top: 6px; color: #365548; font-size: 13px; }
+    .team-step span { display: block; margin-top: 8px; color: #72817a; font-size: 11px; line-height: 1.5; }
+    .workflow-node-detail { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--line); }
+    .workflow-node-detail h3 { margin: 0 0 8px; font-size: 14px; }
+    .workflow-node-detail p { margin: 0; color: #64766d; font-size: 12px; line-height: 1.7; }
+    .workflow-legend { display: flex; gap: 16px; margin-top: 2px; color: #8a9690; font-size: 10px; }
+    .workflow-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .legend-mark { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #bdcbc3; }
+    .legend-mark.done { background: var(--green); }
+    .legend-mark.current { border: 2px solid var(--blue); background: #fff; }
+
+    .content { padding-top: 19px; }
+    .context { margin-bottom: 18px; color: #75827b; font-size: 12px; }
+    .context summary { cursor: pointer; list-style: none; }
+    .context summary::-webkit-details-marker { display: none; }
+    .context summary::before { content: "▸"; display: inline-block; margin-right: 7px; color: var(--green); }
+    .context[open] summary::before { transform: rotate(90deg); }
+    .context p { max-width: 760px; margin: 10px 0 0 18px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; color: #52645c; background: var(--surface); line-height: 1.7; }
+
+    .stream { max-width: 760px; margin: 0 auto; }
+    .elapsed { display: inline-flex; align-items: center; gap: 8px; margin: 1px 0 14px; padding: 7px 11px; border: 1px solid #e0e9e4; border-radius: 9px; color: #7a8881; background: var(--surface); font-size: 12px; }
+    .elapsed strong { color: #53675e; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .elapsed-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
+    .assistant-copy { margin: 10px 0; color: #354842; font-size: 15px; line-height: 1.85; }
+    .assistant-copy strong { color: #253f34; }
+    .cursor { display: inline-block; width: 2px; height: 16px; margin-left: 4px; vertical-align: -2px; background: var(--green); animation: blink 1s steps(2, start) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .activity { position: relative; margin: 10px 0 12px; }
+    .activity::before { content: ""; position: absolute; top: -11px; bottom: -11px; left: 12px; border-left: 1px solid #dce7e1; }
+    .activity summary { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 9px; align-items: center; width: 100%; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; color: #30463e; background: #fbfcfb; list-style: none; cursor: pointer; z-index: 1; }
+    .activity summary::-webkit-details-marker { display: none; }
+    .activity.current summary { border-color: #cbddec; background: #f7fbff; }
+    .activity-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--green); background: var(--green-soft); font-size: 13px; }
+    .activity.current .activity-icon { color: var(--blue); background: var(--blue-soft); }
+    .activity-title { display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .activity-status { color: var(--muted); font-size: 11px; font-weight: 400; }
+    .activity.current .activity-status { color: var(--blue); }
+    .activity-time { color: #7b8982; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .activity-detail { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 5px 10px 0 34px; padding: 7px 9px; border-top: 1px solid #e7efea; color: #718079; font-size: 11px; line-height: 1.6; }
+    .activity-detail div { display: flex; gap: 5px; min-width: 0; max-width: 100%; }
+    .activity-detail strong { color: #3d6254; font-weight: 650; overflow-wrap: anywhere; }
+    .tag { display: inline-flex; padding: 2px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+    .tag.tool { color: #356d5b; background: var(--green-soft); }
+    .tag.file { color: #486c8c; background: var(--blue-soft); }
+    .activity-note { width: 100%; margin: 1px 0 0; color: #6c7e76; }
+
+    .content-viewer { margin-top: 27px; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); box-shadow: var(--shadow); }
+    .viewer-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 17px 20px 14px; border-bottom: 1px solid var(--line); background: rgba(255, 255, 255, .96); backdrop-filter: blur(7px); }
+    .viewer-toolbar h2 { margin: 5px 0 0; font-size: 18px; }
+    .viewer-toolbar small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .viewer-scroll { max-height: 440px; overflow: auto; padding: 22px 25px 28px; scroll-behavior: smooth; }
+    .viewer-page { max-width: 760px; margin: 0 auto; color: #52645c; font-size: 13px; line-height: 1.8; }
+    .viewer-page h3 { margin: 0 0 9px; color: #2d4a3d; font-size: 16px; }
+    .viewer-page h4 { margin: 21px 0 6px; color: #436456; font-size: 13px; }
+    .viewer-page p { margin: 0 0 10px; }
+    .viewer-page ul { margin: 8px 0 0; padding-left: 19px; }
+    .viewer-page li { margin: 6px 0; }
+    .viewer-section + .viewer-section { margin-top: 21px; padding-top: 19px; border-top: 1px solid #edf1ef; }
+    .viewer-callout { margin: 14px 0; padding: 11px 13px; border-left: 3px solid var(--green); border-radius: 0 8px 8px 0; color: #4e675b; background: #f4f9f6; }
+    .viewer-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-top: 1px solid var(--line); background: #fbfcfb; }
+    .viewer-actions p { margin: 0; color: #75827b; font-size: 11px; }
+    .decision-actions { display: flex; gap: 8px; }
+    .decision-actions button { padding: 9px 13px; border: 1px solid #d1ded7; border-radius: 8px; color: #527066; background: #fff; font-size: 12px; }
+    .decision-actions .primary { border-color: var(--green); color: #fff; background: var(--green); }
+    .footer-status { margin: 18px 0 0; padding-top: 13px; border-top: 1px solid var(--line); color: #91a099; font-size: 11px; }
+    .footer-status strong { color: #5d756a; }
+
+    @media (max-width: 820px) {
+      .app { display: block; }
+      .sidebar { display: none; }
+      .main { padding: 20px 15px 40px; }
+      .actions { display: none; }
+      .workflow-overview { padding: 14px; }
+      .workflow-svg { height: 92px; }
+      .workflow-overview-head { align-items: flex-start; }
+      .team-flow { grid-template-columns: 1fr 1fr; }
+      .team-step:nth-child(2)::after { display: none; }
+      .stream { max-width: none; }
+      .viewer-scroll { max-height: 420px; padding: 18px 16px 22px; }
+      .viewer-actions { display: block; }
+      .viewer-actions p { margin-bottom: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">◈</span><span>产研工作台</span></div>
+      <p class="sidebar-subtitle">从想法到可执行需求</p>
+      <button class="new-run" type="button">＋ 新需求</button>
+      <div class="sidebar-label">最近的主流程</div>
+      <button class="run active" type="button"><span class="run-title">实现执行节点可视化</span><span class="run-meta">正在执行 · 7分58秒</span></button>
+      <button class="run" type="button"><span class="run-title">招聘候选人初筛流程</span><span class="run-meta">等待产品稿确认</span></button>
+      <button class="run" type="button"><span class="run-title">HRM 项目交付回归</span><span class="run-meta">本轮已结束</span></button>
+      <p class="sidebar-foot">所有确认在此工作台完成<br />执行活动只展示安全元数据。</p>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><div class="eyebrow">Mastra Run · 流式输出草图</div><h1>实现执行节点可视化</h1></div>
+        <div class="actions"><button class="action" type="button">项目仓库管理</button><button class="action" type="button">远端同步设置</button><button class="action" type="button">刷新状态</button></div>
+      </header>
+
+      <section class="workflow-overview" aria-label="Workflow 主流程">
+        <div class="workflow-overview-head">
+          <div><div class="eyebrow">Workflow 主流程 · 动态状态</div><strong id="workflow-title">开发授权与实施</strong><small id="workflow-subtitle">当前位于：研发团队 · 技术方案</small></div>
+          <button class="workflow-detail-button" id="workflow-detail-button" type="button">查看阶段流程</button>
+        </div>
+        <svg class="workflow-svg" viewBox="0 0 900 108" role="img" aria-label="需求澄清、产品稿确认、开发授权与实施、测试与发布四阶段流程">
+          <path class="workflow-track" d="M90 41 H810" />
+          <path class="workflow-progress" d="M90 41 H570" />
+          <g class="workflow-node done" data-stage="requirements" tabindex="0" role="button" aria-label="查看需求澄清流程">
+            <rect x="30" y="12" width="120" height="88" fill="#fff" fill-opacity="0.001" pointer-events="all" /><circle cx="90" cy="41" r="14" /><text class="workflow-node-check" x="90" y="45">✓</text><text x="90" y="77">01 需求澄清</text><text class="workflow-node-state" x="90" y="94">已完成</text>
+          </g>
+          <g class="workflow-node done" data-stage="product" tabindex="0" role="button" aria-label="查看产品稿确认流程">
+            <rect x="270" y="12" width="120" height="88" fill="#fff" fill-opacity="0.001" pointer-events="all" /><circle cx="330" cy="41" r="14" /><text class="workflow-node-check" x="330" y="45">✓</text><text x="330" y="77">02 产品稿确认</text><text class="workflow-node-state" x="330" y="94">已完成</text>
+          </g>
+          <g class="workflow-node current" data-stage="development" tabindex="0" role="button" aria-label="查看开发授权与实施流程">
+            <rect x="510" y="12" width="120" height="88" fill="#fff" fill-opacity="0.001" pointer-events="all" /><circle cx="570" cy="41" r="16" /><text x="570" y="77">03 开发授权与实施</text><text class="workflow-node-state" x="570" y="94">当前节点</text>
+          </g>
+          <g class="workflow-node pending" data-stage="testing" tabindex="0" role="button" aria-label="查看测试与发布流程">
+            <rect x="750" y="12" width="120" height="88" fill="#fff" fill-opacity="0.001" pointer-events="all" /><circle cx="810" cy="41" r="14" /><text x="810" y="77">04 测试与发布</text><text class="workflow-node-state" x="810" y="94">待执行</text>
+          </g>
+        </svg>
+        <div class="workflow-current"><span>当前节点</span><strong id="workflow-current-node">研发团队 · 技术方案</strong><span>·</span><span id="workflow-current-status">等待人工确认</span></div>
+        <div class="workflow-legend" aria-label="Workflow 状态图例"><span><i class="legend-mark done"></i>已完成</span><span><i class="legend-mark current"></i>当前阶段</span><span><i class="legend-mark"></i>待执行</span></div>
+      </section>
+
+      <div class="workflow-dialog" id="workflow-dialog" hidden>
+          <div class="workflow-dialog-card" role="dialog" aria-modal="true" aria-labelledby="workflow-dialog-title">
+          <div class="workflow-dialog-head"><div><div class="eyebrow">阶段流程详情</div><h2 id="workflow-dialog-title">开发授权与实施</h2></div><button class="workflow-dialog-close" id="workflow-dialog-close" type="button" aria-label="关闭">×</button></div>
+          <div class="workflow-dialog-current" id="workflow-dialog-current">当前节点：研发团队 · 技术方案。方案批准前不会自动进入代码实施。</div>
+          <div class="team-flow" id="team-flow"></div>
+          <div class="workflow-node-detail"><h3>节点说明</h3><p id="workflow-dialog-description">研发团队负责把已确认的产品边界转成可审阅的技术方案，并在获得授权后进入实施。</p></div>
+        </div>
+      </div>
+
+      <div class="content">
+        <details class="context">
+          <summary>原始需求 · 当前 Run 的输入</summary>
+          <p>前端 UI 节点能力，希望能看到当前环节耗时、调用的工具、读取的文件，以及可解释的执行进展。</p>
+        </details>
+
+        <section class="stream" aria-label="正文与执行活动流">
+          <div class="elapsed"><span class="elapsed-dot"></span><span>已处理 <strong>7分58秒</strong></span></div>
+
+          <p class="assistant-copy"><strong>我会按已确认的 Mastra Workflow 结构继续执行。</strong> 我先读取项目约束，再整理技术方案和实现边界。</p>
+
+          <details class="activity">
+            <summary><span class="activity-icon">▧</span><span class="activity-title">已读取文件 <span class="activity-status">已完成</span></span><span class="activity-time">42秒</span></summary>
+            <div class="activity-detail"><div><span>文件</span><strong><span class="tag file">AGENTS.md</span> <span class="tag file">docs/architecture.md</span> <span class="tag file">src/entry.mjs</span></strong></div></div>
+          </details>
+
+          <p class="assistant-copy">项目的主要约束已经确认：执行范围需要绑定当前仓库，检查命令只能使用已登记的固定清单。</p>
+
+          <details class="activity">
+            <summary><span class="activity-icon">⌁</span><span class="activity-title">调用工具 <span class="activity-status">已完成</span></span><span class="activity-time">3次调用</span></summary>
+            <div class="activity-detail"><div><span>工具</span><strong><span class="tag tool">readFile</span> <span class="tag tool">skill_read</span> <span class="tag tool">handoff_read</span></strong></div></div>
+          </details>
+
+          <p class="assistant-copy">基于这些已读取的事实，我正在整理任务依赖、责任角色和验证方式<span class="cursor" aria-label="流式输出中"></span></p>
+
+          <details class="activity current" open>
+            <summary><span class="activity-icon">✳</span><span class="activity-title">正在生成技术方案 <span class="activity-status">进行中</span></span><span class="activity-time">已运行 1分07秒</span></summary>
+            <div class="activity-detail">
+              <div><span>工具</span><strong><span class="tag tool">readFile</span> <span class="tag tool">delegateTask</span></strong></div>
+              <div><span>文件</span><strong><span class="tag file">src/runtime.mjs</span> <span class="tag file">src/routes.mjs</span></strong></div>
+              <p class="activity-note">工作摘要：根据已读取的约束整理任务边界。这里是安全摘要，不是模型隐藏思维链。</p>
+            </div>
+          </details>
+
+          <p class="assistant-copy">完成后我会输出一份可审阅的技术方案，并停在方案批准节点，不会自动进入代码实施。</p>
+
+          <section class="content-viewer" aria-label="技术方案内容查看区">
+            <div class="viewer-toolbar"><div><div class="eyebrow">当前阶段 · 方案整理</div><h2>技术方案与待确认事项</h2><small>滚动查看完整内容；执行活动仍保留在上方正文流中。</small></div><button class="action" id="viewer-top" type="button">回到顶部</button></div>
+            <div class="viewer-scroll" id="viewer-scroll">
+              <article class="viewer-page">
+                <section class="viewer-section"><h3>方案摘要</h3><p>系统会把执行过程中形成的事实整理成可审阅的技术方案，正文保持在主阅读流里，长内容在这里独立滚动查看。</p><div class="viewer-callout">当前状态：方案已生成到可审阅阶段，等待人工确认；不会因为查看内容而自动进入代码实施。</div></section>
+                <section class="viewer-section"><h3>一、当前已确认的边界</h3><ul><li>执行范围绑定当前仓库，不能跨项目读取或写入。</li><li>工具和文件只展示服务端白名单元数据，不展开隐藏参数。</li><li>方案批准前不会自动进入代码实施。</li><li>后续节点需要沿用当前 Workflow 的人工确认关口。</li></ul><h4>交付目标</h4><p>形成一份能被产品、研发和测试共同审阅的实施方案，并明确每个团队的责任边界。</p></section>
+                <section class="viewer-section"><h3>二、团队分工</h3><p>产品团队负责确认业务规则与验收目标；研发团队负责技术拆分、实现边界和验证计划；测试团队负责检查方案是否具备可执行的验收条件；发布团队负责最后的发布范围与回滚约束。</p><h4>当前节点：研发团队 · 技术方案</h4><p>研发团队正在根据已读取的仓库资料整理方案。该节点完成后，结果会回到人工确认关口。</p></section>
+                <section class="viewer-section"><h3>三、验证方式</h3><ul><li>核对方案是否覆盖已确认的主流程和异常处理。</li><li>核对每个实现任务是否有对应的验收标准。</li><li>核对检查命令是否来自当前项目登记的固定清单。</li><li>任何新增权限、业务决定或工程准备缺口都必须重新确认。</li></ul></section>
+                <section class="viewer-section"><h3>四、待确认事项</h3><p>请确认当前方案是否准确反映项目范围、团队职责和实施边界。确认后才会进入下一节点。</p><div class="viewer-callout">这里是业务决策内容查看区，不是 Workflow 时间线；执行过程细节请查看上方正文活动流。</div></section>
+              </article>
+            </div>
+            <div class="viewer-actions"><p>当前操作：确认技术方案方向后进入下一团队节点。</p><div class="decision-actions"><button type="button">返回修改</button><button class="primary" type="button">确认并继续</button></div></div>
+          </section>
+
+          <p class="footer-status">当前流式输出状态：<strong>等待“生成技术方案”节点完成</strong></p>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const workflowData = {
+      requirements: { title: '需求澄清', status: '已完成', current: '需求澄清已完成', runtime: '研发团队 · 技术方案', description: '需求澄清阶段负责收集输入、澄清业务目标，并形成可进入产品稿确认的需求基线。', nodes: [['需求输入', '已完成', '收集原始需求'], ['业务澄清', '已完成', '确认关键决策'], ['范围收敛', '已完成', '明确边界与假设'], ['需求基线', '已完成', '形成阶段产物']] },
+      product: { title: '产品稿确认', status: '已完成', current: '产品稿确认已完成', runtime: '研发团队 · 技术方案', description: '产品稿确认阶段负责把需求基线整理成可审阅的产品稿，并通过人工确认后交给研发。', nodes: [['产品方案', '已完成', '承接需求基线'], ['方案修订', '已完成', '吸收确认结果'], ['产品稿生成', '已完成', '形成完整产品稿'], ['人工审阅', '已完成', '确认当前版本']] },
+      development: { title: '开发授权与实施', status: '等待人工确认', current: '研发团队 · 技术方案', runtime: '研发团队 · 技术方案', description: '研发阶段负责确认项目范围、形成技术方案，并在获得授权后进入具体实施。', nodes: [['项目范围授权', '已完成', '确认仓库与权限'], ['技术方案', '当前节点', '拆分实现边界'], ['研发实施', '待执行', '按方案修改代码'], ['研发自检', '待执行', '执行登记检查']] },
+      testing: { title: '测试与发布', status: '待执行', current: '测试与发布待执行', runtime: '研发团队 · 技术方案', description: '测试与发布阶段负责验证交付结果，并在通过确认后执行发布或回滚。', nodes: [['测试准备', '待执行', '准备验收条件'], ['测试执行', '待执行', '执行登记检查'], ['结果确认', '待执行', '确认测试回执'], ['发布与回滚', '待执行', '执行发布关口']] }
+    };
+
+    // 原型交互：活动节点使用原生 details 展开或收起公开执行元数据。
+    function bindActivityRows() {
+      document.querySelectorAll('.activity').forEach(function (activity) {
+        activity.addEventListener('toggle', function () {
+          activity.classList.toggle('is-open', activity.open);
+        });
+      });
+    }
+
+    // 原型交互：根据选中的主流程阶段渲染团队接力流程。
+    function renderTeamFlow(stageId) {
+      const data = workflowData[stageId];
+      document.querySelector('#workflow-dialog-title').textContent = data.title;
+      document.querySelector('#workflow-dialog-current').textContent = `查看阶段节点：${data.current}。运行当前节点：${data.runtime}。${data.description}`;
+      document.querySelector('#workflow-dialog-description').textContent = data.description;
+      document.querySelector('#team-flow').innerHTML = data.nodes.map(function (node, index) {
+        const state = node[1] === '当前节点' ? 'current' : node[1] === '已完成' ? 'done' : '';
+        return `<div class="team-step ${state}"><small>0${index + 1} · ${node[1]}</small><strong>${node[0]}</strong><span>${node[2]}</span></div>`;
+      }).join('');
+    }
+
+    // 原型交互：打开团队流程详情，并同步当前主流程节点。
+    function openWorkflowDetails(stageId) {
+      renderTeamFlow(stageId);
+      document.querySelector('#workflow-dialog').hidden = false;
+    }
+
+    // 原型交互：关闭团队流程详情浮层。
+    function closeWorkflowDetails() {
+      document.querySelector('#workflow-dialog').hidden = true;
+    }
+
+    // 原型交互：支持点击和键盘操作 SVG Workflow 节点。
+    function bindWorkflowNodes() {
+      document.querySelectorAll('.workflow-node').forEach(function (node) {
+        function activateNode() { openWorkflowDetails(node.dataset.stage); }
+        node.addEventListener('click', activateNode);
+        node.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activateNode(); }
+        });
+      });
+    }
+
+    // 原型交互：绑定浮层关闭、背景点击和内容区回到顶部操作。
+    function bindUtilityActions() {
+      document.querySelector('#workflow-detail-button').addEventListener('click', function () { openWorkflowDetails('development'); });
+      document.querySelector('#workflow-dialog-close').addEventListener('click', closeWorkflowDetails);
+      document.querySelector('#workflow-dialog').addEventListener('click', function (event) {
+        if (event.target === event.currentTarget) closeWorkflowDetails();
+      });
+      document.querySelector('#viewer-top').addEventListener('click', function () {
+        document.querySelector('#viewer-scroll').scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    }
+
+    bindActivityRows();
+    bindWorkflowNodes();
+    bindUtilityActions();
+    renderTeamFlow('development');
+  </script>
+</body>
+</html>

@@ -128,7 +128,7 @@ export function createDeploymentWorkflow(agents: ReturnType<typeof createAgents>
     },
   });
   const cycle = createWorkflow({ id: 'deployment-and-rollback-cycle', description: '发布授权 → 外部执行回执 → 健康确认 → 失败回滚', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).then(withRepositoryAssets(scope.bind(prepare), config)).then(withRepositoryAssets(scope.bind(approve), config)).then(withRepositoryAssets(scope.bind(execute), config)).then(withRepositoryAssets(scope.bind(health), config)).then(withRepositoryAssets(rollback, config)).commit();
-  return createWorkflow({ id: 'deployment', description: '部署：方案、发布审批、外部执行、健康检查与回滚', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).dountil(cycle,
+  return createWorkflow({ id: 'deployment-team', description: '运维团队：方案、发布审批、外部执行、健康检查与回滚', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).dountil(cycle,
     // 发布成功、回滚或需要人工处理时退出，不伪造生产成功状态。
     async ({ inputData }) => inputData.outcome !== 'in-progress',
   ).commit();

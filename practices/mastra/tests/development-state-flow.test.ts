@@ -107,7 +107,7 @@ test('主流程停止开发后不进入测试、发布或最终交付；原生�
     current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { ...current.gate!.fixed, decision: 'stop', reviewer: 'test', comment: '合成停止' } });
     assert.equal(current.status, 'success'); assert.equal(current.outcome, 'blocked'); assert.equal(current.gate, undefined);
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    for (const key of ['testing', 'deployment', 'confirm-final-delivery']) assert.notEqual((snapshot!.steps![key] as any)?.status, 'success');
+    for (const key of ['test-team', 'deployment-team', 'delivery-team']) assert.notEqual((snapshot!.steps![key] as any)?.status, 'success');
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -122,7 +122,7 @@ test('历史failed架构受控Time travel：拒绝旧hash和源码漂移，重�
   // 保持同一原生图，仅模拟旧版架构错误退出以形成真实failed持久化记录。
   let oldCalls = 0;
   // 先模拟旧版尾部恢复暂停，再在第二轮架构抛错，此时prepare-context未在当前轮被选择。
-  dev.steps['development-team-iteration'].steps.architecture.execute = async ({ inputData }: any) => {
+  dev.steps['development-execution'].steps['development-execution-iteration'].steps.architecture.execute = async ({ inputData }: any) => {
     if (++oldCalls === 1) return { ...inputData, recovery: { hash: recoveryHashV2(inputData), checkpointHash: inputData.checkpointHash, phase: 'architecture', role: 'architect', taskId: null, kind: 'model-timeout' } };
     throw new Error('开发阶段 architecture 再次未完成（model-timeout），人工恢复预算已耗尽');
   };
@@ -135,10 +135,10 @@ test('历史failed架构受控Time travel：拒绝旧hash和源码漂移，重�
     current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { project, reviewer: 'test', comment: '合成项目' } });
     assert.equal(current.status, 'suspended');
     current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { ...current.gate!.fixed, decision: 'retry', reviewer: 'test', comment: '模拟旧版人工重试' } });
-    assert.equal(current.status, 'failed'); assert.equal(current.retry!.step, 'development-team.development-team-iteration');
+    assert.equal(current.status, 'failed'); assert.equal(current.retry!.step, 'development-team.development-execution.development-execution-iteration');
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: '0'.repeat(64) }, config), /版本/);
     const snapshot = await workflow.getWorkflowRunById(run.runId); const state = (snapshot!.steps![(current.retry as any).checkpointStep] as any).payload;
-    assert.equal(snapshot!.steps!['development-team.development-team-iteration.prepare-context'], undefined);
+    assert.equal(snapshot!.steps!['development-team.development-execution.development-execution-iteration.prepare-context'], undefined);
     let candidate = executionResolver(config)(state.input); await candidate.writeFile('src/a.mjs', 'export const drift=1;'); await candidate.close();
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: current.retry!.hash }, config), /检查点/);
     assert.equal((await readIntake(workflow, run.runId)).status, 'failed');

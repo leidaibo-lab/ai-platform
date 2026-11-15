@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mastra 流式活动时间线草图</title>
+  <style>
+    :root { --bg:#fff; --soft:#f7f9f8; --ink:#252c29; --muted:#87918c; --line:#e8ecea; --green:#3f8b72; --green-soft:#edf7f2; --blue:#4b7cae; --blue-soft:#edf4fb; --amber:#b17a31; --amber-soft:#fff7e9; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); }
+    button { font:inherit; }
+    .app { min-height:100vh; display:grid; grid-template-columns:220px minmax(0, 1fr); }
+    .sidebar { padding:24px 15px; border-right:1px solid var(--line); background:#fbfcfb; }
+    .brand { display:flex; align-items:center; gap:9px; margin:0 10px 28px; font-weight:700; }
+    .brand-mark { width:25px; height:25px; display:grid; place-items:center; border-radius:8px; color:#fff; background:#304d43; font-size:12px; }
+    .new-run { width:100%; padding:10px 12px; border:1px solid #dbe3df; border-radius:10px; color:#355a4d; background:#fff; text-align:left; cursor:pointer; }
+    .label { margin:27px 10px 9px; color:#a2aba7; font-size:11px; letter-spacing:.08em; }
+    .run { display:block; width:100%; padding:10px; border:0; border-radius:10px; color:var(--ink); background:transparent; text-align:left; cursor:pointer; }
+    .run.active { background:#eaf2ee; }
+    .run-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+    .run-meta { display:block; margin-top:4px; color:var(--muted); font-size:11px; }
+    .main { padding:31px 28px 60px; }
+    .topbar { max-width:760px; margin:0 auto 25px; display:flex; justify-content:space-between; align-items:center; }
+    .eyebrow { color:#a2aba7; font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
+    h1 { margin:5px 0 0; font-size:21px; letter-spacing:-.02em; }
+    .refresh { padding:8px 11px; border:1px solid #dbe3df; border-radius:9px; color:#74817b; background:#fff; cursor:pointer; }
+    .stream { max-width:760px; margin:0 auto; }
+    .user { max-width:590px; margin:0 0 21px auto; padding:14px 16px; border-radius:15px 15px 4px 15px; color:#42554c; background:#e9f1ec; font-size:14px; line-height:1.7; }
+    .assistant { margin:0 0 18px; color:#343d39; font-size:15px; line-height:1.9; }
+    .assistant strong { color:#233a31; }
+    .cursor { display:inline-block; width:2px; height:17px; margin-left:4px; vertical-align:-3px; background:var(--green); animation:blink 1s steps(2,start) infinite; }
+    @keyframes blink { 50% { opacity:0; } }
+    .elapsed { display:inline-flex; align-items:center; gap:8px; margin:3px 0 18px; padding:8px 12px; border:1px solid #e3e9e5; border-radius:9px; color:#89948e; background:#fff; font-size:13px; }
+    .elapsed-dot { width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 0 4px var(--green-soft); }
+    .event { position:relative; margin:11px 0 17px; }
+    .event::before { content:""; position:absolute; top:-17px; left:12px; height:17px; border-left:1px solid #dce5e0; }
+    .event-toggle { display:grid; grid-template-columns:25px minmax(0,1fr) auto; gap:10px; align-items:center; width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:9px; color:var(--ink); background:var(--soft); text-align:left; list-style:none; cursor:pointer; }
+    .event-toggle::-webkit-details-marker { display:none; }
+    .event-icon { width:22px; height:22px; display:grid; place-items:center; border-radius:7px; color:#427765; background:var(--green-soft); }
+    .event-icon svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .event.current { border-color:#cbddeb; background:#f7fbff; }
+    .event.current .event-icon { color:#4679a9; background:var(--blue-soft); }
+    .event.waiting { border-color:#f0dfc5; background:#fffaf1; }
+    .event.waiting .event-icon { color:#ad7a37; background:var(--amber-soft); }
+    .event-title { display:flex; align-items:center; gap:7px; min-width:0; font-size:13px; font-weight:650; }
+    .event-status { color:var(--muted); font-size:11px; font-weight:400; }
+    .event.current .event-status { color:var(--blue); }
+    .event-time { color:#7c8982; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .event-detail { margin:5px 10px 0 35px; color:#77837d; font-size:11px; line-height:1.6; }
+    .tag { display:inline-flex; margin:0 5px 4px 0; padding:3px 6px; border-radius:5px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; }
+    .tool { color:#356d5b; background:var(--green-soft); }
+    .file { color:#486c8c; background:var(--blue-soft); }
+    .event-details { display:none; margin:6px 10px 0 35px; padding-top:7px; border-top:1px solid #e6eeea; color:#77837d; font-size:11px; line-height:1.7; }
+    .event[open] .event-details { display:block; }
+    .event[open] .event-toggle { border-bottom-left-radius:5px; border-bottom-right-radius:5px; }
+    .thinking { margin-top:7px; padding:7px 8px; border-left:2px solid #a9bfd2; color:#6a7c8a; background:#f2f8fc; line-height:1.6; }
+    .stream-end { margin:22px 0 0; padding:13px 0; border-top:1px solid var(--line); color:#9aa49f; font-size:11px; }
+    .stream-end strong { color:#5e7468; font-weight:600; }
+    @media(max-width:700px) { .app{display:block}.sidebar{display:none}.main{padding:20px 14px 40px}.topbar{margin-bottom:20px}.event{grid-template-columns:24px minmax(0,1fr)}.event-time{grid-column:2}.user{font-size:13px}.assistant{font-size:14px} }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">◈</span><span>产研工作台</span></div>
+      <button class="new-run">＋ 新建需求</button>
+      <div class="label">最近的主流程</div>
+      <button class="run active"><span class="run-title">实现执行节点可视化</span><span class="run-meta">正在执行 · 7分58秒</span></button>
+      <button class="run"><span class="run-title">招聘候选人初筛流程</span><span class="run-meta">等待产品确认</span></button>
+      <button class="run"><span class="run-title">HRM 项目交付回归</span><span class="run-meta">本轮已结束</span></button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><div><div class="eyebrow">Mastra Run · 流式输出草图</div><h1>实现执行节点可视化</h1></div><button class="refresh">刷新状态</button></header>
+      <section class="stream" aria-label="正文与执行活动流">
+        <div class="user">前端 UI 节点能力，希望能看到当前环节耗时、调用的工具、读取的文件，以及可解释的执行进展。</div>
+
+        <p class="assistant"><strong>我会按已确认的 Mastra Workflow 结构继续执行。</strong> 我先读取项目约束，再整理技术方案和实现边界。</p>
+        <div class="elapsed"><span class="elapsed-dot"></span><span>已处理 <strong>7分58秒</strong></span></div>
+
+        <details class="event">
+          <summary class="event-toggle"><span class="event-icon"><svg viewBox="0 0 24 24"><path d="M6 3h12v18H6z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg></span><span class="event-title">已读取文件 <span class="event-status">已完成</span></span><span class="event-time">42秒</span></summary>
+          <div class="event-detail"><span class="tag file">AGENTS.md</span><span class="tag file">docs/architecture.md</span><span class="tag file">src/entry.mjs</span></div>
+          <div class="event-details">读取动作只展示文件元数据，不展开文件正文。</div>
+        </details>
+
+        <p class="assistant">项目的主要约束已经确认：执行范围需要绑定当前仓库，检查命令只能使用已登记的固定清单。</p>
+
+        <details class="event">
+          <summary class="event-toggle"><span class="event-icon"><svg viewBox="0 0 24 24"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/></svg></span><span class="event-title">调用工具 <span class="event-status">已完成</span></span><span class="event-time">3次调用</span></summary>
+          <div class="event-detail"><span class="tag tool">readFile</span><span class="tag tool">skill_read</span><span class="tag tool">handoff_read</span></div>
+          <div class="event-details">工具名称来自真实工具结果；完整参数和结果正文不在对话流中展开。</div>
+        </details>
+
+        <p class="assistant">基于这些已读取的事实，我正在整理任务依赖、责任角色和验证方式<span class="cursor" aria-label="流式输出中"></span></p>
+
+        <details class="event current" open>
+          <summary class="event-toggle"><span class="event-icon"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg></span><span class="event-title">正在生成技术方案 <span class="event-status">进行中</span></span><span class="event-time">已运行 1分07秒</span></summary>
+          <div class="event-detail">正在读取与当前任务相关的文件，并整理方案边界。</div>
+          <div class="event-details"><div>已调用：<span class="tag tool">readFile</span><span class="tag tool">delegateTask</span></div><div>已读取：<span class="tag file">src/runtime.mjs</span><span class="tag file">src/routes.mjs</span></div><div class="thinking">工作摘要：根据已读取的约束整理任务边界。这里是安全摘要，不是模型隐藏思维链。</div></div>
+        </details>
+
+        <p class="assistant">完成后我会输出一份可审阅的技术方案，并停在方案批准节点，不会自动进入代码实施。</p>
+        <div class="stream-end">当前流式输出状态：<strong>等待“生成技术方案”节点完成</strong></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // 原型交互：同步活动节点的展开状态，保持活动行本身仍是正文流的一部分。
+    function syncEventState(event) {
+      event.classList.toggle('open', event.open);
+    }
+
+    // 原型交互：监听原生 details 状态变化，不额外维护独立时间线数据。
+    document.querySelectorAll('.event').forEach((event) => {
+      event.addEventListener('toggle', () => syncEventState(event));
+      syncEventState(event);
+    });
+  </script>
+</body>
+</html>

@@ -47,7 +47,7 @@ test('真实Mastra写作API发送stream:true、输出上限并正确汇总SSE', 
     const port = (server.address() as { port: number }).port;
     const agents = createAgents({ rootDir: resolve('.'), mode: 'live', databaseUrl: 'file::memory:', port: 4111, modelId: 'openai/gpt-synthetic', apiKey: 'synthetic-not-a-secret', baseUrl: `http://127.0.0.1:${port}/v1` }, { skillsEnabled: false, workspace: false });
     new Mastra({ agents, storage, logger: false });
-    const result = await generateProductContent(agents.productAgent, '合成写作传输验收', 'writing', 'live');
+    const result = await generateProductContent(agents.productManagerAgent, '合成写作传输验收', 'writing', 'live');
     assert.equal(result.text, '完整合成产品稿'); assert.equal(received.length, 1); assert.equal(received[0].stream, true);
     assert.equal(received[0].max_tokens ?? received[0].max_completion_tokens, WRITING_MODEL_SETTINGS.maxOutputTokens);
   } finally { await storage.close(); server.closeAllConnections(); await new Promise<void>(/** 等待独占测试端口关闭。 */done => server.close(/** 关闭不影响其他应用端口。 */() => done())); }
@@ -78,7 +78,7 @@ test('中间角色拒绝把计划句或工具循环保存为已完成产物', /*
   assert.equal(isPlanOnlyProductOutput('我会用需求测试场景检查覆盖，再检查风险。'), true);
   assert.equal(isPlanOnlyProductOutput('正常路径：用户提交需求；失败路径：输入不完整时拒绝推进。'), false);
   const agent = { generate: /** 模拟调用停止于工具调用，没有最终答案。 */async () => ({ text: '我会检查规则。', finishReason: 'tool-calls', steps: [{ text: '我会检查规则。', finishReason: 'tool-calls' }] }) } as any;
-  await assert.rejects(generateProductContent(agent, '合成', 'closure', 'fixture'), (error: unknown) => {
+  await assert.rejects(generateProductContent(agent, '合成', 'scope-priority', 'fixture'), (error: unknown) => {
     assert.ok(error instanceof ProductGenerationFailure);
     const summary = describeProductFailure(error);
     assert.equal(summary?.reason, '工具调用循环尚未产生最终正文');
@@ -96,7 +96,7 @@ test('上下文预算故障不重试并给出明确原因', /** 扩大重试不�
 test('旧预算故障可解释且无需升档恢复', /** 预算恢复显式扩容且不触碰权限；旧快照说明证据缺口。 */async () => {
   const error = new ContextBudgetError('read', 50000, 48000);
   const agent = { generate: /** 触发合成资料预算故障，不调用网络模型。 */async () => { throw error; } } as any;
-  await assert.rejects(generateProductContent(agent, '合成', 'closure', 'live'), (failure: unknown) => {
+  await assert.rejects(generateProductContent(agent, '合成', 'scope-priority', 'live'), (failure: unknown) => {
     assert.ok(failure instanceof ProductGenerationFailure);
     assert.deepEqual(failure.details.attempts[0].budget, { resource: 'read', usedBytes: 50000, limitBytes: 48000 });
     const summary = describeProductFailure(failure, 0);

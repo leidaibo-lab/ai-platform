@@ -75,7 +75,7 @@
 - `configHash`：对严格解析的业务配置作确定性JSON序列化后SHA-256。对象键按Unicode码点排序，无空白UTF-8；只允许字符串、布尔、null（仅宿主快照中的可空字段）、安全范围整数、数组、普通对象；拒绝undefined、NaN、浮点及负零。数组默认保留顺序；`roles`按id排序，`methodRefs/toolRefs`按ID排序且拒绝重复；其他语义为集合的字段在schema明确后排序及去重校验，不允许通用序列化器自行重排任务执行序列。
 - `bundleHash`：同一规则计算`{bundleVersion,configHash,workflowVersion,registryVersion,adapterVersions,contractVersions,cardHashes,methodHashes,sourceProfileVersion,modelIdentity}`。adapterVersions必须含构建内容hash并覆盖prompt投影/渲染实现，不能只用可随意复写的版本标签。代码与生成提示词必须使用同一规范化函数；不得复用当前只做JSON.stringify的`developmentHash`而假定字段顺序稳定。
 - 模型身份包含请求模型ID、归一化端点身份hash和协议版本；凭据本身不参与hash，允许密钥轮换。数据库地址、端口、临时路径、时间、Run ID不参与bundleHash。实际响应模型ID另记证据，不能取代请求身份。
-- 产品资料在调用前复制到Run专属只读快照，记录文件相对路径、字节hash、sourceSnapshotHash；四产品角色只读快照，不再读可变的原仓库资料。导出时观测manifest不能替代生成时来源。源码初始快照到项目范围确认时才取得，其hash单独绑定`scopeApproval`，不回写或重冻初始化配置。
+- 产品资料在调用前复制到Run专属只读快照，记录文件相对路径、字节hash、sourceSnapshotHash；产品经理和产品审查 Agent 只读快照，不再读可变的原仓库资料。导出时观测manifest不能替代生成时来源。源码初始快照到项目范围确认时才取得，其hash单独绑定`scopeApproval`，不回写或重冻初始化配置。
 - 原生Store保存冻结manifest、配置声明及可恢复的角色卡/方法内容或其不可变归档引用；引用必须可校验且在整个Run保留期可用。不能只存路径/hash后仍读取已更新文件。文件投影失效时从原生提交事实恢复，不生成第二审批库；没有可核实的冻结内容则停止。
 - 每次调用、审批、故障接续、QA返工和最终交付都绑定`bundleHash`。产品批准绑定`productHash + bundleHash + sourceSnapshotHash`；方案批准在既有绑定上增加`bundleHash`；质量/发布hash沿同版本链传递。
 - 恢复读取Run已冻结bundle，不重新合并当前配置。不要求当前默认配置与旧Run相同；但宿主必须仍支持该冻结版本和资源hash。兼容则按旧bundle继续，不兼容则`manual-attention`，不能悄悄换方法或模型。
@@ -90,10 +90,10 @@
 
 | 角色模板 / inputContract | payload允许字段 | 输出契约与消费者 |
 | --- | --- | --- |
-| 总产品 / `product-coordinator.input.v1` | `brief,sourceRefs,reworkFeedback` | `product-work.output.v1`，供需求梳理 |
-| 需求梳理 / `product-clarification.input.v1` | `brief,sourceRefs,coordination,reworkFeedback` | 同上，供闭环 |
-| 产品闭环 / `product-closure.input.v1` | `brief,sourceRefs,clarification,coordinationDecisions,reworkFeedback` | 同上，供写作 |
-| 产品写作 / `product-writing.input.v1` | `brief,sourceRefs,clarification,closure,coordinationDecisions,reworkFeedback` | `product-document.output.v1`，供产品审批 |
+| 产品经理：需求分析 / `product-analysis.input.v1` | `brief,sourceRefs,reworkFeedback` | `product-work.output.v1`，供需求澄清整理 |
+| 产品经理：需求澄清 / `product-clarification.input.v1` | `brief,sourceRefs,analysis,reworkFeedback` | 同上，供范围与优先级 |
+| 产品经理：范围与优先级 / `product-scope-priority.input.v1` | `brief,sourceRefs,clarification,analysisDecisions,reworkFeedback` | 同上，供产品稿写作 |
+| 产品经理：产品稿写作 / `product-writing.input.v1` | `brief,sourceRefs,clarification,scopePriority,analysisDecisions,reworkFeedback` | `product-document.output.v1`，供产品审查与人工审批 |
 | 上下文 / `context.input.v1` | `approvedProduct,requirements,projectScope,fileManifest` | `context.output.v1`，宿主校验后保存ProjectContext |
 | 架构 / `architect.input.v1` | `approvedProduct,requirements,context,projectScope,referenceGroups,priorBlockingFindings` | `plan.output.v1`，供组队/就绪/方案审批 |
 | 就绪 / `readiness.input.v1` | `approvedProduct,requirements,context,plan,taskPackages,referenceGroups` | `assessment.output.v1`，供就绪门；不含作者的自评结论 |

@@ -221,7 +221,7 @@
   ],
   "configurationOwners": {
     "environment": "src/mastra/config.ts#readConfig",
-    "productRoles": "src/mastra/agents/product-roles.ts#productRoleProfiles",
+    "productAgents": "src/mastra/agents/product-roles.ts#productManagerProfile,productReviewerProfile",
     "productSkillInventory": "src/mastra/agents/skills.ts#loadProductSkills",
     "developmentMethods": "src/development/v2/methods.ts#loadDevelopmentMethods",
     "developmentRolesAndTools": "src/development/v2/agents.ts#createAgentV2",

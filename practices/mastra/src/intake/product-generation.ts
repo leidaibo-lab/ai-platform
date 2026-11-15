@@ -8,12 +8,14 @@ import { diagnoseModelFailure } from '../delivery/model-failure.js';
 import { ContextBudgetError } from '../delivery/context-budget.js';
 import { ProductGenerationFailure, canRetryProductAttempt, classifyProductError, isPlanOnlyProductOutput, safeFinishReason } from './product-failure.js';
 import type { ProductAttempt, ProductFailureKind } from '../delivery/product-generation-contract.js';
+import { projectToolFacts } from './run-timeline.js';
 export const WRITING_MODEL_SETTINGS = { maxRetries: 0, maxOutputTokens: 16000, timeout: { totalMs: 1800000, stepMs: 600000 } } as const;
-/** 四角色统一验证原生结束事实；只读临时故障最多两次，单节点共享30分钟截止时间。 */
-export async function generateProductContent(agent: ReturnType<typeof createAgents>['productAgent'], prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0) {
+type ProductGenerationAgent = Pick<ReturnType<typeof createAgents>['productManagerAgent'], 'generate' | 'stream'>;
+/** 产品团队统一验证原生结束事实；只读临时故障最多两次，单节点共享30分钟截止时间。 */
+export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0) {
   let input: Record<string, unknown>;
   try { input = JSON.parse(prompt); } catch { input = { task: 'product', instruction: prompt }; }
-  const attempts: ProductAttempt[] = []; const invocationStarted = performance.now(); const deadline = invocationStarted + WRITING_MODEL_SETTINGS.timeout.totalMs;
+  const attempts: ProductAttempt[] = []; const invocationStarted = performance.now(); const startedAt = new Date().toISOString(); const deadline = invocationStarted + WRITING_MODEL_SETTINGS.timeout.totalMs;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const started = performance.now();
     // 每次重试从相同输入新建只读资料闭包，失败片段不混入新正文。
@@ -34,7 +36,8 @@ export async function generateProductContent(agent: ReturnType<typeof createAgen
       textChars = text.length;
       kind = finishReason === 'length' ? 'output-limit' : finishReason === 'tool-calls' ? 'tool-loop' : finishReason === 'tripwire' || finishReason === 'content-filter' ? 'blocked' : finishReason !== 'stop' ? 'incomplete' : !text ? 'empty-output' : role !== 'writing' && isPlanOnlyProductOutput(text) ? 'incomplete' : undefined;
       if (kind) throw new Error('产品生成结果未通过完成校验');
-      return { ...result, text, generation: { version: 'product-generation.v1' as const, finishReason: 'stop' as const, attempts: attempt, durationMs: Math.max(0, Math.round(performance.now() - invocationStarted)), failures: attempts } };
+      const endedAt = new Date().toISOString();
+      return { ...result, text, toolFacts: projectToolFacts(result.toolResults), generation: { version: 'product-generation.v1' as const, finishReason: 'stop' as const, attempts: attempt, durationMs: Math.max(0, Math.round(performance.now() - invocationStarted)), startedAt, endedAt, failures: attempts } };
     } catch (error) {
       const detail: ProductAttempt = { attempt, durationMs: Math.max(0, Math.round(performance.now() - started)), recordedAt: new Date().toISOString(), kind: kind ?? classifyProductError(error), finishReason, steps, textChars, budget: error instanceof ContextBudgetError ? error.budget : undefined, failure: diagnoseModelFailure(error) };
       attempts.push(detail);

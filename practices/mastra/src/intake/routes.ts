@@ -8,8 +8,11 @@ import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
+import { projectWorkflowActivity } from './run-timeline.js';
+import { intakeModeSchema } from './contracts.js';
 import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
-const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned') });
+import type { WorkflowStreamEvent } from '@mastra/core/workflows';
+const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned'), intakeMode: intakeModeSchema.default('clarify') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
 export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
   const busy = new Set<string>();
@@ -74,10 +77,11 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
           if (await workflow.getWorkflowRunById(id)) {
             const existing = await readIntake(workflow, id);
             if (existing.brief !== input.brief) throw new Error('同一标识不能更换需求');
+            if (existing.intakeMode && existing.intakeMode !== input.intakeMode) throw new Error('同一标识不能更换需求处理方式');
             return c.json(existing);
           }
           const run = await workflow.createRun({ runId: id });
-          await run.start({ inputData: { brief: input.brief, iterationId: input.iterationId, guidedIntake: true } });
+          await run.start({ inputData: { brief: input.brief, iterationId: input.iterationId, intakeMode: input.intakeMode, guidedIntake: input.intakeMode === 'clarify' } });
           return c.json(await readIntake(workflow, id));
         } catch (error) { return failure(c, error); }
         finally { if (id && acquired) busy.delete(id); }
@@ -101,6 +105,54 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         c.header('Cache-Control', 'no-store');
         try { return c.json(await readIntake(workflow, c.req.param('runId'))); }
         catch (error) { return failure(c, error); }
+      },
+    }),
+    registerApiRoute('/intake-api/runs/:runId/events', { method: 'GET',
+      // 复用 Mastra 原生 Workflow.watch；活动摘要只做即时提示，详情仍由快照接口权威返回。
+      handler: async c => {
+        const runId = c.req.param('runId');
+        const encoder = new TextEncoder();
+        let closed = false;
+        let unwatch: (() => void) | undefined;
+        let finishTimer: ReturnType<typeof setTimeout> | undefined;
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            /** 发送一条受控 SSE 数据，不把 Workflow 原始 payload 传给浏览器。 */
+            function send(payload: Record<string, unknown>) {
+              if (closed) return;
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+            }
+            /** 关闭订阅并释放 Mastra watch 观察者。 */
+            function close() {
+              if (closed) return;
+              closed = true;
+              if (finishTimer) clearTimeout(finishTimer);
+              unwatch?.();
+              controller.close();
+            }
+            /** 将原生 Workflow 事件压缩为可公开的节点变化摘要。 */
+            function observe(event: WorkflowStreamEvent) {
+              if (event.runId !== runId) return;
+              const payload = 'payload' in event && event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
+              const eventId = 'id' in event && typeof event.id === 'string' ? event.id : null;
+              const stepId = eventId ?? (typeof payload.id === 'string' ? payload.id : null);
+              const status = typeof payload.status === 'string' ? payload.status : typeof payload.workflowStatus === 'string' ? payload.workflowStatus : null;
+              const occurredAt = new Date().toISOString();
+              send({ type: 'workflow-event', runId, eventType: event.type, stepId, status, occurredAt, activity: projectWorkflowActivity(event.type, stepId, status, occurredAt) });
+              if (event.type === 'workflow-finish' || event.type === 'workflow-canceled') finishTimer = setTimeout(close, 100);
+            }
+            send({ type: 'ready', runId, occurredAt: new Date().toISOString() });
+            const run = await workflow.createRun({ runId });
+            unwatch = run.watch(observe);
+            c.req.raw.signal.addEventListener('abort', close, { once: true });
+          },
+          cancel() {
+            closed = true;
+            if (finishTimer) clearTimeout(finishTimer);
+            unwatch?.();
+          },
+        });
+        return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' } });
       },
     }),
     registerApiRoute('/intake-api/runs/:runId/respond', { method: 'POST',

@@ -1,6 +1,6 @@
 # 完整产研流程
 
-2026-11-07 起，Studio业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）；另注册六个具名开发独立评测Workflow，仅在隔离候选中考核单个角色。旧提案链、独立产品交接及修订入口从 Studio 移除；历史源文件与数据库保留，旧 CLI 仅作兼容。
+当前 Studio 业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）。主流程按团队职责组织为五个嵌套 Workflow：`product-team`、`development-team`、`test-team`、`deployment-team`、`delivery-team`。新 Run 只使用这套团队边界；团队内部步骤仍用于暂停、恢复、审计和责任定位，但不再作为主流程中的平行团队节点。
 
 日常操作按 [README](./README.md#启动)启动后端与前端，打开[产研工作台](http://127.0.0.1:4112/)；所有人工关口可在工作台完成。以下 Studio 图和 Resume JSON 供技术调试及契约查阅。
 
@@ -8,29 +8,35 @@
 
 ```text
 原始需求
-  → guidedIntake=true 时：方案摘要 → 关键问题确认 → 回答后修订及业务成熟度检查（不设总轮数上限，每轮最多八题）
-  → 总产品 → 需求梳理 → 产品闭环 → 产品写作
-  → review-product：人工确认产品版本
-  → confirm-project-scope：确认文件快照、可写范围和角色
-  → prepare-context：读取项目上下文
-  → architecture：接口契约、任务拆分、依赖图
-  → assemble-agent-team：按任务动态组建团队
-  → assess-readiness：独立就绪评估，必要时人工裁决
-  → approve-architecture：确认方案、团队和权限
-  → execute-agent-team：按依赖波次执行
-       dispatch-ready-tasks
-         → foreach execute-team-member，最多3个独立任务并行
-             任务负责人 → delegateTask → 具名子 Agent 实际实现
-         → merge-team-results：范围校验与合并
-       未完成任务继续下一波次
-  → development-self-check：固定工程检查
-  → review-code：独立只读评审
-  → assess-delivery：交付门
-       通过 → development-delivery.v2
-       缺陷 → 责任任务及其下游有界返工
-       方案阻塞 → 重新规划、组队与批准
-       新业务决定/扩大授权/预算耗尽 → 保存证据并升级人工
-  → testing：独立测试子流程
+  → product-team
+       ├─ draft-product：产品成稿与质量检查
+       │    ├─ guided-requirements：需求澄清（可选）
+       │    │    └─ product-manager-agent
+       │    ├─ 需求分析 → product-manager-agent
+       │    ├─ 范围与优先级 → product-manager-agent
+       │    ├─ 产品稿写作 → product-manager-agent
+       │    └─ 独立闭环检查 → product-reviewer-agent
+       └─ review-product：产品负责人人工审批
+  → route-product-team-result：仅批准版本进入下游
+  → development-team
+       ├─ plan-development
+       │    ├─ confirm-project-scope：人工确认项目、文件快照、可写范围和任务角色
+       │    ├─ prepare-context / architecture / assemble-agent-team
+       │    │    └─ development-lead-agent：核实上下文、技术方案、任务拆分与动态组队
+       │    ├─ assess-readiness
+       │    │    └─ development-reviewer-agent：实施前独立就绪审查
+       │    └─ approve-architecture：人工确认方案、团队和权限
+       ├─ develop-and-check
+       │    ├─ execute-agent-team：按依赖波次执行，最多3个独立任务并行
+       │    │    └─ development-implementer-agent：按任务动态创建；frontend/backend/infrastructure 仅为任务角色
+       │    └─ development-self-check：确定性固定工程检查，不调用 Agent
+       ├─ review-development-quality
+       │    ├─ review-code
+       │    │    └─ development-reviewer-agent：实施后独立只读代码审查
+       │    └─ assess-delivery：确定性交付门
+       └─ resolve-development-blockers：保存证据、返工或回流产品团队
+  → test-team
+       → test-and-regression-cycle：独立测试、缺陷回归和质量确认
        prepare-test-plan：测试角色读取需求与实际源码
        approve-test-cases：确认用例、预期、需求与登记检查映射
        execute-tests：隔离环境重跑登记套件
@@ -38,22 +44,24 @@
        review-test-results：补充人工用例结果，确认质量
        通过 → deployment
        缺陷 → route-test-defects → 原开发团队修复/自检/评审 → 重新测试
-  → deployment：部署子流程
+  → deployment-team
+       → deployment-and-rollback-cycle：部署审批、外部回执、健康检查和回滚
        prepare-release-plan：部署方案
        approve-release-scope：确认环境、制品、健康检查与回滚范围
        execute-release-externally：等待外部 CI/CD 实际执行回执
        verify-release-health：收集批准清单的全部健康结果
        失败 → execute-rollback-externally：等待外部回滚回执
-  → confirm-final-delivery：汇总同版本证据，确认交付
+  → delivery-team
+       → confirm-final-delivery：汇总同版本证据，确认最终交付
 ```
 
 产品、项目范围和方案在同一个原生 Run 中暂停与恢复。产品退回修改保存 `rework-requested` 终态，带反馈重新发起需求。开发模型故障保留失败任务和已合并的成功任务，连续故障后原阶段暂停，可多轮人工继续；不承诺强杀或跨实例的原子恢复。
 
 开发阶段使用原生条件分支：只有当前阶段执行，未执行节点不会因空返回而完成。可恢复模型故障在原阶段暂停，页面解释阶段、原因和具体重试动作；历史 `recover-development` 暂停点保留兼容。连续自动尝试或调用额度耗尽会暂停等待恢复/追加额度，用户选择停止则保存阻塞终态；开发未交付时不启动测试/发布。图中 `state-after-*` 为状态传递节点，其完成不代表相邻业务阶段已完成。[状态决策](../../docs/decisions/2026-11-08-mastra-stage-state-flow.md)。
 
-## 项目范围确认
+## development-team：项目范围确认与研发交付
 
-当前 HRM 前端在 `confirm-project-scope` 确认关联项目、代码版本、确认人、交接说明及自主执行预算。服务端从固定仓库装配源码、源码根权限上界、只读检查文件和角色候选池；浏览器不能自报全栈执行档或上传源码替换基线。开发 Agent 决定具体文件、任务依赖及所需角色，动态团队由任务形成，仍需人工批准架构方案后才实施。
+当前 HRM 前端在 `confirm-project-scope` 确认关联项目、代码版本、确认人、交接说明及自主执行预算。服务端从固定仓库装配源码、源码根权限上界、只读检查文件和任务角色候选池；浏览器不能自报全栈执行档或上传源码替换基线。`development-lead-agent` 决定具体文件、任务依赖及所需任务角色；`development-implementer-agent` 按批准任务动态创建，仍需人工批准架构方案后才实施。自检和交付评估属于 Workflow 确定性门禁，不创建 Agent。
 
 HRM 执行档为 `hrm-pnpm-docker-v1`，`planning=agent`。检查登记为 `project:check/build/smoke`，通过 Docker/Compose 在源码副本和临时数据库中运行 `pnpm check/build/smoke`；前两项禁网，smoke 仅连内部测试网络，不使用宿主 `.env`。新增文件限已授权源码根，依赖清单、锁和固定检查不可修改。当前 smoke 验证页面、API 与数据库健康，业务断言需后续随需求补充。
 
@@ -107,9 +115,9 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 
 该闭环已覆盖真实 Workflow、隔离 Node 检查和持久化回归，尚未完成真实模型在 HRM 上的完整业务自主交付验收。独立测试用例批准、人工用例确认及发布审批/外部回执仍按各阶段约定处理。[选型、验收及剩余边界](../../docs/decisions/2026-11-09-mastra-autonomous-development.md)。
 
-## 测试用例与质量确认
+## test-team：测试用例、质量确认与回归
 
-`testing` 消费研发交付与同一份候选源码，独立生成计划，不复制开发自检当作独立执行结果。`approve-test-cases` 的 Resume 示例：
+`test-team` 消费研发交付与同一份候选源码，独立生成计划，不复制开发自检当作独立执行结果。其内部 `test-and-regression-cycle` 负责测试计划、用例批准、执行、质量确认和缺陷回归。`approve-test-cases` 的 Resume 示例：
 
 ```json
 {
@@ -133,9 +141,9 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 
 返工需要具体 `findings`，结构沿用开发评审的 `id/category/severity/route/detail/refs/evidence`，引用必须属于当前需求/任务/文件证据，责任角色必须已登记。缺陷通过原开发继续入口修复，沿用累计返工和调用预算；修复后重新自检、评审和独立测试。`qualityHistory` 与 `developmentHistory` 保存旧测试及交付记录。业务、完整性问题或预算耗尽停止流程，不自动放行。
 
-## 发布审批与外部回执
+## deployment-team：发布审批与外部回执
 
-部署当前采用原生暂停和人工回填，没有远程执行 Adapter。部署角色生成方案后，`approve-release-scope` 的 Resume 包含 `hash`（暂停信息中的 `packageHash`）、`decision: "approve" | "stop"`、`reviewer`、`comment` 和 `scope`：
+部署当前采用原生暂停和人工回填，没有远程执行 Adapter。`deployment-team` 内部 `deployment-and-rollback-cycle` 负责部署方案、审批、外部执行回执、健康检查和回滚。部署角色生成方案后，`approve-release-scope` 的 Resume 包含 `hash`（暂停信息中的 `packageHash`）、`decision: "approve" | "stop"`、`reviewer`、`comment` 和 `scope`：
 
 ```json
 {
@@ -159,17 +167,17 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 
 终态 `delivery-confirmed` 表示基于已收集证据确认交付，不表示远程机器独立验证；fixture 模式仅产生 `fixture-completed`。其他终态包括 `blocked/rework-exhausted/rejected/rolled-back/manual-attention`。产品审批前的拒绝/退回仍保留原产品状态结构。新图使用新 Run；旧 Run 不承诺跨版本透明续跑；仅对未实施的业务阻塞提供经过版本和源码校验的固定澄清入口，见[工作台契约](./guided-intake.md)。
 
-采用锁定版本的原生 Workflow 嵌套与 `foreach concurrency`，未采用 Agent network 自由路由或自建通用调度引擎；原因、维护责任、退出及重评条件见[决策记录](../../docs/decisions/2026-11-07-mastra-unified-development-team.md)。
+采用锁定版本的原生 Workflow 嵌套与 `foreach concurrency`，未采用 Agent network 自由路由或自建通用调度引擎；团队职责边界见[团队边界决策](../../docs/decisions/2026-11-14-mastra-workflow-team-boundaries.md)，开发团队内部调度见[统一团队选型](../../docs/decisions/2026-11-07-mastra-unified-development-team.md)。
 
 测试与部署的选型、人工回执边界和重评条件见[完整产研生命周期决策](../../docs/decisions/2026-11-07-mastra-full-delivery-lifecycle.md)。
 
 ## HRM 资产落地与资料来源（2026-11-07）
 
-Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_HRM_REPOSITORY` 指定绝对路径，origin 必须匹配用户指定仓库。四产品角色改为只读该仓库 `product/sources/`。旧 CLI 与配对评测仍沿用原资料条件；不会自动把历史量表/评审开放给 Agent。
+Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_HRM_REPOSITORY` 指定绝对路径，origin 必须匹配用户指定仓库。产品经理和产品审查 Agent 只读该仓库 `product/sources/`；不会自动把历史量表/评审开放给 Agent。
 
 | 产物 | HRM 本地归档 |
 | --- | --- |
-| 产品稿、四角色输出、审批、项目范围、方案/任务/研发交接元数据 | `product/runs/<runId>/<stage>/<hash>/` |
+| 产品稿、产品经理阶段输出、产品审查、审批、项目范围、方案/任务/研发交接元数据 | `product/runs/<runId>/<stage>/<hash>/` |
 | 测试计划、用例、结果、缺陷与历史 | `testSet/runs/<runId>/<stage>/<hash>/` |
 | 发布方案、范围、发布/健康/回滚回执、最终状态 | `deploy/runs/<runId>/<stage>/<hash>/` |
 
@@ -186,7 +194,7 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 
 ## 验证与历史证据
 
-可靠性回归、架构续验与真实业务阶段结果见[检测记录](./evaluations/reliability/2026-11-07.md)；前端及 HTTP 关口验证见[工作台契约](./guided-intake.md)。固定模式通过不代表真实模型质量或实际部署通过，完整业务交付尚未验收。历次计数和阶段观察保存在[整理前快照](./unified-workflow-history-2026-11-07.md)，不作为当前测试总数。
+前端及 HTTP 关口验证见[工作台契约](./guided-intake.md)。固定模式通过不代表真实模型质量或实际部署通过，完整业务交付尚未验收。
 
 ## Agent 资源归属核对
 
@@ -198,7 +206,7 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 
 ## 原生评测面板
 
-原生 Datasets、Scorers、Experiments 的用例与命令见[原生节点评测](./evaluations/native/README.md)、[开发独立节点评测](./evaluations/native/development-nodes/README.md)及[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)。角色评测不代表动态团队、业务审批或发布路径已验收。
+研发团队的独立节点评测与独立评审专项见[开发独立节点评测](./evaluations/native/development-nodes/README.md)及[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)。专项评测不代表动态团队、业务审批或发布路径已验收。
 
 前端需求澄清、完整稿及全部后续人工关口见[工作台契约](./guided-intake.md)；直接使用 Studio 原始输入默认跳过澄清。
 

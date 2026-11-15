@@ -1,73 +1,63 @@
-# 产品固定角色子流程
+# 产品团队 Workflow
 
-> 文档范围：产品子流程的版本契约，含旧独立提案链的返工规则。当前操作使用[产研工作台](./guided-intake.md)，当前主链与返工边界见[完整产研流程](./unified-workflow.md)。本文历史计数不表示当前测试总数。
+本文描述当前主入口 `productDevelopmentWorkflow` 中的产品团队边界。产品团队是一个顶层团队 Workflow，内部再按产品经理、产品审查和人工审批划分职责；这些内部步骤不是主流程中的平行团队。
 
-2026-11-06 首版契约。设计依据见[方案决策](../../docs/decisions/2026-11-06-mastra-fixed-product-roles.md)。本契约仅约束 Mastra 原生实践，不修改探索主线 OpenSpec。
+## 流程与 Agent 对应关系
 
-## 角色和执行
+```text
+product-team｜产品团队
+├─ draft-product｜产品成稿与质量检查
+│  ├─ guided-requirements｜需求澄清（可选）
+│  │  └─ product-manager-agent｜产品经理 Agent
+│  ├─ product-analysis｜需求分析
+│  │  └─ product-manager-agent｜产品经理 Agent
+│  ├─ product-clarification｜需求澄清结果整理
+│  │  └─ product-manager-agent｜产品经理 Agent
+│  ├─ product-scope-priority｜范围与优先级
+│  │  └─ product-manager-agent｜产品经理 Agent
+│  ├─ product-writing｜产品稿写作
+│  │  └─ product-manager-agent｜产品经理 Agent
+│  ├─ publish-product｜发布待审产品稿
+│  │  └─ product-manager-agent｜产品经理 Agent
+│  └─ review-product-quality｜独立闭环检查
+│     └─ product-reviewer-agent｜产品审查 Agent
+└─ review-product｜产品负责人人工审批
+   └─ 人工 reviewer｜批准、拒绝或终止当前产品版本
+```
 
-| 角色 | 注册名 | 职责与交付 |
-| --- | --- | --- |
-| 总产品 | `productCoordinatorAgent` | 汇总目标、识别当前问题归属、安排本轮处理重点；无审批和动态创建 Agent 权限 |
-| 需求梳理 | `productClarificationAgent` | 用户、场景、目标、事实、已确认约束和待澄清问题 |
-| 产品闭环 | `productClosureAgent` | 范围/非目标、业务规则、正常/边界/异常路径、验收条件及未决项 |
-| 产品写作 | `productAgent` | 基于上游依据输出完整 Markdown 产品稿；保留既有注册名，不自行决定未知业务规则 |
-| 产品经理 | `review-product` 人工节点 | 对当前 hash 批准、退回修改或拒绝终止 |
+其中 `guided-requirements` 是 `draft-product` 内的可选需求澄清子流程。它和后续产品经理阶段共用 `product-manager-agent`，不会脱离产品团队成为独立团队节点。需求入口现在支持两种策略：`clarify` 保留逐项澄清；`autofill` 跳过人工问答，由产品经理 Agent 基于原始想法主动补全推荐闭环，直接生成待审产品稿。两种策略都必须经过 `review-product` 人工审批，`autofill` 不代表自动批准或自动进入研发。
 
-顺序固定，每个 Agent 最多 24 步（与完整 PM 套件共用有限调用预算），可自主调用已注册的只读工具、需求交接 Skill 与[完整 PM 套件](.agents/skills/README.md)、自检并修订。执行与产物校验共用 `PRODUCT_MAX_STEPS`，避免长工具链生成成功后被旧步数限制拒绝。工具能力不等于任意文件/网络/命令权限；目前通过 [Workspace](./workspaces.md) 只读招聘项目的 `sources/`；不接入任意仓库或长期 Agent Memory。中间产物保存角色、内容、工具名和模型执行步数；这些是执行证据，不是内容正确证明。
+`product-clarification` 不创建新的 Agent，它只负责让同一个产品经理 Agent 整理澄清事实、回答、假设和待决项；`product-analysis` 负责需求分析，`product-scope-priority` 负责范围与优先级，`product-writing` 负责完整产品稿。这样 Agent 数量保持精简，Workflow 阶段仍保留可审计的中间产物。
 
-### 角色与产品方法
+## 职责边界
 
-四个角色通过同一个产品 Agent 工厂注册全部 **113** 项 Skill（PM 套件 112 项和需求交接 1 项）。[角色配置](./src/mastra/agents/product-roles.ts)保存各自优先方法；表内名称均带 `product-pm-` 前缀，完整名称以代码配置为准。
+| Workflow 流程 | Agent / 执行者 | 负责内容 | 不负责内容 |
+| --- | --- | --- | --- |
+| `guided-requirements` | `product-manager-agent` | 识别高影响缺口、生成澄清问题、吸收人工回答（`clarify`） | 不替用户确认业务选择，不进入研发实施 |
+| `autofill` 入口策略 | `product-manager-agent` | 基于原始想法主动选择推荐闭环，补齐流程、边界、指标和验收，并标记假设/待确认项 | 不把推断写成已确认事实，不跳过产品人工审批 |
+| `product-analysis` | `product-manager-agent` | 目标、用户、场景、约束和需求结构分析 | 不生成代码，不代替人工审批 |
+| `product-clarification` | `product-manager-agent` | 整理已确认规则、事实、建议和未决项 | 不把推荐或假设写成已批准规则 |
+| `product-scope-priority` | `product-manager-agent` | 首期范围、非目标、优先级和可检查验收边界 | 不执行测试，不代替独立质量审查 |
+| `product-writing` | `product-manager-agent` | 生成完整 Markdown 产品稿 | 不声称产品已批准 |
+| `review-product-quality` | `product-reviewer-agent` | 独立检查目标、范围、规则、异常路径、验收、非目标和风险 | 不修改原稿，不代替人工批准 |
+| `review-product` | 产品负责人 / 人工 | 对当前产品稿 hash 做批准、拒绝或终止决定 | 不替代 Agent 生成产品稿 |
 
-| 角色 | 优先方法 | 使用目的 |
-| --- | --- | --- |
-| 总产品 | `flow-triage-requests`、`prioritization-frameworks`、`opportunity-solution-tree` | 分诊、取舍依据、目标与机会对应 |
-| 需求梳理 | `analyze-feature-requests`、`job-stories`、`interview-script` | 请求归类、用户情境、补证问题 |
-| 产品闭环 | `test-scenarios`、`strategy-red-team`、`pre-mortem` | 验收覆盖、承重假设、失败风险 |
-| 产品写作 | `create-prd`、`flow-write-prd`、`user-stories`、`wwas` | 组织产品稿与规则、验收、未决项 |
+## 数据与质量门
 
-优先列表不限制工具可见范围；每个角色根据当前任务选择最少必要的方法，再用 `skill_read` 取得原文和分支参考，交付前调用需求交接检查。复合方法只执行当前角色负责部分，不能创建下级 Agent 或改变固定路径。中间角色输出对应分析，写作角色汇总完整稿；工具缺失或输入不完整时保留未执行项与人工待决问题。提示词要求简列实际使用方法，但这属于模型行为指导，不能代替 `toolResults` 的调用事实。启动校验发现优先方法未注册时明确失败。
+- `productWork.entries` 按产品经理阶段顺序保存中间产物，并记录真实 Agent、工具、文件和生成时间事实。
+- `productQualityReview` 只保存 `product-reviewer-agent` 的独立质量证据，不等同于人工批准。
+- `publish-product` 生成待审产品版本；只有 `review-product` 的 `approve` 才能通过 `route-product-team-result` 进入 `development-team`。
+- `reject` 或 `rework-requested` 在 `product-team` 边界终止当前版本，不进入研发；返工必须产生新的产品版本和新的人工审批。
+- 需求澄清、产品稿生成或产品质量检查失败时，只允许从原生快照中的真实失败步骤恢复，不接受客户端替换步骤或正文。
 
-## 人工决定和返工
+## 代码落点
 
-- `approve`：批准当前 hash，然后才生成开发提案。
-- `rework`：保存当前版本的审阅意见，来源轮次以 `rework-requested` 结束；服务创建确定标识的后继 Run，四角色收到原稿及意见重新处理，停在新的产品人工关口。
-- `reject`：保存拒绝意见并结束本轮，不生成返工或开发。
-- 同一需求链最多三次退回；达到上限不消耗当前暂停点，仍可批准或终止。
-- 旧稿保持只读，新稿不继承批准。返工反馈指明待修问题，未明确的业务选择仍需产品经理决定。
-- 同一已记录退回请求重试回读相同后继，不增加轮次。能力限于本地串行服务和已持久后继；运行中失败、跨实例或崩溃后的自动续做不在首版保证中。
+- 产品团队装配：[product-team.ts](./src/mastra/workflows/product-team.ts)
+- `draft-product` 与产品经理/审查 Agent：[product-manager.ts](./src/mastra/workflows/product-manager.ts)
+- 可选需求澄清：[intake/workflow.ts](./src/intake/workflow.ts)
+- Agent 装配与中文职责说明：[agents/index.ts](./src/mastra/agents/index.ts)、[agents/product-roles.ts](./src/mastra/agents/product-roles.ts)
+- 产品数据契约：[product-contract.ts](./src/mastra/workflows/product-contract.ts)、[delivery.ts](./src/mastra/workflows/delivery.ts)
 
-`POST /review-api/runs/:runId/review` 继续只接收 `artifactHash/decision/reviewer/comment`，新增合法 `decision: rework`。返回后继产品文档时 `runId` 会变化，页面应切换至新 Run。非法动作、旧版本和模式冲突先拒绝，再考虑恢复。
+## 验证边界
 
-## 数据与兼容
-
-`productWork` 是有序角色产物，只由子 Workflow 写入。`productRework` 绑定来源 Run、产品 hash、来源正文、审阅人、反馈和 1–3 的返工轮数；来源全部从服务端已保存快照派生，页面不得传入替代正文。两个字段在旧快照中都可缺省。
-
-外层仍保留 `initialize`、`draft-product` 和 `review-product` 标识；子流程完成后输出同一 Delivery 结构。产品 hash 绑定需求、正文、来源和角色产物。既有修订预览应用路径继续原样使用已经比较的正文，不重新生成，也不记录并未执行的角色工作。
-
-旧运行数据不批量改写。对已保存暂停快照的兼容在隔离数据库回归，不能据此宣称所有历史版本或正在执行的快照均可迁移。
-
-## 验证与质量观察
-
-执行 `npm run check`、`npm test`、`npm run review:build`，从独立临时数据库验证四角色、工具调用、返工来源、版本隔离、重复请求、进程恢复和人工放行。
-
-真实质量比较需使用同一批业务需求和统一人工验收标准，记录阻塞遗漏/冲突数量、人工审阅时间、实质修改量、首次通过率、返工次数、总耗时与模型成本。fixture 固定文本仅验证执行与数据流，不理解业务，不代表分工已提高质量。
-
-首轮 Skill 增量比较使用[专用配对评测](./evaluations/product-skills/README.md)：模型、四角色、工作流、输入与采样设置保持一致，仅切换完整 Skill 包及调用指引。复用正式入口和人工暂停点，逐步记录 usage 与响应 modelId；人工量表与模型输入分离，未评指标保留 null。首轮只比较首稿，不混入返工和下游开发效果；步骤上限与生产行为保持一致，评测额外设置相同输出和超时预算。
-
-### 2026-11-06 验证记录
-
-- Node.js 24.22.1：后端类型检查通过；全套自动回归 **31/31**，其中固定角色、返工及兼容新增 11 项，其余覆盖既有流程、审阅、修订及并行接入的 PM Skill。
-- 四角色各自通过原生 Agent 调用 `practiceInfo`；额外验证闭环角色连续七次工具调用、共八步后仍可保存产物并进入人工验收。此项验证有限工具循环与输出契约一致，不验证模型分析质量。
-- 三次返工上限、旧 hash/错误角色/跨模式拒绝、反馈来源、重复退回、重开应用及跨 OS 进程同一后继均通过；旧版单产品步骤的真实原生暂停快照可由新应用读取并批准。
-- 前端构建、Skill 目录治理校验、OpenSpec strict **1/1** 和 `git diff --check` 通过。前端主包约 976.6 kB（gzip 294 kB），保留 Vite 体积提示。
-- 独立 fixture 数据库的浏览器验证通过：角色产物展开、必填输入、退回二次确认及取消、退回后切换新稿、新稿重新待审、反馈和来源展示、旧稿只读及后继导航。没有操作用户已有真实 Run。
-
-本轮没有进行真实模型质量对照，也没有验收多人权限、跨实例原子协调、生成中崩溃恢复、长期记忆或工程执行。以上固定数据结果不作为这些能力的完成证据。
-
-### 2026-11-06 产品 Skill 角色融合续验
-
-拉取并确认 `main` 与 `origin/main` 同为 `9cbd0ac`（完整 PM Skills 套件提交），保留本地未提交的固定角色和返工变更。在既有原生 Skill 方案内增加只读角色配置与优先方法提示，不新增依赖、调度器或数据结构版本。
-
-后端类型检查通过，全套回归 **36/36** 通过：新增四项测试分别核对角色的全部 113 项注册、对应提示、实际方法加载与参考原文读取；新增一项集成测试让四角色在正式 Workflow 中调用各自方法及交接检查，保存四步执行记录与 `skill/skill_read` 工具名，最终仍暂停在产品人工验收。测试模型按脚本选择工具，证明装配与执行可用，不证明真实模型会正确选法或改善文档质量。
+`npm run check` 验证类型和 Workflow 装配；`npm test` 验证澄清暂停/恢复、产品稿生成、独立质量检查、人工审批、返工和跨团队交接。fixture 模式只证明流程与数据边界，不证明真实模型的产品判断质量。
