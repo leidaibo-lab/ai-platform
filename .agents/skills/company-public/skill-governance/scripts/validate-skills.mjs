@@ -3,8 +3,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
 const projectRoot = resolve(new URL("../../../../../", import.meta.url).pathname);
-// 仅收集治理根与用户明确指定的独立实践根，不扫描依赖或临时 checkout。
-const skillRoots = [join(projectRoot, ".agents", "skills"), join(projectRoot, "practices/mastra/.agents/skills")];
+// 根目录是 Mastra 主线与共用 Skill 的唯一治理根，不扫描依赖或临时 checkout。
+const skillRoots = [join(projectRoot, ".agents", "skills")];
 const allowedPatterns = new Set(["tool-wrapper", "generator", "reviewer", "inversion", "pipeline"]);
 const issues = [];
 

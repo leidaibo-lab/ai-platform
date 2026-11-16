@@ -5,7 +5,7 @@
 - 负责人：AI 应用基础平台维护者
 - 所属区域：渠道与体验层 / Agent Runtime
 - 关联需求：在 Mastra 产研工作台展示类似 Codex 的当前节点、耗时、工具和文件读取事实
-- 关联 OpenSpec：不涉及探索主线稳定契约；仅扩展 `practices/mastra` 原生实践的工作台投影
+- 关联 OpenSpec：不涉及探索稳定契约；仅扩展 Mastra 主线的工作台投影（迁移前路径：`practices/mastra`）
 - 替代记录：无
 
 ## 问题

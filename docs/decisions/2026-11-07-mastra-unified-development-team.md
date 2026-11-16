@@ -41,7 +41,7 @@ Studio 仅注册产品批准即结束的流程，开发执行留在 CLI，用户
 
 ## 本轮实际结果
 
-已完成统一 Workflow、Studio 单入口、运行作用域、动态团队、原生 foreach 波次执行与受限 delegateTask 接入。`npm run check` 通过，dev 编译与启动成功；只读 `/api/workflows` 仅返回 `productDevelopmentWorkflow`，原生图包含产品、组队、派发、foreach 成员、合并、自检、评审与交付节点。Studio 已打开新图。按用户要求没有新增或运行测试、没有发起真实模型业务 Run；历史测试结果不作为本轮证据。输入结构、设计模式及使用说明见 [完整流程](../../practices/mastra/unified-workflow.md)。
+已完成统一 Workflow、Studio 单入口、运行作用域、动态团队、原生 foreach 波次执行与受限 delegateTask 接入。`npm run check` 通过，dev 编译与启动成功；只读 `/api/workflows` 仅返回 `productDevelopmentWorkflow`，原生图包含产品、组队、派发、foreach 成员、合并、自检、评审与交付节点。Studio 已打开新图。按用户要求没有新增或运行测试、没有发起真实模型业务 Run；历史测试结果不作为本轮证据。输入结构、设计模式及使用说明见 [完整流程](../application/unified-workflow.md)。
 
 ## 同日范围演进
 

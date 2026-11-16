@@ -5,7 +5,7 @@
 - 负责人：AI 应用基础平台维护者
 - 所属区域：Agent Runtime
 - 关联需求：将 Mastra 产研 Workflow 的节点职责收敛到产品、研发、测试、部署和交付团队
-- 关联 OpenSpec：不涉及探索主线稳定契约；属于 `practices/mastra` 原生实践的 Workflow 组织调整
+- 关联 OpenSpec：不涉及探索稳定契约；属于 Mastra 主线的 Workflow 组织调整（迁移前路径：`practices/mastra`）
 - 替代记录：无
 
 ## 问题
@@ -35,7 +35,7 @@
 
 | 候选 | 路线 | 覆盖范围 | 关键优势 | 关键缺口或风险 | 证据 |
 | --- | --- | --- | --- | --- | --- |
-| 原生嵌套团队 Workflow | 成熟一体化适配 | 主流程和团队责任边界 | 复用 Mastra 的输入校验、暂停恢复和快照 | 业务服务必须处理嵌套路径 | `practices/mastra/src/mastra/workflows/product-development.ts` |
+| 原生嵌套团队 Workflow | 成熟一体化适配 | 主流程和团队责任边界 | 复用 Mastra 的输入校验、暂停恢复和快照 | 业务服务必须处理嵌套路径 | `src/mastra/workflows/product-development.ts` |
 | 仅修改节点命名和页面分组 | 轻量局部改造 | 展示层职责 | 变更小 | 运行时所有权仍是平铺的，无法约束团队交接 | 现有主流程结构 |
 | 自建团队调度器 | 最小自研 | 团队编排、恢复和审计 | 可完全定制 | 重复建设 Workflow 持久化、暂停和恢复，形成第二事实源 | 项目架构边界与 Mastra 原生 Workflow 现状 |
 
@@ -49,9 +49,9 @@
 
 | 假设 | 验证方法 | 输入与版本 | 结果 | 证据位置 |
 | --- | --- | --- | --- | --- |
-| 五个团队可作为主链嵌套边界 | 主流程和统一交接测试 | fixture，Mastra 当前锁定版本 | 通过 | `practices/mastra/tests/unified-workflow.test.ts` |
-| 嵌套路径下的人工恢复仍能定位真实叶节点 | 澄清、产品失败、架构失败和跨 Store 回归 | fixture，主 Workflow 新路径 | 通过 | `practices/mastra/tests/blocker-clarification.test.ts`、`guided-intake.test.ts`、`development-state-flow.test.ts` |
-| 团队边界阻止错误交接 | 产品拒绝、研发停止、测试/发布失败场景 | fixture，主 Workflow | 通过 | `practices/mastra/tests/unified-workflow.test.ts` |
+| 五个团队可作为主链嵌套边界 | 主流程和统一交接测试 | fixture，Mastra 当前锁定版本 | 通过 | `tests/unified-workflow.test.ts` |
+| 嵌套路径下的人工恢复仍能定位真实叶节点 | 澄清、产品失败、架构失败和跨 Store 回归 | fixture，主 Workflow 新路径 | 通过 | `tests/blocker-clarification.test.ts`、`guided-intake.test.ts`、`development-state-flow.test.ts` |
+| 团队边界阻止错误交接 | 产品拒绝、研发停止、测试/发布失败场景 | fixture，主 Workflow | 通过 | `tests/unified-workflow.test.ts` |
 
 ## 决策
 
@@ -80,7 +80,7 @@
 
 ## 实施计划
 
-- 受影响路径：`practices/mastra/src/mastra/workflows/product-team.ts`、`development-team.ts`、`product-development.ts`、`src/delivery/testing.ts`、`src/delivery/deployment.ts`、`src/intake/service.ts`、`src/intake/recovery.ts`。
+- 受影响路径：`src/mastra/workflows/product-team.ts`、`development-team.ts`、`product-development.ts`、`src/delivery/testing.ts`、`src/delivery/deployment.ts`、`src/intake/service.ts`、`src/intake/recovery.ts`。
 - 核心数据结构：跨团队继续使用 `Delivery`、`StateV2` 和 `DeliveryLifecycle`；状态由原生 Store 所有，团队 Workflow 只返回 Schema 约束的新状态。
 - 遵循的模式：Workflow Composite；团队 Workflow 组合已有内部步骤，Adapter 只负责仓库资产绑定和路径投影。
 - 不采用的模式：不引入事件总线、第二审批库或按 UI 名称猜测步骤路径。
@@ -107,7 +107,7 @@
 
 - 验证证据：团队边界与核心恢复测试通过；`npm run check` 通过；清理旧模型后的全量测试 194/194 通过。
 - 剩余边界：真实模型质量、跨实例实时事件和生产部署不在本次范围。
-- 文档与契约：已同步 `practices/mastra/README.md`、`product-workflow.md`、`unified-workflow.md`、`docs/README.md`；OpenSpec 不受影响。
+- 文档与契约：已同步根 `README.md`、`docs/application/product-workflow.md`、`docs/application/unified-workflow.md`、`docs/README.md`；OpenSpec 不受影响。
 - 重评条件：Mastra Workflow 路径语义变化、团队独立部署/安全边界出现，或跨实例恢复成为稳定需求时重新评估。
 
 ## 证据与后续演进

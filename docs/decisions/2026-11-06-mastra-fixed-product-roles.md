@@ -1,13 +1,13 @@
 # 在 Mastra 产品阶段采用固定角色子流程
 
-> 历史记录：本文固定四角色模型已于 2026-11-14 被[当前产品团队 Workflow](../../practices/mastra/product-workflow.md)替代。下文只用于追溯当时的决策和验证事实，不是当前实现说明。
+> 历史记录：本文固定四角色模型已于 2026-11-14 被[当前产品团队 Workflow](../application/product-workflow.md)替代。下文只用于追溯当时的决策和验证事实，不是当前实现说明。
 
 - 状态：接受（独立原生实践；用户已确认固定角色、固定路径和人工验收）
 - 日期：2026-11-06
 - 负责人：Mastra 实践维护者
-- 所属区域：`practices/mastra` 原生应用实践
+- 所属区域：Mastra 主线（迁移前路径：`practices/mastra`）
 - 历史关联需求：产品阶段由总产品、需求梳理、产品闭环、产品写作四个固定 Agent 协作，人工验收后进入开发，未通过时带意见返工。
-- 当前实现：不涉及探索主线稳定契约；实践行为定义于[产品团队 Workflow](../../practices/mastra/product-workflow.md)。
+- 当前实现：主线行为定义于[产品团队 Workflow](../application/product-workflow.md)。
 - 替代记录：无；细化 [探索与原生实践分工](./2026-11-02-exploration-and-native-practices.md)。
 
 ## 问题
@@ -59,7 +59,7 @@
 
 ## 实施边界与计划
 
-- 修改 `practices/mastra/src/mastra/agents/`，增加三个产品角色并明确既有产品 Agent 的写作职责；沿用原生 Skill 工具和只读 `practiceInfo`。
+- 修改 `src/mastra/agents/`，增加三个产品角色并明确既有产品 Agent 的写作职责；沿用原生 Skill 工具和只读 `practiceInfo`。
 - 新增产品数据契约和子 Workflow；外层保留 `draft-product`、`review-product` 等步骤标识，维持人工关口和既有文档投影。
 - 共享交接服务新增返工动作和固定新 Run 标识；相同已保存决定重试只回读同一后继。只支持单机串行使用，HTTP 沿用进程内互斥。
 - 产品稿和中间产物不可变返回，审批不继承；返工来源保存在 Workflow 输入，历史由来源链接追溯。
@@ -85,11 +85,11 @@
 
 2026-11-06：采用原生子 Workflow 与四个固定 Agent，实践自写范围为职责提示、角色产物、版本散列、返工来源和页面投影；未增加依赖或第二套事实源。动态委派未采用，因为首版需要固定变量观察质量；手写引擎未采用，因为现有框架可持久化步骤并暂停恢复。角色执行与产物校验共用每次 24 步预算，返工最多三次。
 
-Node.js 24.22.1 下全套自动回归 **31/31**，包括本方案新增 11 项固定角色/返工回归；后端类型检查、前端构建、Skill 治理校验、OpenSpec strict **1/1** 与 diff 检查通过。实际验证八步工具链保存产物、旧单步骤快照批准、跨 OS 进程回读同一返工后继，以及隔离浏览器的退回确认、取消、新稿再审和版本导航。验证细节见[产品子流程记录](../../practices/mastra/product-workflow.md#2026-11-06-验证记录)。
+Node.js 24.22.1 下全套自动回归 **31/31**，包括本方案新增 11 项固定角色/返工回归；后端类型检查、前端构建、Skill 治理校验、OpenSpec strict **1/1** 与 diff 检查通过。实际验证八步工具链保存产物、旧单步骤快照批准、跨 OS 进程回读同一返工后继，以及隔离浏览器的退回确认、取消、新稿再审和版本导航。验证细节见[产品子流程记录](../application/product-workflow.md#2026-11-06-验证记录)。
 
 真实模型质量、长期记忆、任意源资料读取、代码执行、多人鉴权和生产协调未验收。维护责任及退出路径沿用上节；出现动态职责、复杂回退、跨实例需求或真实样本收益不足时重评。
 
-2026-11-06 产品 Skill 融合续验：基于远端 `9cbd0ac` 的完整 PM 套件，各角色通过同一工厂挂载 113 项 Skill；以只读 `productRoleProfiles` 定义职责、中文名称和优先方法。启动验证所有优先名称已注册，运行时按任务选用并渐进读取，复合方法只处理当前职责。沿用原生工具循环和人工关口；未采用角色能力裁剪，以符合各角色具备完整 Agent 工作能力的约定，也未新增自动路由器。类型检查及全套 **36/36** 回归通过，包括四角色分别实际读取方法/原文，以及正式 Workflow 的四角色 Skill 调用与持久化验收。此结果不替代真实模型选法与质量评测；当前角色说明见[产品团队 Workflow](../../practices/mastra/product-workflow.md)。
+2026-11-06 产品 Skill 融合续验：基于远端 `9cbd0ac` 的完整 PM 套件，各角色通过同一工厂挂载 113 项 Skill；以只读 `productRoleProfiles` 定义职责、中文名称和优先方法。启动验证所有优先名称已注册，运行时按任务选用并渐进读取，复合方法只处理当前职责。沿用原生工具循环和人工关口；未采用角色能力裁剪，以符合各角色具备完整 Agent 工作能力的约定，也未新增自动路由器。类型检查及全套 **36/36** 回归通过，包括四角色分别实际读取方法/原文，以及正式 Workflow 的四角色 Skill 调用与持久化验收。此结果不替代真实模型选法与质量评测；当前角色说明见[产品团队 Workflow](../application/product-workflow.md)。
 
 ## 证据与后续演进
 
@@ -98,5 +98,5 @@ Node.js 24.22.1 下全套自动回归 **31/31**，包括本方案新增 11 项�
 - https://mastra.ai/docs/workflows/overview
 - https://mastra.ai/docs/workflows/control-flow
 - https://mastra.ai/docs/agents/overview
-- 锁定版本与原生运行入口：`practices/mastra/package.json`、`src/mastra/app.ts`。
-- 当前产品团队不增加动态委派或自动批准范围，详见[产品团队 Workflow](../../practices/mastra/product-workflow.md)。
+- 锁定版本与原生运行入口：根 `package.json`、`src/mastra/app.ts`。
+- 当前产品团队不增加动态委派或自动批准范围，详见[产品团队 Workflow](../application/product-workflow.md)。

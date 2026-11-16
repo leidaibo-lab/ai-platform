@@ -5,7 +5,7 @@
 - 负责人：AI 应用基础平台维护者
 - 所属区域：Agent Runtime
 - 关联需求：将 `development-team` 收敛为负责人、动态实施者和独立审查者三类 Agent；自检与交付评估改为 Workflow 门禁
-- 关联 OpenSpec：不涉及探索主线稳定契约；属于 `practices/mastra` 原生实践的内部 Workflow 组织调整
+- 关联 OpenSpec：不涉及探索稳定契约；属于 Mastra 主线的内部 Workflow 组织调整（迁移前路径：`practices/mastra`）
 - 替代记录：补充并细化 [Mastra Workflow 团队职责边界](./2026-11-14-mastra-workflow-team-boundaries.md) 的研发团队内部职责
 
 ## 问题
@@ -80,7 +80,7 @@
 
 ## 实施计划
 
-- 受影响路径：`practices/mastra/src/development/v2/agents.ts`、`src/development/v2/team.ts`、`src/mastra/workflows/development-team.ts`、`src/mastra/workflows/development-v2.ts`、`src/evaluation/development-nodes.ts`、对应测试与研发文档。
+- 受影响路径：`src/development/v2/agents.ts`、`src/development/v2/team.ts`、`src/mastra/workflows/development-team.ts`、`src/mastra/workflows/development-v2.ts`、`src/evaluation/development-nodes.ts`、对应测试与研发文档。
 - 核心数据结构：`DevelopmentAgentKind` 是三值映射；`RoleV2`、`StateV2.verificationHistory` 与 `phaseSchema` 保持现有版本和所有权。
 - 遵循的模式：Workflow Composite 组合团队边界；Strategy 映射 Agent 类型；Adapter 继续隔离执行和检查。
 - 不采用的模式：不引入 Agent 网络自由路由、全局可写 Agent 或模型驱动的检查通过判断。
@@ -112,7 +112,7 @@
 
 ## 证据与后续演进
 
-- 执行日期与版本：2026-11-14，当前 `practices/mastra` 锁定依赖与 fixture。
+- 执行日期与版本：2026-11-14，当前根目录锁定依赖与 fixture。
 - 可追溯资产：Agent 工厂映射、确定性自检回归、研发节点评测和标准质量命令。
 - 当前状态：实现验证通过；真实模型和生产门禁未完成。
 - 后续记录：若研发团队拆分为独立服务或引入新的执行身份边界，新增替代决策。

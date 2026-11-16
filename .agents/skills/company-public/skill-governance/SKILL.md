@@ -11,7 +11,7 @@ metadata:
 
 ## 核心规则
 
-- 共用 Skill 放在根 `.agents/skills/`。用户指定的 Mastra 产品套件放在 `practices/mastra/.agents/skills/`，这是显式实践作用域例外；其两级目录、中文入口与元数据仍遵守本规范，不另复制到根目录。
+- 共用 Skill 和 Mastra 产品套件均放在根 `.agents/skills/`；产品套件位于 `.agents/skills/product-pm/`，遵守相同的两级目录、中文入口与元数据规则。
 - 目录采用两级结构：`<顶级目录>/<技能目录>/SKILL.md`。
 - `name` 必须等于 `<顶级目录>-<技能目录>`。
 - frontmatter 必须包含 `name`、`description`、`metadata.pattern`、`metadata.author`、`metadata.version`。

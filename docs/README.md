@@ -1,66 +1,24 @@
 # 项目文档
 
-- [Mastra 自主开发与修复闭环](./decisions/2026-11-09-mastra-autonomous-development.md)：批准范围内连续实现、登记检查、失败证据传递、联合修复与预算/进展停止；[使用说明](../practices/mastra/unified-workflow.md#批准范围内自主开发与排障)。
+根目录是 AI 应用基础平台 v2.0 的 Mastra 主线。当前应用入口、工作台、配置、评测和运行说明均以仓库根目录为准；原自研 Runtime 的历史材料已收拢到 [`practices/custom-exploration/docs/`](../practices/custom-exploration/docs/)。
 
-- [开发阶段状态与故障引导](./decisions/2026-11-08-mastra-stage-state-flow.md)：当前阶段、故障原因、保留检查点和下一步操作；未执行业务节点不再空跑为完成，原阶段暂停恢复。
+## 应用与操作
 
-- [HRM 全栈验证与开发自主规划](./decisions/2026-11-08-mastra-hrm-execution.md)：用户确认关联项目，Agent 提出具体文件与团队；已实测 Docker 中类型检查、构建及页面/API/临时数据库连通。[使用说明](../practices/mastra/README.md)。
+- [完整产研流程](./application/unified-workflow.md)：产品、研发、测试、部署和交付团队的主流程与人工关口。
+- [需求工作台](./application/guided-intake.md)：逐项澄清与 AI 主动补全、产品确认和恢复边界。
+- [工作流执行时间线](./decisions/2026-11-14-mastra-workflow-execution-timeline.md)：RunFlowMini、RunActivityFeed 与 SSE 的只读投影边界。
+- [运行产物与数据流](./application/artifact-dataflow.md)：项目、迭代、Run、阶段产物和只读 Workspace。
+- [研发阶段设计](./application/development-workflow-design.md)：团队化研发、受限实现、自检与独立评审。
+- [浏览器 QA](./application/browser-qa.md)：浏览器用例、截图证据与质量门。
+- [工作区资料](./application/workspaces.md)：只读业务资料和运行产物导出。
 
-- [Mastra资源配置接入规范](../practices/mastra/config/runtime-resource-contract.md)：单一配置归属、加载交叉校验、Run冻结/恢复、逐角色最小输入与版本迁移；定义稿，未接入运行时。
+## 约束、决策与评测
 
-- [HRM 产物归档与数据流转](../practices/mastra/artifact-dataflow.md)：项目/迭代/Run 关联、阶段版本、查看与下载；[PNG](./assets/mastra-hrm-artifact-dataflow.png) / [SVG](./assets/mastra-hrm-artifact-dataflow.svg)，[决策](./decisions/2026-11-07-hrm-asset-catalog.md)。
+- [架构与方案决策](./decisions/README.md)：接受、替代与历史决策索引。
+- [v2.0 迁移方案](./v2-migration-plan.md)：完整远端基线、目录迁移和验证状态。
+- [根主线协作规则](../AGENTS.md)：运行边界、配置和安全约束。
+- [OpenSpec](../openspec/project.md)：稳定行为契约与主线范围。
+- [产品 Skill 套件](../.agents/skills/README.md)：产品 Agent 的本地方法入口与来源锁。
+- [开发评测](../evaluations/README.md)：fixture、真实模型与人工验收的证据边界。
 
-- [HRM 仓库资产归属](./decisions/2026-11-07-hrm-repository-assets.md)：产品、测试、发布投影归 hrm，业务资料从 product/sources 读取；全栈验证见2026-11-08决策，Git 回库仍待接线。
-
-- [Mastra 完整产研流程](../practices/mastra/unified-workflow.md)：同一主 Run，按 `product-team`、`development-team`、`test-team`、`deployment-team`、`delivery-team` 五个团队边界组织产品、研发、测试、部署和最终交付；[团队边界决策](./decisions/2026-11-14-mastra-workflow-team-boundaries.md)，[生命周期决策](./decisions/2026-11-07-mastra-full-delivery-lifecycle.md)。
-
-- [Mastra 研发团队 Agent 边界](./decisions/2026-11-14-mastra-development-agent-boundaries.md)：`development-lead-agent` 负责规划与组队，`development-implementer-agent` 按任务动态创建，`development-reviewer-agent` 负责独立审查；自检和交付评估属于确定性 Workflow 门禁。
-
-- [Mastra六类开发独立节点评测](../practices/mastra/evaluations/native/development-nodes/README.md)：上下文、架构、就绪、实现、自检、代码评审的18例冻结数据集，原生Workflow/Experiment及真实代码证据。
-
-这个目录承接项目结构、架构说明和运维边界。`AGENTS.md` 只保留 AI 协作入口和路由，详细说明放在这里。
-
-## 文档索引
-
-- [Mastra 完整 PM Skills](../practices/mastra/.agents/skills/README.md)：111项上游能力、中文入口、来源锁、MIT、原生加载与维护；[适配决策](./decisions/2026-11-06-mastra-pm-skills.md)。
-
-- [应用实践集合](../practices/README.md)：与探索实现并行，按 Mastra、pi 等项目的原生方式学习应用；共用业务与验收问题，不强制统一运行时。
-- [Mastra 招聘 Workspace 与资料评测](../practices/mastra/workspaces.md)：业务资料只读挂载、运行产物导出和固定来源评测。
-- [Mastra 原生最小应用与产研交接](../practices/mastra/README.md)：当前启动、产研工作台、模型配置与执行边界。
-- [Mastra 产品团队 Workflow](../practices/mastra/product-workflow.md)：`draft-product` 内的 `product-manager-agent`、`product-reviewer-agent` 与 `review-product` 人工审批边界。
-- [Mastra 研发阶段工作流](../practices/mastra/development-workflow-design.md)：技术方案确认、受限实现、开发自检、返工和研发交付；[24案例评测](../practices/mastra/evaluations/development/README.md)区分离线执行、真实模型和人工量表，[首轮 pilot 观察](../practices/mastra/evaluations/development/observations-2026-11-06.md)记录原始结果、发现的问题与未准入结论；[续办记录](../practices/mastra/evaluations/development/continuation-2026-11-06.md)保留当时的恢复修复、评测结果、全栈候选与环境阻塞；当前独立测试已接入完整主链。
-- [Mastra 当前产研流程](../practices/mastra/unified-workflow.md)：产品、研发、测试、部署和最终交付团队的统一主链；产品团队内部由产品经理 Agent、产品审查 Agent 和人工审批组成。
-- [探索与原生应用实践分开组织](./decisions/2026-11-02-exploration-and-native-practices.md)：记录两条学习方向、规则作用域、原生比较方法与现有实验归属；不代表接受任何框架迁移。
-- [AI 应用基础平台架构说明](./ai-structure.md)：六个架构区域、控制面/数据面、当前代码映射、可插拔契约、数据所有权、独立服务拆分蓝图，以及 V0-V4 实施对比。
-- [AI SDK Core v7 对齐说明](./ai-sdk-core-alignment.md)：说明当前采用的 Core 原语、GatewayClient 适配边界、v7 结果语义和按场景延后的能力。
-- [场景化输入到大模型交互链路](./scenario-interaction-chains.md)：明确共同底座、只读工具切片、分阶段重试与恢复边界，按对话、图片、文档、业务数据、实时事件、操作执行和批量分析拆分端到端链路，并固化当前 C1 焦点及四维验收框架。
-- [运行可靠性与结果验收](./runtime-reliability-and-acceptance.md)：用 R0-R4 与 A0-A4 分开表达可执行、可记录、可重放、可恢复、多实例协调，以及模型声明、结构校验、事实绑定、系统验收和人工确认；记录当前 Operation journal、RunLease/fencing 基础、天气恢复点与 Scenario Runner 扩展方式。
-- [C1 对话链路深入理解指南](./c1-conversation-chain-learning-guide.md)：不依赖源码阅读，通过贯穿案例解释 C1 的参与者、状态、上下文、记忆、幂等、重试、流式交付、取消、观测和评测。
-- [C1 链路深挖问题清单](./c1-conversation-chain-deep-dive-questions.md)：以问题驱动方式追问每项能力的业务动机、约束、候选、采用/适配/自研边界、验证证据和重评条件。
-- [C1 ChainTrace 运维说明](./c1-chaintrace-operations.md)：保留为触发 TODO 后的 Phoenix + PostgreSQL 启用手册，说明认证、Runtime OTLP 配置、健康检查、备份和升级回滚边界；当前日常启动不执行。
-- [方案选型与复用治理](./solution-selection-governance.md)：约束方案发现、成熟能力复用、`采用 / 适配 / 自研` 决策、存量能力审计和能力完成报告。
-- [方案决策记录](./decisions/README.md)：保存每次能力选择、未采用原因、验证证据、退出路径和重评条件，并提供统一模板。
-- [pi Agent Runtime 隔离对比](./decisions/2026-10-13-pi-agent-isolated-comparison.md)：两套真实 SDK 的确定性工具、故障和进程恢复对比，以及 Node 24 验证记录。
-- [pi 后续选型验证](./audits/2026-10-13-pi-followup-verification.md)：46 项 PoC、durable 故障边界、迁移删除清单、许可声明和真实模型门禁。
-- [架构与方案决策存量审计（2026-10-12）](./audits/2026-10-12-architecture-decisions.md)：按最新 ADR Skill 审计 21 份决策，区分契约偏差、历史演进、证据与交接缺口。
-- [决策审计修复验证与证据登记](./audits/2026-10-12-decision-repair-evidence.md)：记录契约同步、18 份有效决策补齐、165 项回归与仍需真实验证的门禁。
-- [编码规范](./coding-standards.md)：函数注释、数据结构、设计模式、设计原则和变更检查要求。
-- [架构图视觉与表达规范](./architecture-diagram-style.md)：统一当前项目架构图的模块框、关联箭头、职责边界、状态标识、路径摘要和 SVG/PNG 资产要求。
-- [上下文管理](./context-management.md)：持久化会话、结构化记忆、Context Planner、高低水位、并发控制和 100 轮评测。
-- [Agent Skills 索引](../.agents/skills/README.md)：本项目 Skill 目录规范、索引和治理要求。
-- [架构与方案决策 Skill](../.agents/skills/docs/architecture-decision/SKILL.md)：架构决策记录的 Agent-first 工作流，以及与选型治理和 OpenSpec 的边界。
-
-## 与 OpenSpec 的分工
-
-- `docs/` 解释项目如何工作、为什么这样分层、后续怎么演进。
-- `.agents/skills/` 承接可复用的 Agent Skill、目录规范和治理口径。
-- `openspec/` 固化稳定能力契约，约束后续代码和配置变更。
-- `README.md` 保持用户启动和测试路径清晰，不承载过多内部协作细节。
-
-- [Mastra 主流程需求输入](../practices/mastra/guided-intake.md)：需求澄清、开发阻塞后的业务选择补齐、完整修订稿确认及开发、测试、发布等人工关口。
-
-- [Mastra 角色产物远端交接与按需上下文](./decisions/2026-11-08-mastra-remote-handoff.md)：阶段同步回执、原生同步恢复与有界资料读取。
-
-- [Mastra 项目运行档案](../practices/mastra/artifact-dataflow.md#2026-11-09项目运行档案)：生命周期投影、交接分支同步与只读 Workspace，不迁移执行状态。
-
-- [Mastra 浏览器 QA](../practices/mastra/browser-qa.md)：Skill、原生 Agent、Playwright 工具与 Workflow 质量门；[选型 ADR](./decisions/2026-11-09-mastra-gstack-browser-qa.md)，首版静态候选，HRM 全栈仍阻塞。
+历史 ADR 记录会保留当时的路径与结论；凡指向当前应用的链接已以本索引和根目录入口为准。

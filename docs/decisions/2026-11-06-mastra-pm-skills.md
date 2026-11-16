@@ -3,7 +3,7 @@
 - 状态：接受（用户已明确指定整套迁入 Mastra 实践；接受适配范围，真实模型质量另行验收）
 - 日期：2026-11-06
 - 负责人：Mastra 实践维护者
-- 所属区域：`practices/mastra` 独立原生应用实践
+- 所属区域：Mastra 主线（迁移前路径：`practices/mastra`）
 - 关联需求：将 phuryn/pm-skills 全套能力放入 Mastra 的 `.agents/skills/`，供产品 Agent 使用。
 - 关联 OpenSpec：不涉及探索主线稳定契约；未改变根 Runtime、API、配置或密钥边界。
 - 替代记录：无；细化原生实践分工，与固定产品角色决策互补，不在本次实现额外角色。
@@ -14,7 +14,7 @@
 
 ## 约束与非目标
 
-用户指定 `practices/mastra/.agents/skills/` 为单一落点；这是根 Skill 目录规则的显式实践作用域例外。沿用两级路径、职能前缀、中文正文、模式/作者/版本元数据和治理校验。固定上游版本并保留 MIT 原文与逐文件散列，启动不联网。
+用户指定根 `.agents/skills/product-pm/` 为单一落点。沿用两级路径、职能前缀、中文正文、模式/作者/版本元数据和治理校验。固定上游版本并保留 MIT 原文与逐文件散列，启动不联网。
 
 复用 `@mastra/core 1.81.0` 原生 `createSkill`、`skill`、`skill_read`、`skill_search`，不引入 Workspace、执行引擎、模型依赖升级或动态委派。Skill 是方法，不授予网络、仓库、SQL、命令、部署或审批权限；需要缺失工具的步骤应报告输入/能力缺口。真实模型能力、产品质量提升、全量业务评测与生产发布不在本次验收范围。
 
@@ -50,7 +50,7 @@
 
 ## 实施边界与计划
 
-- 资产：`practices/mastra/.agents/skills/`，111项源入口、中文正文、精确保留的原文、附属参考、许可证、来源锁与索引。索引/导航明确原始名称到本地名称的关系。
+- 资产：`.agents/skills/product-pm/`，111项源入口、中文正文、精确保留的原文、附属参考、许可证、来源锁与索引。索引/导航明确原始名称到本地名称的关系。
 - Adapter：`src/mastra/agents/skills.ts` 从显式根读取两级目录；交给 createSkill 的 metadata/license/references 完整保留。配置或资源错误使启动失败，不静默跳过。
 - 数据结构：来源锁是版本1的只读 JSON，包含仓库/SHA、每项类型/原路径/本地名称/依赖、源文件和附属文件散列；Agent 不写来源锁。Skill 对象由应用启动时拥有，不存业务数据。
 - 模式：Adapter 只适配资产布局和框架输入；流程由 Mastra 持有。中文方法正文和原始资料渐进加载，避免把111份全文常驻系统提示。
@@ -90,7 +90,7 @@
 
 - https://github.com/phuryn/pm-skills/tree/2a12295a7717569baa7be181b4cfebe3ca38a6bb
 - https://github.com/phuryn/product-engineering/tree/0e8b5a5fdd7155a5c440ade930c3e081eb387943/ai-shipping
-- Mastra 原生包版本及安装包文档：`practices/mastra/package-lock.json`、`node_modules/@mastra/core/dist/docs/references/`。
+- Mastra 原生包版本及安装包文档：根 `package-lock.json`、`node_modules/@mastra/core/dist/docs/references/`。
 - 目录规范对照：seakoi/skills `10b013bd9046b7e4bbae0f9a2475d933bcd1af94` 的 README 与设计参考，结合本仓治理 Skill。
 
 ### 2026-11-06 提交前独立验证

@@ -38,7 +38,7 @@
 
 ## 实施与验收计划
 
-修改 practices/mastra/src/development/v2/ 的契约、证据策略、工具、invoke、team，以及开发/QA Workflow、工作台范围表单和说明。Zod 约束跨模块数据；采用策略模式集中管理返工与停止判定，执行作用域采用 Adapter 模式共享检查账本。纯策略负责决定，ExecutionPort 隔离 I/O，原生 Store 保存返回的新快照；不引入新的调度器或状态库。
+修改 `src/development/v2/` 的契约、证据策略、工具、invoke、team，以及开发/QA Workflow、工作台范围表单和说明。Zod 约束跨模块数据；采用策略模式集中管理返工与停止判定，执行作用域采用 Adapter 模式共享检查账本。纯策略负责决定，ExecutionPort 隔离 I/O，原生 Store 保存返回的新快照；不引入新的调度器或状态库。
 
 - [x] 验证失败日志跨返工、失败分支与重启持久化传递。
 - [x] 验证真实受控工具可检查、检查限额不可超支、文件/命令边界不扩大。

@@ -3,9 +3,9 @@
 - 状态：接受（用户授权实现，并确认沿用招聘项目和已有材料）
 - 日期：2026-11-06
 - 负责人：Mastra 实践维护者
-- 所属区域：`practices/mastra` 原生应用实践
+- 所属区域：Mastra 主线（迁移前路径：`practices/mastra`）
 - 关联需求：让 Agent 读取业务材料，在 Studio 查看运行产物，并用于可复现评测。
-- 关联 OpenSpec：不涉及探索主线稳定契约；实践行为先定义于 [Workspace 契约](../../practices/mastra/workspaces.md)。
+- 关联 OpenSpec：主线行为定义于 [Workspace 契约](../application/workspaces.md)。
 - 替代记录：无；细化[固定产品角色](./2026-11-06-mastra-fixed-product-roles.md)的资料读取边界。
 
 ## 问题与约束

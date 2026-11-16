@@ -3,8 +3,8 @@
 - 状态：接受（用户已明确授权执行研发阶段设计并启动能力评测；能力准入仍待实测）
 - 日期：2026-11-06
 - 负责人：Mastra 实践维护者
-- 所属区域：`practices/mastra` 原生实践
-- 关联需求：[开发阶段设计](../../practices/mastra/development-workflow-design.md)
+- 所属区域：Mastra 主线（迁移前路径：`practices/mastra`）
+- 关联需求：[开发阶段设计](../application/development-workflow-design.md)
 - 关联 OpenSpec：不改变探索主线稳定契约；实践执行契约见上述设计与评测 README。
 - 替代记录：无；细化 Workspace 决策，产品角色继续只读，不继承执行权限。
 
@@ -45,7 +45,7 @@
 - [x] macOS 隔离读写/网络、路径/链接与检查只读已测；Node 测试 worker 提前退出伪造 TAP 回归通过。检查超时预算已配置，强制终止触发路径未单独实测，Linux bwrap 未测。
 - [x] 24案例资产已修订至 v2，固定控制流与真实模型分开；当前 judge 同目录断言不构成恶意候选防作弊。
 - [x] 类型检查、相关回归、OpenSpec strict 与文档同步通过。
-- [x] 48项真实模型 pilot 已执行并完整保留；独立人评为0/48，执行器旧版缺陷使原始通过数无效，能力准入未判定。修复后的独立重跑见[观察报告](../../practices/mastra/evaluations/development/observations-2026-11-06.md)。
+- [x] 48项真实模型 pilot 已执行并完整保留；独立人评为0/48，执行器旧版缺陷使原始通过数无效，能力准入未判定。修复后的独立重跑见[观察报告](../../evaluations/development/observations-2026-11-06.md)。
 
 ## 风险、退出与维护
 
@@ -65,11 +65,11 @@ Seatbelt 是本地进程约束，不等于容器/VM资源隔离；初版固定30
 
 维持原生Workflow/Store及文件检查点Adapter方案，不新增调度器或依赖。架构方案生成完成后将route恢复为all，只有新的架构阻塞/自检路由才触发重规划；completedTasks继续负责失败任务接续，避免额外维护平行进度状态。执行身份作为Workflow状态保存并绑定方案及恢复hash，端点归一化后只存摘要；审批、接续和澄清入口共用校验，缺失身份的旧快照不能自动迁移或恢复。
 
-评测入口校验合成证据与规范正文hash，真实产品来源仍从持久化产品批准派生。安全错误模块只从SDK异常读取白名单name/code/status/cause，抛给调用边界的是固定分类且不附原始cause；任务图语义错误使用SyntaxError归类。真实SDK503/连接重置复验发现原生默认error processor额外重试，因此同时设maxRetries=0、maxProcessorRetries=0，只保留已有Adapter的一次检查点重试。99/99实践回归、类型检查及OpenSpec strict通过；新真实模型批次与剩余边界见[续办记录](../../practices/mastra/evaluations/development/continuation-2026-11-06.md)。
+评测入口校验合成证据与规范正文hash，真实产品来源仍从持久化产品批准派生。安全错误模块只从SDK异常读取白名单name/code/status/cause，抛给调用边界的是固定分类且不附原始cause；任务图语义错误使用SyntaxError归类。真实SDK503/连接重置复验发现原生默认error processor额外重试，因此同时设maxRetries=0、maxProcessorRetries=0，只保留已有Adapter的一次检查点重试。99/99实践回归、类型检查及OpenSpec strict通过；新真实模型批次与剩余边界见[续办记录](../../evaluations/development/continuation-2026-11-06.md)。
 
 数据结构沿用DevelopmentState，新增可空executionIdentity以读取历史结果，非空身份是继续执行的不变量。错误分类为有限枚举；角色返回值、身份校验和外部I/O分离，分别落实单一职责与边界隔离。复用原生路由和completedTasks而非增加恢复调度层，保持KISS；统一来源与身份校验避免审批/接续规则分叉。维护者仍为本实践维护者；出现外部副作用、多实例或升级旧快照迁移需求时重评原决策。
 
-实现与回归已完成，48项旧版真实模型 pilot、修复版完整48项及两例歧义补验均记于[观察报告](../../practices/mastra/evaluations/development/observations-2026-11-06.md)。修复版为24次交付断言通过、18次澄清、6次模型/网络失败，人评0/48，能力未准入；原始存在伪造检查路径的批次不能作为 Agent 能力准入依据。重跑后补充的架构阻塞上下文仅完成确定性回归，未单独验证真实模型收益。
+实现与回归已完成，48项旧版真实模型 pilot、修复版完整48项及两例歧义补验均记于[观察报告](../../evaluations/development/observations-2026-11-06.md)。修复版为24次交付断言通过、18次澄清、6次模型/网络失败，人评0/48，能力未准入；原始存在伪造检查路径的批次不能作为 Agent 能力准入依据。重跑后补充的架构阻塞上下文仅完成确定性回归，未单独验证真实模型收益。
 
 ### 2026-11-07 Homebrew Node 沙箱依赖修复
 
@@ -77,4 +77,4 @@ Homebrew Node 25.1.0 的动态库不在可执行文件的bin目录中，原策�
 
 Node默认还会读取Homebrew OpenSSL配置，受限进程显式设置`OPENSSL_CONF=/dev/null`，不开放宿主配置。禁网、只读候选、禁止读取真实凭据与其他宿主文件的规则保持。新增动态库路径集合为宿主生成、只读且运行实例内持有；复用OS加载元数据，不增加通用沙箱或依赖管理器。维护责任仍归实践维护者；Node加载机制变化、未支持rpath或需FIPS/联网/包安装时重评，不通过开放整个Homebrew目录兜底。
 
-Homebrew Node25环境下执行器9/9、全实践141/141回归通过；另有原生证据评分的新增测试单独验证。固定流程真实模型基线与质量限制见[2026-11-07基线报告](../../practices/mastra/evaluations/native/baseline-2026-11-07.md)。
+Homebrew Node25环境下执行器9/9、全实践141/141回归通过；另有原生证据评分的新增测试单独验证。固定流程真实模型基线与质量限制见[2026-11-07基线报告](../../evaluations/native/baseline-2026-11-07.md)。

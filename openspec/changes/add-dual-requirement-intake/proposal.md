@@ -1,5 +1,11 @@
 # 双模式需求入口
 
+## Capabilities
+
+### Modified Capabilities
+
+- `mastra-role-resources`：增加版本化 `intakeMode`，并固定两种入口都停在既有产品人工审批前。
+
 ## Why
 
 现有需求入口默认要求用户逐轮回答澄清问题。用户有时只想输入一个想法，并先获得一版基于推荐假设的完整需求稿，因此需要在保留人工澄清的同时增加 AI 主动补全模式。

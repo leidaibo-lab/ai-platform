@@ -5,7 +5,7 @@
 - 负责人：Mastra 实践维护者
 - 所属区域：渠道与体验层（独立实践）
 - 关联需求：用户明确授权方案摘要、关键问题卡片、回答修订与产品稿确认闭环
-- 关联 OpenSpec：不改变探索主线稳定契约；实践契约见 practices/mastra/guided-intake.md
+- 关联 OpenSpec：主线契约见 `openspec/specs/mastra-role-resources/`；操作说明见 [需求工作台](../application/guided-intake.md)
 - 替代记录：无；扩展完整产研生命周期记录
 
 ## 问题、约束与非目标
@@ -26,7 +26,7 @@
 
 结论：适配。用户已明确授权上述闭环；新增可选 guidedIntake，默认关闭。新页面在主 Run 内开启澄清，原生子 Workflow 用 dountil 保存多轮方案与人工回答。模型输出经 Zod 校验；服务端只恢复允许的澄清和产品确认步骤，恢复前校验当前 payload/hash 与答案，非法输入不得消耗暂停点。推荐项不预先成为回答。前端只持有未提交输入，确认事实与版本归 LibSQL 快照。HTTP Adapter 负责协议转换，纯函数负责答案校验，复用现有四产品角色生成完整稿，不增加 Agent 或依赖。
 
-受影响路径：practices/mastra/src/intake/、src/mastra/workflows/、src/mastra/app.ts、web/src 与 vite.config.ts、tests、实践文档。历史 Run 不迁移；回退可关闭 guidedIntake 并使用 Studio。服务仅本机，审阅人仍是本地声明；进程内互斥不声明分布式锁。维护责任归实践维护者。
+受影响路径：`src/intake/`、`src/mastra/workflows/`、`src/mastra/app.ts`、`web/src` 与 `web/vite.config.ts`、`tests/`、主线文档。历史 Run 不迁移；回退可关闭 guidedIntake 并使用 Studio。服务仅本机，审阅人仍是本地声明；进程内互斥不声明分布式锁。维护责任归主线维护者。
 
 ## 验收计划
 

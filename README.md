@@ -1,293 +1,126 @@
-# AI 应用基础平台
+# AI 应用基础平台 v2.0
 
-面向不同业务场景，按需组合渠道、Agent Runtime、连接器与知识、模型网关以及治理能力的 AI 应用基础平台。
+根目录使用完整 Mastra Agent、Workflow 和 LibSQLStore 作为主线应用。原自研 Runtime、Demo、
+LiteLLM 和 pi 适配实验保留在 `practices/custom-exploration/`，与主线独立管理依赖、配置和数据。
 
-## 两条学习方向
+## 当前入口与流程
 
-| 方向 | 目标 | 入口与边界 |
-| --- | --- | --- |
-| 探索 | 通过自己的实现理解会话、上下文、执行、恢复和治理的设计取舍 | 当前 `src/`、`demo/`、`scripts/` 与 `experiments/`；保留现有 Runtime 主链 |
-| 应用实践 | 按成熟项目的原生架构完成应用，理解它们与探索实现的差异、收益和代价 | [应用实践集合](./practices/README.md)；按 Mastra、pi 等项目分别组织，独立运行 |
+日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案、测试与发布回执等人工确认。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
 
-应用实践共用业务问题、验收问题和证据记录方式，不要求接入探索主线的 Runtime、Store 或 GatewayClient。先理解原生方案，再基于证据比较；是否集成或迁移是后续独立决策。[Mastra 原生应用](./practices/mastra/README.md)已形成产品、动态团队开发、独立测试和发布回执的[完整产研主链](./practices/mastra/unified-workflow.md)，由[工作台](./practices/mastra/guided-intake.md)承接人工关口；真实业务全链路、代码回库与自动 CI/CD 尚未验收。pi 仍为学习入口。
+需求输入与澄清 → `product-team`（需求、产品稿、产品确认）→ `development-team`（项目范围、负责人规划、动态实施、确定性自检、独立代码审查与研发交付）→ `test-team`（测试与回归）→ `deployment-team`（部署与回滚）→ `delivery-team`（最终交付确认）。研发团队只使用 `development-lead-agent`、按任务动态创建的 `development-implementer-agent` 和 `development-reviewer-agent`；团队内部步骤只表达团队内职责和人工关口，不再作为主流程的平行团队节点。
 
-以下项目架构、当前能力和快速开始描述的是**探索主线**。
+新工作台输入显式批准自主开发策略：团队可在候选内运行登记检查、携带失败证据连续排障，多角色缺陷联合修复并重跑下游。默认3轮返工、72次开发模型调用、24次检查套件执行，连续2次重复失败且无新证据时停止；新增业务决定、扩大授权或预算耗尽升级人工。旧输入保持原政策。原生 Workflow 与真实隔离检查回归已验证，真实模型完整业务交付尚未验收。详见[自主开发与排障](./docs/application/unified-workflow.md#批准范围内自主开发与排障)及[决策记录](./docs/decisions/2026-11-09-mastra-autonomous-development.md)。
 
-探索主线以 **V0.6 会话与上下文基线**为主体，并建设 **V1 首个只读工具与执行治理切片**：提供浏览器多会话 Demo、SQLite 会话事实源、结构化记忆、Context Planner、统一模型调用、天气工具、受限恢复、结果验收、智能 operation 路由和图片生成/编辑开发能力。当前形态用于本地开发、确定性回归和方案验证，不代表生产级平台控制面或通用持久工作流已经完成。
+- [完整产研流程](./docs/application/unified-workflow.md)：阶段职责、暂停恢复、输入格式和终态。
+- [工作台输入与人工关口](./docs/application/guided-intake.md)：澄清、版本确认、后续表单与校验。
+- [产物归档与数据流转](./docs/application/artifact-dataflow.md)：项目/迭代/Run 关联、历史版本及下载；[产物查看页](http://127.0.0.1:4111/delivery-assets)只读。
+- [Studio 流程图](http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph)：技术调试与流程检查；日常人工确认可在工作台完成。
 
-## 项目定位
+开发角色的单模型步骤时限为10分钟，每次 Agent 执行总时限为30分钟（`development-timeout.v3`），不把整个开发阶段或人工等待限制为30分钟。临时模型故障每轮最多5次尝试（含首次），退避后仍失败则原阶段暂停，可多轮人工继续；累计调用额度用完后可在前端填写追加次数，计数不清零。资料不再设置累计读取、初始目录或模型请求体字节门槛，也不要求资料升档确认。live 角色显式启用 Mastra 原生 Observational Memory，按执行独立线程观察和反思工具历史；原生压缩失败仍走检查点恢复。每次失败保存来源、实际触发时限、耗时、UTC时间与调用序号。历史未采集的细项不补猜；已有失败架构节点通过检查点/身份校验后可受控恢复，不跳过方案批准。
 
-“AI 应用基础平台”是项目总称，项目、仓库和目录统一使用 `ai-platform`。系统按六个架构区域组织：
+## 运行档案
 
-| 区域 | 核心职责 | 当前状态 |
-| --- | --- | --- |
-| 渠道与体验层 | Web、IM、IDE、API Adapter 的输入输出适配 | 已有 React 浏览器 Demo 和 Demo Server HTTP Adapter |
-| 平台控制面 | 租户、应用、Agent 定义、版本发布和策略配置 | 尚未实现 |
-| Agent Runtime | Session/Run、上下文、operation 路由、工具循环、结果组装与验收 | 已有本地集成切片 |
-| 连接器与知识层 | Tool Registry、MCP、业务 API、搜索、文档与 RAG | 已有 Open-Meteo 只读天气 Connector；其他能力尚未实现 |
-| 模型网关 | 模型访问、别名、provider key、路由、预算和限流 | 已有独立 LiteLLM Proxy；单应用 virtual key/预算治理为隔离 PoC |
-| 治理与可观测 | 身份上下文、执行策略、审计、Trace、评测和反馈 | 已有本地执行治理、回归评测和默认关闭的 OTel 旁路 |
+新主流程自动将开始、归档阶段返回、暂停、失败和完成的观察记录保存到 HRM 的 product/catalog/runs/<RunId>/history/。Studio Workspace 中选择“HRM · 运行档案（状态投影，不可恢复）”查看。live 沿用产品阶段开关同步到 Run 交接分支；同步失败保留本地文件，可用 npm run run:archive -- sync <RunId> 补推。档案不迁移执行状态或填充另一台机器的 Recent runs。详见[运行档案说明](./docs/application/artifact-dataflow.md#2026-11-09项目运行档案)。
 
-严格意义上的 **AI Gateway** 只指模型网关区域；未来拆出的服务使用 `model-gateway`。页面、会话、工具循环、RAG 和业务流程不属于模型网关，也不得绕过 Agent Runtime 形成新的业务模型入口。
+## 角色资料交接
 
-![AI 应用基础平台当前运行架构](./docs/assets/ai-platform-current-runtime-v1.png)
+绑定仓库的 live 主流程在角色交付时自动提交并推送 `codex/workflow/<根RunId>`，成功回执绑定 commit 与文件散列。推送失败在工作台暂停，可仅重试同步而不重新生成；fixture 不推送真实远端。“项目仓库管理”登记并校验本机项目 checkout，“远端同步设置”再为产品、技术方案、开发与评审、测试、发布五个阶段分别启停同步并选择已登记仓库；默认全部使用 HRM。管理页不接受凭据，保存时服务端核对 Git 根目录与 HTTPS origin；`MASTRA_REMOTE_SYNC_TARGETS` 仍可作为首次启动的初始字典。设置只作用于后续进入的节点，不改写已保存的 Run、审批或交接回执。当前路由粒度是阶段；要按前端/后端等动态开发角色拆仓，需要先让角色任务形成独立交付节点与路由键，不能仅靠页面配置假装已经隔离。Agent 默认接收任务和资料目录，按需分段读取固定版本原文，并由 Mastra 原生观察记忆管理执行中的上下文。历史审批与恢复快照仍兼容保留。详见[远端交接说明](./docs/application/artifact-dataflow.md#2026-11-08远端交接与按需上下文)。
 
-完整的区域职责、数据所有权、服务拆分条件和演进路线见[架构说明](./docs/ai-structure.md)。
+## 原生上下文管理
 
-## 当前业务主链
+`@mastra/memory@1.41.0` 与 `@mastra/core@1.81.0` 配合，由统一工厂装配产品、开发v2、独立测试和部署角色。观察器和反思器使用当前角色同一模型及出口，不自动切换服务商。每次调用/重试使用独立线程；默认在估算的 24000 消息 token 触发同步观察、12000 观察 token 触发反思。这些是内部压缩阈值，不是资料容量或人工审批门槛；provider 溢出时启用原生观察后重试。
 
-探索主线的所有业务模型请求统一经过 Agent Runtime：
+资料仍按固定版本分页读取，单次返回有界、累计不限。压缩属于有损模型操作，会产生额外调用，不能保证任意模型窗口或业务事实零遗漏；原文可以重新读取，审批只认 Workflow 的保存事实。历史资料预算失败可直接从原检查点继续，无需升档。真实长资料任务的质量与成本仍需验证。
 
-```text
-浏览器 Demo / 未来渠道
-  -> Demo Server 渠道 HTTP Adapter
-  -> Agent Runtime
-  -> GatewayClient
-  -> AI SDK Core / Responses 图片编辑 Adapter
-  -> LiteLLM Proxy
-  -> 上游 OpenAI-compatible API
-```
+## 启动
 
-浏览器只提交当前输入、稳定引用和幂等标识，不接触 LiteLLM key 或上游真实 key。GatewayClient、AI SDK 和 Responses Adapter 都是 Runtime 的下游实现，不是并列业务入口。
-
-`scripts/test-chat.sh -> LiteLLM Proxy -> 上游模型` 只用于本地 smoke test、CI 和排障，不属于平台业务主链或普通客户端接入方式。
-
-## 当前能力与边界
-
-执行可靠性使用 R0-R4，结果可信度使用 A0-A4。两个等级相互独立，详细定义见[运行可靠性与结果验收](./docs/runtime-reliability-and-acceptance.md)。
-
-| 场景 | 当前能力 | 等级 | 主要边界 |
-| --- | --- | --- | --- |
-| C1 普通对话 | 持久化 Conversation/Run/Message、幂等重放、统一重试、流式输出、取消和恢复入口 | R2 / A0 | 自然语言事实正确性没有独立验收 |
-| 只读天气工具 | 确定性开放 `get_weather`、持久化 ToolResult、重启后受限总结恢复、天气 AcceptanceResult | 受限 R3 / A3 | 只覆盖已注册、已完成的只读天气 ToolResult 稳定点 |
-| C2 图片生成/编辑 | 文生图、受控单图上传、多轮 A→B→C 编辑、资产来源链、结果格式校验和幂等重放 | R2 / A2 | 仍是开发切片，尚无内容安全、正式对象存储和完整质量/成本基线 |
-
-执行治理已经落地版本化 `ExecutionPolicy`、独立 `Operation journal` 和 SQLite `RunLease`/`fencing`：未知操作默认拒绝，已知副作用默认要求确认，过期 lease 可由更大的 fencing token 接管，旧 owner 的关键提交会被拒绝。这些能力只构成 R4 的协调基础，不等于通用持久工作流或生产级多实例协调；共享生产数据库、跨实例取消、业务回读、补偿和生产级协调演练尚未完成。
-
-同步输出遵守三层边界：
-
-- Agent Runtime 只向进程内 `RunEventSink` 发布易失、有序、不可变的生命周期事件。
-- Demo Server 把事件映射为既有 POST SSE，并在 Runtime 返回后交付完整终态。
-- SQLite `conversation_events` 只保存事务内已提交事实，用于游标同步和恢复。
-
-`RunEventSink` 不是 Broker、Outbox、Trace 或事实源，不能直接挂接无界或远程慢订阅者。
-
-当前明确未完成：
-
-- 正式平台控制面、多租户身份和正式多渠道接入。
-- MCP、企业业务 Connector、私有文档解析、RAG、知识权限和完整 C4 业务数据能力。
-- 生产级多实例部署、跨实例取消、长任务 Worker 和运行中工具 checkpoint。
-- Sandbox、有副作用写操作的确认/回读/补偿，以及 exactly-once 证明。
-- 正式 Runtime Trace 验收、在线评测反馈闭环、完整图片理解资产输入、内容审核和生产资产治理。
-
-## 快速开始
-
-### 1. 环境要求
-
-- Node.js `24.0.0` 或更高版本，用于内置 `node:sqlite` 和项目运行时基线。
-- Docker 与 Docker Compose，用于启动 LiteLLM Proxy。
-
-### 2. 安装与配置
+使用 Node.js 24+，在仓库根目录安装依赖。后端与前端分别保持一个终端运行；同一项目目录只启动一个 Mastra dev 实例。
 
 ```bash
-npm ci
-cp .env.example .env
+cd /Users/Administrator/self-code/ai-platform
+npm ci --ignore-scripts --no-audit --no-fund
+npm --prefix web ci --ignore-scripts --no-audit --no-fund
+
+# 终端一：无密钥固定模式，使用独立数据目录。
+MASTRA_MODE=fixture MASTRA_DATA_DIR=.data/fixture npm run dev
+
+# 终端二：启动产研工作台。
+npm run review:dev
 ```
 
-使用 nvm 时先运行 `nvm install` 和 `nvm use`；仓库的 `.nvmrc` 选择 Node 24 主版本。
+打开工作台，填写需求与迭代标识。页面默认开启需求澄清；fixture 使用固定响应，只能验证控制流，不理解业务输入。阅读和恢复已有 Run 时，后端必须使用创建时的模式与数据目录。前端代理固定连接 `127.0.0.1:4111`。
 
-至少在 `.env` 中替换以下本地示例值：
+## 配置真实模型
 
-```bash
-UPSTREAM_API_BASE=https://你的中转站地址/v1
-UPSTREAM_API_KEY1=你的对话与图片编辑模型真实-key
-UPSTREAM_API_KEY2=你的图片生成模型真实-key
-LITELLM_MASTER_KEY=你的本地模型网关管理-key
+只使用仓库根目录的 `.env`，按下表设置模型配置。进程环境变量优先。
 
-LITELLM_MODEL=gpt-5.6
-LITELLM_IMAGE_MODEL=gpt-image-2
-LITELLM_IMAGE_EDIT_MODEL=gpt-5.6
-LITELLM_CHAT_MODELS=gpt-5.6
-LITELLM_VISION_MODELS=gpt-5.6
-LITELLM_IMAGE_EDITING_MODELS=gpt-5.6
-```
-
-不要提交 `.env`。真实上游地址、模型名和 key 只保留在模型网关与服务端配置中。
-
-默认 [`config.yaml`](./config.yaml) 使用以下平台别名：
-
-| 平台别名 | 上游模型 | 用途 |
-| --- | --- | --- |
-| `gpt-5.6` | `openai/gpt-5.6-sol` | 对话、视觉输入和 Responses 图片编辑 |
-| `gpt-image-2` | `openai/gpt-image-2` | 图片生成 |
-
-如果中转站使用不同模型名，需要同步修改 `config.yaml` 的映射和 `.env` 中的 Runtime 默认别名。承载图片副作用的模型映射保持 `num_retries: 0`，由 Runtime 统一控制尝试预算。
-
-### 3. 启动模型网关
-
-```bash
-docker compose up -d
-```
-
-LiteLLM 默认监听 `http://localhost:4000`。需要排查启动状态时再查看日志：
-
-```bash
-docker compose logs -f litellm
-```
-
-退出日志跟随不会停止容器。
-
-### 4. 启动 Demo
-
-```bash
-npm run demo
-```
-
-浏览器访问 `http://localhost:4010`。会话数据库和图片二进制默认分别保存在 `.data/ai-platform.sqlite` 与 `.data/image-assets/`。
-
-开发渠道页面时，可以在两个终端分别运行：
-
-```bash
-npm run demo:server
-npm run demo:ui
-```
-
-此时通过 `http://localhost:5173` 访问 Vite 开发页面，`/api` 会代理到 `http://localhost:4010`。
-
-## Demo 使用说明
-
-Demo 当前提供以下可直接验证的交互：
-
-- 多会话创建、搜索、重命名、归档、关闭和多标签页事实同步。
-- 普通输入统一提交 `operation=auto`；Runtime 根据当前附件和有界会话 routing snapshot 决定对话、图片生成或图片编辑。
-- 文本、本地受控图片、远程图片 URL、文档链接和会话消息引用；文档链接只作为文本上下文，不代表平台已经实现文档抓取或解析。
-- 最多 5 MiB 的 PNG、JPEG、WebP 源图上传；图片编辑每轮创建新资产，不覆盖历史版本。
-- POST SSE 文本增量、工具阶段和图片产物交付，以及显式停止、失败重试、重新生成和中断后继续。
-- SQLite 完整消息、结构化记忆、Context Manifest 和 token 高低水位压缩。
-- 明确地点的今明日天气查询；Runtime 只在确定性命中时开放 `get_weather`。
-
-普通 Composer 不选择模型别名。Runtime 会按解析后的真实 operation 选择服务端默认模型，并独立校验网关可见性与能力集合。模型目录可见不等于上游账号健康或该模型兼容当前操作。
-
-## Runtime API
-
-Demo Server 当前提供分层的本地 API：
-
-| API | 说明 |
+| 配置 | 默认 / 要求 |
 | --- | --- |
-| `GET /api/gateway/status` | 返回 LiteLLM 可达性、可见别名、默认模型和静态能力集合 |
-| `GET /api/runtime/conversations` | 列出会话 |
-| `POST /api/runtime/conversations` | 创建会话 |
-| `GET /api/runtime/conversations/{id}` | 查询消息、记忆、版本和最新 Run |
-| `PATCH /api/runtime/conversations/{id}` | 更新标题或归档状态 |
-| `POST /api/runtime/conversations/{id}/image-assets` | 上传当前会话拥有的受控源图 |
-| `POST /api/runtime/conversations/{id}/runs` | 创建 JSON Run；普通新请求使用 `operation=auto` |
-| `POST /api/runtime/conversations/{id}/runs/stream` | 创建 POST SSE Run |
-| `POST /api/runtime/conversations/{id}/run-requests/{requestId}/cancel` | 在 Run 创建前取消排队或结构化分类 |
-| `POST /api/runtime/conversations/{id}/runs/{runId}/cancel` | 取消已创建的 Run |
-| `GET /api/runtime/conversations/{id}/image-assets/{assetId}/content` | 读取当前会话有权访问的图片资产 |
-| `GET /api/runtime/conversations/{id}/events` | 按 SQLite 事件游标订阅已提交事实 |
-| `POST /api/runtime/conversations/{id}/close` | 最终 checkpoint 并关闭会话 |
+| `MASTRA_MODE` | `fixture`；显式设置 `live` 才调用远程模型 |
+| `OPENAI_API_KEY` | live 必填 |
+| `MASTRA_MODEL` | 真实模式必填；未匹配角色的默认模型，参见 `.env.example` |
+| `MASTRA_BASE_URL` | 可选 OpenAI-compatible API 基址 |
+| `MASTRA_PORT` | `4111`；修改后需同步前端代理 |
+| `MASTRA_DATA_DIR` | `.data`，相对仓库根目录，也可为绝对路径 |
+| `MASTRA_HRM_REPOSITORY` | 可选 HRM checkout 绝对路径；默认同级 `hrm`，origin 必须匹配 `leidaibo-lab/hrm` |
+| `MASTRA_REMOTE_SYNC_TARGETS` | 可选 JSON 数组，登记额外目标：`id`、`label`、`root`、`origin`；服务重启后在“远端同步设置”选择 |
 
-普通新 Run 的最小请求示例：
-
-```json
-{
-  "operation": "auto",
-  "requestId": "request-uuid",
-  "clientMessageId": "message-uuid",
-  "message": "查询上海明天的天气",
-  "imageUrls": [],
-  "documentUrls": [],
-  "references": []
-}
-```
-
-渠道不应在普通请求中传入模型别名。`retry`、`regenerate`、`continue` 等恢复动作需要使用新的幂等标识，并通过 `sourceRunId` 与 `recoveryMode` 引用来源 Run；完整契约以 [OpenSpec](./openspec/specs/ai-platform/spec.md) 为准。
-
-## 模型连通性诊断
-
-下面的脚本只验证 LiteLLM、模型映射和上游连通性，不验证 Agent Runtime、会话、工具或结果验收：
+配置真实模型后，先运行 `npm run smoke:live` 检查终答与实际工具调用，再启动后端：
 
 ```bash
-set -a
-source .env
-set +a
-BASE_URL="$LITELLM_BASE_URL" bash scripts/test-chat.sh
+MASTRA_MODE=live MASTRA_DATA_DIR=.data/live npm run dev
 ```
 
-业务客户端不得把该脚本或 LiteLLM `/v1/chat/completions` 当作平台业务入口。
+真实模式会产生模型调用费用。前端不持有模型密钥。服务仅供本机使用；审阅人和操作者是本地声明标签，尚未接入账号认证或多人权限隔离。
 
-## 验证
+## 当前执行边界
 
-运行完整确定性回归：
+HRM 项目由服务端自动关联当前仓库、分支和版本。用户确认项目后，开发 Agent 根据需求决定具体改动路径和团队，方案批准后才实施。HRM 候选通过 Docker/Compose 执行完整的 `pnpm check`、`pnpm build` 和 `pnpm smoke`，数据库为独立临时实例；检查脚本、依赖清单和锁文件受保护。旧 Node fixture 执行器保留兼容。
+
+只有产品资料、尚未建立工程骨架的仓库也可先交接生成方案。工作台逐项列出工程文件、固定脚本及 Docker 的准备缺口；这些缺口随本次输入保存，存在时仅允许只读规划，不能批准实施或执行检查。工程准备完成后，使用“重新检查项目，继续交接”返回同一 Run 的项目确认关口；保留产品批准，重新确认当前仓库版本后再规划。不会自动创建工程骨架。
+
+可在本目录运行 `npm run verify:hrm -- /Users/lei/code/hrm` 重新验证当前基线，要求 Docker Desktop 可用。结果保存到忽略的 `.data/hrm-verification-result.json`。2026-11-08 三项真实基线检查通过；这不代表招聘业务已实现或全部业务验收通过。候选代码尚未自动回写 HRM，Git 回库和 CI 制品绑定仍未接通。独立测试会重跑登记套件，人工用例需要实际结果和证据。
+
+部署由外部平台实际执行，工作台收集发布、健康检查与回滚回执，尚未接入自动 CI/CD。最终交付依赖同版本质量与发布证据；人工回执不等于机器独立验证。真实业务全链路、生产多实例和完整故障恢复尚未验收。
+
+HRM 的 `product/sources/` 为产品资料来源；阶段投影分别归档到 `product/`、`testSet/`、`deploy/`。归档文件只供查看，审批和恢复以 Mastra Store 为准。
+
+## 维护与评测
 
 ```bash
+npm run check
+npm run review:build
 npm test
+npm run smoke
+npm run build
 ```
 
-常用聚焦入口：
+这些是可执行的检查命令，不表示本次文档整理重新运行了它们。测试数量和具体通过结果以对应验证记录为准，固定模型控制流、真实模型质量与实际工程交付分别记录。
 
-| 命令 | 验证范围 |
-| --- | --- |
-| `npm run demo:check` | Demo 构建与 gzip 预算 |
-| `npm run test:architecture` | 全局架构和业务主链边界 |
-| `npm run test:runtime` | Session/Run、上下文、路由、恢复和事件 |
-| `npm run test:gateway` | GatewayClient 与 AI SDK/Responses 协议 |
-| `npm run test:tools` | 天气工具与 Connector |
-| `npm run test:images` | 图片生成、编辑、资产与错误边界 |
-| `npm run test:acceptance` | AcceptanceResult 策略 |
-| `npm run test:governance` | ExecutionPolicy、Operation journal、RunLease/fencing |
-| `npm run test:scenarios` | 两个真实 Node 进程的故障与重启场景 |
-| `npm run eval:runtime-scenarios:deterministic` | 只读工具恢复的确定性场景评测 |
-| `npm run eval:runtime-routing:deterministic` | 智能 operation 路由的确定性场景评测 |
+- [需求工作台验证证据](./docs/application/guided-intake.md)
+- [开发角色评测](./evaluations/native/development-nodes/README.md)、[独立评审与返工](./evaluations/native/review-rework/README.md)
+- [招聘管理验证项目](./projects/pm-hrm-recruitment/README.md)
+- [资源配置归属](./config/README.md)与[资源输入契约](./config/runtime-resource-contract.md)：配置规范仍是定义稿，未作为统一运行时配置加载。
+- [产品角色与 Skill](./src/mastra/agents/product-roles.ts)、[PM 技能套件](./.agents/skills/README.md)、[第三方声明](./web/THIRD_PARTY_NOTICES.md)
 
-真实模型评测必须显式固定平台模型别名，并会调用上游模型：
+Mastra 提供 Agent、工具循环、Workflow 与存储；主线维护业务 schema、版本绑定、人工关口、权限边界和 I/O 适配。不将文件投影另建为审批库，不以评测计数替代业务质量验收。
 
-```bash
-npm run eval:runtime-scenarios:real -- --model <fixed-model-alias>
-npm run eval:runtime-routing:real -- --model <fixed-model-alias>
+## 研发执行说明
+
+[独立开发设计](./docs/application/development-workflow-design.md)补充研发团队的受限执行说明；当前操作统一以上文工作台与完整产研流程为准。
+
+### 按角色配置模型
+
+模型选择集中在根 `.env`，示例见 [.env.example](./.env.example)：
+
+```dotenv
+MASTRA_MODEL=openai/gpt-5.6-sol
+MASTRA_PRODUCT_MODEL=openai/gpt-6-luna
+MASTRA_DEVELOPMENT_MODEL=openai/gpt-5.6-luna
 ```
 
-真实有效样本少于 30 时只标记为 `observation-only`，不能作为发布准确率或质量基线。
+复用 Mastra 原生 Agent 的 model 配置。产品经理和产品审查 Agent 使用产品覆盖；研发团队及其评审/委派角色使用开发覆盖；其他角色和评测裁判使用默认模型。角色变量缺省或为空时回退 `MASTRA_MODEL`。真实模式要求显式设置默认模型；fixture 缺少默认配置时仅使用模拟模型占位标识。代码不内置上述业务模型名称，端点和凭据沿用原配置。
 
-修改稳定契约后还应运行：
+重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。模型可用性与真实质量仍需上游验证。
 
-```bash
-openspec validate --specs --strict
-```
-
-## 配置与安全边界
-
-完整示例和默认值见 [`.env.example`](./.env.example)，核心配置分组如下：
-
-| 配置 | 作用与边界 |
-| --- | --- |
-| `UPSTREAM_API_BASE`、`UPSTREAM_API_KEY1/2` | 只供 LiteLLM 访问上游，不进入浏览器或 Run 请求 |
-| `LITELLM_MASTER_KEY` | LiteLLM 管理和本地诊断凭据，不提供给普通客户端 |
-| `LITELLM_RUNTIME_KEY` | 可选的受限 Runtime virtual key；未配置时仅为本地兼容回退 master key |
-| `LITELLM_BASE_URL` | Runtime 使用的 LiteLLM 根地址，默认 `http://localhost:4000`，不要追加 `/v1` |
-| `LITELLM_MODEL`、`LITELLM_IMAGE_MODEL`、`LITELLM_IMAGE_EDIT_MODEL` | 三类 operation 的服务端默认平台别名 |
-| `LITELLM_*_MODELS` | 服务端静态能力 allowlist；不能仅凭 `/v1/models` 推断操作兼容性 |
-| `DEMO_DATABASE_PATH`、`DEMO_IMAGE_ASSET_DIR` | SQLite 事实源与本地图片二进制目录 |
-| `DEMO_CONTEXT_*` | Context Planner 预算和 75%/45%/90% 高低硬水位 |
-| `DEMO_RUN_TIMEOUT_MS`、`DEMO_MODEL_MAX_ATTEMPTS` | 单个 Run 的共享截止时间和模型总尝试次数 |
-| `DEMO_TOOL_MAX_STEPS`、`DEMO_WEATHER_*` | 有界工具循环与固定 Open-Meteo Connector 配置 |
-| `OTEL_*` | 默认关闭的 C1 ChainTrace 旁路；启用不改变 Run 事实语义 |
-
-所有密钥只放在服务端 `.env`。日志、Trace、SQLite 公开投影和浏览器响应都不得包含上游 key、图片二进制、物理存储路径或 provider 原始错误正文。
-
-## 文档导航
-
-| 文档 | 内容 |
-| --- | --- |
-| [项目文档索引](./docs/README.md) | 全部架构、场景、决策和学习资料入口 |
-| [架构说明](./docs/ai-structure.md) | 六个区域、依赖规则、数据所有权、服务拆分和路线图 |
-| [场景交互链路](./docs/scenario-interaction-chains.md) | C1-C7 场景边界、共同底座、质量维度和建设顺序 |
-| [运行可靠性与结果验收](./docs/runtime-reliability-and-acceptance.md) | R0-R4、A0-A4、当前场景等级和扩展模板 |
-| [AI SDK Core 对齐](./docs/ai-sdk-core-alignment.md) | 当前采用、适配、延后和不采用的 SDK 能力 |
-| [方案选型与复用治理](./docs/solution-selection-governance.md) | 采用/适配/自研门禁、完成定义和存量审计 |
-| [方案决策索引](./docs/decisions/README.md) | 候选比较、选择依据、失败证据、退出路径和重评条件 |
-| [ChainTrace 运维说明](./docs/c1-chaintrace-operations.md) | 默认关闭的 Phoenix 后端启用、认证、验证和运维边界 |
-| [稳定 OpenSpec](./openspec/specs/ai-platform/spec.md) | Session/Run API、鉴权、模型别名、上下文与安全契约 |
-
-README 只说明已可用能力、启动方式和验证入口；候选方案、历史 PoC 过程和详细重评条件以 `docs/decisions/` 与专题文档为准。
+浏览器 QA 已接入主 Workflow：在测试用例批准关口显式选择 browser，执行真实 Chromium 并在质量关口查看截图与版本绑定回执。安装、示例与边界见[浏览器 QA](./docs/application/browser-qa.md)；首版限候选静态 HTML，HRM 全栈需后续启动 Adapter。

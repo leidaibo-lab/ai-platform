@@ -3,7 +3,7 @@
 - 状态：接受（2026-11-09 用户确认沿用 Mastra/BMAD 并优先浏览器 QA；工程与真实模型质量分别验收）
 - 日期：2026-11-09
 - 负责人：Mastra 实践维护者
-- 所属区域：practices/mastra 独立实践及根通用 Skill
+- 所属区域：Mastra 主线及根通用 Skill（迁移前路径：`practices/mastra`）
 - 关联需求：增强 Workflow 内运行的 Agent，注册方法、工具、输入输出契约与执行节点。
 - 关联 OpenSpec：探索主线契约不变；本实践新增测试方法及可选证据字段，先在 browser-qa.md 固化本地版本契约。旧用例与旧记录不增加缺省证据。
 - 替代记录：无；细化现有完整产研生命周期与 BMAD 方法适配。
@@ -70,7 +70,7 @@
 - 原生 QA Agent 的 skill、skill_read、runBrowserCase 实际执行；Workflow browser-success/browser-failure 均逐暂停点关闭并重装 Store，分别完成成功主链和失败阻塞。
 - 后端类型检查、前端类型检查与 Vite 构建通过；前端保留 chunk 体积提示。Skill 治理输出 SKILL_STRUCTURE_OK，OpenSpec strict 为1项通过。
 - 原目录存在正在运行的 mastra dev，CLI 保护性拒绝 build；未停止或覆盖服务。在仅复制源码、配置、方法与依赖入口的临时副本中执行 Mastra build 成功（未复制 .env）。
-- 关键入口：[QA Agent](../../practices/mastra/src/browser-qa/agent.ts)、[Playwright Adapter](../../practices/mastra/src/browser-qa/runner.ts)、[用例/回执](../../practices/mastra/src/browser-qa/contracts.ts)、[质量门](../../practices/mastra/src/delivery/testing.ts)、[使用与本地契约](../../practices/mastra/browser-qa.md)。
+- 关键入口：[QA Agent](../../src/browser-qa/agent.ts)、[Playwright Adapter](../../src/browser-qa/runner.ts)、[用例/回执](../../src/browser-qa/contracts.ts)、[质量门](../../src/delivery/testing.ts)、[使用与本地契约](../application/browser-qa.md)。
 
 自研仅限批准输入与工具回执的数据绑定、静态快照服务和现有质量门接线；采用原生 Agent 工厂与 Playwright Adapter 模式，方法不拥有权限、模型不拥有执行结果，遵守单一职责与最小范围组合。新增函数与回调均有紧邻职责注释，外部 I/O 与输入 schema、证据校验分层。
 

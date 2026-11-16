@@ -2,6 +2,8 @@
 
 本目录保存平台能力的方案发现、验证和选择证据。记录用于回答“为什么这样选”和“为什么没有使用其他方案”，不能只描述最终实现。
 
+[以完整远端基线推进 Mastra v2.0 主线](./2026-11-16-mastra-v2-mainline.md)：接受；以 `fa9715f` 的完整 Mastra 代码提升根目录，原自研 Runtime 下沉为 `practices/custom-exploration/`。
+
 [批准范围内自主开发与修复闭环](./2026-11-09-mastra-autonomous-development.md)：接受；适配原生 Workflow 与执行 Adapter，保留失败证据、开放受控检查、跨角色修复及按进展停止；真实模型业务交付待验。
 
 [角色产物远端交接与按需上下文](./2026-11-08-mastra-remote-handoff.md)：接受；远端回执作为角色交付门禁，按调用分段读取材料。
@@ -64,6 +66,7 @@
 
 | 日期 | 记录 | 状态 | 结论摘要 |
 | --- | --- | --- | --- |
+| 2026-11-16 | [以完整远端基线推进 Mastra v2.0 主线](./2026-11-16-mastra-v2-mainline.md) | 接受 | 根目录成为完整 Mastra 应用；自研 Runtime 迁为独立 custom-exploration 实践 |
 | 2026-11-07 | [HRM 产物关联与目录](./2026-11-07-hrm-asset-catalog.md) | 接受 | 关联项目/迭代/根 Run，节点自动导出，清单按需重建，预览下载；业务 Run 验收待执行 |
 | 2026-11-06 | [在 Mastra 产研流程中适配 BMAD 方法资产](./2026-11-06-mastra-bmad-method-integration.md) | 接受 | 已接入 v2 产品交接、上下文/任务/就绪、人工批准、实现/检查/评审及交付门；原生离线回归通过，真实质量净收益待验 |
 | 2026-11-06 | [为招聘实践采用 Mastra 原生 Workspace](./2026-11-06-mastra-project-workspaces.md) | 接受 | 业务材料只读、运行产物可重建、量表与 Agent 隔离，显式资料评测固定快照 |

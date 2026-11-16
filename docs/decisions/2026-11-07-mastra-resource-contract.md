@@ -5,7 +5,7 @@
 - 负责人：Mastra实践维护者
 - 所属区域：独立应用实践；对应Agent Runtime及治理边界，不改变探索主线架构。
 - 关联需求：Agent资源单一归属、配置加载与交叉校验、Run级冻结、逐角色最小输入。
-- 关联OpenSpec：探索主线稳定契约不变；本实践拟新增版本化配置和状态见[接入规范](../../practices/mastra/config/runtime-resource-contract.md)。正式实现前以其契约为依据，不把旧v2快照升级为已冻结。
+- 关联OpenSpec：主线资源边界见 `openspec/specs/mastra-role-resources/`；版本化配置和状态定义见[接入规范](../../config/runtime-resource-contract.md)。正式实现前以其契约为依据，不把旧v2快照升级为已冻结。
 - 替代记录：无；细化[动态团队决策](./2026-11-07-mastra-unified-development-team.md)与[完整生命周期决策](./2026-11-07-mastra-full-delivery-lifecycle.md)，不替代原生Workflow/Store所有权。
 
 ## 问题
@@ -24,7 +24,7 @@
 
 | 候选 | 路线 | 收益 | 代价与取舍 | 本地一手证据 |
 | --- | --- | --- | --- | --- |
-| 直接依靠Mastra原生Agent/Workflow装配和快照 | 原生一体化 | 不引入额外运行事实源，已有暂停恢复 | 当前工厂仍从闭包/文件读取配置；本地业务资源引用域、来源冻结和逐角色最小输入仍需显式适配，不能假定原生自动保证 | `practices/mastra/src/mastra/app.ts`、`src/mastra/workflows/product-development.ts`与已锁定依赖 |
+| 直接依靠Mastra原生Agent/Workflow装配和快照 | 原生一体化 | 不引入额外运行事实源，已有暂停恢复 | 当前工厂仍从闭包/文件读取配置；本地业务资源引用域、来源冻结和逐角色最小输入仍需显式适配，不能假定原生自动保证 | `src/mastra/app.ts`、`src/mastra/workflows/product-development.ts`与已锁定依赖 |
 | 原生Workflow + Zod资源声明/投影/冻结薄适配 | 轻量可组合 | 保留原生运行模型；显式约束本地交接，复用已有schema、来源锁、ExecutionPort | 维护配置注册表、hash与版本兼容，必须防止配置和工厂双默认值 | `src/development/v2/contracts.ts`、`methods.ts`、`execution-scope.ts`及139项本地回归记录 |
 | 自建配置驱动调度/审批/资源中心 | 最小自研路线评估 | 可自由定义跨角色协议 | 本场景会重复Workflow、Store、审批与工具注册，显著扩大维护与事实一致性问题；淘汰 | 当前原生主链已存在，见团队/生命周期决策 |
 
@@ -36,7 +36,7 @@
 
 ## 决策
 
-结论：**适配**。采用原生Mastra负责执行、暂停、快照及恢复，Zod负责唯一结构定义；本地薄适配负责资源注册解析、交叉校验、冻结hash和角色输入投影。具体字段、加载顺序、13种角色契约和RC01–RC14验收以[接入规范](../../practices/mastra/config/runtime-resource-contract.md)为唯一设计明细，本ADR不再复制参数。
+结论：**适配**。采用原生Mastra负责执行、暂停、快照及恢复，Zod负责唯一结构定义；本地薄适配负责资源注册解析、交叉校验、冻结hash和角色输入投影。具体字段、加载顺序、13种角色契约和RC01–RC14验收以[接入规范](../../config/runtime-resource-contract.md)为唯一设计明细，本ADR不再复制参数。
 
 配置拥有每个运行参数唯一默认值；代码拥有schema、固定状态机、工具实现、权限交集及不可配置安全上限。角色卡与方法正文使用版本化文件；配置只引用登记ID。审计清单、schema展示和prompt引用分组均从同一生效bundle或契约注册表生成。
 

@@ -29,5 +29,5 @@
 
 ## 验证
 
-- `practices/mastra/tests/guided-intake.test.ts` 覆盖 Workflow 与 HTTP 入口选择 `autofill` 后直接停在 `review-product`。
+- `tests/guided-intake.test.ts` 覆盖 Workflow 与 HTTP 入口选择 `autofill` 后直接停在 `review-product`。
 - `npm run check`、定向测试、前端构建和 OpenSpec 严格校验作为交付验证。

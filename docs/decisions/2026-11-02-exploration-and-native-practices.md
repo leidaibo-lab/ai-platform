@@ -58,7 +58,7 @@
 
 ## 实施边界与计划
 
-- 新增 `practices/README.md`、`practices/AGENTS.md`、`practices/mastra/README.md`、`practices/pi/README.md`。
+- 新增 `practices/README.md`、`practices/AGENTS.md`、`practices/mastra/README.md`、`practices/pi/README.md`；其中 Mastra 已在 v2.0 迁移至仓库根目录。
 - 同步根 README、AGENTS、文档索引、架构说明、选型治理、OpenSpec 项目说明和决策索引的作用域与入口。
 - 在 `experiments/pi-agent/README.md` 标明适配探索归属并链接原生实践，不改其代码、结果或历史决策状态。
 - 无新运行数据结构、API、依赖、环境变量或迁移；新文档标明尚未运行，根目录 package/lockfile 不因本次变更调整。
@@ -97,6 +97,6 @@
 
 ### 后续学习实施
 
-2026-11-02，用户进一步明确“从 Mastra 原生最小应用开始，再推进产研协作场景”。在原有组织决策之后，新增[Mastra 独立原生应用](../../practices/mastra/README.md)，包含 Agent/工具、Studio/API、原生 Workflow 四阶段提案确认和 LibSQL 暂停快照恢复；实测版本、回归与边界在该实践维护。前文“只建立组织、未安装运行”描述原组织变更的验收范围，保留其历史事实。
+2026-11-02，用户进一步明确“从 Mastra 原生最小应用开始，再推进产研协作场景”。在原有组织决策之后，新增 Mastra 原生应用，包含 Agent/工具、Studio/API、原生 Workflow 四阶段提案确认和 LibSQL 暂停快照恢复；该应用现已迁移为[根目录 Mastra 主线](../../README.md)。前文“只建立组织、未安装运行”描述原组织变更的验收范围，保留其历史事实。
 
 本次仍是原生学习应用，不改变探索稳定契约，不形成 Mastra 平台采用、跨框架共享运行时、真实代码执行或生产部署的接受结论。
