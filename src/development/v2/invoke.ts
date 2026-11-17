@@ -46,7 +46,7 @@ export async function invokeV2(config: PracticeConfig, execution: ExecutionPort,
       const kind = budget ? 'context-budget' as const : error instanceof SyntaxError || (error instanceof Error && (error as Error & { code?: string }).code === 'INVALID_OUTPUT') ? 'invalid-output' as const : classifyDevelopmentError(error);
       const diagnostic = kind === 'invalid-output' ? diagnoseOutput(error) : undefined;
       const taskId = extra && typeof extra === 'object' && 'id' in extra && typeof extra.id === 'string' ? extra.id : null;
-      state = { ...state, faults: [...state.faults, { sequence: state.faults.length + 1, phase: state.phase, role, taskId, kind, ...(budget ? { budget } : {}), attempt, modelCall, ...(diagnostic ? { diagnostic } : {}), checkpointHash: state.checkpointHash, partialSourceHash, restored: true }] };
+      state = { ...state, faults: [...state.faults, { sequence: state.faults.length + 1, phase: state.phase, role, taskId, kind, ...(budget ? { budget } : {}), attempt, ...(diagnostic ? { diagnostic } : {}), modelCall, checkpointHash: state.checkpointHash, partialSourceHash, restored: true }] };
       if (attempt < automaticAttempts && (['model-timeout', 'model-network'].includes(kind) || (!!state.input.autonomy && kind === 'invalid-output'))) {
         if (config.mode === 'live') await delay(retryDelayMs(attempt));
         continue;

@@ -117,6 +117,21 @@ export function recoveryHashV2(state: StateV2): string {
   return developmentHash({ ...state, recovery: null });
 }
 
+/** 校验完整状态；兼容旧版在诊断字段前写入模型证据的故障摘要。 */
+export function matchesRecoveryHashV2(state: StateV2, expected: string): boolean {
+  if (recoveryHashV2(state) === expected) return true;
+  const faults = [...state.faults];
+  // 旧代码在一次调用中追加故障；只还原末尾连续故障的字段次序，所有值仍参与摘要。
+  for (let i = faults.length - 1; i >= 0; i--) {
+    const fault = faults[i]!;
+    if (!fault.diagnostic || !fault.modelCall) break;
+    const { diagnostic, modelCall, checkpointHash, partialSourceHash, restored, ...prefix } = fault;
+    faults[i] = { ...prefix, modelCall, diagnostic, checkpointHash, partialSourceHash, restored };
+    if (recoveryHashV2({ ...state, faults }) === expected) return true;
+  }
+  return false;
+}
+
 /** 固定检查清单由输入派生，模型不能添加命令或降低验证范围。 */
 export function registeredChecks(input: InputV2): string[] {
   if (input.project.executionProfile === 'hrm-pnpm-docker-v1') return ['project:check', 'project:build', 'project:smoke'];

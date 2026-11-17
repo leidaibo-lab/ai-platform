@@ -10,9 +10,10 @@ import { LibSQLStore } from '@mastra/libsql';
 import { seedDevelopment } from '../src/development-service.js';
 import { DevelopmentExecution } from '../src/development-execution.js';
 import { developmentHash } from '../src/development/contracts.js';
-import { recoveryHashV2, inputV2Schema, stateV2Schema } from '../src/development/v2/contracts.js';
+import { matchesRecoveryHashV2, recoveryHashV2, inputV2Schema, stateV2Schema } from '../src/development/v2/contracts.js';
 import { generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
 import { loadDevelopmentMethods } from '../src/development/v2/methods.js';
+import { applyRecoveryDecision } from '../src/development/v2/recovery-policy.js';
 import { createDevelopmentWorkflowV2 } from '../src/mastra/workflows/development-v2.js';
 import { recoverDevelopmentV2 } from '../src/development-v2-service.js';
 import { describeGate, validateGate, describeDevelopmentProgress } from '../src/intake/gates.js';
@@ -34,6 +35,41 @@ function fixture(generate: GeneratorV2) {
   }
   return { open, directory, parent };
 }
+
+test('结构化输出故障持久化后可恢复，历史字段顺序兼容且篡改仍被拒绝', /** 真实暂停、Store 重开和原阶段重试同时覆盖诊断字段与模型调用证据。 */async () => {
+  let fail = true; const calls: string[] = [];
+  /** 仅第一次就绪审查返回无效结构，其余保留真实 fixture 工具路径。 */
+  const generate: GeneratorV2 = async (...args) => { calls.push(args[2]); if (args[2] === 'readiness' && fail) throw new SyntaxError('synthetic invalid output'); return generateV2(...args); };
+  const setup = fixture(generate); let app = setup.open();
+  try {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    let snapshot = await app.workflow.getWorkflowRunById(run.runId);
+    const paused = snapshot!.steps!['development-iteration-v2.assess-readiness'] as any;
+    assert.equal(paused.status, 'suspended');
+    const state = stateV2Schema.parse(paused.suspendPayload.recoveryState);
+    assert.equal(state.recovery?.kind, 'invalid-output');
+    assert.ok(state.faults.at(-1)?.diagnostic && state.faults.at(-1)?.modelCall);
+    assert.equal(matchesRecoveryHashV2(state, state.recovery!.hash), true);
+    const last = state.faults.at(-1)!;
+    const { diagnostic, modelCall, checkpointHash, partialSourceHash, restored, ...prefix } = last;
+    const legacyState = { ...state, faults: [...state.faults.slice(0, -1), { ...prefix, modelCall, diagnostic, checkpointHash, partialSourceHash, restored }] };
+    const legacyHash = recoveryHashV2(legacyState);
+    assert.notEqual(legacyHash, state.recovery!.hash);
+    assert.equal(matchesRecoveryHashV2(state, legacyHash), true);
+    assert.equal(matchesRecoveryHashV2({ ...state, calls: state.calls + 1 }, legacyHash), false);
+    const legacyPaused = { ...state, recovery: { ...state.recovery!, hash: legacyHash } };
+    assert.equal(applyRecoveryDecision(legacyPaused, { hash: legacyHash, decision: 'retry', reviewer: 'test', comment: '验证历史检查点' }).recovery, null);
+    assert.throws(/** 历史兼容不能放行实际状态篡改。 */() => applyRecoveryDecision({ ...legacyPaused, calls: legacyPaused.calls + 1 }, { hash: legacyHash, decision: 'retry', reviewer: 'test', comment: '篡改检查' }), /漂移/);
+    await app.execution.close(); await app.storage.close(); app = setup.open(); fail = false;
+    await recoverDevelopmentV2(app, run.runId, { hash: state.recovery!.hash, decision: 'retry', reviewer: 'test', comment: '验证已保存检查点' });
+    snapshot = await app.workflow.getWorkflowRunById(run.runId);
+    assert.equal(snapshot!.status, 'suspended');
+    assert.equal((snapshot!.steps!['development-iteration-v2.approve-architecture'] as any).status, 'suspended');
+    assert.equal(calls.filter(/** 仅失败的就绪阶段重试。 */role => role === 'context').length, 1);
+    assert.equal(calls.filter(/** 架构不重放。 */role => role === 'architect').length, 1);
+    assert.equal(calls.filter(/** 就绪阶段实际执行两次。 */role => role === 'readiness').length, 2);
+  } finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
+});
 
 for (const legacy of [false, true]) test(legacy ? '历史恢复节点在新条件图中仍能恢复到方案批准' : '架构故障就地暂停、下游未执行，重开后只重试该阶段', /** 用原生持久化验证状态，不把UI字符串当作执行证据。 */async () => {
   let failing = true; const calls: string[] = [];

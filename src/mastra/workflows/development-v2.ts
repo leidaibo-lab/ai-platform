@@ -7,7 +7,7 @@ import type { PracticeConfig } from '../config.js';
 import type { Step } from '@mastra/core/workflows';
 import { developmentExecutionIdentity, developmentHash, recoveryReviewSchema, validateEvaluationSource } from '../../development/contracts.js';
 import { parseDevelopmentJson } from '../../development/agents.js';
-import { approvalHashV2, approvalV2Schema, assessmentSchema, contextDraftSchema, inputV2Schema, planV2Schema, recoveryHashV2, stateV2Schema, validatePlanV2, registeredChecks, findingsHashV2, findingsReviewSchema, type StateV2 } from '../../development/v2/contracts.js';
+import { approvalHashV2, approvalV2Schema, assessmentSchema, contextDraftSchema, inputV2Schema, planV2Schema, matchesRecoveryHashV2, stateV2Schema, validatePlanV2, registeredChecks, findingsHashV2, findingsReviewSchema, type StateV2 } from '../../development/v2/contracts.js';
 import { applyFindingsReview, assertApprovalV2, checksPassedV2, reportV2, unresolvedV2, validateAssessment, validateIdentityV2, validateReviewResolutions } from '../../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../../development/v2/methods.js';
 import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
@@ -296,7 +296,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     execute: async ({ inputData, resumeData, suspend }) => {
       if (inputData.outcome !== 'in-progress' || !inputData.recovery) return inputData;
       await guard(inputData);
-      if (inputData.recovery.hash !== recoveryHashV2(inputData)) throw new Error('v2恢复绑定漂移');
+      if (!matchesRecoveryHashV2(inputData, inputData.recovery.hash)) throw new Error('v2恢复绑定漂移');
       if (!resumeData) return suspend(inputData.recovery);
       if (resumeData.hash !== inputData.recovery.hash) throw new Error('v2恢复版本不匹配');
       return applyRecoveryDecision(inputData, resumeData);
@@ -317,7 +317,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         state = stateV2Schema.parse(context.suspendData.recoveryState);
         await guard(state);
         const decision = recoveryReviewSchema.parse(context.resumeData);
-        if (!state.recovery || decision.hash !== state.recovery.hash || decision.hash !== recoveryHashV2(state)) throw new Error('恢复版本发生漂移');
+        if (!state.recovery || decision.hash !== state.recovery.hash || !matchesRecoveryHashV2(state, decision.hash)) throw new Error('恢复版本发生漂移');
         state = applyRecoveryDecision(state, decision);
         if (state.outcome !== 'in-progress') return state;
       }

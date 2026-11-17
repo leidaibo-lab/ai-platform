@@ -8,6 +8,16 @@
 
 ## Requirements
 
+### Requirement: Development fault recovery retains state identity
+
+研发阶段发生模型输出或网络故障后，系统 SHALL 对持久化后的完整恢复状态校验原检查点和恢复摘要；同一状态经结构化序列化或字段顺序规范化后 SHALL 可安全接续，实际内容、检查点或恢复决定发生变化时 SHALL 拒绝。
+
+#### Scenario: Invalid structured output is persisted and retried
+
+- **WHEN** 研发故障记录同时包含模型调用证据与结构化输出诊断，暂停后经 Store 恢复
+- **THEN** 系统 SHALL 验证完整保存状态并允许使用原摘要重试原阶段
+- **AND** SHALL NOT 重放已完成阶段或接受被修改的状态
+
 ### Requirement: Dual requirement intake modes
 
 产品需求入口 SHALL 支持逐项澄清和 AI 主动补全两种入口策略，并且两种策略都 SHALL 在
