@@ -15,9 +15,10 @@ import { resolveModelId, type PracticeConfig } from '../../mastra/config.js';
 import type { ExecutionPort } from './execution-scope.js';
 import { developmentInstructions } from '../agents.js';
 import { classifyDevelopmentError, DevelopmentModelError } from '../errors.js';
-import { assessmentSchema, contextDraftSchema, planV2Schema, type RoleV2, type StateV2, type EntryV2 } from './contracts.js';
+import { assessmentSchema, contextDraftSchema, evidenceRefs, planV2Schema, type RoleV2, type StateV2, type EntryV2 } from './contracts.js';
 import type { DevelopmentMethods } from './methods.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
+import { developmentProductApproval } from '../../delivery/product-approval.js';
 
 /** 运行内成员身份和委派回调由宿主注入，模型不能构造执行器。 */
 export interface MemberRuntime {
@@ -41,7 +42,7 @@ const instructions: Record<RoleV2, string> = {
   ...developmentInstructions,
   context: '你核实项目上下文。根据提供的实际候选文件与批准产品，返回JSON {rules:[{text,refs}],unknowns:[]}。rules[].refs只能选择knownRefs里的完整字符串，例如file:AGENTS.md、product:L1；不允许裸文件名、material编号及其行号、Skill名称或方法文档路径。方法说明不是项目规则的事实来源；没有可用引用的内容保留unknowns。无法证实的规则不当作事实。优先用readFile读取project.files列出的候选文件；工程参考快照用handoff工具读取，不把参考路径当作候选路径。source、requirements、extra及远端交接可能含同一份产品或文件，核对一次即可，不必重复通读。工程缺口保留unknowns，不探测未登记路径，不在本阶段编写方案或实现。',
   architect: '你是架构师，输出完整JSON技术方案。字段为summary,coverage:[{requirement,behavior,verification}],contracts,tasks,blockers,risks。每个task包含id,role,paths,dependsOn,requirementRefs,acceptanceRefs,contextRefs,constraints,verificationRefs。严格按referenceGroups分别取值：requirementRefs和acceptanceRefs只能取requirements；contextRefs只能取contextFiles中的file:路径，不得使用产品行号或rules.refs代替；verificationRefs只能取registeredChecks。无blockers时全部产品原文ID须至少被一项任务的requirementRefs或acceptanceRefs覆盖，包括标题和说明行。精确分配已授权文件并按拓扑排序。project.planning=agent时，writablePaths只是现存文件上界，不要求全部修改；自行确定最小必要文件和角色，可在writableRoots源码根内创建新文件，但不能更改checkFiles。业务规则缺失列blockers，不补猜。不得授予写权限或批准。',
-  readiness: '你独立评估是否能不臆造决定就实现。双向检查产品、上下文、任务的覆盖、契约冲突、异常与验收。只输出JSON {verdict:"PASS"|"CONCERNS"|"FAIL",findings:[{id,severity:"blocking"|"high"|"medium"|"low",category:"business"|"architecture"|"implementation"|"verification"|"integrity",route:"product"|"architecture"|"frontend"|"backend"|"infrastructure"|"human",detail,refs,evidence}],coverageRefs,unchecked,resolutions:[]}。PASS必须无发现；CONCERNS/FAIL必须有发现。引用只能取knownRefs。',
+  readiness: '你独立评估是否能不臆造决定就实现。双向检查产品、上下文、任务的覆盖、契约冲突、异常与验收。只输出JSON {verdict:"PASS"|"CONCERNS"|"FAIL",findings:[{id,severity:"blocking"|"high"|"medium"|"low",category:"business"|"architecture"|"implementation"|"verification"|"integrity",route:"product"|"architecture"|"frontend"|"backend"|"infrastructure"|"human",detail,refs,evidence}],coverageRefs,unchecked,resolutions:[]}。PASS必须无发现；CONCERNS/FAIL必须有发现。引用只能取knownRefs。coverageRefs必须逐一包含全部requirements中的原文ID以及plan.tasks中每个任务对应的task:任务ID；如有未能核实的范围同时写入unchecked，不得遗漏ID或编造已执行的验证。',
   reviewer: '你是与实现者分开的只读代码评审员。评估批准意图、实际源码变化、异常边界和真实检查的验证缺口。输出与readiness相同的JSON，coverageRefs覆盖全部原文与任务ID，unchecked公开未审范围。发现必须有具体坏结果、路径引用和证据。复查priorReports的每条旧发现；已修复可在resolutions返回{findingId,decision:"fixed",reason,refs}，不得删除原始发现或无证据关闭。不能用PASS抹掉旧问题；无法核实应保留问题，不冒充独立测试。',
 };
 
@@ -119,7 +120,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
   const storage = config.mode === 'live' ? new LibSQLStore({ id: 'development-context-memory', url: config.databaseUrl }) : undefined;
   try {
     const agent = createAgentV2(config, execution, role, state, paths, methods, runtime, storage);
-    const taskContext = createTaskContext({ repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从候选工具读原文，避免文件在project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
+    const taskContext = createTaskContext({ repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, currentProductApproval: developmentProductApproval(state.input, state.phase), source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从候选工具读原文，避免文件在project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
       requirements: state.requirements.map(
         /** 需求与验收只消费批准原文锚点。 */
         (item) => item.id,
@@ -140,7 +141,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
       (task) => `task:${task.id}`,
     ) ?? [])], context: state.context, plan: state.plan, checks: state.checks, verificationHistory: state.verificationHistory, repairHistory: state.repairHistory, priorReports: state.codeReviews, round: state.round, taskPaths: paths, extra: role === 'context' ? { candidateFiles: Object.keys(state.input.project.files), note: '候选原文通过readFile读取；重复归档无需通读' } : extra }, config.mode === 'live', config.hrmRepositoryRoot ? { root: config.hrmRepositoryRoot, receipt: state.repositoryHandoff ?? state.input.repositoryHandoff } : undefined, state.contextBudgetLevel ?? 0);
     const prompt = taskContext.prompt;
-    const schema = role === 'context' ? contextOutputSchema(state) : role === 'architect' ? planV2Schema : role === 'readiness' || role === 'reviewer' ? assessmentSchema : null;
+    const schema = role === 'context' ? contextOutputSchema(state) : role === 'architect' ? planV2Schema : role === 'readiness' || role === 'reviewer' ? assessmentOutputSchema(state) : null;
     const timeout = developmentTimeoutPolicy(role);
     const options = { ...taskContext.options, maxSteps: developmentMaxSteps, prepareStep: developmentPrepareStep(role), modelSettings: { maxOutputTokens: 6000, maxRetries: 0, timeout: { totalMs: timeout.totalMs, stepMs: timeout.stepMs } } };
     /** SDK结构输出失败在边界转为固定诊断，禁止把原cause带入Workflow日志。 */
@@ -179,5 +180,12 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
 export function contextOutputSchema(state: StateV2) {
   const refs = [...state.requirements.map(/** 产品引用绑定批准原文行。 */item => item.id), ...Object.keys(state.input.project.files).map(/** 文件引用绑定候选路径。 */path => `file:${path}`)];
   return contextDraftSchema.extend({ rules: z.array(contextDraftSchema.shape.rules.element.extend({ refs: z.array(z.enum(refs)).min(1) })).min(1) });
+}
+
+/** 结构输出声明引用域和覆盖数量；实际逐项覆盖仍由宿主独立校验。 */
+export function assessmentOutputSchema(state: StateV2) {
+  const refs = [...evidenceRefs(state)];
+  const requiredCount = state.requirements.length + (state.plan?.tasks.length ?? 0);
+  return assessmentSchema.extend({ coverageRefs: z.array(z.enum(refs)).min(Math.max(1, requiredCount)) });
 }
 export type GeneratorV2 = typeof generateV2;

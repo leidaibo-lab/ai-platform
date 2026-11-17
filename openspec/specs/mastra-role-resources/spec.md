@@ -8,6 +8,30 @@
 
 ## Requirements
 
+### Requirement: Product approval facts accompany development handoff
+
+当 Workflow 已对当前产品版本保存批准，研发与阻塞澄清 SHALL 接收与产品摘要一致的宿主审批事实；产品正文中生成时的审批状态仅代表当时文档内容，不能覆盖后续审批事实。缺少匹配批准时 SHALL NOT 补造已批准状态或放行研发。
+
+#### Scenario: Approved product contains an earlier pending-approval statement
+
+- **WHEN** 产品稿仍包含生成时的待审批说明，且 Workflow 已批准同一产品版本
+- **THEN** 研发和阻塞澄清 SHALL 获得与当前产品版本绑定的实际批准事实
+- **AND** 产品正文和人工审批记录 SHALL 保留原样
+- **AND** 技术方案生成阶段 SHALL 说明该方案须在生成和就绪审查后才进入独立审批，不能把尚未发生的后续审批当作生成方案的业务前置条件
+- **AND** 就绪审查阶段 SHALL 将技术方案审批识别为后续独立关口，不能将就绪报告本身视为实施授权
+
+#### Scenario: Development blocker is converted to a question
+
+- **WHEN** 模型生成开发阻塞问题
+- **THEN** 必答问题 SHALL 引用实际业务阻塞并标记阻塞研发，可选问题 SHALL 不引用阻塞且不阻塞流程
+- **AND** 宿主仍 SHALL 校验所有已登记业务阻塞被覆盖
+
+#### Scenario: Readiness output violates a known validation constraint
+
+- **WHEN** 就绪报告引用未知事实或遗漏需求与任务覆盖等已登记约束
+- **THEN** 恢复诊断 SHALL 使用固定的约束代码区分该错误与 JSON 解析失败
+- **AND** 诊断 SHALL NOT 包含模型原文、凭据或任意异常内容
+
 ### Requirement: Development fault recovery retains state identity
 
 研发阶段发生模型输出或网络故障后，系统 SHALL 对持久化后的完整恢复状态校验原检查点和恢复摘要；同一状态经结构化序列化或字段顺序规范化后 SHALL 可安全接续，实际内容、检查点或恢复决定发生变化时 SHALL 拒绝。

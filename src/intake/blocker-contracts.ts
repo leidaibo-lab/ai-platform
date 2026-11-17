@@ -8,9 +8,14 @@ import { developmentHash } from '../development/contracts.js';
 export const blockerQuestionSchema = planSchema.shape.questions.element.extend({ blockerIds: z.array(z.string()).max(20) });
 export const blockerPlanSchema = planSchema.safeExtend({ questions: z.array(blockerQuestionSchema).max(16) });
 /** 新开发澄清必须解释开工影响；兼容历史卡片时不虚构依据。 */
-export const generatedBlockerPlanSchema = blockerPlanSchema.safeExtend({ questions: z.array(blockerQuestionSchema.extend({ decision: questionDecisionSchema })).max(16) }).superRefine(/** 阻塞与卡片关联不可降级；可选项只能是额外细节。 */(plan, context) => {
-  for (const question of plan.questions) if (question.decision.blocks === 'product' || (question.blockerIds.length > 0 && !question.required) || (question.required && !question.blockerIds.length)) context.addIssue({ code: 'custom', message: '开发问题分类与阻塞来源不一致' });
-});
+export const generatedBlockerPlanSchema = blockerPlanSchema.safeExtend({ questions: z.array(z.discriminatedUnion('required', [
+  blockerQuestionSchema.extend({ required: z.literal(true), blockerIds: z.array(z.string()).min(1).max(20), decision: questionDecisionSchema.extend({ blocks: z.literal('development') }) }),
+  blockerQuestionSchema.extend({ required: z.literal(false), blockerIds: z.array(z.string()).max(0), decision: questionDecisionSchema.extend({ blocks: z.literal('none') }) }),
+])).max(16) });
+/** 有业务阻塞时向模型暴露非空约束，完整覆盖仍由宿主校验。 */
+export function generatedBlockerPlanForCount(count: number) {
+  return generatedBlockerPlanSchema.safeExtend({ questions: generatedBlockerPlanSchema.shape.questions.min(count > 0 ? 1 : 0) });
+}
 export const blockerAnswerSchema = z.object({ hash: z.string().length(64), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(16), supplement: z.string().trim().max(4000) });
 export const revisedProductReviewSchema = z.object({ hash: z.string().length(64), decision: z.enum(['approve', 'revise', 'stop']), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) });
 export const blockerCycleSchema = z.object({ repositoryHandoff: remoteHandoffSchema.optional(),

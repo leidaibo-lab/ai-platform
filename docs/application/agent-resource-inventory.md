@@ -74,7 +74,7 @@
 
 `tests/nacos-product-suite.test.ts` 用本地 HTTP 模拟 Nacos，将全部 113 个真实 Skill 包经现有 Adapter 冻结并按原版本复核，比较参考资料清单，再装配到锁定版本的 Mastra 两个产品 Agent。该测试不证明真实 Nacos 上已发布、人工审批完成或产品角色的真实模型质量；另有测试覆盖审查角色只加载绑定子集。
 
-跨电脑的候选入口位于 `nacos-resources/product/`；本机注册脚本及使用方法见该目录 README。当前注册器仅在模拟服务验证过幂等和同版本冲突，真实 Nacos 全量发布和阶段 Prompt 迁移仍待完成。
+跨电脑的候选入口位于 `nacos-resources/product/`；本机注册脚本及使用方法见该目录 README。隔离 Nacos 3.3 已发布并读回全部 113 项 Skill 和两个角色 Prompt；注册幂等及同版本冲突也由模拟服务验证。其他机器注册、生产治理和阶段 Prompt 迁移仍待完成。真实 Run 证据及限制见 [live 流程验证](./nacos-live-run-findings.md)。
 
 ## 按顺序完成迁移与证据
 

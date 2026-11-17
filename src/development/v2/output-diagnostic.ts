@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 export const outputDiagnosticSchema = z.object({
   stage: z.enum(['structured-output', 'method', 'schema', 'json', 'constraint', 'unknown']),
-  code: z.enum(['structured-output-invalid', 'method-load-missing', 'method-read-missing', 'schema-invalid', 'json-invalid', 'task-id-duplicate', 'role-unregistered', 'path-ownership-invalid', 'dependency-invalid', 'path-ownership-missing', 'requirement-ref-unknown', 'context-ref-unknown', 'check-ref-unregistered', 'requirement-ref-missing', 'output-invalid']),
+  code: z.enum(['structured-output-invalid', 'method-load-missing', 'method-read-missing', 'schema-invalid', 'json-invalid', 'task-id-duplicate', 'role-unregistered', 'path-ownership-invalid', 'dependency-invalid', 'path-ownership-missing', 'requirement-ref-unknown', 'context-ref-unknown', 'check-ref-unregistered', 'requirement-ref-missing', 'assessment-ref-unknown', 'assessment-finding-duplicate', 'assessment-route-unregistered', 'assessment-verdict-inconsistent', 'assessment-coverage-missing', 'output-invalid']),
   issues: z.array(z.object({ path: z.string().max(150), code: z.enum(['invalid_type', 'too_small', 'too_big', 'invalid_value', 'invalid_format', 'unrecognized_keys', 'custom', 'other']) })).max(12).optional(),
 });
 export type OutputDiagnostic = z.infer<typeof outputDiagnosticSchema>;
@@ -24,6 +24,9 @@ const constraints: Record<string, OutputDiagnostic['code']> = {
   '方案遗漏文件责任': 'path-ownership-missing', '任务引用未知需求或验收': 'requirement-ref-unknown',
   '任务引用未知上下文': 'context-ref-unknown', '任务引用未登记检查': 'check-ref-unregistered',
   '任务遗漏批准原文引用': 'requirement-ref-missing',
+  '报告覆盖引用未知': 'assessment-ref-unknown', '发现引用未知': 'assessment-ref-unknown', '处理记录引用未知': 'assessment-ref-unknown',
+  '报告发现ID重复': 'assessment-finding-duplicate', '发现指向未登记角色': 'assessment-route-unregistered',
+  '报告判定与发现不一致': 'assessment-verdict-inconsistent', '报告遗漏需求或任务覆盖': 'assessment-coverage-missing',
 };
 const fields = new Set(['summary', 'coverage', 'requirement', 'behavior', 'verification', 'contracts', 'tasks', 'id', 'role', 'paths', 'dependsOn', 'requirementRefs', 'acceptanceRefs', 'contextRefs', 'constraints', 'verificationRefs', 'blockers', 'risks', 'rules', 'refs', 'text', 'unknowns', 'verdict', 'findings', 'coverageRefs', 'unchecked', 'resolutions']);
 const issueCodes = new Set(['invalid_type', 'too_small', 'too_big', 'invalid_value', 'invalid_format', 'unrecognized_keys', 'custom']);

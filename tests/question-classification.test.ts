@@ -2,10 +2,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generatedPlanSchema, planSchema, validateAnswers, intakeHash, canFinalizePlan, collectConfirmedDecisions } from '../src/intake/contracts.js';
-import { generatedBlockerPlanSchema, validateBlockerPlan } from '../src/intake/blocker-contracts.js';
+import { generatedBlockerPlanForCount, generatedBlockerPlanSchema, validateBlockerPlan } from '../src/intake/blocker-contracts.js';
 import { createIntakeWorkflow } from '../src/intake/workflow.js';
 import { Mastra } from '@mastra/core';
 import { LibSQLStore } from '@mastra/libsql';
+import { z } from 'zod';
+import { blockerProductApproval, developmentProductApproval } from '../src/delivery/product-approval.js';
 
 const required = { id: 'scope', title: '本期范围', reason: '范围尚未确认', required: true, kind: 'single' as const, options: [{ id: 'minimal', label: '最小范围' }], recommendation: '建议最小范围', decision: { blocks: 'product' as const, reason: '未确认时无法定义本期验收范围', unanswered: '暂停产品范围确认，不默认采用建议' } };
 const optional = { ...required, id: 'preference', title: '展示偏好', required: false, decision: { blocks: 'none' as const, reason: '不改变本期流程和验收，可在后续完善', unanswered: '保留为待决，不采用推荐作为已确认规则' } };
@@ -71,6 +73,28 @@ test('开发业务阻塞不能降级；附加可选细节不覆盖业务阻塞',
   assert.throws(/** 已登记阻塞不允许变成可选。 */() => generatedBlockerPlanSchema.parse({ ...plan, questions: [{ ...extra, blockerIds: ['blocker-1'] }] }));
   assert.throws(/** 可选补充不能假装覆盖原阻塞。 */() => validateBlockerPlan({ ...parsed, questions: [extra] }, state));
   assert.throws(/** 不能发布无实际阻塞来源的开发必答题。 */() => generatedBlockerPlanSchema.parse({ ...plan, questions: [{ ...blocker, blockerIds: [] }] }));
+  assert.throws(/** 即使拥有阻塞依据也不能把研发问题标记为阻塞产品。 */() => generatedBlockerPlanSchema.parse({ ...plan, questions: [{ ...blocker, decision: { ...blocker.decision, blocks: 'product' } }] }));
+  const jsonSchema = JSON.stringify(z.toJSONSchema(generatedBlockerPlanSchema));
+  assert.match(jsonSchema, /development/);
+  assert.match(jsonSchema, /blockerIds/);
+  assert.throws(/** 模型可见的 schema 在有阻塞时要求问题非空。 */() => generatedBlockerPlanForCount(1).parse({ ...plan, questions: [] }));
+  assert.equal(generatedBlockerPlanForCount(0).parse({ ...plan, questions: [] }).questions.length, 0);
+});
+
+test('只投影同一产品版本的真实批准，历史待审批文字和其他版本不能改写事实', /** 明确区分产品批准和项目范围确认。 */() => {
+  const hash = 'a'.repeat(64); const other = 'b'.repeat(64);
+  const input = { source: { kind: 'approved-product', workflowId: 'product-development', hash, content: '本稿尚未审批' }, scopeApproval: { productHash: hash, reviewer: 'owner', comment: '确认项目范围' } } as any;
+  assert.equal(developmentProductApproval(input)?.status, 'approved');
+  assert.match(developmentProductApproval(input, 'architecture')!.nextGate!, /审批前不得实施/);
+  assert.match(developmentProductApproval(input, 'assess-readiness')!.nextGate!, /就绪审查评估方案是否适合提交审批/);
+  assert.equal(developmentProductApproval(input, 'implement')!.nextGate, undefined);
+  assert.equal(developmentProductApproval({ ...input, source: { ...input.source, hash: other } }), undefined);
+  assert.equal(developmentProductApproval({ ...input, source: { ...input.source, kind: 'evaluation' } }), undefined);
+  const delivery = { artifacts: [{ stage: 'product', hash, content: '本稿尚未审批', evidence: 'model-proposal' }], reviews: [{ role: 'product', artifactHash: hash, decision: 'approve', reviewer: 'owner', comment: '已批准' }] } as any;
+  assert.equal(blockerProductApproval(delivery, hash)?.status, 'approved');
+  assert.equal(blockerProductApproval(delivery, other), undefined);
+  assert.equal(blockerProductApproval({ ...delivery, reviews: [{ ...delivery.reviews[0], decision: 'reject' }] }, hash), undefined);
+  assert.equal(delivery.artifacts[0].content, '本稿尚未审批');
 });
 
 test('新Run原生链路：生成分类、暂停、仅答必答后继续，不补造可选答案', /** 脚本模型验证完整数据链，不把结构测试当作真实模型判断质量。 */async () => {
