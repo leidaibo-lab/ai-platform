@@ -5,6 +5,7 @@ import { revisionSourceSchema } from './revision-contract.js';
 import { maxProductReworks, productQualityReviewSchema, productReworkSchema, productWorkSchema } from './product-contract.js';
 import { correlationSchema } from '../../delivery/asset-identity.js';
 import { maxContextBudgetLevel } from '../../delivery/context-budget.js';
+import { nacosSnapshotSchema } from '../nacos-resources.js';
 
 export const stageSchema = z.enum(['product', 'development', 'testing', 'operations']);
 export type Stage = z.infer<typeof stageSchema>;
@@ -20,6 +21,7 @@ export const reviewSchema = z.object({
 export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
+  nacosResources: nacosSnapshotSchema.optional(),
   intake: intakeSchema.optional(),
   // 顶层保留入口策略，便于恢复和页面投影不依赖当前暂停点。
   intakeMode: intakeModeSchema.optional(),

@@ -34,7 +34,7 @@ LiteLLM 和 pi 适配实验保留在 `practices/custom-exploration/`，与主线
 
 ## 启动
 
-使用 Node.js 24+，在仓库根目录安装依赖。后端与前端分别保持一个终端运行；同一项目目录只启动一个 Mastra dev 实例。
+使用 Node.js 24+，在仓库根目录安装依赖。标准流程默认启用 Nacos，先按下文和 `.env.example` 配置已发布的产品资源及只读账号；以下 fixture 命令显式关闭 Nacos，只验证本地固定流程。后端与前端分别保持一个终端运行；同一项目目录只启动一个 Mastra dev 实例。
 
 ```bash
 cd /Users/Administrator/self-code/ai-platform
@@ -42,7 +42,7 @@ npm ci --ignore-scripts --no-audit --no-fund
 npm --prefix web ci --ignore-scripts --no-audit --no-fund
 
 # 终端一：无密钥固定模式，使用独立数据目录。
-MASTRA_MODE=fixture MASTRA_DATA_DIR=.data/fixture npm run dev
+NACOS_RESOURCES_ENABLED=false MASTRA_MODE=fixture MASTRA_DATA_DIR=.data/fixture npm run dev
 
 # 终端二：启动产研工作台。
 npm run review:dev
@@ -122,5 +122,15 @@ MASTRA_DEVELOPMENT_MODEL=openai/gpt-5.6-luna
 复用 Mastra 原生 Agent 的 model 配置。产品经理和产品审查 Agent 使用产品覆盖；研发团队及其评审/委派角色使用开发覆盖；其他角色和评测裁判使用默认模型。角色变量缺省或为空时回退 `MASTRA_MODEL`。真实模式要求显式设置默认模型；fixture 缺少默认配置时仅使用模拟模型占位标识。代码不内置上述业务模型名称，端点和凭据沿用原配置。
 
 重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。模型可用性与真实质量仍需上游验证。
+
+### Nacos 产品方法资源
+
+默认启用。新建产品 Run 使用 Nacos 3.3 的 Prompt 和 Skill，在根 `.env` 中按示例设置服务地址、命名空间、只读账号及明确的资源名称和版本；缺少配置时启动失败。先在 Nacos 完成审核和发布；应用不负责发布资源。服务端在 Run 初始化时读取并保存正文、参考文件与 SHA-256，产品需求澄清、写作和审查从快照装配，不再追加本地产品方法套件；调用前重新确认相同版本可访问且内容未改变，资源下线、撤销或注册中心不可用时停止调用。远端内容不授予额外工具或审批权限。
+
+可通过 `NACOS_REVIEW_PROMPT_NAME` 和 `NACOS_REVIEW_PROMPT_VERSION` 为产品审查角色指定独立 Prompt；缺省时共用产品 Prompt。通过 `NACOS_ADDITIONAL_SKILLS` 配置额外 Skill 的名称与版本数组，最多额外 127 个，冻结内容总计不超过 8 MiB。可通过 `NACOS_REVIEW_SKILLS` 指定审查角色使用的已登记 Skill 名称子集；未配置时两角色共享全部 Skill，空数组表示审查角色不加载 Skill。绑定进入 Run 快照和审批身份，配置变更只作用于新 Run；发布到 Nacos 的资源需先自行完成治理和授权。
+
+此前本地的 113 项产品方法不会自动迁移或装入新 Run；需要使用时先将对应 Skill 发布到 Nacos，再将其名称和版本加入配置。构建环境若不提供 Nacos 配置，可显式设置 `NACOS_RESOURCES_ENABLED=false` 执行构建；这只影响该构建进程。
+
+旧 Run 没有快照时沿用原本地资源；已启用 Nacos 的 Run 恢复需要可访问原服务、相同版本及可用凭据。配置变更只影响新 Run 的选择，切换服务地址会阻断旧 Run。隔离评测或历史兼容可显式设置 `NACOS_RESOURCES_ENABLED=false`。研发阻塞回流调用产品角色时也使用原产品 Run 快照；研发、测试、部署等自身角色仍使用原有资源，MCP 暂不接入。单机集成和生产权限配置、真实模型质量需按实际环境单独验收。
 
 浏览器 QA 已接入主 Workflow：在测试用例批准关口显式选择 browser，执行真实 Chromium 并在质量关口查看截图与版本绑定回执。安装、示例与边界见[浏览器 QA](./docs/application/browser-qa.md)；首版限候选静态 HTML，HRM 全栈需后续启动 Adapter。

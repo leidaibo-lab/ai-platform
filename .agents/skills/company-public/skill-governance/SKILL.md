@@ -1,6 +1,6 @@
 ---
 name: "company-public-skill-governance"
-description: "公司级 Skill 创建与治理规范。用于新增、更新、迁移或校验 .agents/skills 下的 Skill，确保目录、命名、frontmatter、中文正文、引用归属和 OpenSpec 边界符合 seakoi/skills 风格。"
+description: "公司级 Skill 创建与治理规范。用于新增、更新、迁移或校验共用与产品 Skill，确保目录、命名、frontmatter、中文正文、引用归属和 OpenSpec 边界符合 seakoi/skills 风格。"
 metadata:
   pattern: "reviewer"
   author: "company-public"
@@ -11,7 +11,7 @@ metadata:
 
 ## 核心规则
 
-- 共用 Skill 和 Mastra 产品套件均放在根 `.agents/skills/`；产品套件位于 `.agents/skills/product-pm/`，遵守相同的两级目录、中文入口与元数据规则。
+- 共用 Skill 放在根 `.agents/skills/`；产品套件和产品交接方法放在 `nacos-resources/product/skills/`，均遵守相同的两级目录、中文入口与元数据规则。
 - 目录采用两级结构：`<顶级目录>/<技能目录>/SKILL.md`。
 - `name` 必须等于 `<顶级目录>-<技能目录>`。
 - frontmatter 必须包含 `name`、`description`、`metadata.pattern`、`metadata.author`、`metadata.version`。
@@ -23,8 +23,8 @@ metadata:
 
 ## 新增 Skill 流程
 
-1. 先判断内容是否应该成为 Skill：只有可复用的 Agent 工作口径、流程、校验清单或领域知识才放入 `.agents/skills/`。
-2. 选择两级路径：`.agents/skills/<顶级目录>/<技能目录>/SKILL.md`。
+1. 先判断内容是否应该成为 Skill：只有可复用的 Agent 工作口径、流程、校验清单或领域知识才放入对应 Skill 根。
+2. 选择两级路径：`<Skill 根>/<顶级目录>/<技能目录>/SKILL.md`。
 3. 让 `name` 和目录保持一致，并按主用途选择 `metadata.pattern`。
 4. 用 `description` 写清楚这个 Skill 做什么，以及什么场景必须使用它。
 5. 将正文控制为中文的执行规则、检查项和必要边界。
@@ -59,4 +59,4 @@ node .agents/skills/company-public/skill-governance/scripts/validate-skills.mjs
 
 若脚本失败，先修复结构、frontmatter 或命名问题，再继续处理业务文档或 OpenSpec。
 
-自动校验覆盖根目录与 Mastra 显式实践根；不收集 node_modules、外部 checkout 或其他任意目录。
+自动校验覆盖共用 Skill 根和产品资源 Skill 根；不收集 node_modules、外部 checkout 或其他任意目录。

@@ -11,7 +11,7 @@ import { loadGovernedSkill, loadProductSkills } from '../src/mastra/agents/skill
 import { productManagerProfile, productReviewerProfile } from '../src/mastra/agents/product-roles.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const skillsRoot = resolve(root, '.agents/skills');
+const skillsRoot = resolve(root, 'nacos-resources/product/skills');
 
 /** 来源锁由导入器生成；每项拥有原始来源、解析后来源及完整参考文件散列。 */
 interface SourceFile { repository: string; sourcePath: string; localPath: string; sha256: string }

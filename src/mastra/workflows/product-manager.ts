@@ -9,6 +9,7 @@ import { createIntakeWorkflow } from '../../intake/workflow.js';
 import { collectConfirmedDecisions } from '../../intake/contracts.js';
 import { generateProductContent } from '../../intake/product-generation.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
+import { nacosResourceIdentity, type NacosSnapshot } from '../nacos-resources.js';
 
 type StepBinder = <T extends Step<any, any, any, any, any, any>>(step: T) => T;
 
@@ -26,6 +27,7 @@ export function createProductManagerWorkflow(
   mode: Delivery['mode'],
   bind: StepBinder = (step) => step,
   repositoryRoot?: string,
+  resolveAgents?: (resources: NacosSnapshot) => Promise<ReturnType<typeof createAgents>>,
 ) {
   const manager = agents.productManagerAgent;
   const reviewer = agents.productReviewerAgent;
@@ -45,7 +47,9 @@ export function createProductManagerWorkflow(
         const modeInstruction = intakeMode === 'autofill'
           ? '本次是“AI 主动补全”模式。不要把缺少用户回答当作继续提问的理由；请基于需求目标、常见产品实践和当前上下文主动选择一条最推荐的闭环方案。所有推断、默认值和推荐必须在产品稿中明确标注为“AI 建议”或“待确认”，不能伪装成用户已确认事实；完整产品稿必须包含目标、主流程、异常边界、非目标、指标和验收标准，供产品负责人一次性审阅。'
           : '本次是“逐项澄清”模式。只使用用户已经明确确认的业务规则；不能把推荐或假设升级为事实，关键缺口应保留为待确认项。';
-        const result = await generateProductContent(manager, JSON.stringify({
+        if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
+        const activeManager = inputData.nacosResources ? (await resolveAgents!(inputData.nacosResources)).productManagerAgent : manager;
+        const result = await generateProductContent(activeManager, JSON.stringify({
           task: 'product-manager-phase',
           phase: role,
           phaseInstruction: managerPhaseInstructions[role],
@@ -84,7 +88,7 @@ export function createProductManagerWorkflow(
     execute: async ({ inputData }) => {
       const content = inputData.revision?.content ?? inputData.productWork?.entries.at(-1)?.content;
       if (!content) throw new Error('产品写作未产生可审阅正文');
-      const hash = createHash('sha256').update(JSON.stringify({ stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content, revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork })).digest('hex');
+      const hash = createHash('sha256').update(JSON.stringify({ stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content, revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork, ...(inputData.nacosResources ? { resources: nacosResourceIdentity(inputData.nacosResources) } : {}) })).digest('hex');
       return { ...inputData, artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };
     },
   });
@@ -98,7 +102,9 @@ export function createProductManagerWorkflow(
     execute: async ({ inputData }) => {
       const artifact = inputData.artifacts.at(-1);
       if (!artifact || artifact.stage !== 'product') throw new Error('产品审查缺少待审产品稿');
-      const result = await generateProductContent(reviewer, JSON.stringify({
+      if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
+      const activeReviewer = inputData.nacosResources ? (await resolveAgents!(inputData.nacosResources)).productReviewerAgent : reviewer;
+      const result = await generateProductContent(activeReviewer, JSON.stringify({
         task: 'product-quality-review',
         brief: inputData.brief,
         product: artifact.content,
@@ -125,7 +131,7 @@ export function createProductManagerWorkflow(
     inputSchema: deliverySchema,
     outputSchema: deliverySchema,
   })
-    .then(createIntakeWorkflow(agents, mode, bind))
+    .then(createIntakeWorkflow(agents, mode, bind, resolveAgents))
     .then(bind(managerPhase('analysis')))
     .then(bind(managerPhase('clarification')))
     .then(bind(managerPhase('scope-priority')))

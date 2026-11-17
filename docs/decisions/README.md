@@ -2,6 +2,8 @@
 
 本目录保存平台能力的方案发现、验证和选择证据。记录用于回答“为什么这样选”和“为什么没有使用其他方案”，不能只描述最终实现。
 
+[在 Mastra 主线适配 Nacos AI 资源](./2026-11-17-nacos-mastra-resources.md)：提议；已有默认启用的产品阶段 Prompt/Skill 验证切片，正式接入与生产验收待完成；MCP 和 A2A 延后。
+
 [以完整远端基线推进 Mastra v2.0 主线](./2026-11-16-mastra-v2-mainline.md)：接受；以 `fa9715f` 的完整 Mastra 代码提升根目录，原自研 Runtime 下沉为 `practices/custom-exploration/`。
 
 [批准范围内自主开发与修复闭环](./2026-11-09-mastra-autonomous-development.md)：接受；适配原生 Workflow 与执行 Adapter，保留失败证据、开放受控检查、跨角色修复及按进展停止；真实模型业务交付待验。

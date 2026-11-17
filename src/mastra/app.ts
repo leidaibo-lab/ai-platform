@@ -16,12 +16,13 @@ import { createProductDevelopmentWorkflow } from './workflows/product-developmen
 export function createStudioApplicationOptions(config: PracticeConfig) {
   const repository = config.hrmRepositoryRoot ? validateHrmRepository(config.hrmRepositoryRoot) : undefined;
   const agents = createAgents(config, repository ? { workspace: createRecruitmentWorkspace(config.rootDir, join(repository, 'product/sources')) } : {});
-  const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config);
+  const storage = new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl });
+  const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config, undefined, { storage });
   return {
     agents: { productManagerAgent: agents.productManagerAgent, productReviewerAgent: agents.productReviewerAgent, testingAgent: agents.testingAgent, operationsAgent: agents.operationsAgent },
     scorers: createNodeScorers(config),
     workflows: { productDevelopmentWorkflow, ...createDevelopmentNodeWorkflows(config) },
-    storage: new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl }),
+    storage,
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
     server: { host: '127.0.0.1', port: config.port, apiRoutes: [...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config)] },
   };

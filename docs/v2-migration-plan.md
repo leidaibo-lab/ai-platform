@@ -21,7 +21,7 @@
 | Mastra 应用与 Workflow | `src/`、`src/mastra/` | 根主线运行入口 |
 | 工作台 | `web/` | 需求、澄清、审批、Run 时间线与活动流 |
 | 配置、脚本、测试、评测 | `config/`、`scripts/`、`tests/`、`evaluations/` | 使用主线依赖与隔离数据目录 |
-| 产品 Skill | `.agents/skills/product-pm/` | 根 Skill 治理下的唯一产品套件 |
+| 产品 Skill | `nacos-resources/product/skills/product-pm/` | 产品资源目录下的唯一产品套件，沿用统一 Skill 治理 |
 | 运行说明 | `docs/application/` | 根主线操作与边界说明 |
 | 自研探索 | `practices/custom-exploration/` | Runtime、Demo、LiteLLM、场景、pi 适配与旧 OpenSpec |
 

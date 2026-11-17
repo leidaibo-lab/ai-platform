@@ -5,6 +5,8 @@
 ## 应用与操作
 
 - [完整产研流程](./application/unified-workflow.md)：产品、研发、测试、部署和交付团队的主流程与人工关口。
+- [产研角色资源清单与绑定](./application/agent-resource-inventory.md)：产品 Prompt、Skill 的当前来源、目标绑定与迁移缺口，以及宿主执行边界。
+- [产品 Nacos 资源候选](../nacos-resources/product/README.md)：跨电脑共享的角色 Prompt、资源声明与 Skill 包准备方法。
 - [需求工作台](./application/guided-intake.md)：逐项澄清与 AI 主动补全、产品确认和恢复边界。
 - [工作流执行时间线](./decisions/2026-11-14-mastra-workflow-execution-timeline.md)：RunFlowMini、RunActivityFeed 与 SSE 的只读投影边界。
 - [运行产物与数据流](./application/artifact-dataflow.md)：项目、迭代、Run、阶段产物和只读 Workspace。

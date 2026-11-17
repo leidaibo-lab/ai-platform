@@ -1,5 +1,10 @@
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
-import type { createAgents } from '../agents/index.js';
+import { createAgents } from '../agents/index.js';
+import { createRecruitmentWorkspace } from '../project-workspaces.js';
+import { join } from 'node:path';
+import { verifyNacosAccess } from '../nacos-resources.js';
+import type { NacosSnapshot } from '../nacos-resources.js';
+import type { MastraCompositeStore } from '@mastra/core/storage';
 import type { PracticeConfig } from '../config.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { createProductManagerWorkflow } from './product-manager.js';
@@ -7,8 +12,15 @@ import { deliverySchema, pendingSchema, reviewSchema, validateReview } from './d
 
 type StepBinder = <T extends Step<any, any, any, any, any, any>>(step: T) => T;
 
+/** 从原 Run 快照装配产品角色，所有回流调用共享权限校验和存储。 */
+export async function resolveProductAgents(config: PracticeConfig, resources: NacosSnapshot, storage?: MastraCompositeStore) {
+  await verifyNacosAccess(config.nacosResources, resources);
+  if (config.mode === 'live' && !storage) throw new Error('Nacos 产品角色缺少 Mastra 记忆存储');
+  return createAgents(config, { resources, storage, ...(config.hrmRepositoryRoot ? { workspace: createRecruitmentWorkspace(config.rootDir, join(config.hrmRepositoryRoot, 'product/sources')) } : {}) });
+}
+
 /** 产品团队的唯一边界：draft-product 内完成产品经理工作和独立闭环检查，随后进入人工审批。 */
-export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig) {
+export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, storage?: MastraCompositeStore) {
   const bind: StepBinder = (step) => withRepositoryAssets(step, config);
   const review = createStep({
     id: 'review-product',
@@ -42,7 +54,7 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
     outputSchema: deliverySchema,
   })
     // draft-product 内部包含 guided-requirements，需求澄清不再与产品成稿平级。
-    .then(createProductManagerWorkflow(agents, config.mode, bind, config.hrmRepositoryRoot))
+    .then(createProductManagerWorkflow(agents, config.mode, bind, config.hrmRepositoryRoot, /** 调用前复核授权并从 Run 快照装配。 */async resources => resolveProductAgents(config, resources, storage)))
     .then(bind(review))
     .then(bind(complete))
     .commit();

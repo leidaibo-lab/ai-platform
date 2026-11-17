@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { RemoteSyncTarget } from '../delivery/remote-sync-settings.js';
+import type { NacosResourceConfig } from './nacos-resources.js';
 
 /** 独立实践配置；数据库使用绝对路径，fixture 模式不会访问模型服务。 */
 export interface PracticeConfig {
@@ -19,6 +20,8 @@ export interface PracticeConfig {
   hrmRepositoryRoot?: string;
   /** 仅服务端环境登记的远端目标，页面只能引用其ID。 */
   remoteSyncTargets?: RemoteSyncTarget[];
+  /** 仅服务端持有的 Nacos 配置与凭据；关闭时不访问网络。 */
+  nacosResources?: NacosResourceConfig;
 }
 
 /** 从实践根目录加载独立配置；不查找上级 .env，不输出凭据。 */
@@ -35,7 +38,33 @@ export function readConfig(): PracticeConfig {
   if (mode === 'live' && !apiKey) throw new Error('真实模型尚未配置：请在本实践 .env 设置 OPENAI_API_KEY。');
   const baseUrl = process.env.MASTRA_BASE_URL || undefined;
   if (baseUrl) z.url().parse(baseUrl);
-  return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  const nacosResources = readNacosConfig(process.env);
+  return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+}
+
+/** 默认启用注册中心；只有明确关闭才允许本地兼容路径。 */
+export function readNacosConfig(env: Record<string, string | undefined>): NacosResourceConfig | undefined {
+  const enabled = z.enum(['true', 'false']).default('true').parse(env.NACOS_RESOURCES_ENABLED);
+  if (enabled === 'false') return undefined;
+  const required = z.string().trim().min(1);
+  const parsed = z.object({ url: z.url(), namespace: required, username: required, password: required, promptName: required, promptVersion: required, skillName: required, skillVersion: required }).safeParse({ url: env.NACOS_URL, namespace: env.NACOS_NAMESPACE, username: env.NACOS_USERNAME, password: env.NACOS_PASSWORD, promptName: env.NACOS_PROMPT_NAME, promptVersion: env.NACOS_PROMPT_VERSION, skillName: env.NACOS_SKILL_NAME, skillVersion: env.NACOS_SKILL_VERSION });
+  if (!parsed.success) throw new Error('Nacos 默认启用，请在服务端配置地址、命名空间、凭据及 Prompt/Skill 的名称和版本。');
+  const reviewerName = env.NACOS_REVIEW_PROMPT_NAME?.trim(); const reviewerVersion = env.NACOS_REVIEW_PROMPT_VERSION?.trim();
+  if (!!reviewerName !== !!reviewerVersion) throw new Error('Nacos 审查角色 Prompt 名称和版本必须同时配置。');
+  let additionalSkills: NacosResourceConfig['additionalSkills'];
+  if (env.NACOS_ADDITIONAL_SKILLS) {
+    try { additionalSkills = z.array(z.object({ name: required, version: required }).strict()).max(127).parse(JSON.parse(env.NACOS_ADDITIONAL_SKILLS)); }
+    catch { throw new Error('Nacos 额外 Skill 配置必须为名称和版本数组。'); }
+  }
+  const names = [parsed.data.skillName, ...(additionalSkills ?? []).map(/** 禁止重复注册 Skill。 */skill => skill.name)];
+  if (new Set(names).size !== names.length) throw new Error('Nacos Skill 名称不能重复。');
+  let reviewerSkills: string[] | undefined;
+  if (env.NACOS_REVIEW_SKILLS) {
+    try { reviewerSkills = z.array(required).max(128).parse(JSON.parse(env.NACOS_REVIEW_SKILLS)); }
+    catch { throw new Error('Nacos 审查角色 Skill 绑定必须为名称数组。'); }
+    if (new Set(reviewerSkills).size !== reviewerSkills.length || reviewerSkills.some(/** 只能绑定已配置的资源。 */name => !names.includes(name))) throw new Error('Nacos 审查角色 Skill 绑定无效。');
+  }
+  return { ...parsed.data, ...(reviewerName && reviewerVersion ? { reviewerPrompt: { name: reviewerName, version: reviewerVersion } } : {}), ...(additionalSkills ? { additionalSkills } : {}), ...(reviewerSkills ? { reviewerSkills } : {}) };
 }
 
 /** 解析必填默认模型和可选角色组覆盖；缺省或空覆盖回退默认模型，非法值直接拒绝。 */

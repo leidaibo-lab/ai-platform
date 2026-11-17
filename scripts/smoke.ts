@@ -6,6 +6,8 @@ import { readConfig } from '../src/mastra/config.js';
 async function main() {
   // 默认固定模式，不因本机 .env 的 live 配置意外产生真实模型调用。
   process.env.MASTRA_MODE = process.argv.includes('--live') ? 'live' : 'fixture';
+  // 本脚本只检查最小模型工具链，显式关闭无关的 Nacos 产品资源。
+  process.env.NACOS_RESOURCES_ENABLED = 'false';
   const config = readConfig();
   // 最小 Agent 不依赖团队 Run 的 threadId，专门验证原生工具循环和模型配置边界。
   const result = await createAgents(config, { workspace: false }).minimalAgent.generate('请调用 practiceInfo，然后说明本实践范围。', { maxSteps: 3 });

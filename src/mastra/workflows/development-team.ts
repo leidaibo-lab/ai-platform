@@ -17,6 +17,8 @@ import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
 import { createDevelopmentWorkflowV2 } from './development-v2.js';
 import { deliverySchema } from './delivery.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
+import type { MastraCompositeStore } from '@mastra/core/storage';
+import { resolveProductAgents } from './product-team.js';
 
 const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 
@@ -47,7 +49,7 @@ export function executionResolver(config: PracticeConfig) {
 }
 
 /** 研发团队的唯一边界：负责人规划、动态实施、确定性门禁、独立审查、阻塞澄清和研发交付均在此子 Workflow 内完成。 */
-export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean } = {}) {
+export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; storage?: MastraCompositeStore } = {}) {
   const resolveExecution = executionResolver(config);
   const execution = createExecutionScope(resolveExecution, config.mode === 'live' && !!config.hrmRepositoryRoot);
   const bind = <T extends Step<any, any, any, any, any, any>>(step: T): T => withRepositoryAssets(execution.bind(step), config);
@@ -75,7 +77,7 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
     // 产品来源由研发团队的输入快照提供，阻塞澄清仍在研发团队边界内回流产品职责。
     execute: async ({ inputData, getInitData }) => blockerCycleSchema.parse({ development: inputData, approvedProduct: getInitData(), round: 1, history: [] }),
   });
-  const clarification = createBlockerClarificationWorkflow(agents, config, resolveExecution, generate);
+  const clarification = createBlockerClarificationWorkflow(agents, config, resolveExecution, generate, /** 阻塞回流使用原产品 Run 的资源和存储。 */async resources => resolveProductAgents(config, resources, options.storage));
   const main = createWorkflow({ id: 'development-team', description: '研发团队｜plan-development → develop-and-check → review-development-quality；三类 Agent、确定性门禁与阻塞回流', inputSchema: deliverySchema, outputSchema: stateV2Schema })
     .then(withRepositoryAssets(scope, config))
     .then(development);

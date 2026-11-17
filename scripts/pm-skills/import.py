@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 APPLICATION_ROOT = Path(__file__).resolve().parents[2]
-TARGET = APPLICATION_ROOT / '.agents/skills'
+TARGET = APPLICATION_ROOT / 'nacos-resources/product/skills'
 CURATION = json.loads(Path(__file__).with_name('curation.json').read_text())
 PM_SHA = '2a12295a7717569baa7be181b4cfebe3ca38a6bb'
 SHIPPING_SHA = '0e8b5a5fdd7155a5c440ade930c3e081eb387943'
@@ -191,7 +191,7 @@ def main():
 - pm-skills marketplace 2.2.0，commit `2a12295a7717569baa7be181b4cfebe3ca38a6bb`。
 - shipping迁移实现：product-engineering commit `0e8b5a5fdd7155a5c440ade930c3e081eb387943`，仅使用8项迁移入口与3项辅助参考。
 - [来源锁](upstream-lock.json)记录111项路径、依赖、解析后来源和逐文件SHA256；[pm-skills许可](licenses/pm-skills-MIT.txt)、[product-engineering许可](licenses/product-engineering-MIT.txt)保留MIT全文与作者。
-- 中文策划源：`../../scripts/pm-skills/curation.json`；可复现导入器：`../../scripts/pm-skills/import.py`。导入器只接受已审查的两个固定checkout，不联网；更新先审查上游差异、许可、迁移及中文方法，再修改锁定版本并运行导入。
+- 中文策划源：`../../../scripts/pm-skills/curation.json`；可复现导入器：`../../../scripts/pm-skills/import.py`。导入器只接受已审查的两个固定checkout，不联网；更新先审查上游差异、许可、迁移及中文方法，再修改锁定版本并运行导入。
 - 在实践根运行 `python3 scripts/pm-skills/import.py <pm-skills-checkout> <product-engineering-checkout>`；提交资产后运行 `npm run check`、`npm test`，在仓库根运行 Skill 治理校验。启动及测试不需要外部checkout。
 - 真实模型的任务路由、全流程产品质量和成本需另以真实业务材料验证；确定性工具回归仅证明注册、读取和工作流边界。
 

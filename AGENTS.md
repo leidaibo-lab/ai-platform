@@ -18,7 +18,7 @@
 - 应用：`src/mastra/`、`src/`、`config/`
 - 工作台：`web/`
 - 维护、回归与评测：`scripts/`、`tests/`、`evaluations/`
-- 产品 Skill：`.agents/skills/product-pm/`
+- 产品 Skill：`nacos-resources/product/skills/`
 - Mastra 操作文档：`docs/application/`
 - 稳定契约：`openspec/specs/mastra-role-resources/`、`openspec/specs/project-mainline/`
 - 当前迁移变更：`openspec/changes/promote-mastra-v2/`

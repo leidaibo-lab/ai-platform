@@ -20,6 +20,7 @@ import { inputV2Schema, stateV2Schema } from '../development/v2/contracts.js';
 import { lifecycleSchema } from './contracts.js';
 import type { AssetCorrelation } from './asset-identity.js';
 import { assetManifestSchema, writeImmutableFile } from './asset-catalog.js';
+import { nacosResourceIdentity } from '../mastra/nacos-resources.js';
 
 /** 字节散列用于导出完整性，与产品业务版本散列分开。 */
 function bytesHash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -37,7 +38,7 @@ function projectAssets(value: unknown): { correlation?: AssetCorrelation; runId?
     if (state.revision) files['revision.json'] = json(state.revision);
     if (state.productRework) files['product-rework.json'] = json(state.productRework);
     for (const entry of state.productWork?.entries ?? []) files[`role-${entry.role}.md`] = entry.content;
-    for (const artifact of state.artifacts) if (artifact.stage === 'product') { files['product.md'] = artifact.content; files['product-version.json'] = json({ hash: artifact.hash, evidence: artifact.evidence }); }
+    for (const artifact of state.artifacts) if (artifact.stage === 'product') { files['product.md'] = artifact.content; files['product-version.json'] = json({ hash: artifact.hash, evidence: artifact.evidence, ...(state.nacosResources ? { resources: nacosResourceIdentity(state.nacosResources) } : {}) }); }
     return { correlation: state.correlation, area: 'product', files };
   }
   const lifecycle = lifecycleSchema.safeParse(value);

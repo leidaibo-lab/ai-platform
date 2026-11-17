@@ -19,18 +19,21 @@ import { assetIdSchema, correlationSchema } from '../../delivery/asset-identity.
 import { registerAssetRun } from '../../delivery/asset-catalog.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { intakeModeSchema } from '../../intake/contracts.js';
+import { loadNacosSnapshot } from '../nacos-resources.js';
+import type { MastraCompositeStore } from '@mastra/core/storage';
 
 const inputSchema = z.object({ intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
 
 /** 采用 Workflow 嵌套和 foreach；人工批准保持为原生 suspend/resume。 */
-export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean } = {}) {
+export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; storage?: MastraCompositeStore } = {}) {
   const initialize = createStep({ id: 'initialize-product-development', description: '从原始需求启动完整产研流程', inputSchema, outputSchema: deliverySchema,
     // 不接受客户端伪造产品稿、批准或模式。
     execute: async ({ inputData, runId }) => {
       const correlation = correlationSchema.parse({ projectId: 'hrm', iterationId: inputData.iterationId, runId, workflowId: 'productDevelopmentWorkflow' });
       if (config.hrmRepositoryRoot) registerAssetRun(config.hrmRepositoryRoot, correlation, inputData.brief);
       const intakeMode = inputData.intakeMode ?? (inputData.guidedIntake === true ? 'clarify' : 'autofill');
-      return { intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], outcome: 'in-progress' as const };
+      const nacosResources = config.nacosResources ? await loadNacosSnapshot(config.nacosResources) : undefined;
+      return { nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], outcome: 'in-progress' as const };
     },
   });
   const developmentTeam = createDevelopmentTeamWorkflow(agents, config, generate, options);
@@ -61,7 +64,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
     .then(withRepositoryAssets(developmentTeam.execution.bind(finish), config))
     .commit();
   const main = createWorkflow({ options: runArchiveLifecycle(config), id: 'product-development', description: '完整产研：产品 → 开发（动态团队、并行、受限委派）→ 测试（缺陷修复与回归）→ 部署（审批、外部回执、健康检查与回滚）→ 最终交付', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
-    .then(withRepositoryAssets(initialize, config)).then(createProductTeamWorkflow(agents, config)).then(withRepositoryAssets(routeProductTeamResult, config)).then(developmentTeam.workflow);
+    .then(withRepositoryAssets(initialize, config)).then(createProductTeamWorkflow(agents, config, options.storage)).then(withRepositoryAssets(routeProductTeamResult, config)).then(developmentTeam.workflow);
   return main.then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, developmentTeam.execution, generate)).then(createDeploymentWorkflow(agents, config, developmentTeam.execution)).then(deliveryTeam).commit();
 }
 

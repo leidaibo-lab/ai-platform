@@ -8,6 +8,9 @@ import { loadGovernedSkill, loadProductSkills, PRODUCT_MAX_STEPS } from './skill
 import { productManagerProfile, productReviewerProfile, type ProductAgentRole } from './product-roles.js';
 import type { AnyWorkspace } from '@mastra/core/workspace';
 import { createRecruitmentWorkspace } from '../project-workspaces.js';
+import { createSkill, validateSkillContent } from '@mastra/core/skills';
+import { validateNacosSnapshot, type NacosSnapshot } from '../nacos-resources.js';
+import type { MastraCompositeStore } from '@mastra/core/storage';
 
 const instructions = {
   product: `产品 Agent 可使用完整 product-pm 套件。先从当前任务的优先方法中匹配最少必要的 Skill，至少加载一项适合本轮任务的 product-pm 方法；优先列表是选法指引，可以从全套选择更合适的方法。调用原生 skill 加载选定方法，并按其说明用 skill_read 读取完整原文或分支参考；原名查找或任务不明确时读取 product-pm-catalog。复合任务只完成当前 Workflow 阶段，不跳过人工关口或替其他阶段伪造执行事实。不批量展开全部方法。交付前必须调用 product-requirements-handoff Skill，按当前职责检查依据、已确认规则、边界和未决项；输出末尾简列本轮实际使用的方法及其用途，未调用的方法不能声称已使用。`,
@@ -26,19 +29,21 @@ export interface ProductAgentOptions {
   skillsEnabled?: boolean;
   workspace?: AnyWorkspace | false;
   execution?: (role: ProductAgentRole) => Pick<AgentExecutionOptionsBase<unknown>, 'modelSettings' | 'onStepFinish'>;
+  resources?: NacosSnapshot;
+  storage?: MastraCompositeStore;
 }
 
 /** 工厂只组合框架原生 Agent；fixture/live 的变化位于模型边界。 */
 export function createAgents(config: PracticeConfig, options: ProductAgentOptions = {}) {
   const workspace = options.workspace === false ? undefined : options.workspace ?? createRecruitmentWorkspace(config.rootDir);
   const workspaceInstructions = workspace ? '你可通过已注册的 Workspace 原生文件工具只读业务材料。处理招聘项目时先列目录并读取 brief.md 和相关原始资料，引用实际读取的文件依据；其他业务不要套用招聘资料。Workspace 不包含历史评审或标准答案，缺失资料应明确提出。你不能写文件、执行命令或审批；产物副本由应用导出，不得声称自己已保存。' : '';
-  const sharedRoot = resolve(config.rootDir, '.agents/skills');
-  const productSkills = [loadGovernedSkill(sharedRoot, 'product/requirements-handoff'), ...loadProductSkills(resolve(config.rootDir, '.agents/skills'))];
+  const productSkillRoot = resolve(config.rootDir, 'nacos-resources/product/skills');
+  const productSkills = options.resources ? [] : [loadGovernedSkill(productSkillRoot, 'product/requirements-handoff'), ...loadProductSkills(productSkillRoot)];
   const availableProductSkills = new Set(
     // 装配时验证优先方法名称，避免上游迁移后提示仍指向不存在的 Skill。
     productSkills.map((skill) => skill.name),
   );
-  for (const profile of [productManagerProfile, productReviewerProfile]) {
+  for (const profile of options.resources ? [] : [productManagerProfile, productReviewerProfile]) {
     for (const name of profile.preferredSkills) {
       if (!availableProductSkills.has(name)) throw new Error(`产品 Agent ${profile.name} 的优先 Skill 未注册：${name}`);
     }
@@ -49,15 +54,21 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
     return { id: resolveModelId(config, stage === 'product' || stage.startsWith('product-') ? 'product' : stage === 'development' ? 'development' : undefined), apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
   }
   /** 创建统一产品经理/独立产品审查 Agent；同一逻辑 Agent 可被多个 Workflow 阶段复用。 */
-  function specializedProductAgent(profile: typeof productManagerProfile | typeof productReviewerProfile, id: string, stage: string) {
+  function specializedProductAgent(profile: typeof productManagerProfile | typeof productReviewerProfile, id: string, stage: string, resources?: NacosSnapshot) {
+    const frozen = resources ?? options.resources ? validateNacosSnapshot(resources ?? options.resources) : undefined;
+    const externalSkills = frozen ? [frozen.skill, ...(frozen.additionalSkills ?? [])].filter(/** 审查绑定缺省保持旧快照共享行为。 */skill => id !== 'product-reviewer-agent' || !frozen.reviewerSkills || frozen.reviewerSkills.includes(skill.name)).map(/** 冻结方法只以 Mastra 原生 Skill 装配。 */skill => {
+      const definition = validateSkillContent({ content: skill.content });
+      if (!definition.metadata || !definition.instructions) throw new Error('冻结的 Nacos Skill 无效');
+      return createSkill({ name: String(definition.metadata.name), description: String(definition.metadata.description), instructions: definition.instructions, references: skill.references });
+    }) : [];
     return new Agent({
       id,
       name: profile.name,
-      instructions: `${profile.instructions}${productTask}${instructions.product}当前任务优先方法：${profile.preferredSkills.join('、')}。${productBoundaries}${workspaceInstructions}`,
+      instructions: frozen ? `当前角色：${profile.name}。${productTask}按当前任务需要可调用已注册的版本化 Skill。角色方法：${id === 'product-reviewer-agent' ? (frozen.reviewerPrompt ?? frozen.prompt).content : frozen.prompt.content}\n${productBoundaries}${workspaceInstructions}` : `${profile.instructions}${productTask}${instructions.product}当前任务优先方法：${profile.preferredSkills.join('、')}。${productBoundaries}${workspaceInstructions}`,
       model: model(stage),
-      ...(config.mode === 'live' ? { memory: createNativeMemory(model('product')) } : {}),
+      ...(config.mode === 'live' ? { memory: createNativeMemory(model('product'), options.storage) } : {}),
       ...(workspace ? { workspace } : {}),
-      ...(options.skillsEnabled === false ? {} : { skills: productSkills }),
+      ...(options.skillsEnabled === false ? {} : { skills: frozen ? externalSkills : productSkills }),
       tools: { practiceInfo: practiceInfoTool },
       defaultOptions: { ...options.execution?.(id === 'product-manager-agent' ? 'product-manager' : 'product-reviewer'), maxSteps: PRODUCT_MAX_STEPS },
     });
