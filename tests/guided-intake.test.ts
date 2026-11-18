@@ -275,3 +275,28 @@ test('旧产品快照中的闭环执行计划不显示为已完成检查', /** �
   const retry = describeRecovery('test', 'failed', { 'product-team.draft-product.product-writing': { status: 'failed', payload } })!;
   assert.deepEqual(retry.preserved.map(item => 'complete' in item ? item.complete : undefined), [true, true, false]);
 });
+
+test('产品质量审查失败后从原检查点恢复并保留产品稿', async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'product-quality-retry-'));
+  const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
+  const manager = app.agents.productManagerAgent; const originalManager = manager.generate.bind(manager) as any; let managerCalls = 0;
+  manager.generate = (async (...args: any[]) => { managerCalls++; return originalManager(...args); }) as any;
+  const reviewer = app.agents.productReviewerAgent; const originalReviewer = reviewer.generate.bind(reviewer) as any; let reviewerCalls = 0;
+  reviewer.generate = (async (...args: any[]) => { reviewerCalls++; if (reviewerCalls === 1) throw new Error('synthetic failure'); return originalReviewer(...args); }) as any;
+  new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
+  try {
+    const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成审查故障', iterationId: 'quality-recovery' } });
+    const before = await readIntake(workflow, run.runId);
+    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.draft-product.review-product-quality');
+    const snapshot = await workflow.getWorkflowRunById(run.runId);
+    const saved = (snapshot!.steps!['product-team.draft-product.publish-product'] as any).output.artifacts.at(-1);
+    const alteredSteps = { ...snapshot!.steps, 'product-team.draft-product.publish-product': { ...(snapshot!.steps!['product-team.draft-product.publish-product'] as any), output: { ...(snapshot!.steps!['product-team.draft-product.publish-product'] as any).output, brief: '不一致的产品输入' } } };
+    assert.equal(describeRecovery(run.runId, 'failed', alteredSteps), undefined);
+    assert.equal(describeRecovery(run.runId, 'failed', { ...snapshot!.steps, 'product-team.review-product': { status: 'success' } }), undefined);
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: '0'.repeat(64) }));
+    const after = await respondIntake(workflow, 'fixture', run.runId, { retryHash: before.retry!.hash });
+    assert.equal(after.status, 'suspended'); assert.equal(after.step, 'review-product'); assert.equal(after.product?.artifact.hash, saved.hash);
+    assert.equal(managerCalls, 4); assert.equal(reviewerCalls, 2);
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: before.retry!.hash }));
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});

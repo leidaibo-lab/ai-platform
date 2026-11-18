@@ -7,6 +7,7 @@ import type { NacosSnapshot } from '../nacos-resources.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
 import type { PracticeConfig } from '../config.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
+import { publishFormalSpecification, type FormalSpecificationReceipt } from '../../delivery/remote-handoff.js';
 import { createProductManagerWorkflow } from './product-manager.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from './delivery.js';
 
@@ -30,14 +31,24 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
     suspendSchema: pendingSchema,
     resumeSchema: reviewSchema,
     // 产品审批属于产品团队的人工质量门，未批准版本不能交给研发团队。
-    execute: async ({ inputData, resumeData, suspend, bail }) => {
+    execute: async ({ inputData, resumeData, suspend, bail, runId }) => {
       if (inputData.mode !== config.mode) throw new Error('产品运行模式发生变化');
       const pending = pendingSchema.parse({ role: 'product', artifact: inputData.artifacts.at(-1), productReworkRound: 0 });
       if (!resumeData) return suspend(pending);
       const decision = validateReview(pending, resumeData);
       const next = { ...inputData, reviews: [...inputData.reviews, decision] };
       if (decision.decision !== 'approve') return bail({ ...next, outcome: decision.decision === 'reject' ? 'rejected' as const : 'rework-requested' as const });
-      return next;
+      // 只有人工确认后的需求文档和产品 Spec 才能进入正式 Run 分支；fixture 不接触远端。
+      if (config.mode !== 'live') return next;
+      const root = config.hrmRepositoryRoot;
+      const capability = inputData.correlation?.iterationId;
+      if (!root || !capability) throw new Error('产品确认后缺少受控项目仓库或主要能力标识，不能提交正式规格');
+      const handoff = await publishFormalSpecification(root, runId, capability, {
+        'specs/requirements.md': inputData.brief.endsWith('\n') ? inputData.brief : `${inputData.brief}\n`,
+        'specs/product-spec.md': pending.artifact.content.endsWith('\n') ? pending.artifact.content : `${pending.artifact.content}\n`,
+      }, 'docs(spec): 提交已确认需求与产品规格');
+      const receipt: FormalSpecificationReceipt = { kind: 'product', handoff, paths: ['specs/requirements.md', 'specs/product-spec.md'], upstreamCommits: [] };
+      return { ...next, formalSpecifications: [...(next.formalSpecifications ?? []), receipt] };
     },
   });
   const complete = createStep({

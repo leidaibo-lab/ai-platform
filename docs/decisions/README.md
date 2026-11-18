@@ -2,6 +2,8 @@
 
 本目录保存平台能力的方案发现、验证和选择证据。记录用于回答“为什么这样选”和“为什么没有使用其他方案”，不能只描述最终实现。
 
+[划分平台与团队 Harness 职责](./2026-11-18-platform-team-harness.md)：接受；以两类 Harness、四个职责区域约束后续开发；本轮完成架构与协作规则，通用机制抽取和项目解耦另按 H1–H4 验证。
+
 [在 Mastra 主线适配 Nacos AI 资源](./2026-11-17-nacos-mastra-resources.md)：提议；已有默认启用的产品阶段 Prompt/Skill 验证切片，正式接入与生产验收待完成；MCP 和 A2A 延后。
 
 [以完整远端基线推进 Mastra v2.0 主线](./2026-11-16-mastra-v2-mainline.md)：接受；以 `fa9715f` 的完整 Mastra 代码提升根目录，原自研 Runtime 下沉为 `practices/custom-exploration/`。
@@ -101,3 +103,7 @@
 没有单独决策证据的存量实现仍按照 [`方案选型与复用治理`](../solution-selection-governance.md) 审计，不能因为本次总审计存在就自动视为已经通过选型。后续 PoC、迁移和重要依赖引入继续建立独立记录。
 
 [适配 gstack 方法与真实浏览器 QA](./2026-11-09-mastra-gstack-browser-qa.md)：接受；保留 Mastra/BMAD，固定方法来源、Playwright 执行与版本绑定证据，首版支持静态候选。
+# 恢复决策
+
+- [受控恢复旧版开发初始化失败](2026-11-18-recover-development-initialization.md)：针对已知旧锚点上限错误，绑定原批准与候选检查点，只恢复规划；跨进程和外部副作用恢复尚未覆盖。
+- [受控恢复未实施的开发阶段](2026-11-18-safe-development-stage-recovery.md)：区分架构缓存结果与暂停包；只在同一批准与候选检查点下恢复未实施架构节点。

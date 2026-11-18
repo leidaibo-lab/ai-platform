@@ -13,6 +13,13 @@
 - Mastra Store 持有 Workflow 执行、审批和恢复事实；文件或业务仓库投影不得成为第二事实源。
 - 未经授权不得推送远端、部署或删除数据。
 
+## Harness 架构约束
+
+- 遵循[两类 Harness、四个职责区域](docs/application/harness-architecture.md)及其[接受决策](docs/decisions/2026-11-18-platform-team-harness.md)。业务编排负责跨团队协作，团队 Harness 负责专业执行与验收闭环，平台 Harness 提供通用执行治理，项目适配提供具体仓库、环境和检查。
+- 新增能力先明确职责归属；团队复用 Mastra 原生运行事实和受控执行 Port，不自建审批/恢复引擎。通用机制不得固化 HRM 路径、命令或团队专业策略。
+- 团队方法和检查应版本化；实现 Agent 不得修改受保护检查、降低验收标准或自行扩权。行为变化先更新 OpenSpec。
+- 当前归属不等于代码已解耦；后续抽取按架构文档 H1–H4 任务和实际复用需求推进，不机械创建四套目录或通用框架。
+
 ## 主线入口
 
 - 应用：`src/mastra/`、`src/`、`config/`

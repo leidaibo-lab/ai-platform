@@ -17,13 +17,14 @@ import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
 import { createDevelopmentWorkflowV2 } from './development-v2.js';
 import { deliverySchema } from './delivery.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
+import { readHandoffFile } from '../../delivery/remote-handoff.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
 import { resolveProductAgents } from './product-team.js';
 
 const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 
 /** 将每个开发 Run 的候选目录与输入绑定，步骤结束即关闭执行环境。 */
-export function executionResolver(config: PracticeConfig) {
+export function executionResolver(config: PracticeConfig, options: { requireExisting?: boolean } = {}) {
   const parent = resolve(dirname(fileURLToPath(config.databaseUrl)), 'development-runs');
   /** 目录名仅由宿主 Run 标识派生，恢复不覆盖现有源码或输入。 */
   return (input: InputV2): DevelopmentExecution => {
@@ -36,6 +37,7 @@ export function executionResolver(config: PracticeConfig) {
       for (const path of [base, resolve(base, 'revisions'), preparationRoot]) if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error('候选版本目录不能是符号链接');
       mkdirSync(dirname(directory), { recursive: true, mode: 0o700 });
     }
+    if (!existsSync(directory) && options.requireExisting) throw new Error('原候选检查点不存在，不能恢复');
     if (!existsSync(directory)) seedDevelopment(directory, input);
     else {
       if (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink()) throw new Error('运行目录必须为普通目录');
@@ -65,8 +67,15 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
       if (inputData.mode !== config.mode) throw new Error('项目授权模式发生变化');
       const product = inputData.artifacts.find((artifact) => artifact.stage === 'product');
       if (!product || !inputData.reviews.some((review) => review.role === 'product' && review.decision === 'approve' && review.artifactHash === product.hash)) throw new Error('开发缺少当前产品批准');
+      // live 开发只能以同一 Run 分支的已推送产品规格作为上游版本；本地产品稿仅保留为审批散列绑定。
+      if (config.mode === 'live') {
+        const formal = inputData.formalSpecifications?.find(item => item.kind === 'product');
+        if (!formal || !formal.paths.includes('specs/requirements.md') || !formal.paths.includes('specs/product-spec.md')) throw new Error('开发缺少已推送的需求文档或产品规格');
+        const remoteProduct = readHandoffFile(config.hrmRepositoryRoot!, formal.handoff, 'specs/product-spec.md');
+        if (remoteProduct !== `${product.content.endsWith('\n') ? product.content : `${product.content}\n`}`) throw new Error('已推送产品规格与当前人工批准版本不一致');
+      }
       if (!resumeData) return suspend({ productHash: product.hash, instruction: '确认已关联仓库、当前代码版本与整体权限。技术文件拆分和实际团队由研发团队提出，方案批准后才实施。', projectFields: ['id', 'files', 'writablePaths', 'checkFiles', 'roles'] });
-      return inputV2Schema.parse({ repositoryHandoff: inputData.repositoryHandoff, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
+      return inputV2Schema.parse({ repositoryHandoff: inputData.repositoryHandoff, formalSpecifications: inputData.formalSpecifications, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
     },
   });
   const development = createDevelopmentWorkflowV2(config, execution.port, false, generate, { id: 'development-execution', team: true, bind: execution.bind });
@@ -81,7 +90,7 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
   const main = createWorkflow({ id: 'development-team', description: '研发团队｜plan-development → develop-and-check → review-development-quality；三类 Agent、确定性门禁与阻塞回流', inputSchema: deliverySchema, outputSchema: stateV2Schema })
     .then(withRepositoryAssets(scope, config))
     .then(development);
-  const ready = options.legacyBlocked ? main : main.then(openClarification).branch([[/** 只有尚未实施的业务阻塞进入澄清循环。 */async ({ inputData }) => inputData.development.outcome === 'clarification-required' && inputData.development.completedTasks.length === 0, clarification]]).map(async ({ inputData, getStepResult }) => inputData['resolve-development-blockers']?.development ?? getStepResult(openClarification).development, { id: 'continue-after-clarification' });
+  const ready = options.legacyBlocked ? main : main.then(openClarification).branch([[/** 无论发现时点，业务阻塞都须回流产品澄清；澄清子流程会保留原候选与证据。 */async ({ inputData }) => inputData.development.outcome === 'clarification-required', clarification]]).map(async ({ inputData, getStepResult }) => inputData['resolve-development-blockers']?.development ?? getStepResult(openClarification).development, { id: 'continue-after-clarification' });
   return { workflow: ready.commit(), execution, executionPort: execution.port };
 }
 

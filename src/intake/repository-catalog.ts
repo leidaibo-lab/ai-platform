@@ -27,16 +27,37 @@ export function readRepositoryCatalog(directory?: string) {
   }
   files.sort(/** 稳定顺序用于版本绑定与查找。 */(a, b) => a.path.localeCompare(b.path));
   const manifestFile = files.find(/** 只有经过上面安全检查的普通package.json才读取。 */file => file.path === 'package.json');
-  const manifest = manifestFile ? JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) : {};
+  let manifest: { packageManager?: unknown; scripts?: Record<string, unknown> } = {};
+  let invalidManifest = false;
+  if (manifestFile) { try { const parsed: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) invalidManifest = true; else manifest = parsed; } catch { invalidManifest = true; } }
   const checks = ['check', 'build', 'smoke'].filter(/** 只展示仓库真实登记的检查，不创造命令。 */key => typeof manifest.scripts?.[key] === 'string').map(/** 识别命令不等于已获准在隔离环境执行。 */key => ({ id: key, title: ({ check: '代码与类型检查', build: '应用构建验证', smoke: '页面、接口和数据库连通检查' } as Record<string, string>)[key], command: `pnpm ${key}`, ready: true, reason: '使用独立 Docker 候选及临时数据库执行' }));
   const catalog = { id: 'hrm', title: 'HRM 人资管理系统', branch, revision, modules: [...areas, { id: 'shared', title: '公共配置与说明', role: 'infrastructure' }].map(/** 模块数量由本次真实文件清单计算。 */area => ({ ...area, count: files.filter(/** 不把其他模块文件计入当前模块。 */file => file.area === area.id).length })), files, checks };
   let dockerReady = false;
   try { execFileSync('docker', ['--context', 'desktop-linux', 'info', '--format', '{{.ServerVersion}}'], { stdio: 'ignore', timeout: 3000 }); dockerReady = true; } catch { /* 没有隔离后端时不回退到宿主执行。 */ }
-  const missingFiles = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/web/package.json', 'apps/api/package.json', 'packages/database/package.json', 'scripts/smoke.mjs'].filter(/** 仅安全清单内的普通文件算作执行配置存在。 */path => !files.some(/** 复用已读取清单，避免绕过链接及大小检查。 */file => file.path === path));
-  const preparationIssues = missingFiles.map(/** 逐项说明真实工程缺口，不把未建项目误报为版本错误。 */path => `缺少可读取的工程文件：${path}`);
-  if (manifestFile && manifest.packageManager !== 'pnpm@10.6.0') preparationIssues.push('package.json 需要声明 packageManager 为 pnpm@10.6.0');
-  if (manifestFile) for (const key of ['check', 'build', 'smoke']) if (typeof manifest.scripts?.[key] !== 'string' || !manifest.scripts[key].trim()) preparationIssues.push(`package.json 缺少固定检查脚本：${key}`);
+  // 只观察固定标识文件的存在性；不读取其他技术栈的配置正文或跟随链接。
+  const indicators = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock', 'bun.lockb', 'pyproject.toml', 'requirements.txt', 'go.mod', 'Cargo.toml', 'pom.xml', 'build.gradle', 'build.gradle.kts'];
+  const present = indicators.filter(path => { const stat = lstatSync(join(root, path), { throwIfNoEntry: false }); return !!stat?.isFile() && !stat.isSymbolicLink(); });
+  const otherStack = present.filter(path => !['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'].includes(path));
+  const pnpmEvidence = present.filter(path => ['pnpm-lock.yaml', 'pnpm-workspace.yaml'].includes(path));
+  if (manifestFile && typeof manifest.packageManager === 'string' && manifest.packageManager.startsWith('pnpm@')) pnpmEvidence.push('package.json:packageManager');
+  const stackStatus = pnpmEvidence.length && otherStack.length ? 'ambiguous' : pnpmEvidence.length ? 'matched' : otherStack.length ? 'mismatch' : 'unknown';
+  const engineeringAssessment = { stackStatus, evidence: [...pnpmEvidence, ...otherStack, ...(present.includes('package.json') && !pnpmEvidence.length ? ['package.json'] : [])], expectedProfile: 'hrm-pnpm-docker-v1' };
+  const preparationIssues: string[] = [];
+  if (invalidManifest) preparationIssues.push('package.json 格式无效，需先修复后识别技术栈');
+  if (stackStatus === 'unknown') preparationIssues.push('尚未识别项目技术栈，需先核对仓库事实并确定工程准备方案');
+  if (stackStatus === 'mismatch') preparationIssues.push('发现其他技术栈或包管理器，与当前 pnpm 执行档不匹配，需先确认项目适配');
+  if (stackStatus === 'ambiguous') preparationIssues.push('检测到多种技术栈或包管理器，需先确认项目适配');
+  if (stackStatus === 'matched') {
+    const expected = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'apps/web/package.json', 'apps/api/package.json', 'packages/database/package.json', 'scripts/smoke.mjs'];
+    for (const path of expected) {
+      if (files.some(file => file.path === path)) continue;
+      const stat = lstatSync(join(root, path), { throwIfNoEntry: false });
+      preparationIssues.push(stat ? `工程文件存在但未纳入安全读取范围：${path}` : `缺少可读取的工程文件：${path}`);
+    }
+    if (manifestFile && manifest.packageManager !== 'pnpm@10.6.0') preparationIssues.push('package.json 需要声明 packageManager 为 pnpm@10.6.0');
+    if (manifestFile) for (const key of ['check', 'build', 'smoke']) if (typeof manifest.scripts?.[key] !== 'string' || !manifest.scripts[key].trim()) preparationIssues.push(`package.json 缺少固定检查脚本：${key}`);
+  }
   if (!dockerReady) preparationIssues.push('Docker Desktop 尚未就绪，请启动后重新检查');
   const executionReady = preparationIssues.length === 0;
-  return { available: true as const, ...catalog, catalogHash: developmentHash(catalog), executionReady, preparationIssues, executionReason: executionReady ? '已接入独立 Docker 验证：类型检查、构建和临时页面/API/数据库连通检查。' : '可以先交给开发团队生成方案。以下工程准备项完成并重新确认项目后，才能批准实施。' };
+  return { available: true as const, ...catalog, engineeringAssessment, catalogHash: developmentHash({ ...catalog, engineeringAssessment, preparationIssues }), executionReady, preparationIssues, executionReason: executionReady ? '已接入独立 Docker 验证：类型检查、构建和临时页面/API/数据库连通检查。' : '可以先交给开发团队生成方案。以下工程准备项完成并重新确认项目后，才能批准实施。' };
 }

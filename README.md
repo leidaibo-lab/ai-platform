@@ -12,6 +12,8 @@ LiteLLM 和 pi 适配实验保留在 `practices/custom-exploration/`，与主线
 新工作台输入显式批准自主开发策略：团队可在候选内运行登记检查、携带失败证据连续排障，多角色缺陷联合修复并重跑下游。默认3轮返工、72次开发模型调用、24次检查套件执行，连续2次重复失败且无新证据时停止；新增业务决定、扩大授权或预算耗尽升级人工。旧输入保持原政策。原生 Workflow 与真实隔离检查回归已验证，真实模型完整业务交付尚未验收。详见[自主开发与排障](./docs/application/unified-workflow.md#批准范围内自主开发与排障)及[决策记录](./docs/decisions/2026-11-09-mastra-autonomous-development.md)。
 
 - [完整产研流程](./docs/application/unified-workflow.md)：阶段职责、暂停恢复、输入格式和终态。
+- [Harness 架构](./docs/application/harness-architecture.md)：平台与团队两类 Harness、四个职责区域、代码归属和渐进演进任务。
+- [产研可视化框架](./docs/application/visual-framework.md)：以不同颜色展示主流程、Git 数据交接和 Nacos 资源传递。
 - [工作台输入与人工关口](./docs/application/guided-intake.md)：澄清、版本确认、后续表单与校验。
 - [产物归档与数据流转](./docs/application/artifact-dataflow.md)：项目/迭代/Run 关联、历史版本及下载；[产物查看页](http://127.0.0.1:4111/delivery-assets)只读。
 - [Studio 流程图](http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph)：技术调试与流程检查；日常人工确认可在工作台完成。

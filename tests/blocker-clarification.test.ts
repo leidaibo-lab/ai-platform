@@ -120,6 +120,7 @@ test('历史架构同步失败复用同版本阻塞结果，拒绝篡改且不�
     assert.ok('kind' in drift && drift.kind === 'development-repository-sync'); assert.match(drift.reason, /切换模型/);
     assert.equal(describeRecovery(runId, 'failed', { [path]: steps[path] }), undefined);
     const { createStep } = await import('@mastra/core/workflows');
+    const { z } = await import('zod');
     const { withRepositoryAssets } = await import('../src/delivery/repository-assets.js');
     const { contentHash, handoffCache } = await import('../src/delivery/remote-handoff.js');
     const { stateV2Schema } = await import('../src/development/v2/contracts.js');
@@ -130,8 +131,8 @@ test('历史架构同步失败复用同版本阻塞结果，拒绝篡改且不�
     const key = contentHash(JSON.stringify({ runId, stage: 'architecture', input: entry.payload }, null, 2) + '\n');
     writeFileSync(resolve(handoffCache(repo), `result-${key}.json`), JSON.stringify(saved));
     let generations = 0; let failPublish = true;
-    const step = createStep({ id: 'architecture', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
-      /** 恢复时禁止重新调用原角色。 */execute: async () => { generations++; throw new Error('不得重新生成'); },
+    const step = createStep({ id: 'architecture', inputSchema: stateV2Schema, outputSchema: stateV2Schema, resumeSchema: z.object({ hash: z.string() }),
+      /** 旧暂停包不许回放；恢复轮实际进入角色时才允许生成新的可归档结果。 */execute: async ({ inputData, resumeData }: any) => { generations++; if (!resumeData) throw new Error('不得重新生成'); return inputData; },
     });
     const wrapped = withRepositoryAssets(step, { ...f.config, mode: 'live', hrmRepositoryRoot: repo },
       /** 只模拟网络边界，不访问真实业务远端。 */async (_root, owner, files) => { if (failPublish) throw new Error('synthetic network'); return { version: 'remote-handoff.v1', branch: `codex/workflow/${owner}`, commit: 'a'.repeat(40), files: Object.fromEntries(Object.entries(files).map(/** 回执绑定实际投影内容。 */([name, text]) => [name, contentHash(text)])) }; });
@@ -142,5 +143,17 @@ test('历史架构同步失败复用同版本阻塞结果，拒绝篡改且不�
     failPublish = false;
     const restored = await wrapped.execute({ ...context, suspendData: paused, resumeData: { repositoryRetry: paused.retryKey } } as any) as any;
     assert.equal(restored.calls, saved.calls); assert.equal(generations, 0); assert.deepEqual(restored.plan, saved.plan);
+    /** 旧目录中若留下的是原生暂停记录，恢复决定必须回到架构节点，不能把暂停包当作已生成方案。 */
+    const suspendedRun = `${runId}-suspended`;
+    const suspendedKey = contentHash(JSON.stringify({ runId: suspendedRun, stage: 'architecture', input: entry.payload }, null, 2) + '\n');
+    writeFileSync(resolve(handoffCache(repo), `result-${suspendedKey}.json`), JSON.stringify({ runId: suspendedRun, stage: 'architecture', inputHash: 'a'.repeat(64), action: 'suspend', value: entry.payload, args: [{}] }));
+    await assert.rejects(wrapped.execute({ ...context, runId: suspendedRun } as any), /不得重新生成/);
+    assert.equal(generations, 1);
+    /** 业务恢复生成新暂停包时保留旧缓存并派生新键，避免缓存冲突掩盖原生恢复结果。 */
+    const recoveryRun = `${runId}-recovery`;
+    const recoveryKey = contentHash(JSON.stringify({ runId: recoveryRun, stage: 'architecture', input: entry.payload, resume: { hash: 'recovery' }, suspend: undefined }, null, 2) + '\n');
+    writeFileSync(resolve(handoffCache(repo), `result-${recoveryKey}.json`), JSON.stringify({ runId: recoveryRun, stage: 'architecture', inputHash: contentHash(JSON.stringify(entry.payload, null, 2) + '\n'), action: 'suspend', value: entry.payload, args: [{}] }));
+    const recovered = await wrapped.execute({ ...context, runId: recoveryRun, resumeData: { hash: 'recovery' }, suspend: async (value: unknown) => value } as any) as any;
+    assert.equal(recovered.phase, 'architecture'); assert.equal(generations, 2);
   } finally { await app.storage.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });

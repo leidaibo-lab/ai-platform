@@ -16,6 +16,7 @@ export const projectSchema = z.object({
   planning: z.literal('agent').optional(),
   /** 服务端检查得到的工程缺口随输入冻结；存在时仅可规划，不能批准或实施。 */
   preparationIssues: z.array(z.string().min(1)).min(1).max(20).optional(),
+  engineeringAssessment: z.object({ stackStatus: z.enum(['matched', 'unknown', 'mismatch', 'ambiguous']), evidence: z.array(z.string().min(1)).max(20), expectedProfile: z.literal('hrm-pnpm-docker-v1') }).optional(),
   writableRoots: z.array(safePathSchema).max(4).optional(),
   files: z.record(safePathSchema, z.string().max(100000)),
   writablePaths: z.array(safePathSchema).max(40),

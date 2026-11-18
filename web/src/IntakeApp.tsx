@@ -9,7 +9,7 @@ import { RemoteSyncSettings } from './RemoteSyncSettings';
 import { RepositoryManagement } from './RepositoryManagement';
 import { QuestionFlow, type ClarificationQuestion as Question, type ClarificationAnswer as Answer } from './components/QuestionFlow';
 import { RunFlowMini } from './components/RunFlowMini';
-import { RunActivityFeed, type LiveActivity, type RunTimelineDocument } from './components/RunActivityFeed';
+import { RunActivityFeed, appendProductStream, type ProductStreamEvent, type ProductStreamView, type LiveActivity, type RunTimelineDocument } from './components/RunActivityFeed';
 import { InlineClarificationNode } from './components/InlineClarificationNode';
 import './intake.css';
 interface Document { developmentStop?: { reason: string; rounds: number; calls: number; checkRuns: number; latestChecks?: { id: string; command: string; exitCode: number | null; stderr: string; stdout: string }[] }; reconfigure?: { hash: string }; clarify?: { hash: string; title: string }; blockage?: { preparationRequired?: boolean; phase: string; title: string; summary: string; blockers: string[]; taskCount: number; productContent: string }; progress?: { attemptDetails?: string[]; phase: string; title: string; detail: string; next: string }; retry?: { attemptDetails?: string[]; next?: string; syncOnly?: boolean; hash: string; message: string; savedAnswers: number; title: string; step: string; reason: string; impact: string; preserved: {label: string; role: string; complete?: boolean}[] }; outcome?: string; gate?: WorkflowGate; runId: string; status: string; mode?: string; intakeMode?: 'clarify' | 'autofill'; brief: string; step?: string; createdAt?: string; updatedAt?: string; timeline?: RunTimelineDocument; intake?: { intakeMode?: 'clarify' | 'autofill'; round: number; hash: string; plan: { maturity?: Record<string, { clear: boolean; evidence: string }>; summary: string; assumptions: string[]; questions: Question[] }; history: { plan: { questions: Question[] }; response: { reviewer: string; supplement: string; answers: Answer[] } }[] }; product?: { artifact: { content: string; hash: string } } }
@@ -53,13 +53,13 @@ export function IntakeApp() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [approving, setApproving] = useState(false);
-  const [recoveryConfirm, setRecoveryConfirm] = useState(false);
   const [showSyncSettings, setShowSyncSettings] = useState(false);
   const [showRepositoryManagement, setShowRepositoryManagement] = useState(false);
   const [liveActivity, setLiveActivity] = useState<LiveActivity>();
+  const [productStream, setProductStream] = useState<ProductStreamView>();
   /** 深链接与所选 Run 一致，刷新恢复当前人工节点。 */
   function choose(value: string) {
-    setNotice(''); setUncertain(false); setRecoveryConfirm(false); setId(value); setDocument(undefined); setLiveActivity(undefined); setAnswers({}); setSupplement(''); setComment(''); setError(''); setApproving(false);
+    setNotice(''); setUncertain(false); setId(value); setDocument(undefined); setLiveActivity(undefined); setProductStream(undefined); setAnswers({}); setSupplement(''); setComment(''); setError(''); setApproving(false);
     const url = new URL(location.href); value ? url.searchParams.set('run', value) : url.searchParams.delete('run'); history.replaceState(null, '', url);
   }
   /** 回读不重发用户决定，网络失败保留表单。 */
@@ -67,7 +67,7 @@ export function IntakeApp() {
     try {
       if (value) {
         const next = await request<Document>(`/${value}`);
-        if (next.intake?.hash !== document?.intake?.hash || next.product?.artifact.hash !== document?.product?.artifact.hash || next.retry?.hash !== document?.retry?.hash) { setRecoveryConfirm(false); setAnswers({}); setSupplement(''); setApproving(false); setComment(''); }
+        if (next.intake?.hash !== document?.intake?.hash || next.product?.artifact.hash !== document?.product?.artifact.hash || next.retry?.hash !== document?.retry?.hash) { setAnswers({}); setSupplement(''); setApproving(false); setComment(''); }
         setDocument(next); setUncertain(false); setError(''); if (next.status !== document?.status) setNotice('已同步最新流程状态。');
       }
       setRuns((await request<{ runs: Document[] }>('')).runs);
@@ -96,7 +96,7 @@ export function IntakeApp() {
     /** 一次只执行一个只读查询，终态或新暂停点会自然停止轮询。 */
     async function poll() {
       if (reading) return; reading = true;
-      try { const next = await request<Document>(`/${id}`); if (active) { setDocument(next); setUncertain(false); setError(''); if (next.status !== document?.status) setNotice('已同步最新流程状态。'); if (next.status !== 'running') { setAnswers({}); setSupplement(''); setApproving(false); setRecoveryConfirm(false); if (next.status === 'failed') { setError(next.retry ? `${next.retry.title}未完成：${next.retry.reason}。可使用恢复入口继续。` : '后台执行已失败，请查看处理说明。'); setNotice(''); } else setNotice('已重新同步最新流程状态。'); } } }
+      try { const next = await request<Document>(`/${id}`); if (active) { setDocument(next); setUncertain(false); setError(''); if (next.status !== document?.status) setNotice('已同步最新流程状态。'); if (next.status !== 'running') { setAnswers({}); setSupplement(''); setApproving(false); if (next.status === 'failed') { setError(next.retry ? `${next.retry.title}未完成：${next.retry.reason}。可使用恢复入口继续。` : '后台执行已失败，请查看处理说明。'); setNotice(''); } else setNotice('已重新同步最新流程状态。'); } } }
       catch { /* 只读观察暂不可达时保留未知状态，下一轮继续回读。 */ }
       finally { reading = false; }
     }
@@ -112,7 +112,9 @@ export function IntakeApp() {
     /** 事件只触发权威快照回读，不把 SSE payload 当作执行事实。 */
     source.onmessage = event => {
       try {
-        const payload = JSON.parse(event.data) as { activity?: LiveActivity };
+        const payload = JSON.parse(event.data) as { activity?: LiveActivity; output?: ProductStreamEvent; eventType?: string; stepId?: string };
+        if (active && payload.output) { setProductStream(previous => appendProductStream(previous, payload.output!)); return; }
+        if (active && payload.eventType === 'workflow-step-start' && payload.stepId) setProductStream(undefined);
         if (active && payload.activity) setLiveActivity(payload.activity);
       } catch { /* 非活动 SSE 事件不影响快照同步。 */ }
       void request<Document>(`/${id}`).then(next => {
@@ -132,7 +134,7 @@ export function IntakeApp() {
     if (result.running || result.uncertain) {
       setError(''); setNotice(''); setOperation({ label: result.running ? '提交连接已超时，后台仍在运行，正在同步进度…' : '连接暂时中断，正在重新确认后台执行状态…', startedAt: operation.startedAt });
     } else if (result.failed) setError(result.document?.retry ? `${result.document.retry.title}未完成：${result.document.retry.reason}。请查看本页的失败证据与恢复入口。` : '后台执行已失败，请查看本页的失败原因和恢复入口。');
-    else if (result.document?.status === 'success' || (result.document?.status === 'suspended' && advanced)) { setError(''); setAnswers({}); setSupplement(''); setApproving(false); setRecoveryConfirm(false); setNotice('已重新同步，流程已进入最新确认步骤。'); }
+    else if (result.document?.status === 'success' || (result.document?.status === 'suspended' && advanced)) { setError(''); setAnswers({}); setSupplement(''); setApproving(false); setNotice('已重新同步，流程已进入最新确认步骤。'); }
     else setError((reason as Error).message);
   }
   /** 创建前固定 UUID，即使响应丢失仍可按地址找回同一流程。 */
@@ -145,12 +147,12 @@ export function IntakeApp() {
   /** 仅在版本变化后清空回答，失败时保留当前输入用于检查。 */
   async function submit(body: unknown) {
     const action = (body as { action?: string; retryHash?: string }).action;
-    setLiveActivity(undefined);
+    setLiveActivity(undefined); setProductStream(undefined);
     setOperation({ label: (body as { clarifyHash?: string }).clarifyHash ? '正在整理待决问题、关联工程资料并准备选择卡片…' : (body as { retryHash?: string }).retryHash ? `正在从${document?.retry?.title ?? '已保存检查点'}恢复…` : action === 'refine' ? '正在根据你的回答完善方案…' : action === 'finalize' ? '正在检查业务缺口，满足条件后生成产品需求稿…' : '正在保存决定并处理下一步…', startedAt: Date.now() }); setNotice('');
     setBusy(true); setError('');
     try {
       const next = await request<Document>(`/${id}/respond`, body);
-      if (next.status === 'failed') setError(next.retry ? `${next.retry.title}未完成：${next.retry.reason}。请查看本页的失败证据与恢复入口。` : '后续生成未完成，请查看本页处理说明。'); else setNotice(next.gate?.key === 'confirm-blocker-answers' ? '待决问题已整理，请逐项选择或补充。' : next.gate?.key === 'review-revised-product' ? '已生成完整修订稿，请审阅确认。' : next.gate?.recoveryInfo ? '该阶段执行未完成，检查点已保留。请查看下面的处理指引。' : '本次决定已保存，请查看当前阶段与下一步。'); setDocument(next); window.scrollTo({ top: 0, behavior: 'smooth' }); setRuns(runs.map(/** 当前 Run 状态随已保存响应同步。 */run => run.runId === next.runId ? next : run)); setAnswers({}); setSupplement(''); setApproving(false); setRecoveryConfirm(false);
+      if (next.status === 'failed') setError(next.retry ? `${next.retry.title}未完成：${next.retry.reason}。请查看本页的失败证据与恢复入口。` : '后续生成未完成，请查看本页处理说明。'); else setNotice(next.gate?.key === 'confirm-blocker-answers' ? '待决问题已整理，请逐项选择或补充。' : next.gate?.key === 'review-revised-product' ? '已生成完整修订稿，请审阅确认。' : next.gate?.recoveryInfo ? '该阶段执行未完成，检查点已保留。请查看下面的处理指引。' : '本次决定已保存，请查看当前阶段与下一步。'); setDocument(next); window.scrollTo({ top: 0, behavior: 'smooth' }); setRuns(runs.map(/** 当前 Run 状态随已保存响应同步。 */run => run.runId === next.runId ? next : run)); setAnswers({}); setSupplement(''); setApproving(false);
     } catch (reason) { await recoverResponse(id, reason); }
     finally { setBusy(false); }
   }
@@ -188,11 +190,11 @@ export function IntakeApp() {
         <button className="primary" disabled={busy || uncertain || !brief.trim() || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)} onClick={start}>{intakeMode === 'autofill' ? '自主补全并生成需求稿 →' : '分析需求，形成初步方案 →'}</button>
       </section> : <>
         <section className="intake-context"><details><summary>原始需求 · {document?.mode === 'fixture' ? '固定样例，不理解业务输入' : document?.mode === 'live' ? '真实模型提案，待人工审核' : '正在载入'}</summary><p>{document?.brief || brief}</p><code>{id}</code></details></section>
-        {document && <RunFlowMini document={document} />}
-        {document && <RunActivityFeed timeline={document.timeline} status={document.status} liveActivity={liveActivity} progressText={document.progress?.detail} nextText={document.progress?.next}>
+        {document && <RunFlowMini document={document} recoveryDisabled={busy || uncertain} onRecover={document.retry ? () => void submit({ retryHash: document.retry!.hash }) : undefined} />}
+        {document && <RunActivityFeed stream={productStream} timeline={document.timeline} status={document.status} liveActivity={liveActivity} progressText={document.progress?.detail} nextText={document.progress?.next} />}
           {intake && <InlineClarificationNode questions={questions} questionKey={intake.hash} answers={answers} activeQuestion={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question" supplement={supplement} onSupplementChange={setSupplement} reviewer={reviewer} onReviewerChange={setReviewer} complete={complete} missingRequired={questions.filter(/** 只统计未显式回答的必答项。 */question => question.required && !answers[question.id]?.selected.length && !answers[question.id]?.custom.trim()).length} busy={busy} onRefine={/** 回答后重新形成方案，仍须确认。 */() => respond('refine')} onFinalize={/** 显式结束澄清，进入完整稿生成。 */() => respond('finalize')} />}
           {intake && <p className="run-activity-copy inline-continuation">保存后，系统会根据你的决定继续完善当前阶段结果。</p>}
-        </RunActivityFeed>}
+
         {intake && <RequirementWorkspace contentOnly title="澄清待确认项" panel={<fieldset className="requirement-inputs" disabled={busy || uncertain}><legend className="sr-only">本轮问题与补充</legend>
 <QuestionFlow key={intake.hash} questions={questions} answers={answers} activeId={activeQuestion} onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question" />
           <label>其他补充<textarea value={supplement} maxLength={4000} onChange={/** 补充与当前问题回答一并保存。 */e => setSupplement(e.target.value)} /></label>
@@ -222,10 +224,10 @@ export function IntakeApp() {
         {document?.blockage && <section className="intake-card"><div className="intake-eyebrow">{document.blockage.phase} · 已返回方案，尚未开工</div><h1>{document.blockage.title}</h1><p>已保存开发方案，包含 {document.blockage.taskCount} 项任务。以下事项仍阻止开工，本次没有进入代码实施。</p><Markdown>{document.blockage.summary}</Markdown><h2>接下来需要处理什么？</h2><p>{document.blockage.preparationRequired ? '当前项目尚未具备实施与验证条件。开发侧需要先按方案完成工程准备，再点击下方入口重新确认项目；产品需求和本次方案已保存，工程缺口不需要通过修改产品稿解决。' : '先补齐产品稿中的业务选择；工程资料缺口由开发侧核对。补齐后再继续方案规划和确认，不应把这些未决项直接当作已批准规则。'}</p>{document.reconfigure && <button className="primary" disabled={busy || uncertain} onClick={/** 返回项目确认关口重新检查工程环境，不重做产品生成或自动批准。 */() => void submit({ reconfigureHash: document.reconfigure!.hash })}>重新检查项目，继续交接 →</button>}{document.clarify && <button className="primary" disabled={busy || uncertain} onClick={/** 在原Run创建原生澄清暂停点，不选择答案或自动批准。 */() => void submit({ clarifyHash: document.clarify!.hash })}>{busy ? '正在准备选择卡片…' : '补齐业务选择，修订产品稿 →'}</button>}<details open><summary>查看具体阻塞事项（{document.blockage.blockers.length}）</summary><ul>{document.blockage.blockers.map(/** 阻塞依据来自模型已保存的实际方案，不代替用户作决定。 */(item, index) => <li key={index}><p>{item}</p></li>)}</ul></details><details><summary>查看已确认产品稿及其待决项</summary><Markdown>{document.blockage.productContent}</Markdown></details></section>}
         {document?.progress && !document.gate && <section className="intake-card" role="status"><div className="intake-eyebrow">当前阶段 · {document.progress.phase}</div><h1>{document.progress.title}</h1><p>{document.progress.detail}</p><p>{document.progress.next}</p>{!!document.progress.attemptDetails?.length && <details><summary>查看模型调用诊断</summary>{document.progress.attemptDetails.map(/** 后端仅返回经过白名单校验的来源和计时。 */(detail, index) => <p key={index}>{detail}</p>)}</details>}</section>}
         {document?.gate?.key === 'confirm-project-scope' ? <RepositoryScope key={document.gate.gateHash} gateHash={document.gate.gateHash} busy={busy || uncertain} submit={submit} /> : document?.gate && <WorkflowGateForm key={document.gate.gateHash} gate={document.gate} busy={busy || uncertain} submit={submit} />}
-        {document && !intake && !document.product && !document.gate && !document.blockage && (!document.progress || document.retry) && (document.retry ? <RequirementWorkspace title="恢复与下一步" panel={<><p>{document.retry.next ?? '从已保存的检查点继续，已确认内容和前序成果保留。'}</p><h3>执行影响</h3><p>{document.retry.impact}</p></>} actions={recoveryConfirm ? <div className="intake-assumptions"><strong>确认从“{document.retry.title}”继续？</strong><p>{document.retry.next}</p><p>{document.retry.syncOnly ? '仅同步已保存产物，不重新调用模型；成功后继续原流程。' : '会继续当前需求执行，不重新填写需求；模型调用可能产生费用。'}</p><button className="primary" disabled={busy || uncertain} onClick={/** 路径和输入由服务端快照决定，客户端只提交版本令牌。 */() => void submit({ retryHash: document.retry!.hash })}>{busy ? '正在恢复…' : '确认恢复并继续'}</button><button disabled={busy || uncertain} onClick={/** 返回检查不改变原生快照。 */() => setRecoveryConfirm(false)}>返回检查</button></div> : <button className="primary" disabled={busy || uncertain} onClick={/** 恢复前先展示检查点与执行影响。 */() => setRecoveryConfirm(true)}>{document.retry.syncOnly ? '重试资料同步 →' : `从${document.retry.title}继续 →`}</button>}>
+        {document && !intake && !document.product && !document.gate && !document.blockage && (!document.progress || document.retry) && (document.retry ? <div id="workflow-recovery"><RequirementWorkspace title="恢复与下一步" panel={<><p>{document.retry.next ?? '从已保存的检查点继续，已确认内容和前序成果保留。'}</p><h3>执行影响</h3><p>{document.retry.impact}</p></>} actions={<button className="primary" disabled={busy || uncertain} onClick={/** 恢复只提交当前服务端版本，不允许客户端指定路径。 */() => void submit({ retryHash: document.retry!.hash })}>{busy ? '正在重试…' : '重试'}</button>}>
           <section className="intake-card requirement-completeness"><div className="intake-eyebrow">当前成果状态</div><h1>已保存的工作与待补结果</h1><p>已保存 {document.retry.savedAnswers} 轮回答。当前停在“{document.retry.title}”，恢复后仍会停在相应的人工确认关口。</p>{document.retry.preserved.length > 0 && <ul className="requirement-preserved">{document.retry.preserved.map(/** 状态由服务端依据保存的角色结果判断，计划句不计作完成交付。 */item => <li key={item.role}><span>{item.label}</span><strong>{item.complete === false ? '仅保存执行计划，未保存检查结果' : '已完成'}</strong></li>)}</ul>}</section>
           <section className="intake-card"><h2>当前需要处理的问题</h2><p><strong>{document.retry.title}：</strong>{document.retry.reason}</p>{document.retry.attemptDetails?.map(/** 保留服务端脱敏后的失败依据，不推断额外故障原因。 */detail => <p key={detail}>{detail}</p>)}<p>{document.retry.message}</p></section>
-        </RequirementWorkspace> : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
+        </RequirementWorkspace></div> : document.status === 'running' ? null : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
       </>}
     </main>
     <OperationFeedback busy={busy || uncertain || document?.status === 'running'} label={busy || uncertain || operation.label.includes('超时') ? operation.label : document?.progress?.title ?? '后台流程仍在处理，正在自动同步最新结果…'} startedAt={operation.startedAt} error={error} notice={notice} dismiss={/** 关闭反馈不丢弃表单或重新提交。 */() => { setError(''); setNotice(''); }} />

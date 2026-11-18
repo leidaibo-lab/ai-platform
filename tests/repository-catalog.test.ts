@@ -50,7 +50,9 @@ test('只有产品资料的项目可交接只读规划，具体工程缺口随�
     execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'test(hrm): 产品资料基线'], { stdio: 'ignore' });
     const catalog = readRepositoryCatalog(root); assert.ok(catalog.available); if (!catalog.available) return;
     assert.equal(catalog.executionReady, false); assert.equal(catalog.checks.length, 0);
-    assert.ok(catalog.preparationIssues.includes('缺少可读取的工程文件：package.json'));
+    assert.equal(catalog.engineeringAssessment.stackStatus, 'unknown');
+    assert.ok(catalog.preparationIssues.some(issue => issue.includes('尚未识别项目技术栈')));
+    assert.ok(!catalog.preparationIssues.some(issue => issue.includes('缺少可读取的工程文件')));
     assert.ok(!catalog.preparationIssues.some(/** 没有清单不能推断包管理器版本错误。 */issue => issue.includes('packageManager')));
     const project = assembleRepositoryProject(root, catalog.catalogHash);
     assert.deepEqual(project.writablePaths, []); assert.deepEqual(project.checkFiles, ['README.md']);
@@ -60,5 +62,28 @@ test('只有产品资料的项目可交接只读规划，具体工程缺口随�
     const changed = readRepositoryCatalog(root); assert.ok(changed.available); if (!changed.available) return;
     assert.ok(changed.preparationIssues.includes('package.json 缺少固定检查脚本：check'));
     assert.ok(changed.preparationIssues.includes('package.json 缺少固定检查脚本：smoke'));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('仓库技术栈不匹配和不可读取配置不会被误报为缺失', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'hrm-stack-')));
+  try {
+    execFileSync('git', ['init', '-b', 'main', root], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'remote', 'add', 'origin', 'https://github.com/leidaibo-lab/hrm.git']);
+    writeFileSync(join(root, 'README.md'), '# 示例');
+    writeFileSync(join(root, 'pyproject.toml'), '[project]\nname="fixture"');
+    execFileSync('git', ['-C', root, 'add', 'README.md']);
+    execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'test(hrm): 示例'], { stdio: 'ignore' });
+    const other = readRepositoryCatalog(root); assert.ok(other.available); if (!other.available) return;
+    assert.equal(other.engineeringAssessment.stackStatus, 'mismatch');
+    assert.ok(!other.preparationIssues.some(issue => issue.includes('缺少可读取的工程文件')));
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages: []');
+    const mixed = readRepositoryCatalog(root); assert.ok(mixed.available); if (!mixed.available) return;
+    assert.equal(mixed.engineeringAssessment.stackStatus, 'ambiguous');
+    rmSync(join(root, 'pyproject.toml'));
+    writeFileSync(join(root, 'package.json'), 'x'.repeat(100001));
+    const restricted = readRepositoryCatalog(root); assert.ok(restricted.available); if (!restricted.available) return;
+    assert.equal(restricted.engineeringAssessment.stackStatus, 'matched');
+    assert.ok(restricted.preparationIssues.includes('工程文件存在但未纳入安全读取范围：package.json'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

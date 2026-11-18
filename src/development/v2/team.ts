@@ -13,6 +13,9 @@ import { DevelopmentExecution } from '../../development-execution.js';
 import { seedDevelopment } from '../../development-service.js';
 import { developmentHash } from '../contracts.js';
 import { generateV2, type GeneratorV2, type MemberRuntime } from './agents.js';
+import type { LiveOutputEvent } from '../../intake/live-output.js';
+import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
+import { publishLiveOutput } from '../../intake/live-output.js';
 import { delegationSchema, recoveryHashV2, stateV2Schema, taskPackageSchema, type StateV2 } from './contracts.js';
 import { pauseForCallBudget } from './recovery-policy.js';
 import { assertApprovalV2, unresolvedV2, validateIdentityV2 } from './gates.js';
@@ -32,7 +35,7 @@ export function assembleTeam(state: StateV2): NonNullable<StateV2['team']> {
 }
 
 /** 单分支只访问当前波次快照；委派可选择已登记角色，但子成员不能继续委派。 */
-async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSchema>, methods: DevelopmentMethods, generate: GeneratorV2): Promise<z.infer<typeof resultSchema>> {
+async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSchema>, methods: DevelopmentMethods, generate: GeneratorV2, onProgress?: (event: LiveOutputEvent) => Promise<void>): Promise<z.infer<typeof resultSchema>> {
   const base = { state: job.state, taskId: job.task?.id ?? null, patches: {}, calls: 0, entry: null, faults: [], failed: false, blocker: false, delegations: [] };
   if (!job.task) return base;
   const task = job.task;
@@ -55,10 +58,10 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
     let delegationError: Error | undefined;
     const delegated: NonNullable<StateV2['delegations']> = [];
     /** 每次真实父/子模型调用共用分支预算，不依赖模型自报用量。 */
-    async function counted(role: typeof task.role, state: StateV2, paths: string[], extra: unknown, runtime: MemberRuntime) {
+    async function counted(role: typeof task.role, state: StateV2, paths: string[], extra: unknown, runtime: MemberRuntime, onProgress?: (event: LiveOutputEvent) => Promise<void>) {
       if (calls >= job.budget) throw new Error('团队任务模型预算耗尽');
       calls++;
-      const entry = await generate(config, activeExecution, role, state, paths, extra, methods, runtime);
+      const entry = await generate(config, activeExecution, role, state, paths, extra, methods, runtime, onProgress);
       if (entry.text.includes('BUSINESS_BLOCKER:')) blockerKind = 'business-decision';
       if (entry.text.includes('AUTHORIZATION_BLOCKER:')) blockerKind = 'authorization-required';
       return entry;
@@ -76,7 +79,7 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
           async () => {
             const memberId = `${member.id}-delegate-${sequence}`;
             const checkpointHash = developmentHash(await branch.snapshot());
-            const entry = await counted(request.role, { ...job.state, checkpointHash }, request.paths, { ...task, goal: request.goal, parentId: member.id, findings: unresolvedV2(job.state) }, { memberId });
+            const entry = await counted(request.role, { ...job.state, checkpointHash }, request.paths, { ...task, goal: request.goal, parentId: member.id, findings: unresolvedV2(job.state) }, { memberId }, onProgress);
             delegatedBlocker ||= entry.text.includes('ARCHITECTURE_BLOCKER:');
             delegated.push({ taskId: task.id, parentId: member.id, memberId, role: request.role, goal: request.goal, paths: request.paths, outputHash: developmentHash(entry), sourceHash: developmentHash(await branch.snapshot()) });
             return { memberId, text: entry.text };
@@ -88,11 +91,11 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
       },
     };
     /** 外层检查点负责父任务整体回滚，失败不会影响其他并行候选。 */
-    const parent: GeneratorV2 = async (_config, _execution, role, state, paths, extra) => {
+    const parent: GeneratorV2 = async (_config, _execution, role, state, paths, extra, _methods, _runtime, progress) => {
       activeExecution = _execution;
       const previousCount = delegated.length;
       try {
-        const entry = await counted(role as typeof task.role, state, paths, extra, runtime);
+        const entry = await counted(role as typeof task.role, state, paths, extra, runtime, progress);
         await queue;
         if (delegationError) throw delegationError;
         if (delegated.length === previousCount) throw new SyntaxError('团队任务未实际委派实现');
@@ -115,7 +118,7 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
         throw error;
       }
     };
-    const called = await invokeV2(config, branch, task.role, job.state, task.paths, { ...task, findings: unresolvedV2(job.state) }, methods, parent, undefined, job.checkBudget);
+    const called = await invokeV2(config, branch, task.role, job.state, task.paths, { ...task, findings: unresolvedV2(job.state) }, methods, parent, undefined, job.checkBudget, onProgress);
     const patches: Record<string, string> = {};
     if (called.entry) for (const path of task.paths) patches[path] = await branch.readFile(path);
     const faults = called.state.faults.slice(job.state.faults.length);
@@ -159,7 +162,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
   });
   const worker = createStep({ id: 'execute-team-member', description: '动态任务负责人 → 受限 delegateTask 子成员 → 独立候选补丁', inputSchema: jobSchema, outputSchema: resultSchema,
     // 原生foreach负责并发，成员只处理自己的输入，不共享候选目录。
-    execute: async ({ inputData }) => executeMember(config, inputData, methods, generate),
+    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => executeMember(config, inputData, methods, generate, event => publishLiveOutput(pubsub, runId, event)),
   });
   const merge = createStep({ id: 'merge-team-results', description: '等待所有分支、校验范围、合并补丁并保存已完成任务', inputSchema: z.array(resultSchema), outputSchema: stateV2Schema,
     // 只有当前源码仍等于派发基线时才能提交本波次补丁。

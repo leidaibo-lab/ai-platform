@@ -1,5 +1,5 @@
 import { contextBudgetFailureSchema } from '../../delivery/context-budget.js';
-import { remoteHandoffSchema } from '../../delivery/remote-handoff.js';
+import { formalSpecificationReceiptSchema, remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 /** v2 独立契约：不可变证据快照由原生 Workflow 持有，不迁移 v1 状态。 */
 import { z } from 'zod';
 import { modelCallDiagnosticSchema } from './model-diagnostic.js';
@@ -9,7 +9,7 @@ import { architectureSchema, commandEvidenceSchema, developmentInputSchema, deve
 
 /** 新Run显式选择自主政策；缺省不改变历史批准/恢复散列。 */
 export const autonomyPolicySchema = z.object({ version: z.literal('autonomy.v1'), maxCheckRuns: z.number().int().min(2).max(96).default(24), maxNoProgress: z.number().int().min(1).max(5).default(2) });
-export const inputV2Schema = developmentInputSchema.extend({ autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+export const inputV2Schema = developmentInputSchema.extend({ autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -44,6 +44,7 @@ export const stateV2Schema = z.object({
   verificationHistory: z.array(verificationRecordSchema).optional(), repairHistory: z.array(repairRecordSchema).optional(),
   stopReason: z.enum(['business-decision', 'authorization-required', 'repair-budget', 'verification-budget', 'no-progress']).optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),
+  formalSpecification: formalSpecificationReceiptSchema.optional(),
   team: teamSchema.optional(), delegations: z.array(delegationSchema).optional(),
   version: z.literal('development-state.v2'), input: inputV2Schema, mode: z.enum(['fixture', 'live']), executionIdentity: executionIdentitySchema,
   methodBundleHash: hash, phase: phaseSchema,

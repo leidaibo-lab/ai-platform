@@ -1,5 +1,9 @@
 # 完整产研流程
 
+架构归属见[Harness 架构](./harness-architecture.md)：本页的 `product-development` 是平台承载的产研业务编排，各团队拥有专业闭环，共用平台执行治理机制并加载项目适配。当前代码尚未完成全部机制与策略解耦，具体差距和后续任务以架构页为准。
+
+主流程、Git 数据流和 Nacos 资源流的分色视图见[产研可视化框架](./visual-framework.md)。该视图按责任团队归属组织，研发阻塞后的产品澄清仍位于产品团队。
+
 当前 Studio 业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）。主流程按团队职责组织为五个嵌套 Workflow：`product-team`、`development-team`、`test-team`、`deployment-team`、`delivery-team`。新 Run 只使用这套团队边界；团队内部步骤仍用于暂停、恢复、审计和责任定位，但不再作为主流程中的平行团队节点。
 
 日常操作按 [README](./README.md#启动)启动后端与前端，打开[产研工作台](http://127.0.0.1:4112/)；所有人工关口可在工作台完成。以下 Studio 图和 Resume JSON 供技术调试及契约查阅。

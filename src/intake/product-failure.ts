@@ -12,6 +12,12 @@ const reasons: Record<ProductFailureKind, string> = {
   'context-budget': '历史资料预算限制中断了执行', 'empty-output': '模型正常结束但没有最终交付正文', unknown: '模型执行未完成，未取得明确故障来源',
 };
 
+/** 将可持久化的单次调用证据转成归因文案，HTTP 5xx 只说明上游网关响应，不能推断本地网络或模型整体不可用。 */
+function describeAttemptReason(attempt: ProductAttempt): string {
+  if (attempt.failure.source === 'upstream-http') return attempt.failure.httpStatus === undefined ? '上游模型网关返回 HTTP 错误（状态码未记录）' : `上游模型网关返回 HTTP ${attempt.failure.httpStatus}${[408, 504, 524].includes(attempt.failure.httpStatus) ? '（请求超时）' : ''}`;
+  return reasons[attempt.kind];
+}
+
 /** 原生 Store 序列化拥有 details；不携带原始 SDK 异常，失败不会变成可发布产物。 */
 export class ProductGenerationFailure extends Error {
   readonly details: ProductFailureEvidence;
@@ -70,7 +76,7 @@ export function describeProductFailure(error: unknown, _legacyContextBudgetLevel
       : last.kind === 'context-budget'
       ? '资料预算门槛已移除；可从当前失败角色继续，执行上下文由 Mastra 原生观察记忆管理，无需确认资料升档。'
       : undefined;
-    return { reason: reasons[last.kind], additionalContextLevel: undefined, retryBlocked: false, details: attempts.map(/** 仅展示白名单字段，不暴露模型返回正文。 */item => `第${item.attempt}次尝试：${reasons[item.kind]}；耗时${(item.durationMs / 1000).toFixed(1)}秒${item.budget ? `；${describeContextBudgetUsage(item.budget)}` : item.kind === 'context-budget' ? '；旧记录未保存具体预算项和用量，无法追溯' : ''}${item.finishReason ? `；结束状态 ${item.finishReason}` : ''}${item.steps !== undefined ? `；执行${item.steps}步` : ''}${item.failure.httpStatus ? `；HTTP ${item.failure.httpStatus}` : ''}。`),
+    return { reason: describeAttemptReason(last), additionalContextLevel: undefined, retryBlocked: false, details: attempts.map(/** 仅展示白名单字段，不暴露模型返回正文。 */item => `第${item.attempt}次尝试：${describeAttemptReason(item)}；耗时${(item.durationMs / 1000).toFixed(1)}秒${item.budget ? `；${describeContextBudgetUsage(item.budget)}` : item.kind === 'context-budget' ? '；旧记录未保存具体预算项和用量，无法追溯' : ''}${item.finishReason ? `；结束状态 ${item.finishReason}` : ''}${item.steps !== undefined ? `；执行${item.steps}步` : ''}。`),
       next: next ?? (last.kind === 'output-limit' ? '请先调整写作范围或输出预算，再从此节点继续。' : last.kind === 'tool-loop' ? '请检查工具错误和循环步数，修复后再继续。' : '可以从此节点继续；仅临时网络或服务故障最多自动尝试两次，仍失败时保留检查点。') };
   }
   if (value?.message === '产品写作未正常完成；未发布部分正文') return { reason: '产品写作未正常结束，未发布部分正文', details: ['历史记录没有保存具体结束状态，无法确认是流中断、工具循环还是上游异常；不能据此判定超时或额度不足。'], next: '修复后的后续执行会记录结束状态与尝试证据；历史记录保持原样。' };

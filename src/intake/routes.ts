@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
-import { projectWorkflowActivity } from './run-timeline.js';
+import { projectLiveOutputEvent, projectWorkflowActivity } from './run-timeline.js';
 import { intakeModeSchema } from './contracts.js';
 import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
 import type { WorkflowStreamEvent } from '@mastra/core/workflows';
@@ -132,7 +132,10 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
             }
             /** 将原生 Workflow 事件压缩为可公开的节点变化摘要。 */
             function observe(event: WorkflowStreamEvent) {
-              if (event.runId !== runId) return;
+              if (event.runId && event.runId !== runId) return;
+              const liveOutput = projectLiveOutputEvent(event);
+              if (liveOutput) { send({ type: 'live-output', runId, output: liveOutput }); return; }
+              if (event.type === 'workflow-step-output') return;
               const payload = 'payload' in event && event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
               const eventId = 'id' in event && typeof event.id === 'string' ? event.id : null;
               const stepId = eventId ?? (typeof payload.id === 'string' ? payload.id : null);

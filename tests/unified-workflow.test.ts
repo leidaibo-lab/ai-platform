@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { Mastra } from '@mastra/core';
 import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { createProductDevelopmentWorkflow } from '../src/mastra/workflows/product-development.js';
+import { readIntake, respondIntake } from '../src/intake/service.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
 
 const actor = { reviewer: 'evaluation-policy', comment: '合成可靠性测试授权，不代表业务人工批准' };
@@ -21,7 +22,7 @@ function paused(result: any): { path: string[]; payload: any } {
 }
 
 // 每个暂停点关闭Store再装配，验证原生快照续跑而非内存闭包。
-for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
+for (const scenario of ['success', 'health-failure', 'health-business-gap', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-business-gap', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
   test(`完整产研主链与跨Store恢复：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'mastra-unified-'));
     const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
@@ -60,10 +61,12 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
         else if (id === 'confirm-project-scope') data = { ...actor, project: scenario.startsWith('browser-') ? { ...project, files: { ...project.files, 'page.html': '<!doctype html><p id="result">候选页面</p>' } } : project, maxReworks: 1 };
         else if (id === 'approve-architecture') { assert.equal(p.team.members.length, 2); data = { ...actor, hash: p.hash, decision: 'approve' }; }
         else if (id === 'approve-test-cases') data = { ...actor, hash: p.plan.hash, decision: 'approve', cases: [{ id: 'automatic', requirementRefs: p.requirements.map(/** 保留所有批准原文引用。 */(r: any) => r.id), expected: '两个模块返回1', method: 'registered-check', checkRefs: p.registeredChecks }] };
-        else if (id === 'review-test-results') { assert.ok(p.quality.checks.length); data = { ...actor, hash: p.hash, decision: ['qa-rework', 'qa-fixed'].includes(scenario) && visited.filter(/** 只在首轮质量门注入缺陷。 */(step) => step === id).length === 1 ? 'rework' : 'pass', manualResults: [], findings: ['qa-rework', 'qa-fixed'].includes(scenario) && visited.filter(/** 保留一次实际返工。 */(step) => step === id).length === 1 ? [{id: 'qa-1', severity: 'medium', category: 'implementation', route: 'backend', detail: '合成缺陷用于验证修复路由', refs: ['task:fixture-task-2'], evidence: '合成质量门故障注入'}] : [] }; }
+        else if (id === 'review-test-results') { assert.ok(p.quality.checks.length); const firstReview = visited.filter(/** 只在首轮质量门注入缺陷。 */step => step === id).length === 1; const qaBusiness = scenario === 'qa-business-gap' && firstReview; const qaRework = ['qa-rework', 'qa-fixed'].includes(scenario) && firstReview; data = { ...actor, hash: p.hash, decision: qaBusiness || qaRework ? 'rework' : 'pass', manualResults: [], findings: qaBusiness ? [{id: 'qa-business-1', severity: 'blocking', category: 'business', route: 'product', detail: '验收口径缺少人工确认', refs: [p.quality.approval.cases[0].requirementRefs[0]], evidence: '合成 QA 业务缺口'}] : qaRework ? [{id: 'qa-1', severity: 'medium', category: 'implementation', route: 'backend', detail: '合成缺陷用于验证修复路由', refs: ['task:fixture-task-2'], evidence: '合成质量门故障注入'}] : [] }; }
+        else if (id === 'confirm-blocker-answers') data = { hash: p.hash, reviewer: 'fixture', answers: p.plan.questions.filter(/** 所有必答业务阻塞都必须有显式选择。 */(question: any) => question.required).map((question: any) => ({ questionId: question.id, selected: [question.options[0].id], custom: '' })), supplement: '合成确认 QA 或发布阶段发现的业务口径' };
+        else if (id === 'review-revised-product') data = { hash: p.draft.hash, decision: 'approve', reviewer: 'fixture', comment: '合成确认修订产品稿，重新规划并回归' };
         else if (id === 'approve-release-scope') data = { ...actor, hash: scenario === 'stale-release' ? '0'.repeat(64) : p.packageHash, decision: 'approve', scope: { environment: 'synthetic', artifactDigest: 'a'.repeat(64), artifactRef: 'synthetic://artifact', rollbackArtifactRef: 'synthetic://previous', healthChecks: [{ id: 'ready', expected: 'ready' }] } };
         else if (id === 'execute-release-externally') data = { releaseHash: p.releaseHash, sourceHash: p.sourceHash, artifactDigest: scenario === 'wrong-artifact' ? 'b'.repeat(64) : p.artifactDigest, environment: p.environment, status: scenario === 'deploy-failure' ? 'failed' : 'succeeded', jobRef: 'synthetic://job', operator: 'fixture', finishedAt: '2026-11-07T00:00:00Z', notes: '模拟回执，未部署' };
-        else if (id === 'verify-release-health') data = { releaseHash: p.releaseHash, deploymentReceiptHash: p.deploymentReceiptHash, operator: 'fixture', checks: [{ id: scenario === 'missing-health' ? 'unknown' : 'ready', status: scenario === 'health-failure' ? 'failed' : 'passed', evidence: '合成健康结果', observedAt: '2026-11-07T00:00:00Z' }] };
+        else if (id === 'verify-release-health') { const releaseBusiness = scenario === 'health-business-gap' && visited.filter(/** 仅首个发布健康确认触发业务澄清。 */step => step === id).length === 1; data = { releaseHash: p.releaseHash, deploymentReceiptHash: p.deploymentReceiptHash, operator: 'fixture', checks: [{ id: scenario === 'missing-health' ? 'unknown' : 'ready', status: scenario === 'health-failure' || releaseBusiness ? 'failed' : 'passed', evidence: '合成健康结果', observedAt: '2026-11-07T00:00:00Z' }], findings: releaseBusiness ? [{ id: 'release-business-1', severity: 'blocking', category: 'business', route: 'product', detail: '健康门发现业务验收口径未确认', refs: ['product:L1'], evidence: '合成发布健康业务缺口' }] : [] }; }
         else if (id === 'execute-rollback-externally') data = { releaseHash: p.releaseHash, rollbackArtifactRef: p.rollbackArtifactRef, status: 'rolled-back', jobRef: 'synthetic://rollback', operator: 'fixture', notes: '模拟回滚' };
         else assert.fail(`未预期暂停点 ${id}`);
         if (scenario.startsWith('browser-') && id === 'approve-test-cases') data.cases.push({ id: 'browser', requirementRefs: p.requirements.map(/** 浏览器用例仍引用批准需求。 */(r: any) => r.id), expected: '页面显示候选内容', method: 'browser', checkRefs: [], browser: { entry: 'page.html', assets: [], actions: [], assertions: [{ selector: '#result', text: scenario === 'browser-failure' ? '不存在' : '候选页面' }] } });
@@ -83,9 +86,19 @@ for (const scenario of ['success', 'health-failure', 'reject-product', 'stale-pr
       if (['stale-release', 'wrong-artifact', 'missing-health'].includes(scenario)) { assert.equal(result.status, 'failed'); return; }
       if (scenario === 'stale-product') { assert.equal(result.status, 'failed'); assert.deepEqual(visited, ['review-product']); return; }
       assert.equal(result.status, 'success', JSON.stringify(result));
-      assert.equal(result.result.outcome, scenario === 'browser-failure' ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
+      assert.equal(result.result.outcome, scenario === 'browser-failure' || ['qa-business-gap', 'health-business-gap'].includes(scenario) ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
       if (['qa-rework', 'qa-fixed'].includes(scenario)) { assert.equal(result.result.qualityHistory.length, 1); assert.equal(result.result.development.round, 1); }
       if (scenario === 'success') { assert.equal(result.result.development.delegations.length, 2); assert.equal(result.result.quality.status, 'passed'); assert.ok(visited.includes('verify-release-health')); }
+      if (['qa-business-gap', 'health-business-gap'].includes(scenario)) {
+        assert.equal(result.result.development.outcome, 'clarification-required');
+        assert.equal(result.result.development.delivery, null);
+        assert.ok(result.result.development.plan.blockers.some((blocker: string) => blocker.includes(scenario === 'qa-business-gap' ? 'QA业务待决' : '发布业务待决')));
+        assert.ok(result.result.qualityHistory.length || result.result.releaseHistory.length, '后期澄清前必须保留阶段证据');
+        const intake = await readIntake(app.workflow, runId);
+        assert.ok(intake.clarify); assert.match(intake.clarify!.title, /后期业务缺口/);
+        const clarified = await respondIntake(app.workflow, 'fixture', runId, { clarifyHash: intake.clarify!.hash }, config);
+        assert.equal(clarified.gate?.key, 'confirm-blocker-answers', '后期业务缺口必须进入既有澄清入口');
+      }
     } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
   });
 }

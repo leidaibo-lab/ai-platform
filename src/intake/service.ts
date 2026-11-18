@@ -1,10 +1,11 @@
 import { repositorySyncPauseSchema } from '../delivery/remote-handoff.js';
+import { createHash } from 'node:crypto';
 import { readLegacyArchitectureResult } from '../delivery/legacy-sync.js';
 /** 主流程业务投影与命令；存储、调度及恢复继续归 Mastra。 */
 import { blockerCycleSchema, developmentBlockers } from './blocker-contracts.js';
 import { executionResolver } from '../mastra/workflows/product-development.js';
 import type { PracticeConfig } from '../mastra/config.js';
-import { stateV2Schema } from '../development/v2/contracts.js';
+import { inputV2Schema, stateV2Schema } from '../development/v2/contracts.js';
 import { developmentHash } from '../development/contracts.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
 import { validateIdentityV2 } from '../development/v2/gates.js';
@@ -17,6 +18,7 @@ import { projectRunTimeline } from './run-timeline.js';
 /** 仅公开本地业务输入校验，不透出模型或文件系统异常。 */
 export class GateInputError extends Error {}
 export type IntakeWorkflow = ReturnType<typeof createProductDevelopmentWorkflow>;
+const recoveryInFlight = new Set<string>();
 /** 在团队化主流程中按叶节点后缀读取步骤，避免业务服务依赖嵌套层数。 */
 function findStep(snapshot: any, suffix: string) {
   const entries = Object.entries(snapshot.steps ?? {}).filter(([path, step]) => !Array.isArray(step) && (path === suffix || path.endsWith(`.${suffix}`)));
@@ -54,13 +56,22 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const blockers = development.success ? developmentBlockers(development.data) : [];
   const preparationRequired = development.success && !!development.data.input.project.preparationIssues?.length;
   const blockage = development.success && (development.data.outcome === 'clarification-required' || preparationRequired && development.data.outcome === 'manual-attention') && development.data.plan && blockers.length ? { phase: '技术方案生成', title: '技术方案已生成，开工条件未齐', summary: development.data.plan.summary, blockers, taskCount: development.data.plan.tasks.length, productContent: development.data.input.source.content, preparationRequired } : undefined;
-  const clarify = snapshot.status === 'success' && blockage && !preparationRequired && development.success && development.data.completedTasks.length === 0 && !development.data.approvedHash ? { hash: developmentHash({ runId, development: development.data, outcome: (snapshot.result as any).outcome }), title: '补齐业务选择并修订产品稿' } : undefined;
+  const clarify = snapshot.status === 'success' && blockage && !preparationRequired && development.success ? { hash: developmentHash({ runId, development: development.data, outcome: (snapshot.result as any).outcome }), title: development.data.completedTasks.length ? '处理后期业务缺口，修订产品稿并回归' : '补齐业务选择并修订产品稿' } : undefined;
   const reconfigure = snapshot.status === 'success' && blockage && preparationRequired && development.success && !development.data.completedTasks.length && !development.data.approvedHash && !development.data.delivery ? { hash: developmentHash({ runId, development: development.data, action: 'reconfirm-project' }) } : undefined;
   const intakeMode = state?.success ? state.data.intakeMode ?? state.data.intake?.intakeMode ?? (state.data.intake?.enabled ? 'clarify' : 'autofill') : intake.success ? intake.data.intakeMode ?? (intake.data.enabled ? 'clarify' : 'autofill') : undefined;
   return { developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, intakeMode, brief: state?.success ? state.data.brief : '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
+  const recovering = !!input && typeof input === 'object' && 'retryHash' in input;
+  if (recovering && recoveryInFlight.has(runId)) throw new GateInputError('该运行正在恢复，请勿重复提交');
+  if (recovering) recoveryInFlight.add(runId);
+  try { return await respondIntakeOnce(workflow, mode, runId, input, config); }
+  finally { if (recovering) recoveryInFlight.delete(runId); }
+}
+
+/** 在进程内串行恢复同一 Run，实际权限与版本仍在执行前重新校验。 */
+async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
   const current = await readIntake(workflow, runId);
   if (current.status === 'success' && current.reconfigure && current.mode === mode) {
     if (!config || !input || typeof input !== 'object' || !('reconfigureHash' in input) || input.reconfigureHash !== current.reconfigure.hash) throw new GateInputError('项目重新交接入口已变化，请刷新');
@@ -91,6 +102,19 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
     if (!input || typeof input !== 'object' || !('retryHash' in input) || input.retryHash !== current.retry.hash) throw new GateInputError('恢复版本已变化，请刷新');
     if ('additionalContextLevel' in input) throw new GateInputError('资料预算门槛已移除，请刷新后直接恢复');
     let checkpointInput: unknown;
+    if ('kind' in current.retry && current.retry.kind === 'development-initialization') {
+      if (!config || config.mode !== mode) throw new GateInputError('恢复模式或服务配置已变化');
+      const snapshot = await workflow.getWorkflowRunById(runId);
+      const entry = snapshot?.steps?.[current.retry.checkpointStep];
+      if (!entry || Array.isArray(entry)) throw new GateInputError('开发初始化检查点已变化');
+      const savedInput = inputV2Schema.parse(entry.payload);
+      const execution = executionResolver(config, { requireExisting: true })(savedInput);
+      try {
+        const expected = Object.fromEntries(Object.entries(savedInput.project.files).sort().map(/** 候选文件摘要使用原始字节的 SHA-256。 */([path, content]) => [path, createHash('sha256').update(content).digest('hex')]));
+        if (developmentHash(await execution.snapshot()) !== developmentHash(expected)) throw new GateInputError('原候选检查点已变化，不能恢复');
+      } finally { await execution.close(); }
+      checkpointInput = savedInput;
+    }
     if ('kind' in current.retry && current.retry.kind === 'development-repository-sync') {
       if (!config?.hrmRepositoryRoot) throw new GateInputError('同步恢复缺少已授权仓库配置');
       const snapshot = await workflow.getWorkflowRunById(runId);

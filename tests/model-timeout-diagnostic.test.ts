@@ -3,11 +3,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MastraTimeoutError } from '@mastra/core/loop';
 import { classifyDevelopmentError, DevelopmentModelError } from '../src/development/errors.js';
-import { developmentTimeoutPolicy, diagnoseModelFailure, diagnoseModelResult, modelCallDiagnosticSchema, describeModelCall } from '../src/development/v2/model-diagnostic.js';
+import { developmentTimeoutPolicy, diagnoseModelFailure, diagnoseModelResult, modelCallDiagnosticSchema, describeModelCall, runWithDevelopmentDeadline } from '../src/development/v2/model-diagnostic.js';
+import { describeRecoveryModelFailureReason } from '../src/intake/gates.js';
 
 test('开发角色步骤10分钟/总计30分钟，历史策略仍可读取', /** 角色预算是宿主固定策略，不能由模型扩大。 */() => {
   assert.deepEqual(developmentTimeoutPolicy('architect'), { version: 'development-timeout.v3', totalMs: 1800000, stepMs: 600000 });
   for (const role of ['context', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']) assert.deepEqual(developmentTimeoutPolicy(role), { version: 'development-timeout.v3', totalMs: 1800000, stepMs: 600000 });
+});
+
+test('宿主总时限会中断未响应调用并返回可分类的SDK超时', /** 防止提供方忽略abortSignal时工作流永久停在运行中。 */async () => {
+  let observedAbort = false;
+  await assert.rejects(
+    runWithDevelopmentDeadline(20, async (signal) => await new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => { observedAbort = signal.aborted; reject(signal.reason); }, { once: true }))),
+    (error: unknown) => error instanceof MastraTimeoutError && error.timeoutType === 'total' && error.timeoutMs === 20,
+  );
+  assert.equal(observedAbort, true);
 });
 
 for (const [timeoutType, source] of [['total', 'mastra-total'], ['step', 'mastra-step'], ['firstChunk', 'mastra-first-chunk']] as const) test(`真实SDK超时细项：${timeoutType}`, /** 不保留原异常上的请求正文、headers或动态属性。 */() => {
@@ -39,6 +49,12 @@ test('诊断文案区分已配置预算与实际触发来源，格式不夹带�
   const call = modelCallDiagnosticSchema.parse({ version: 'development-call.v1', callIndex: 5, durationMs: 202000, recordedAt: '2026-11-08T10:00:00.000Z', policy: developmentTimeoutPolicy('architect'), failure: { source: 'upstream-http', httpStatus: 524, url: 'synthetic-private' }, request: 'synthetic-private' });
   const text = describeModelCall(call, 2); assert.match(text, /上游HTTP 524/); assert.match(text, /实际耗时202秒/); assert.match(text, /步骤600秒、Agent总计1800秒/); assert.doesNotMatch(text, /触发时限|synthetic-private/); assert.doesNotMatch(JSON.stringify(call), /synthetic-private/);
   assert.match(describeModelCall(call), /^最近一次尝试/); assert.doesNotMatch(describeModelCall(call), /第1次/);
+});
+
+test('恢复关口将上游 5xx 说明为网关响应，不归因为本地连接', /** 与页面展示一致，避免“模型网络失败”误导排障方向。 */() => {
+  const reason = describeRecoveryModelFailureReason({ source: 'upstream-http', httpStatus: 504 });
+  assert.equal(reason, '上游模型网关返回 HTTP 504（请求超时）');
+  assert.doesNotMatch(reason!, /本地网络|连接未能完成|模型服务不可用/);
 });
 
 test('结束状态采用固定枚举，历史unknown不补造结束证据', /** 输出截断、安全阻断和工具提前退出保持不同诊断；不记录自由文本。 */() => {

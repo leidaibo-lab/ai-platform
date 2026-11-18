@@ -13,9 +13,10 @@ import { classifyDevelopmentError } from '../errors.js';
 import { recoveryHashV2, type StateV2, type RoleV2 } from './contracts.js';
 import { generateV2, type GeneratorV2 } from './agents.js';
 import type { DevelopmentMethods } from './methods.js';
+import type { LiveOutputEvent } from '../../intake/live-output.js';
 
 /** 回滚当前任务允许写入的部分；其他漂移失败关闭，不能隐藏外部变化。 */
-export async function invokeV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, input: StateV2, paths: string[], extra: unknown, methods: DevelopmentMethods, generate: GeneratorV2 = generateV2, validate?: (text: string) => void, checkBudget?: number) {
+export async function invokeV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, input: StateV2, paths: string[], extra: unknown, methods: DevelopmentMethods, generate: GeneratorV2 = generateV2, validate?: (text: string) => void, checkBudget?: number, onProgress?: (event: LiveOutputEvent) => Promise<void>) {
   let state = input;
   const verification = verificationScope(execution, input, role, paths, checkBudget);
   const before = await execution.snapshot();
@@ -27,7 +28,7 @@ export async function invokeV2(config: PracticeConfig, execution: ExecutionPort,
     state = { ...state, calls: state.calls + 1 };
     const startedAt = performance.now();
     try {
-      const entry = await generate(config, verification.port, role, { ...state, verificationHistory: verification.history() }, paths, { ...(extra && typeof extra === 'object' ? extra : { input: extra }), retryDiagnostic: state.faults.at(-1)?.diagnostic }, methods);
+      const entry = await generate(config, verification.port, role, { ...state, verificationHistory: verification.history() }, paths, { ...(extra && typeof extra === 'object' ? extra : { input: extra }), retryDiagnostic: state.faults.at(-1)?.diagnostic }, methods, undefined, onProgress);
       state = { ...state, verificationHistory: verification.history() };
       if (verification.exhausted()) throw new VerificationBudgetError();
       validate?.(entry.text);

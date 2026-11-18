@@ -1,4 +1,4 @@
-import { remoteHandoffSchema } from '../../delivery/remote-handoff.js';
+import { formalSpecificationReceiptSchema, remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 import { intakeSchema, intakeModeSchema } from '../../intake/contracts.js';
 import { z } from 'zod';
 import { revisionSourceSchema } from './revision-contract.js';
@@ -26,6 +26,8 @@ export const deliverySchema = z.object({
   // 顶层保留入口策略，便于恢复和页面投影不依赖当前暂停点。
   intakeMode: intakeModeSchema.optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),
+  /** 已确认规格的远端回执；Store 保留其与审批、恢复的关系。 */
+  formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(),
   correlation: correlationSchema.optional(),
   brief: z.string().trim().min(1).max(12000),
   mode: z.enum(['fixture', 'live']),

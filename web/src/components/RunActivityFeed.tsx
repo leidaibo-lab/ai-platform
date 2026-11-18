@@ -1,8 +1,10 @@
-import { useEffect, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { useLayoutEffect, useRef, type UIEvent } from 'react';
 
 export interface TimelineNode {
   id: string;
   kind: 'step' | 'agent' | 'check';
+  stage: 'requirements' | 'product' | 'development' | 'testing' | null;
+  attempt: number | null;
   title: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting' | 'suspended' | 'cancelled';
   startedAt: string | null;
@@ -32,106 +34,62 @@ export interface LiveActivity {
   occurredAt: string;
 }
 
-/** 将毫秒格式化为正文活动行使用的短时长。 */
-function formatDuration(durationMs: number | null, live = false): string {
-  if (durationMs === null) return live ? '进行中' : '—';
-  const seconds = Math.max(0, Math.floor(durationMs / 1000));
-  if (seconds < 60) return `${seconds}秒`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}分${String(seconds % 60).padStart(2, '0')}秒`;
-}
+export type ProductStreamEvent = { type: 'text'; text: string; role: string; attempt: number } | { type: 'tool'; name: string; state: 'started' | 'completed' | 'failed'; role: string; attempt: number };
+export interface ProductStreamView { role: string; attempt: number; entries: Array<{ type: 'text'; text: string } | { type: 'tool'; name: string; state: 'started' | 'completed' | 'failed' }>; }
 
-/** 将公开节点状态转换为活动行短标签。 */
-function statusLabel(status: TimelineNode['status']): string {
-  return { completed: '已完成', running: '进行中', failed: '失败', waiting: '等待', suspended: '已暂停', cancelled: '已停止', pending: '待执行' }[status];
-}
-
-/** 选择活动行图标，避免把内部 Workflow 类型直接暴露给用户。 */
-function activityIcon(node: TimelineNode): string {
-  if (node.files.length > 0) return '▧';
-  if (node.tools.length > 0 || node.kind === 'check') return '⌁';
-  return node.status === 'running' ? '✳' : '·';
-}
-
-/** 生成当前活动之前或之后的安全正文摘要，不展示模型隐藏思维链。 */
-function activityCopy(node: TimelineNode, position: number, total: number): string {
-  if (node.status === 'running') return `正在处理“${node.title}”，并把已读取的事实整理进当前结果。`;
-  if (node.status === 'failed') return `“${node.title}”未完成，已保留失败状态和可复核信息。`;
-  if (position === total - 1) return '这一步已完成，正在整理当前阶段的结果和下一步。';
-  return `已完成“${node.title}”，继续输出当前阶段的结果。`;
-}
-
-interface ActivityRowProps {
-  node: TimelineNode;
-}
-
-/** 渲染正文流中的单个可展开活动行；完成节点默认折叠，当前节点展示公开摘要。 */
-function ActivityRow({ node }: ActivityRowProps) {
-  const [open, setOpen] = useState(node.status === 'running');
-  const live = node.status === 'running';
-  useEffect(() => {
-    if (live) setOpen(true);
-  }, [live]);
-  /** 同步活动行展开状态，不改变服务端事实。 */
-  function handleToggle(event: SyntheticEvent<HTMLDetailsElement>) {
-    setOpen(event.currentTarget.open);
-  }
-  const title = node.status === 'running' ? node.title : node.files.length > 0 ? '已读取文件' : node.tools.length > 0 ? '调用工具' : node.title;
-  return <details className={`run-activity-row run-activity-row-${node.status}`} open={open} onToggle={handleToggle}>
-    <summary>
-      <span className="run-activity-icon" aria-hidden="true">{activityIcon(node)}</span>
-      <span className="run-activity-title">{title}<small>{statusLabel(node.status)}</small></span>
-      <span className="run-activity-meta">{formatDuration(node.durationMs, live)}</span>
-    </summary>
-    <div className="run-activity-detail">
-      {node.tools.length > 0 && <div><span>工具</span><strong>{node.tools.join('、')}</strong></div>}
-      {node.files.length > 0 && <div><span>文件</span><strong>{node.files.join('、')}</strong></div>}
-      {node.modelSteps !== undefined && <div><span>模型步骤</span><strong>{node.modelSteps}</strong></div>}
-      {node.check && <div><span>检查</span><strong>{node.check.exitCode === 0 ? '通过' : `退出码 ${node.check.exitCode ?? '未知'}`}</strong></div>}
-      {live && <p>工作摘要：基于当前已公开的文件和工具事实继续处理，不展示模型隐藏思维链。</p>}
-    </div>
-  </details>;
+/** 将同一节点的文本增量合并；切换角色或重试时从新片段开始。 */
+export function appendProductStream(previous: ProductStreamView | undefined, event: ProductStreamEvent): ProductStreamView {
+  const entries = previous?.role === event.role && previous.attempt === event.attempt ? [...previous.entries] : [];
+  if (event.type === 'text') {
+    const last = entries.at(-1);
+    if (last?.type === 'text') entries[entries.length - 1] = { type: 'text', text: (last.text + event.text).slice(-30000) };
+    else entries.push({ type: 'text', text: event.text.slice(-30000) });
+  } else entries.push({ type: 'tool', name: event.name, state: event.state });
+  return { role: event.role, attempt: event.attempt, entries: entries.slice(-100) };
 }
 
 interface RunActivityFeedProps {
   timeline?: RunTimelineDocument;
+  stream?: ProductStreamView;
   status: string;
   liveActivity?: LiveActivity;
   /** 当前服务端阶段说明作为正文流中的安全文案，不替代最终业务正文。 */
   progressText?: string;
   /** 当前服务端阶段的下一步说明，作为正文流末尾的辅助文案。 */
   nextText?: string;
-  children?: ReactNode;
 }
 
-/** 渲染 Mastra Run 的单一流式活动流，不维护独立 Workflow 时间线面板。 */
-export function RunActivityFeed({ timeline, status, liveActivity, progressText, nextText, children }: RunActivityFeedProps) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!timeline?.startedAt || !['running', 'pending'].includes(status)) return;
-    const timer = window.setInterval(() => setTick(value => value + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [timeline?.startedAt, status]);
-  if (!timeline) return null;
-  const live = !timeline.endedAt && ['running', 'pending'].includes(status);
-  const totalDuration = live && timeline.startedAt ? Math.max(0, Date.now() - Date.parse(timeline.startedAt)) : timeline.durationMs;
-  const liveNode: TimelineNode | undefined = liveActivity && liveActivity.stepId && !timeline.nodes.some(node => node.id === liveActivity.stepId)
-    ? { id: liveActivity.stepId, kind: 'step', title: liveActivity.title, status: liveActivity.status, startedAt: liveActivity.occurredAt, endedAt: null, durationMs: null, tools: [], files: [] }
-    : undefined;
-  const nodes = liveNode ? [...timeline.nodes, liveNode] : timeline.nodes;
-  const currentText = liveActivity?.summary ?? progressText ?? (live ? '我正在根据当前需求读取已公开的项目资料，并整理下一步。' : '本次运行已保存执行结果，下面展示正文流中的关键活动。');
-  return <section className="run-activity-feed" aria-label="正文与执行活动流">
-    <div className="run-activity-elapsed"><span className={`run-activity-dot${live ? ' is-live' : ''}`} aria-hidden="true" /><span>已处理 <strong>{formatDuration(totalDuration, live)}</strong></span></div>
-    <div className="run-activity-stream">
-      <p className="run-activity-copy">{currentText}{live && <span className="run-activity-cursor" aria-label="流式输出中" />}</p>
-      {nodes.map((node, index) => <div className="run-activity-segment" key={node.id}>
-        <ActivityRow node={node} />
-        <p className="run-activity-copy">{activityCopy(node, index, nodes.length)}{live && index === nodes.length - 1 && <span className="run-activity-cursor" aria-label="流式输出中" />}</p>
-      </div>)}
-      {nodes.length === 0 && <p className="run-activity-empty">等待执行活动进入正文流…</p>}
-      {nextText && <p className="run-activity-copy run-activity-next">{nextText}</p>}
-      {children}
-    </div>
-    <p className="run-activity-boundary">活动行只展示 Workflow、工具和文件元数据；模型隐藏思维链不会发送到前端。</p>
+/** 展示产品节点真实模型文本和工具事件，片段不代表已确认产物。 */
+export function RunActivityFeed({ timeline, status, liveActivity, progressText, nextText, stream }: RunActivityFeedProps) {
+  const outputRef = useRef<HTMLDivElement>(null);
+  const followOutput = useRef(true);
+  const lastScrollTop = useRef(0);
+  useLayoutEffect(() => {
+    const output = outputRef.current;
+    if (!output) { followOutput.current = true; lastScrollTop.current = 0; return; }
+    if (followOutput.current) {
+      output.scrollTop = output.scrollHeight;
+      lastScrollTop.current = output.scrollTop;
+    }
+  }, [stream]);
+  /** 用户上滚时暂停跟随；重新滚到底部后恢复。 */
+  function handleOutputScroll(event: UIEvent<HTMLDivElement>) {
+    const output = event.currentTarget;
+    const atBottom = output.scrollHeight - output.clientHeight - output.scrollTop <= 8;
+    if (atBottom) followOutput.current = true;
+    else if (output.scrollTop < lastScrollTop.current) followOutput.current = false;
+    lastScrollTop.current = output.scrollTop;
+  }
+  if (!timeline && !stream) return null;
+  const live = ['running', 'pending'].includes(status);
+  const currentText = live ? liveActivity?.summary ?? progressText : undefined;
+  if (!currentText && !nextText && !stream) return null;
+  const roles: Record<string, string> = { analysis: '需求分析', clarification: '需求澄清整理', 'scope-priority': '范围与优先级', writing: '产品稿写作', reviewer: '独立审查', context: '研发上下文核实', architect: '技术方案设计', readiness: '实施前就绪审查', frontend: '前端实现', backend: '后端实现', infrastructure: '基础设施实现', testing: '测试计划', operations: '发布计划' };
+  return <section className="intake-card live-model-output" aria-label="节点实时输出">
+    <div className="live-model-output-head"><div><span className="intake-eyebrow">节点实时输出</span><h2>{stream ? roles[stream.role] ?? '当前节点' : '当前进展'}</h2></div><span>{live ? '运行中' : '本次连接记录'}</span></div>
+    {stream && <><p className="live-model-output-note">模型生成片段 · 第 {stream.attempt} 次尝试 · 完成前内容可能变化</p><div ref={outputRef} className="live-model-output-stream" aria-live="off" onScroll={handleOutputScroll}>{stream.entries.map((entry, index) => entry.type === 'text' ? <p className="live-model-output-text" key={index}>{entry.text}</p> : <p className="live-model-output-tool" key={index}>工具 {entry.name} · {{ started: '调用中', completed: '已完成', failed: '失败' }[entry.state]}</p>)}</div></>}
+    {!stream && currentText && <p className="run-activity-copy" role="status">{currentText}</p>}
+    {!stream && live && nextText && <p className="run-activity-copy run-activity-next">{nextText}</p>}
+    {!stream && live && <p className="live-model-output-note">等待模型文本或工具调用；部分节点暂未接入实时输出。</p>}
   </section>;
 }

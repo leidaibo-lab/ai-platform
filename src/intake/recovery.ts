@@ -2,7 +2,7 @@
 import { deliverySchema } from '../mastra/workflows/delivery.js';
 import { productManagerStages } from '../mastra/workflows/product-contract.js';
 import { blockerCycleSchema } from './blocker-contracts.js';
-import { stateV2Schema } from '../development/v2/contracts.js';
+import { inputV2Schema, stateV2Schema } from '../development/v2/contracts.js';
 import { developmentHash } from '../development/contracts.js';
 import { describeProductFailure, isPlanOnlyProductOutput } from './product-failure.js';
 const titles: Record<string, string> = { 'draft-product.guided-requirements.requirements-round.analyze-requirements': '需求分析', 'draft-product.product-analysis': '需求分析', 'draft-product.product-clarification': '需求澄清整理', 'draft-product.product-scope-priority': '范围与优先级', 'draft-product.product-writing': '产品稿写作', 'draft-product.publish-product': '产品稿发布' };
@@ -21,12 +21,16 @@ function findPath(steps: Record<string, any>, suffix: string) {
 /** 从失败叶节点与已保存输入派生恢复计划；下游存在批准或交付时不开放重放。 */
 export function describeRecovery(runId: string, status: string, steps: Record<string, any>) {
   if (status !== 'failed') return undefined;
+  const initialization = describeInitializationRecovery(runId, steps);
+  if (initialization) return initialization;
   const sync = describeLegacySyncRecovery(runId, steps);
   if (sync) return sync;
   const blocker = describeBlockerGenerationRecovery(runId, steps);
   if (blocker) return blocker;
   const development = describeArchitectureRecovery(runId, steps);
   if (development) return development;
+  const qualityReview = describeProductQualityRecovery(runId, steps);
+  if (qualityReview) return qualityReview;
   const failed = Object.entries(steps).find(/** 排除容器失败，选择明确登记的业务叶节点；draft-product 只是新的产品容器。 */([name, value]) => Object.keys(titles).some((suffix) => (name === suffix || name.endsWith(`.${suffix}`)) && !Array.isArray(value) && value.status === 'failed'));
   if (!failed) return undefined;
   const [path, entry] = failed;
@@ -47,6 +51,38 @@ export function describeRecovery(runId: string, status: string, steps: Record<st
     message: `可以从“${titles[titleKey]}”的已保存输入继续，无需重填已确认信息。`,
     impact: titleKey === 'draft-product.publish-product' ? '重新整理已有产品稿并生成版本，随后等待人工确认。' : '重新调用该步骤及后续所需的模型；前面已完成的产物保留。生成完整产品稿后仍需人工确认。',
   };
+}
+
+/** ADR: docs/decisions/2026-11-18-recover-development-initialization.md；只恢复同 Run 中未实施的旧锚点上限故障。 */
+function describeInitializationRecovery(runId: string, steps: Record<string, any>) {
+  const path = findPath(steps, 'development-team.development-execution.initialize-development');
+  const entry = path ? steps[path] : undefined;
+  if (!path || !entry || Array.isArray(entry) || entry.status !== 'failed' || entry.error?.message !== 'v2产品原文超过试点锚点预算') return undefined;
+  const parsed = inputV2Schema.safeParse(entry.payload);
+  const scoped = inputV2Schema.safeParse(findStep(steps, 'development-team.confirm-project-scope')?.output);
+  const approved = deliverySchema.safeParse(findStep(steps, 'product-team.review-product')?.output);
+  if (!parsed.success || !scoped.success || !approved.success || developmentHash(parsed.data) !== developmentHash(scoped.data)) return undefined;
+  const input = parsed.data;
+  if (input.source.kind !== 'approved-product' || input.source.runId !== runId || input.scopeApproval?.productHash !== input.source.hash) return undefined;
+  if (!approved.data.artifacts.some(/** 恢复只能使用同一 Run 的已批准产品原文。 */item => item.stage === 'product' && item.hash === input.source.hash && item.content === input.source.content) || !approved.data.reviews.some(/** 不把项目确认或其他版本当作产品批准。 */review => review.role === 'product' && review.decision === 'approve' && review.artifactHash === input.source.hash)) return undefined;
+  if (Object.entries(steps).some(([key, value]) => /^(?:development-team\.development-execution\.(?!initialize-development(?:\.|$))|development-team\.(?:open-development-clarification|resolve-development-blockers|continue-after-clarification)(?:\.|$)|(?:test-team|testing-team|deployment-team|delivery-team|initialize-delivery-lifecycle)(?:\.|$))/.test(key) && value?.status && !['pending', 'skipped'].includes(value.status))) return undefined;
+  return { kind: 'development-initialization' as const, hash: developmentHash({ runId, path, input, endedAt: entry.endedAt, error: entry.error.message }), step: 'development-team.development-execution', checkpointStep: path, title: '开发初始化', savedAnswers: approved.data.intake?.history.length ?? 0, preserved: [{ label: '已批准产品稿', role: 'product' }, { label: '已确认项目范围', role: 'context' }], reason: '旧版本产品原文逐行锚点超过限制', message: '可以校验已保存输入与候选后继续开发规划，无需重填产品或项目确认。', impact: '重新生成开发规划可能产生模型费用；工程准备门禁和方案批准仍然生效，不直接实施。' };
+}
+
+/** 只重试已生成产品稿的质量审查，核对原生发布结果和后续审批边界。 */
+function describeProductQualityRecovery(runId: string, steps: Record<string, any>) {
+  const path = findPath(steps, 'draft-product.review-product-quality');
+  const entry = path ? steps[path] : undefined;
+  if (!path || !entry || Array.isArray(entry) || entry.status !== 'failed') return undefined;
+  const input = deliverySchema.safeParse(entry.payload);
+  const published = deliverySchema.safeParse(findStep(steps, 'draft-product.publish-product')?.output);
+  if (!input.success || !published.success || developmentHash(input.data) !== developmentHash(published.data)) return undefined;
+  const state = input.data;
+  const artifact = state.artifacts.at(-1);
+  if (!artifact || artifact.stage !== 'product' || state.reviews.length || state.productQualityReview || state.outcome !== 'in-progress') return undefined;
+  if (Object.entries(steps).some(([key, value]) => /^(product-team\.review-product|development-team|testing-team|test-team|deployment-team|delivery-team)(\.|$)/.test(key) && value?.status && !['pending', 'skipped'].includes(value.status))) return undefined;
+  const failure = describeProductFailure(entry.error, state.contextBudgetLevel ?? 0);
+  return { hash: developmentHash({ runId, step: path, state, endedAt: entry.endedAt, error: entry.error?.name, details: entry.error?.details }), step: path, title: '产品质量审查', savedAnswers: state.intake?.history.length ?? 0, preserved: [{ label: '已生成的产品稿', role: 'product', complete: true }], reason: failure?.reason ?? '产品质量审查未完成', attemptDetails: failure?.details, next: failure?.next, message: '可使用已保存的产品稿重新执行质量审查，无需重新生成产品稿。', impact: '重新调用产品审查，可能产生模型费用；完成后仍需人工审阅和确认。' };
 }
 
 /** 旧图同步失败只开放未实施的架构检查点；新版同步故障使用原生暂停关口。 */
@@ -84,9 +120,13 @@ function describeArchitectureRecovery(runId: string, steps: Record<string, any>)
   const product = approved.data.artifacts.find(/** 只从本Run已批准的产品版本派生。 */artifact => artifact.hash === s.input.source.hash);
   if (!product || !approved.data.reviews.some(/** 不能用其他版本或角色的批准放行。 */review => review.role === 'product' && review.decision === 'approve' && review.artifactHash === product.hash)) return undefined;
   if (s.input.source.kind !== 'approved-product' || s.phase !== 'architecture' || !s.context || s.plan || s.approvedHash || s.reviews.length || s.completedTasks.length || s.delivery || s.input.source.runId !== runId || s.context.productHash !== product.hash || s.work.some(/** 本入口不重放已经有实现副作用的开发。 */work => work.role !== 'context')) return undefined;
-  if (!['model-timeout', 'model-network', 'invalid-output', 'model-error'].some(/** 仅登记的模型失败分类，不恢复源码漂移或身份错误。 */kind => entry.error?.message === `开发阶段 architecture 再次未完成（${kind}），人工恢复预算已耗尽`)) return undefined;
+  const exhausted = ['model-timeout', 'model-network', 'invalid-output', 'model-error'].some(/** 仅登记的模型失败分类，不恢复源码漂移或身份错误。 */kind => entry.error?.message === `开发阶段 architecture 再次未完成（${kind}），人工恢复预算已耗尽`);
+  // 旧同步缓存曾把原生暂停包当作架构结果回放；该错误发生在只读架构入口、无实施副作用时，可按同一检查点安全恢复。
+  const stalePauseReplay = entry.error?.name === 'ZodError';
+  const cacheKeyConflict = entry.error?.message === '交接缓存冲突';
+  if (!exhausted && !stalePauseReplay && !cacheKeyConflict) return undefined;
   if (Object.entries(steps).some(/** 测试、发布和最终交付一旦开始就拒绝向前重放。 */([key, value]) => /^(test-team|deployment-team|delivery-team|initialize-delivery-lifecycle)(\.|$)/.test(key) && value?.status && !['pending', 'skipped'].includes(value.status))) return undefined;
-  return { kind: 'development-architecture' as const, hash: developmentHash({ runId, step: path, state: s, endedAt: entry.endedAt, error: entry.error?.message }), step: 'development-team.development-execution.development-execution-iteration', checkpointStep: path, title: '技术方案生成', savedAnswers: approved.data.intake?.history.length ?? 0, preserved: [{ label: '已确认产品需求', role: 'product' }, { label: '项目与需求分析', role: 'context' }], reason: '历史架构模型调用未完成', message: '可从已保存的架构检查点继续，无需重做需求或已完成的分析。', impact: '校验当前源码和执行身份后重新生成技术方案，完成后仍等待方案批准，不直接实施。' };
+  return { kind: 'development-architecture' as const, hash: developmentHash({ runId, step: path, state: s, endedAt: entry.endedAt, error: entry.error?.message, errorName: entry.error?.name }), step: 'development-team.development-execution.development-execution-iteration', checkpointStep: path, title: '技术方案生成', savedAnswers: approved.data.intake?.history.length ?? 0, preserved: [{ label: '已确认产品需求', role: 'product' }, { label: '项目与需求分析', role: 'context' }], reason: stalePauseReplay ? '历史同步缓存未能与架构恢复检查点兼容' : cacheKeyConflict ? '历史暂停检查点与本轮恢复共用了缓存键' : '历史架构模型调用未完成', message: '可从已保存的架构检查点继续，无需重做需求或已完成的分析。', impact: '校验当前源码和执行身份后重新生成技术方案，完成后仍等待方案批准，不直接实施。' };
 }
 
 /** 新澄清流程只重放只读模型生成；回答与产品原稿保留，批准后不重放旧稿。 */

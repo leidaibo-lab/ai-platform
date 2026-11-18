@@ -36,6 +36,23 @@ function fixture(generate: GeneratorV2) {
   return { open, directory, parent };
 }
 
+test('超过300非空行的批准原文可进入开发上下文且保留原文定位', async () => {
+  const setup = fixture(generateV2); const app = setup.open();
+  try {
+    const content = ['# 招聘需求', ...Array.from({ length: 350 }, (_, i) => `- 候选人规则 ${i + 1}`)].join('\n');
+    app.input.source.content = content;
+    app.input.source.hash = developmentHash(content);
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    const snapshot = await app.workflow.getWorkflowRunById(run.runId);
+    const initialized = (snapshot!.steps!['initialize-development'] as any).output;
+    assert.equal((snapshot!.steps!['initialize-development'] as any).status, 'success');
+    assert.deepEqual(initialized.requirements.flatMap((unit: any) => unit.text.split('\n')), content.split('\n'));
+    assert.equal((snapshot!.steps!['development-iteration-v2.prepare-context'] as any).status, 'success');
+    assert.equal((snapshot!.steps!['development-iteration-v2.approve-architecture'] as any).status, 'suspended');
+    assert.equal(initialized.approvedHash, null);
+  } finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
+});
+
 test('结构化输出故障持久化后可恢复，历史字段顺序兼容且篡改仍被拒绝', /** 真实暂停、Store 重开和原阶段重试同时覆盖诊断字段与模型调用证据。 */async () => {
   let fail = true; const calls: string[] = [];
   /** 仅第一次就绪审查返回无效结构，其余保留真实 fixture 工具路径。 */
@@ -149,6 +166,63 @@ test('主流程停止开发后不进入测试、发布或最终交付；原生�
 
 import { executionResolver } from '../src/mastra/workflows/product-development.js';
 
+test('恢复检查要求原候选存在，不能悄悄重新播种', async () => {
+  const setup = fixture(generateV2); const app = setup.open();
+  try { assert.throws(() => executionResolver(app.config, { requireExisting: true })(app.input), /候选检查点不存在/); }
+  finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
+});
+
+test('旧锚点上限失败仅在原批准和候选未变时恢复初始化', async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'initialization-recovery-'));
+  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  let app = createStudioApplicationOptions(config); let workflow = app.workflows.productDevelopmentWorkflow;
+  const dev = workflow.steps['development-team'] as any;
+  const original = dev.steps['development-execution'].steps['initialize-development'].execute;
+  dev.steps['development-execution'].steps['initialize-development'].execute = async (args: any) => {
+    // 保留真实候选创建与输入绑定，仅模拟历史上限错误。
+    await original(args);
+    throw new Error('v2产品原文超过试点锚点预算');
+  };
+  new Mastra(app);
+  const project = { id: 'initialization-recovery', files: { 'src/a.mjs': 'export const a=0;', 'check.mjs': 'export const check=1;' }, writablePaths: ['src/a.mjs'], checkFiles: ['check.mjs'], roles: ['backend'] };
+  try {
+    const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成开发初始化恢复', iterationId: 'initialization-recovery' } });
+    let current = await readIntake(workflow, run.runId);
+    current = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: current.product!.artifact.hash, decision: 'approve', reviewer: 'test', comment: '合成批准' });
+    current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { project, reviewer: 'test', comment: '合成项目' } });
+    assert.equal(current.status, 'failed'); assert.equal((current.retry as any)?.kind, 'development-initialization');
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: '0'.repeat(64) }, config), /版本/);
+    const saved = await workflow.getWorkflowRunById(run.runId);
+    const { describeRecovery } = await import('../src/intake/recovery.js');
+    assert.equal(describeRecovery(run.runId, 'failed', { ...saved!.steps, 'test-team': { status: 'success' } }), undefined);
+    assert.equal(describeRecovery(run.runId, 'failed', { ...saved!.steps, 'development-team.open-development-clarification': { status: 'success' } }), undefined);
+    const altered = structuredClone(saved!.steps!);
+    (altered['development-team.confirm-project-scope'] as any).output.scopeApproval.productHash = '0'.repeat(64);
+    assert.equal(describeRecovery(run.runId, 'failed', altered), undefined);
+    const input = (saved!.steps![(current.retry as any).checkpointStep] as any).payload;
+    let candidate = executionResolver(config)(input); await candidate.writeFile('src/a.mjs', 'export const drift=1;'); await candidate.close();
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: current.retry!.hash }, config), /检查点/);
+    candidate = executionResolver(config)(input); await candidate.writeFile('src/a.mjs', project.files['src/a.mjs']); await candidate.close();
+    await app.storage.close(); app = createStudioApplicationOptions(config); new Mastra(app); workflow = app.workflows.productDevelopmentWorkflow;
+    const restartedInit = (workflow.steps['development-team'] as any).steps['development-execution'].steps['initialize-development'];
+    const restartedExecute = restartedInit.execute;
+    let release!: () => void; let entered!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    restartedInit.execute = async (args: any) => { entered(); await barrier; return restartedExecute(args); };
+    const retryHash = current.retry!.hash;
+    const recovery = respondIntake(workflow, 'fixture', run.runId, { retryHash }, config);
+    await started;
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash }, config), /正在恢复/);
+    release(); current = await recovery;
+    assert.equal(current.status, 'suspended'); assert.equal(current.gate?.key, 'approve-architecture');
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: '0'.repeat(64) }, config));
+    const resumed = await workflow.getWorkflowRunById(run.runId);
+    const gate = Object.values(resumed!.steps!).find(/** 恢复后仍等待技术方案人工批准。 */step => !Array.isArray(step) && step.status === 'suspended') as any;
+    assert.equal(gate.payload.completedTasks.length, 0); assert.equal(gate.payload.approvedHash, null);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('历史failed架构受控Time travel：拒绝旧hash和源码漂移，重开后只恢复架构并等待方案批准', /** 模拟旧版本抛出的已知模型失败，不修改用户快照。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'architecture-time-travel-'));
   const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
@@ -187,6 +261,35 @@ test('历史failed架构受控Time travel：拒绝旧hash和源码漂移，重�
     assert.equal(approved.payload.work.filter(/** 已完成的上下文不在恢复中重放。 */(entry: any) => entry.role === 'context').length, 1);
     assert.equal(approved.payload.work.filter(/** 仅执行一次新的架构生成。 */(entry: any) => entry.role === 'architect').length, 1);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('缓存暂停包回放造成的架构结构失败仅在未实施检查点恢复', /** 旧兼容故障不应迫使用户重做产品或项目确认。 */async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'architecture-cache-replay-'));
+  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const app = createStudioApplicationOptions(config); const workflow = app.workflows.productDevelopmentWorkflow;
+  const dev = workflow.steps['development-team'] as any;
+  let calls = 0;
+  dev.steps['development-execution'].steps['development-execution-iteration'].steps.architecture.execute = async ({ inputData }: any) => {
+    if (++calls === 1) return { ...inputData, recovery: { hash: recoveryHashV2(inputData), checkpointHash: inputData.checkpointHash, phase: 'architecture', role: 'architect', taskId: null, kind: 'model-timeout' } };
+    throw Object.assign(new Error('synthetic cache replay'), { name: 'ZodError' });
+  };
+  new Mastra(app);
+  const project = { id: 'cache-replay', files: { 'src/a.mjs': 'export const a=0;', 'check.mjs': 'export const check=1;' }, writablePaths: ['src/a.mjs'], checkFiles: ['check.mjs'], roles: ['backend'] };
+  try {
+    const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成缓存暂停包回放', iterationId: 'cache-replay' } });
+    let current = await readIntake(workflow, run.runId);
+    current = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: current.product!.artifact.hash, decision: 'approve', reviewer: 'test', comment: '合成批准' });
+    current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { project, reviewer: 'test', comment: '合成项目' } });
+    current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { ...current.gate!.fixed, decision: 'retry', reviewer: 'test', comment: '触发旧回放问题' } });
+    assert.equal(current.status, 'failed'); assert.match(current.retry!.reason, /缓存.*兼容/);
+    const snapshot = await workflow.getWorkflowRunById(run.runId); const state = (snapshot!.steps![(current.retry as any).checkpointStep] as any).payload;
+    let candidate = executionResolver(config)(state.input); await candidate.writeFile('src/a.mjs', 'export const drift=1;'); await candidate.close();
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: current.retry!.hash }, config), /检查点/);
+    candidate = executionResolver(config)(state.input); await candidate.writeFile('src/a.mjs', project.files['src/a.mjs']); await candidate.close();
+    await app.storage.close(); const rebuilt = createStudioApplicationOptions(config); new Mastra(rebuilt);
+    const resumed = await respondIntake(rebuilt.workflows.productDevelopmentWorkflow, 'fixture', run.runId, { retryHash: current.retry!.hash }, config);
+    assert.equal(resumed.status, 'suspended'); assert.equal(resumed.gate?.key, 'approve-architecture');
+  } finally { await app.storage.close().catch(() => undefined); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('架构返回业务阻塞时投影具体事项和产品依据，不冒充模型超时或方案已批准', /** 模型输出阻塞并不会授权实现，前端需要实际材料而非笼统结束文案。 */async () => {

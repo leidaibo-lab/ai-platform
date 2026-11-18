@@ -143,8 +143,8 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
       if (checked.issues) throw new Error('原业务关口输入不符合要求，资料重试不能替代业务审批');
       context = { ...context, resumeData: checked.value };
     }
-    const key = pausedSync.success ? pausedSync.data.retryKey : contentHash(json({ runId: context.runId, stage: step.id, input: context.inputData, resume: context.resumeData, suspend: context.suspendData }));
-    const cache = config.mode === 'live' ? join(handoffCache(root), `result-${key}.json`) : undefined;
+    let key = pausedSync.success ? pausedSync.data.retryKey : contentHash(json({ runId: context.runId, stage: step.id, input: context.inputData, resume: context.resumeData, suspend: context.suspendData }));
+    let cache = config.mode === 'live' ? join(handoffCache(root), `result-${key}.json`) : undefined;
     if (pausedSync.success && repositoryRetrySchema.parse(context.resumeData).repositoryRetry !== key) throw new Error('同步恢复版本已变化');
     type Checkpoint = { runId: string; stage: string; inputHash: string; action: 'result' | 'suspend' | 'bail'; value: unknown; args?: unknown[] };
     /** 成功推送后才返回/暂停业务关口；失败仅开放同步重试，不重放角色。 */
@@ -173,12 +173,25 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
         const value = validateLegacyArchitectureResult(stateV2Schema.parse(context.inputData), cached);
         return deliver({ runId: context.runId, stage: step.id, inputHash: contentHash(json(context.inputData)), action: 'result', value });
       }
-      return deliver(validate(cached));
+      // 同步重试可重放该同步检查点；业务恢复携带自己的决定，必须回到原角色节点消费，不能把旧暂停包当作结果。
+      if (cached.action === 'result' || pausedSync.success) return deliver(validate(cached));
+      if (cached.action === 'suspend') {
+        // 同一原始输入的业务恢复会生成下一轮暂停/结果；派生缓存键保留旧暂停证据，避免原子缓存冲突。
+        key = contentHash(json({ recoveryOf: key, suspendedCheckpoint: contentHash(json(cached)) }));
+        cache = join(handoffCache(root), `result-${key}.json`);
+      }
     }
-    // 历史架构缓存使用早期键格式；只允许精确同Run、同输入的只读适配，不能因此跳过源码或审批校验。
-    if (config.mode === 'live' && step.id === 'architecture' && existsSync(legacyArchitectureCachePath(root, context.runId, stateV2Schema.parse(context.inputData)))) {
-      const value = readLegacyArchitectureResult(root, context.runId, stateV2Schema.parse(context.inputData));
-      return deliver({ runId: context.runId, stage: step.id, inputHash: contentHash(json(context.inputData)), action: 'result', value });
+    // 历史架构缓存使用早期键格式；只接受已完成结果。暂停检查点必须回到原节点消费恢复决定，不能被缓存重放跳过。
+    if (config.mode === 'live' && step.id === 'architecture') {
+      const legacyInput = stateV2Schema.parse(context.inputData);
+      const legacyPath = legacyArchitectureCachePath(root, context.runId, legacyInput);
+      if (existsSync(legacyPath)) {
+        const legacy = JSON.parse(readHandoffCache(legacyPath));
+        if (!legacy || typeof legacy !== 'object' || !('action' in legacy) || legacy.action === 'result') {
+          const value = readLegacyArchitectureResult(root, context.runId, legacyInput);
+          return deliver({ runId: context.runId, stage: step.id, inputHash: contentHash(json(context.inputData)), action: 'result', value });
+        }
+      }
     }
     if (pausedSync.success) throw new Error('同步检查点缺失，拒绝重新生成角色产物');
     let intercepted = false;

@@ -3,10 +3,11 @@ import { LibSQLStore } from '@mastra/libsql';
 import { createTaskContext } from '../../delivery/task-context.js';
 /** 原生 Agent 工厂；方法按角色最少注册，工具权限与模型报告相互独立。 */
 import { developmentHash } from '../contracts.js';
-import { developmentTimeoutPolicy, diagnoseModelResult } from './model-diagnostic.js';
+import { developmentTimeoutPolicy, diagnoseModelResult, runWithDevelopmentDeadline } from './model-diagnostic.js';
 import { developmentMaxSteps, developmentPrepareStep } from './generation-policy.js';
 import { OutputValidationError } from './output-diagnostic.js';
 import { Agent, type ToolsInput } from '@mastra/core/agent';
+import { projectLiveOutputChunk, type LiveOutputEvent } from '../../intake/live-output.js';
 import { createTool } from '@mastra/core/tools';
 import { MastraLanguageModelV2Mock } from '@mastra/core/test-utils/llm-mock';
 import { noopLogger } from '@mastra/core/logger';
@@ -40,8 +41,8 @@ export function developmentAgentKind(role: RoleV2): DevelopmentAgentKind | null 
 /** 对只读角色给出结构化职责；开发原有职责与权限继续复用。 */
 const instructions: Record<RoleV2, string> = {
   ...developmentInstructions,
-  context: '你核实项目上下文。根据提供的实际候选文件与批准产品，返回JSON {rules:[{text,refs}],unknowns:[]}。rules[].refs只能选择knownRefs里的完整字符串，例如file:AGENTS.md、product:L1；不允许裸文件名、material编号及其行号、Skill名称或方法文档路径。方法说明不是项目规则的事实来源；没有可用引用的内容保留unknowns。无法证实的规则不当作事实。优先用readFile读取project.files列出的候选文件；工程参考快照用handoff工具读取，不把参考路径当作候选路径。source、requirements、extra及远端交接可能含同一份产品或文件，核对一次即可，不必重复通读。工程缺口保留unknowns，不探测未登记路径，不在本阶段编写方案或实现。',
-  architect: '你是架构师，输出完整JSON技术方案。字段为summary,coverage:[{requirement,behavior,verification}],contracts,tasks,blockers,risks。每个task包含id,role,paths,dependsOn,requirementRefs,acceptanceRefs,contextRefs,constraints,verificationRefs。严格按referenceGroups分别取值：requirementRefs和acceptanceRefs只能取requirements；contextRefs只能取contextFiles中的file:路径，不得使用产品行号或rules.refs代替；verificationRefs只能取registeredChecks。无blockers时全部产品原文ID须至少被一项任务的requirementRefs或acceptanceRefs覆盖，包括标题和说明行。精确分配已授权文件并按拓扑排序。project.planning=agent时，writablePaths只是现存文件上界，不要求全部修改；自行确定最小必要文件和角色，可在writableRoots源码根内创建新文件，但不能更改checkFiles。业务规则缺失列blockers，不补猜。不得授予写权限或批准。',
+  context: '你核实项目上下文。根据提供的实际候选文件与批准产品，返回JSON {rules:[{text,refs}],unknowns:[]}。rules[].refs只能选择knownRefs里的完整字符串，例如file:AGENTS.md、product:L1；不允许裸文件名、material编号及其行号、Skill名称或方法文档路径。方法说明不是项目规则的事实来源；没有可用引用的内容保留unknowns。无法证实的规则不当作事实。优先用readFile读取project.files列出的候选文件；工程参考快照用handoff工具读取，不把参考路径当作候选路径。source、requirements、extra及远端交接可能含同一份产品或文件，核对一次即可，不必重复通读。核对 project.engineeringAssessment 的技术栈证据及工程缺口，区分文件未发现、未纳入安全读取、技术栈不匹配和证据不足；无法证实的结论保留 unknowns。不探测未登记路径，不在本阶段写入或实施。',
+  architect: '你是架构师，输出完整JSON技术方案。字段为summary,coverage:[{requirement,behavior,verification}],contracts,tasks,blockers,risks。每个task包含id,role,paths,dependsOn,requirementRefs,acceptanceRefs,contextRefs,constraints,verificationRefs。严格按referenceGroups分别取值：requirementRefs和acceptanceRefs只能取requirements；contextRefs只能取contextFiles中的file:路径，不得使用产品行号或rules.refs代替；verificationRefs只能取registeredChecks。产品原文ID是连续阅读范围而非自动识别的需求；逐项审阅其内容，无blockers时全部ID须至少被一项任务的requirementRefs或acceptanceRefs引用，不能仅罗列ID冒充语义覆盖。精确分配已授权文件并按拓扑排序。project.planning=agent时，writablePaths只是现存文件上界，不要求全部修改；自行确定最小必要文件和角色，可在writableRoots源码根内创建新文件，但不能更改checkFiles。技术栈未确定或不匹配时，先列出项目适配及工程准备所需的证据和步骤，不假定应创建pnpm项目；配置、锁文件和检查脚本的准备须单独授权并独立验证，不得修改受保护检查或降低标准。业务规则缺失列blockers，不补猜。不得授予写权限或批准。',
   readiness: '你独立评估是否能不臆造决定就实现。双向检查产品、上下文、任务的覆盖、契约冲突、异常与验收。只输出JSON {verdict:"PASS"|"CONCERNS"|"FAIL",findings:[{id,severity:"blocking"|"high"|"medium"|"low",category:"business"|"architecture"|"implementation"|"verification"|"integrity",route:"product"|"architecture"|"frontend"|"backend"|"infrastructure"|"human",detail,refs,evidence}],coverageRefs,unchecked,resolutions:[]}。PASS必须无发现；CONCERNS/FAIL必须有发现。引用只能取knownRefs。coverageRefs必须逐一包含全部requirements中的原文ID以及plan.tasks中每个任务对应的task:任务ID；如有未能核实的范围同时写入unchecked，不得遗漏ID或编造已执行的验证。',
   reviewer: '你是与实现者分开的只读代码评审员。评估批准意图、实际源码变化、异常边界和真实检查的验证缺口。输出与readiness相同的JSON，coverageRefs覆盖全部原文与任务ID，unchecked公开未审范围。发现必须有具体坏结果、路径引用和证据。复查priorReports的每条旧发现；已修复可在resolutions返回{findingId,decision:"fixed",reason,refs}，不得删除原始发现或无证据关闭。不能用PASS抹掉旧问题；无法核实应保留问题，不冒充独立测试。',
 };
@@ -114,7 +115,7 @@ export function createAgentV2(config: PracticeConfig, execution: ExecutionPort, 
 }
 
 /** 记录实际工具/用量并强制方法读取；结构失败走相同安全检查点。 */
-export async function generateV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, state: StateV2, paths: string[], extra: unknown, methods: DevelopmentMethods, runtime?: MemberRuntime): Promise<EntryV2> {
+export async function generateV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, state: StateV2, paths: string[], extra: unknown, methods: DevelopmentMethods, runtime?: MemberRuntime, onProgress?: (event: LiveOutputEvent) => Promise<void>): Promise<EntryV2> {
   const invocationStarted = performance.now();
   const startedAt = new Date().toISOString();
   const storage = config.mode === 'live' ? new LibSQLStore({ id: 'development-context-memory', url: config.databaseUrl }) : undefined;
@@ -145,17 +146,27 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
     const timeout = developmentTimeoutPolicy(role);
     const options = { ...taskContext.options, maxSteps: developmentMaxSteps, prepareStep: developmentPrepareStep(role), modelSettings: { maxOutputTokens: 6000, maxRetries: 0, timeout: { totalMs: timeout.totalMs, stepMs: timeout.stepMs } } };
     /** SDK结构输出失败在边界转为固定诊断，禁止把原cause带入Workflow日志。 */
-    async function call() {
+    async function call(abortSignal: AbortSignal) {
       try {
+        if (config.mode === 'live' && onProgress) {
+          const stream = schema
+            ? await agent.stream(prompt, { ...options, abortSignal, structuredOutput: { schema: schema as z.ZodType<unknown>, errorStrategy: 'strict', logger: noopLogger } })
+            : await agent.stream(prompt, { ...options, abortSignal });
+          for await (const chunk of stream.fullStream) {
+            const event = projectLiveOutputChunk(chunk, role, 1);
+            if (event) await onProgress(event).catch(() => {});
+          }
+          return await stream.getFullOutput();
+        }
         return config.mode === 'live' && schema
-          ? await agent.generate(prompt, { ...options, structuredOutput: { schema: schema as z.ZodType<unknown>, errorStrategy: 'strict', logger: noopLogger } })
-          : await agent.generate(prompt, options);
+          ? await agent.generate(prompt, { ...options, abortSignal, structuredOutput: { schema: schema as z.ZodType<unknown>, errorStrategy: 'strict', logger: noopLogger } })
+          : await agent.generate(prompt, { ...options, abortSignal });
       } catch (error) {
         if (classifyDevelopmentError(error) === 'invalid-output') throw new OutputValidationError({ stage: 'structured-output', code: 'structured-output-invalid' });
         throw error;
       }
     }
-    const result = await call();
+    const result = await runWithDevelopmentDeadline(timeout.totalMs, call);
     if (result.finishReason !== 'stop') throw new DevelopmentModelError(result.finishReason === 'error' ? classifyDevelopmentError(result.error) : 'model-error', diagnoseModelResult(result, developmentMaxSteps));
     const tools = result.toolResults.map(
       // 工具名来自实际原生结果，而非模型自报。

@@ -66,9 +66,33 @@
 工作台 SHALL 从原生 Workflow 快照和受控事件读取 Run 状态、阶段、工具名、相对文件路径和
 耗时，而不建立第二套执行事实。
 
+#### Scenario: Product quality review fails before human approval
+
+- **WHEN** 产品质量审查失败且同一 Run 保存了完整待审产品稿和前序结果，后续审批与交付尚未开始
+- **THEN** 系统 SHALL 在校验保存输入与版本后允许通过原生 time travel 重试该审查节点
+- **AND** SHALL 保留已有产品稿，不重跑前序生成，审查完成后仍等待人工审批
+- **AND** 工作台 SHALL 在失败节点附近提供直接重试入口，并使用服务端提供的恢复版本提交
+
 #### Scenario: Workbench receives an activity refresh
 
 - **WHEN** 浏览器读取 Run 或收到活动通知
 - **THEN** 服务端 SHALL 以 Mastra Store 快照作为状态权威来源
 - **AND** 通知 SHALL 只作为刷新提示
 - **AND** 响应 SHALL NOT 包含隐藏推理、真实密钥、工具结果正文或任意文件内容
+
+#### Scenario: Workbench displays workflow progress
+
+- **WHEN** 工作台展示 Run 进度
+- **THEN** 阶段看板 SHALL 使用快照中的节点和状态展示执行卡片
+- **AND** 无法确定阶段归属的节点 SHALL 单独展示，不得推测其完成状态
+- **AND** 动效 SHALL 随真实状态变化，并尊重用户的减少动态效果设置
+- **AND** 节点投影 SHALL 提供可复现的标识、已知阶段和可确定的执行轮次；缺失事实 SHALL 保持未知
+- **AND** Agent 运行中状态 SHALL 仅在运行事实可证明时展示，不得从已完成记录推断
+- **AND** 当前 Run 的工作项卡片 SHALL 随同一 Run 的阶段变化移动；首次加载或切换 Run SHALL 直接定位
+- **AND** 运行中的当前阶段 SHALL 优先反映快照中已知归属的正在执行的叶节点；人工关口和终态仍以对应事实为准
+- **AND** 工作台 SHALL 展示当前 Workflow 节点的耗时，运行中依据节点开始时间更新，缺失时间时显示暂无数据
+- **AND** 工作台 SHALL 展示当前 Run 从开始至结束或当前时刻的总历时，并区分节点耗时；总历时包含等待时间
+- **AND** 澄清表单 SHALL 独立于实时活动提示渲染
+- **AND** 产品生成的实时输出 MAY 展示模型普通文本增量与实际工具调用名称及状态，标记为未完成内容；不得转发模型隐藏推理、工具参数或工具结果正文
+- **AND** 流式片段 SHALL NOT 替代完成校验、已保存产物或人工批准；自动重试时 SHALL 区分尝试
+- **AND** 工作台 SHALL 允许通过当前状态行展开或收起流程节点详情，收起时仍显示阶段和耗时

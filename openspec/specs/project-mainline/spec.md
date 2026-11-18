@@ -39,3 +39,80 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **WHEN** 工作台展示 Run 时间线或接收活动通知
 - **THEN** 页面 SHALL 从原生 Workflow 快照和受控事件读取公开元数据
 - **AND** SHALL NOT 接收模型隐藏推理、密钥、工具结果正文或任意文件内容
+
+### Requirement: All model-backed team roles provide safe live output
+
+产品、研发、测试和发布团队中实际调用模型的角色 SHALL 通过同一 Workflow watch 与工作台 SSE
+链路提供增量文本及工具生命周期投影。投影 SHALL 是易失的只读展示信息，不能改变或替代
+Mastra Store 中的执行、审批、恢复或交付事实。
+
+#### Scenario: A model-backed role produces streaming output
+
+- **WHEN** 产品、研发上下文、架构、就绪审查、实现、代码审查、测试或发布角色在 live 模式生成内容
+- **THEN** 工作台 SHALL 接收带角色和尝试次数的文本增量及工具开始、完成或失败状态
+- **AND** SHALL 使用与产品角色相同的受控 SSE 端点及断线快照回读机制
+- **AND** 并行实现成员 SHALL 以其实际授权角色分别投影，不能共享或伪造其他成员的输出
+
+#### Scenario: A stream event contains sensitive or unsupported data
+
+- **WHEN** 模型流包含隐藏推理、工具参数、工具结果正文、密钥、文件内容或未登记角色
+- **THEN** 系统 SHALL NOT 将该数据投影到浏览器
+- **AND** 确定性 self-check SHALL 仅以既有 Workflow 活动和检查证据呈现，不得伪造模型正文流
+
+### Requirement: Development preparation respects repository facts
+
+研发团队 SHALL 基于仓库事实识别已有技术栈和工程准备缺口，不能将固定执行档的文件清单当作所有仓库的既有事实。
+
+#### Scenario: Repository stack is unknown or incompatible
+
+- **WHEN** 仓库未提供足够证据或显示其他技术栈
+- **THEN** 系统 SHALL 区分未识别与执行档不匹配，保留证据，不得自动生成指定技术栈文件
+- **AND** 受限或无法读取的文件 SHALL NOT 被报告为确认缺失
+- **AND** 未完成独立验证时 SHALL NOT 批准实施
+
+### Requirement: Late business gaps return through product clarification
+
+测试或发布阶段发现属于业务规则、验收口径或产品责任的未闭环项时，系统 SHALL 保留该阶段已
+产生的证据并回流至受控产品澄清；不得将该类问题伪装为纯代码返工，也不得只将 Run 停在开发
+入口而不给出澄清路径。
+
+#### Scenario: QA identifies a business gap after development delivery
+
+- **WHEN** 测试质量确认以 `business` 类发现或 `product` 路由退回当前研发交付
+- **THEN** 系统 SHALL 保留该轮测试计划、执行结果与质量审阅，并将发现绑定为产品澄清问题
+- **AND** SHALL 使旧研发交付、测试通过和发布授权失效
+- **AND** 在修订产品稿获得人工确认后，SHALL 沿用原 Run 的受限代码权限和累计预算重新规划、实施、测试及发布
+
+#### Scenario: Release health identifies a business gap
+
+- **WHEN** 已完成外部发布回执后的健康确认报告提供 `business` 类或 `product` 路由发现
+- **THEN** 系统 SHALL 先保留发布与健康回执，并在需要时完成既有回滚关口
+- **AND** SHALL 将业务发现送入与测试相同的产品澄清和修订确认链
+- **AND** SHALL NOT 将健康失败自动解释为可由代码重试解决的问题
+
+### Requirement: Confirmed specifications are committed to one remote Run branch
+
+需求文档、产品 Spec、开发 Spec 和测试 Spec SHALL 仅在相应人工确认成功后由系统提交并推送到
+同一远端 Run 分支。该分支 SHALL 使用 `run/<主要能力>-<runId>` 命名，主要能力来自受控的
+Run 标识而非客户端提交的任意 Git ref；同一 Run 不得创建阶段性分支或向主分支写入。
+
+#### Scenario: First confirmed requirement creates the Run branch
+
+- **WHEN** 产品负责人确认本 Run 的需求文档
+- **THEN** 系统 SHALL 创建或续接对应的远端 Run 分支，并提交已确认的需求文档与产品 Spec
+- **AND** SHALL 保存分支名、提交 SHA、各文件散列和 push 成功回执为 Workflow 事实
+- **AND** 远端拒绝、分支非快进或 push 校验失败时 SHALL 停在当前确认阶段，不得将本地文件当作已交接版本
+
+#### Scenario: Downstream specification consumes confirmed upstream files
+
+- **WHEN** 开发或测试角色生成其 Spec
+- **THEN** 系统 SHALL 读取同一 Run 分支中已推送且散列匹配的上游文件
+- **AND** 开发 Spec SHALL 绑定需求文档和产品 Spec 的提交版本
+- **AND** 测试 Spec SHALL 额外绑定开发 Spec 的提交版本
+
+#### Scenario: Business clarification changes an upstream requirement
+
+- **WHEN** 业务澄清形成新的已确认需求版本
+- **THEN** 系统 SHALL 在同一 Run 分支追加提交，不得改写既有 Git 历史
+- **AND** SHALL 使依赖旧提交的产品、开发和测试 Spec 失效
+- **AND** SHALL 要求重新确认并推送受影响的下游 Spec 后才允许继续实施、测试或发布

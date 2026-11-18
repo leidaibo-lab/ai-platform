@@ -1,5 +1,6 @@
 /** 模型调用诊断只保存白名单枚举、数值和本地计时，不保存异常正文、cause、URL或凭据。 */
 import { z } from 'zod';
+import { MastraTimeoutError } from '@mastra/core/loop';
 import { diagnoseModelFailure, modelFailureSchema, type ModelFailure } from '../../delivery/model-failure.js';
 export { diagnoseModelFailure, modelFailureSchema, type ModelFailure } from '../../delivery/model-failure.js';
 export const timeoutPolicySchema = z.object({ version: z.enum(['development-timeout.v2', 'development-timeout.v3']), totalMs: z.number().int().positive(), stepMs: z.number().int().positive() });
@@ -9,6 +10,26 @@ export type ModelCallDiagnostic = z.infer<typeof modelCallDiagnosticSchema>;
 /** 开发角色每个模型步骤10分钟、一次Agent执行30分钟，人工等待不在模型计时内。 */
 export function developmentTimeoutPolicy(_role: string): z.infer<typeof timeoutPolicySchema> {
   return { version: 'development-timeout.v3', totalMs: 1800000, stepMs: 600000 };
+}
+
+/** 宿主独立守住总时限，避免上游或SDK未回调时把原生工作流永久留在运行中。 */
+export async function runWithDevelopmentDeadline<T>(timeoutMs: number, operation: (abortSignal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new MastraTimeoutError({ timeoutType: 'total', timeoutMs });
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    // Promise.race 也订阅 operation 的拒绝，超时后的迟到失败不会形成未处理拒绝。
+    return await Promise.race([operation(controller.signal), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 /** SDK 正常返回但未完成时保留白名单结束证据；工具停止不能推断为请求超时。 */
 export function diagnoseModelResult(result: { finishReason?: unknown; steps: readonly unknown[]; error?: unknown }, maxSteps: number): ModelFailure {

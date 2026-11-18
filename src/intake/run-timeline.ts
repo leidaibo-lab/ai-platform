@@ -1,13 +1,19 @@
+import { createHash } from 'node:crypto';
 import type { WorkflowRunStatus } from '@mastra/core/workflows';
 import { stateV2Schema } from '../development/v2/contracts.js';
+import type { LiveOutputEvent } from './live-output.js';
 
 /** 对外公开的执行节点状态；不包含 Mastra 内部错误和模型隐藏内容。 */
 export type RunTimelineStatus = 'pending' | 'running' | 'completed' | 'failed' | 'waiting' | 'suspended' | 'cancelled';
+
+export type RunTimelineStage = 'requirements' | 'product' | 'development' | 'testing';
 
 /** 工作台可消费的单个执行节点事实。 */
 export interface RunTimelineNode {
   id: string;
   kind: 'step' | 'agent' | 'check';
+  stage: RunTimelineStage | null;
+  attempt: number | null;
   title: string;
   status: RunTimelineStatus;
   startedAt: string | null;
@@ -38,6 +44,29 @@ export interface RunActivityEvent {
   summary: string;
   occurredAt: string;
 }
+
+/** 只提取已批准角色的公开流式文本和工具状态，不转发参数或结果。 */
+export function projectLiveOutputEvent(value: unknown): LiveOutputEvent | undefined {
+  let current: unknown = value;
+  for (let depth = 0; depth < 8; depth++) {
+    if (!current || typeof current !== 'object') return undefined;
+    const record = current as Record<string, unknown>;
+    if (record.type === 'live-output.v1' || record.type === 'product-live-output.v1') {
+      const data = record.data as Record<string, unknown> | undefined;
+      const attempt = data?.attempt;
+      if (!data || typeof data.role !== 'string' || !['analysis', 'clarification', 'scope-priority', 'writing', 'reviewer', 'context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'testing', 'operations'].includes(data.role) || typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt < 1 || attempt > 2) return undefined;
+      if (data.type === 'text' && typeof data.text === 'string' && data.text.length <= 16384) return { type: 'text', text: data.text, role: data.role, attempt };
+      if (data.type === 'tool' && typeof data.name === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(data.name) && (data.state === 'started' || data.state === 'completed' || data.state === 'failed')) return { type: 'tool', name: data.name, state: data.state, role: data.role, attempt };
+      return undefined;
+    }
+    const payload = record.payload as Record<string, unknown> | undefined;
+    current = payload?.output;
+  }
+  return undefined;
+}
+
+/** 兼容既有产品流调用者；当前投影已覆盖完整团队角色。 */
+export const projectProductStreamEvent = projectLiveOutputEvent;
 
 interface SnapshotLike {
   status: WorkflowRunStatus | string;
@@ -212,6 +241,20 @@ function collectFacts(snapshot: SnapshotLike): { work: WorkFact[]; files: string
   return { work: [...work.values()], files: [...files].sort(), checks };
 }
 
+/** 根据已知步骤路径投影展示阶段，未知路径保持空值。 */
+function stageForStep(path: string): RunTimelineStage | null {
+  if (/guided-requirements|product-analysis|product-clarification|product-scope-priority/.test(path)) return 'requirements';
+  if (/product-writing|review-product/.test(path)) return 'product';
+  if (/development-team/.test(path)) return 'development';
+  if (/testing-team|deployment-team|delivery-team|confirm-final-delivery/.test(path)) return 'testing';
+  return null;
+}
+
+/** 对已保存事实生成不受数组排序影响的公开标识。 */
+function factId(kind: string, fact: unknown): string {
+  return `${kind}:${createHash('sha256').update(JSON.stringify(fact)).digest('hex').slice(0, 20)}`;
+}
+
 /** 从原生 Workflow 快照生成工作台的节点、工具和文件读取投影。 */
 export function projectRunTimeline(snapshot: SnapshotLike): RunTimeline {
   const now = Date.now();
@@ -232,8 +275,10 @@ export function projectRunTimeline(snapshot: SnapshotLike): RunTimeline {
       const started = typeof result.startedAt === 'number' ? result.startedAt : null;
       const ended = typeof result.endedAt === 'number' ? result.endedAt : null;
       nodes.push({
-        id: results.length > 1 ? `${path}#${index + 1}` : path,
+        id: index === 0 ? path : `${path}#${index + 1}`,
         kind: 'step',
+        stage: stageForStep(path),
+        attempt: Array.isArray(raw) ? index + 1 : null,
         title: titleForStep(path),
         status: mapStatus(result.status),
         startedAt: isoTime(started ?? undefined),
@@ -245,11 +290,13 @@ export function projectRunTimeline(snapshot: SnapshotLike): RunTimeline {
     });
   }
 
-  facts.work.forEach((entry, index) => {
+  facts.work.forEach(entry => {
     for (const tool of entry.tools) timelineTools.add(tool);
     nodes.push({
-      id: `agent:${index + 1}`,
+      id: factId('agent', entry),
       kind: 'agent',
+      stage: ['analysis', 'clarification', 'scope-priority'].includes(entry.role) ? 'requirements' : entry.role === 'writing' ? 'product' : ['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer'].includes(entry.role) ? 'development' : null,
+      attempt: entry.round ?? null,
       title: roleTitles[entry.role] ?? `${entry.role} Agent`,
       status: 'completed',
       startedAt: entry.startedAt ?? null,
@@ -261,9 +308,16 @@ export function projectRunTimeline(snapshot: SnapshotLike): RunTimeline {
     });
   });
 
-  facts.checks.forEach((check, index) => nodes.push({
-    id: `check:${check.id}:${index + 1}`,
+  const checkOccurrences = new Map<string, number>();
+  facts.checks.forEach(check => {
+    const baseId = factId('check', check);
+    const occurrence = (checkOccurrences.get(baseId) ?? 0) + 1;
+    checkOccurrences.set(baseId, occurrence);
+    nodes.push({
+    id: `${baseId}:${occurrence}`,
     kind: 'check',
+    stage: 'development',
+    attempt: null,
     title: `检查：${check.id}`,
     status: check.exitCode === 0 ? 'completed' : 'failed',
     startedAt: null,
@@ -272,7 +326,8 @@ export function projectRunTimeline(snapshot: SnapshotLike): RunTimeline {
     tools: ['runChecks'],
     files: [],
     check: { id: check.id, exitCode: check.exitCode },
-  }));
+  });
+  });
 
   nodes.sort((left, right) => {
     if (!left.startedAt && !right.startedAt) return left.id.localeCompare(right.id);

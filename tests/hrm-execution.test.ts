@@ -115,7 +115,7 @@ test('产品资料项目可先规划，工程缺口不能误送产品澄清，�
     assert.equal(response.status, 200); current = await response.json();
     assert.equal(current.status, 'success'); assert.equal(current.outcome, 'blocked');
     assert.equal(current.blockage?.preparationRequired, true); assert.equal(current.blockage?.taskCount, 0);
-    assert.ok(current.blockage?.blockers.includes('工程上下文缺口：缺少可读取的工程文件：package.json'));
+    assert.ok(current.blockage?.blockers.some((item: string) => item.includes('尚未识别项目技术栈')));
     assert.equal(current.clarify, undefined); assert.ok(current.reconfigure);
     assert.deepEqual(calls, ['context', 'architect']);
     const snapshot = await workflow.getWorkflowRunById(run.runId); const state = (snapshot!.result as any).development;

@@ -47,8 +47,10 @@ test('真实Mastra写作API发送stream:true、输出上限并正确汇总SSE', 
     const port = (server.address() as { port: number }).port;
     const agents = createAgents({ rootDir: resolve('.'), mode: 'live', databaseUrl: 'file::memory:', port: 4111, modelId: 'openai/gpt-synthetic', apiKey: 'synthetic-not-a-secret', baseUrl: `http://127.0.0.1:${port}/v1` }, { skillsEnabled: false, workspace: false });
     new Mastra({ agents, storage, logger: false });
-    const result = await generateProductContent(agents.productManagerAgent, '合成写作传输验收', 'writing', 'live');
+    const events: string[] = [];
+    const result = await generateProductContent(agents.productManagerAgent, '合成写作传输验收', 'writing', 'live', undefined, 0, async event => { if (event.type === 'text') events.push(event.text); });
     assert.equal(result.text, '完整合成产品稿'); assert.equal(received.length, 1); assert.equal(received[0].stream, true);
+    assert.equal(events.join(''), '完整合成产品稿');
     assert.equal(received[0].max_tokens ?? received[0].max_completion_tokens, WRITING_MODEL_SETTINGS.maxOutputTokens);
   } finally { await storage.close(); server.closeAllConnections(); await new Promise<void>(/** 等待独占测试端口关闭。 */done => server.close(/** 关闭不影响其他应用端口。 */() => done())); }
 });
@@ -118,4 +120,12 @@ test('旧写作失败只说明已保存证据能证明的内容', /** 历史快�
   assert.equal(legacy?.reason, '产品写作未正常结束，未发布部分正文');
   assert.match(legacy!.details[0], /无法确认是流中断、工具循环还是上游异常/);
   assert.match(legacy!.next, /历史记录保持原样/);
+});
+
+test('上游网关 5xx 不被归因为本地模型网络故障', /** HTTP 证据仅说明该请求经过的上游网关响应异常。 */() => {
+  const failure = new ProductGenerationFailure([{ attempt: 1, durationMs: 330571, recordedAt: new Date().toISOString(), kind: 'timeout', failure: { source: 'upstream-http', httpStatus: 504 } }]);
+  const summary = describeProductFailure(failure)!;
+  assert.equal(summary.reason, '上游模型网关返回 HTTP 504（请求超时）');
+  assert.match(summary.details[0], /上游模型网关返回 HTTP 504（请求超时）/);
+  assert.doesNotMatch(`${summary.reason} ${summary.details[0]}`, /本地网络|模型连接中断|模型服务不可用/);
 });

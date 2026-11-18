@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
+import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
 import { z } from 'zod';
 import type { createAgents } from '../agents/index.js';
 import type { Delivery } from './delivery.js';
@@ -10,6 +11,7 @@ import { collectConfirmedDecisions } from '../../intake/contracts.js';
 import { generateProductContent } from '../../intake/product-generation.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
 import { nacosResourceIdentity, type NacosSnapshot } from '../nacos-resources.js';
+import { publishLiveOutput } from '../../intake/live-output.js';
 
 type StepBinder = <T extends Step<any, any, any, any, any, any>>(step: T) => T;
 
@@ -39,7 +41,7 @@ export function createProductManagerWorkflow(
       description: `product-manager-agent｜${managerPhaseInstructions[role]}`,
       inputSchema: deliverySchema,
       outputSchema: deliverySchema,
-      execute: async ({ inputData }) => {
+      execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
         if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式生成产品稿');
         if (inputData.revision) return inputData;
         if (inputData.intake?.enabled && !inputData.intake.ready) throw new Error('需求尚未确认');
@@ -59,7 +61,7 @@ export function createProductManagerWorkflow(
           previousWork: inputData.productWork?.entries ?? [],
           rework: inputData.productRework,
           instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}`,
-        }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel);
+        }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event));
         const content = z.string().trim().min(1).max(100000).parse(result.text);
         const facts = projectToolFacts(result.toolResults);
         const entry = {
@@ -99,7 +101,7 @@ export function createProductManagerWorkflow(
     description: 'product-reviewer-agent｜独立闭环检查',
     inputSchema: deliverySchema,
     outputSchema: deliverySchema,
-    execute: async ({ inputData }) => {
+    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
       const artifact = inputData.artifacts.at(-1);
       if (!artifact || artifact.stage !== 'product') throw new Error('产品审查缺少待审产品稿');
       if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
@@ -109,7 +111,7 @@ export function createProductManagerWorkflow(
         brief: inputData.brief,
         product: artifact.content,
         instruction: '独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。只输出审查发现与依据，不修改产品稿，不代替人工审批。',
-      }), 'reviewer', mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel);
+      }), 'reviewer', mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event));
       const facts = projectToolFacts(result.toolResults);
       const review = productQualityReviewSchema.parse({
         version: 'product-quality-review.v1',

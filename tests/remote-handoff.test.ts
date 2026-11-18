@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { publishHandoff, readHandoffFile } from '../src/delivery/remote-handoff.js';
+import { formalRunBranch, publishFormalSpecification, publishHandoff, readHandoffFile } from '../src/delivery/remote-handoff.js';
 import { createTaskContext, contextLimits } from '../src/delivery/task-context.js';
 
 /** 创建独立工作树与 bare 远端；只使用合成文件。 */
@@ -53,6 +53,29 @@ test('push失败后复用提交且禁止pushurl漂移', /** bare hook只用来�
     const receipt = await publishHandoff(f.root, 'run2', files); assert.equal(receipt.commit, saved);
     f.git(['config', 'remote.origin.pushurl', join(f.directory, 'elsewhere')]);
     await assert.rejects(/** pushurl不能扩张目标范围。 */() => publishHandoff(f.root, 'run2', files), /推送地址/);
+  } finally { rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test('正式规格在同一能力 Run 分支追加，且拒绝客户端式路径或非法 Run 标识', /** 规格提交只使用本地 bare 远端。 */async () => {
+  const f = repositories();
+  const runId = 'a84353b9-e22c-4ea9-b412-c6f28800c567';
+  try {
+    const branch = formalRunBranch('招聘 流程!', runId);
+    assert.equal(branch, `run/feature-${runId}`);
+    const requirements = await publishFormalSpecification(f.root, runId, 'recruitment-workflow', {
+      'specs/requirements.md': '# 已确认需求\n',
+      'specs/manifest.json': '{"kind":"requirements"}\n',
+    }, 'docs(spec): 提交已确认需求');
+    const development = await publishFormalSpecification(f.root, runId, 'recruitment-workflow', {
+      'specs/development-spec.md': '# 已确认开发 Spec\n',
+    }, 'docs(spec): 提交已确认开发规格');
+    assert.equal(requirements.branch, `run/recruitment-workflow-${runId}`);
+    assert.equal(development.branch, requirements.branch);
+    assert.notEqual(development.commit, requirements.commit);
+    assert.equal(readHandoffFile(f.root, development, 'specs/development-spec.md'), '# 已确认开发 Spec\n');
+    assert.match(f.git(['ls-remote', 'origin', `refs/heads/${requirements.branch}`]), new RegExp(`^${development.commit}`));
+    assert.throws(() => formalRunBranch('x', 'not-a-uuid'));
+    await assert.rejects(() => publishFormalSpecification(f.root, runId, 'feature', { 'product/escape.md': 'bad' }, 'docs(spec): bad'), /正式规格/);
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });
 

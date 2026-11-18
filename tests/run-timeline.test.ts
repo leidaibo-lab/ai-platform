@@ -76,3 +76,26 @@ test('Workflow 活动事件只投影安全的当前节点摘要', () => {
   });
   assert.equal(JSON.stringify(activity).includes('hiddenReasoning'), false);
 });
+
+test('步骤重试保留首轮标识并投影阶段和轮次', () => {
+  const path = 'development-team.development-execution';
+  const first = { status: 'failed', startedAt: 1000, endedAt: 2000 };
+  const before = projectRunTimeline({ status: 'failed', steps: { [path]: first } });
+  const after = projectRunTimeline({ status: 'running', steps: { [path]: [first, { status: 'running', startedAt: 3000 }] } });
+  assert.equal(before.nodes[0].id, after.nodes[0].id);
+  assert.deepEqual(after.nodes.map(node => [node.stage, node.attempt]), [['development', 1], ['development', 2]]);
+});
+
+test('Agent 标识不受其他已保存事实的插入顺序影响', () => {
+  const entry = { role: 'writing', toolNames: [], modelSteps: 1, startedAt: '2026-01-01T00:00:00Z' };
+  const snapshot = (entries: unknown[]) => ({ status: 'success', result: { productWork: { entries } } });
+  const first = projectRunTimeline(snapshot([entry])).nodes.find(node => node.kind === 'agent');
+  const second = projectRunTimeline(snapshot([{ role: 'analysis', toolNames: [], modelSteps: 1 }, entry])).nodes.find(node => node.title === first?.title);
+  assert.equal(first?.id, second?.id);
+  assert.equal(first?.stage, 'product');
+});
+
+test('产品质量审查节点归属产品阶段', () => {
+  const timeline = projectRunTimeline({ status: 'running', steps: { 'product-team.draft-product.review-product-quality': { status: 'running', startedAt: 1000 } } });
+  assert.equal(timeline.nodes[0].stage, 'product');
+});

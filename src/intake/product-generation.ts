@@ -9,10 +9,12 @@ import { ContextBudgetError } from '../delivery/context-budget.js';
 import { ProductGenerationFailure, canRetryProductAttempt, classifyProductError, isPlanOnlyProductOutput, safeFinishReason } from './product-failure.js';
 import type { ProductAttempt, ProductFailureKind } from '../delivery/product-generation-contract.js';
 import { projectToolFacts } from './run-timeline.js';
+import { projectLiveOutputChunk, type LiveOutputEvent } from './live-output.js';
 export const WRITING_MODEL_SETTINGS = { maxRetries: 0, maxOutputTokens: 16000, timeout: { totalMs: 1800000, stepMs: 600000 } } as const;
+export type ProductStreamEvent = LiveOutputEvent;
 type ProductGenerationAgent = Pick<ReturnType<typeof createAgents>['productManagerAgent'], 'generate' | 'stream'>;
 /** 产品团队统一验证原生结束事实；只读临时故障最多两次，单节点共享30分钟截止时间。 */
-export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0) {
+export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, onProgress?: (event: ProductStreamEvent) => Promise<void>) {
   let input: Record<string, unknown>;
   try { input = JSON.parse(prompt); } catch { input = { task: 'product', instruction: prompt }; }
   const attempts: ProductAttempt[] = []; const invocationStarted = performance.now(); const startedAt = new Date().toISOString(); const deadline = invocationStarted + WRITING_MODEL_SETTINGS.timeout.totalMs;
@@ -26,9 +28,18 @@ export async function generateProductContent(agent: ProductGenerationAgent, prom
       context = createTaskContext(input, mode === 'live', remote, budgetLevel);
       const remaining = Math.max(1, Math.floor(deadline - performance.now()));
       const options = { ...context.options, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
-      const result = role === 'writing' && mode === 'live'
-        ? await (await agent.stream(context.prompt, options)).getFullOutput()
-        : await agent.generate(context.prompt, options);
+      let result;
+      if (mode === 'live' && onProgress) {
+        const stream = await agent.stream(context.prompt, options);
+        for await (const chunk of stream.fullStream) {
+          const event = projectLiveOutputChunk(chunk, role, attempt);
+          // 展示流中断不得改变模型执行、检查点或恢复语义。
+          if (event) await onProgress(event).catch(() => {});
+        }
+        result = await stream.getFullOutput();
+      } else {
+        result = role === 'writing' && mode === 'live' ? await (await agent.stream(context.prompt, options)).getFullOutput() : await agent.generate(context.prompt, options);
+      }
       if (result.error) throw result.error;
       finishReason = safeFinishReason(result.finishReason); steps = result.steps.length;
       // Mastra text 汇总了所有步骤；只把最终步骤正文当交付，避免发布前置“我将检查”的计划。
