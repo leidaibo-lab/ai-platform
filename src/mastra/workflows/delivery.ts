@@ -7,6 +7,14 @@ import { correlationSchema } from '../../delivery/asset-identity.js';
 import { maxContextBudgetLevel } from '../../delivery/context-budget.js';
 import { nacosSnapshotSchema } from '../nacos-resources.js';
 
+/** 后继 Run 只继承经校验的规格正文与来源，不继承审批、预算、测试或发布事实。 */
+export const successorBaselineSchema = z.object({
+  sourceRunId: z.string().uuid(),
+  changeBrief: z.string().trim().min(1).max(12000),
+  artifacts: z.array(z.object({ kind: z.enum(['product', 'development', 'testing']), branch: z.string(), commit: z.string().regex(/^[a-f0-9]{40,64}$/), path: z.string().regex(/^specs\/[a-z0-9-]+\.md$/), hash: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().min(1).max(100000) })).min(1).max(4),
+});
+export type SuccessorBaseline = z.infer<typeof successorBaselineSchema>;
+
 export const stageSchema = z.enum(['product', 'development', 'testing', 'operations']);
 export type Stage = z.infer<typeof stageSchema>;
 export const artifactSchema = z.object({
@@ -28,6 +36,7 @@ export const deliverySchema = z.object({
   repositoryHandoff: remoteHandoffSchema.optional(),
   /** 已确认规格的远端回执；Store 保留其与审批、恢复的关系。 */
   formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(),
+  successorBaseline: successorBaselineSchema.optional(),
   correlation: correlationSchema.optional(),
   brief: z.string().trim().min(1).max(12000),
   mode: z.enum(['fixture', 'live']),

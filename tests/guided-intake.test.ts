@@ -82,6 +82,27 @@ test('AI主动补全模式：跳过逐项澄清，直接生成待审产品稿', 
   } finally { void mastra; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('产品返工回到同 Run 澄清，保留审阅反馈且新稿必须重新确认', /** 未确认产品稿不得进入开发或复用旧审批。 */async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'product-rework-'));
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const app = createStudioApplicationOptions(config); const mastra = new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
+  try {
+    const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成返工需求', iterationId: 'product-rework', intakeMode: 'autofill' } });
+    let current = await readIntake(workflow, run.runId);
+    const oldHash = current.product!.artifact.hash;
+    current = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: oldHash, decision: 'rework', reviewer: 'test-human', comment: '请补齐异常处理与验收边界' });
+    assert.equal(current.status, 'suspended'); assert.equal(current.step, 'guided-requirements'); assert.ok(current.intake);
+    const snapshot = await workflow.getWorkflowRunById(run.runId);
+    const rework = (snapshot!.steps!['product-team.draft-product.guided-requirements'] as any).payload.productRework;
+    assert.equal(rework.sourceHash, oldHash); assert.equal(rework.feedback, '请补齐异常处理与验收边界');
+    assert.equal((snapshot!.steps!['development-team'] as any)?.status, undefined);
+    current = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake!.hash, action: 'finalize', reviewer: 'test-human', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }], supplement: '' });
+    current = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake!.hash, action: 'finalize', reviewer: 'test-human', answers: [], supplement: '' });
+    assert.equal(current.step, 'review-product'); assert.notEqual(current.product!.artifact.hash, oldHash);
+    await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: oldHash, decision: 'approve', reviewer: 'test-human', comment: '旧批准' }));
+  } finally { void mastra; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 import { Hono, type Handler } from 'hono';
 import { randomUUID } from 'node:crypto';
 

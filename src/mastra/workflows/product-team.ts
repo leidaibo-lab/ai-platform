@@ -33,7 +33,7 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
     // 产品审批属于产品团队的人工质量门，未批准版本不能交给研发团队。
     execute: async ({ inputData, resumeData, suspend, bail, runId }) => {
       if (inputData.mode !== config.mode) throw new Error('产品运行模式发生变化');
-      const pending = pendingSchema.parse({ role: 'product', artifact: inputData.artifacts.at(-1), productReworkRound: 0 });
+      const pending = pendingSchema.parse({ role: 'product', artifact: inputData.artifacts.at(-1), productReworkRound: inputData.productRework?.round ?? 0 });
       if (!resumeData) return suspend(pending);
       const decision = validateReview(pending, resumeData);
       const next = { ...inputData, reviews: [...inputData.reviews, decision] };

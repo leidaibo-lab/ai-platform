@@ -76,3 +76,23 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **THEN** 系统 SHALL 使用独立 index 创建仅包含该阶段制品的不可变提交并校验远端分支
 - **AND** SHALL 将分支、commit、文件散列和上游提交绑定保存到 Workflow 状态
 - **AND** SHALL NOT 向默认分支或新的阶段分支推送
+
+### Requirement: Successor Runs preserve specification provenance without inheriting authority
+
+已结束 Run 可创建新的后继 Run。后继 Run SHALL 从来源 Run 的已确认、已推送规格回执读取并校验固定 Git 内容，保存来源溯源，但不得复用来源 Run 的审批、预算、质量、发布或恢复事实。
+
+#### Scenario: A blocked Run starts a successor
+
+- **WHEN** 用户提交新的 Run 标识、变更说明及来源已确认规格的种类
+- **THEN** 服务端 SHALL 校验来源回执和散列并以新的 Run 标识启动产品澄清
+- **AND** 新 Run SHALL 使用自己的能力命名 Run 分支提交后续确认的规格
+
+### Requirement: Product rework returns to same-Run clarification
+
+产品人工确认提出返工时，系统 SHALL 保留来源稿、审阅意见和返工轮次，并在同一 Run 中回到需求澄清；该未确认稿不得被推送或进入研发。
+
+#### Scenario: Reviewer asks for product clarification
+
+- **WHEN** 当前产品稿的人工确认决定为 `rework`
+- **THEN** 系统 SHALL 从需求澄清节点重新开始并将反馈作为产品经理上下文
+- **AND** 重新生成的产品稿 SHALL 要求新的人工确认

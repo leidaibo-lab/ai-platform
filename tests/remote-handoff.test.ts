@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { formalRunBranch, publishFormalSpecification, publishHandoff, readHandoffFile } from '../src/delivery/remote-handoff.js';
 import { createTaskContext, contextLimits } from '../src/delivery/task-context.js';
+import { buildSuccessorBaseline } from '../src/intake/successor-run.js';
 
 /** 创建独立工作树与 bare 远端；只使用合成文件。 */
 function repositories() {
@@ -76,6 +77,20 @@ test('正式规格在同一能力 Run 分支追加，且拒绝客户端式路径
     assert.match(f.git(['ls-remote', 'origin', `refs/heads/${requirements.branch}`]), new RegExp(`^${development.commit}`));
     assert.throws(() => formalRunBranch('x', 'not-a-uuid'));
     await assert.rejects(() => publishFormalSpecification(f.root, runId, 'feature', { 'product/escape.md': 'bad' }, 'docs(spec): bad'), /正式规格/);
+  } finally { rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test('后继 Run 只从已确认回执导入固定 Git 规格，拒绝遗漏与散列漂移', /** 来源正文、ref 与 hash 都不能由页面替换。 */async () => {
+  const f = repositories();
+  const sourceRunId = 'a84353b9-e22c-4ea9-b412-c6f28800c567';
+  try {
+    const handoff = await publishFormalSpecification(f.root, sourceRunId, 'recruitment-workflow', { 'specs/product-spec.md': '# 产品基线\n' }, 'docs(spec): 提交已确认产品规格');
+    const source = { brief: '旧需求', mode: 'live' as const, artifacts: [], reviews: [], outcome: 'in-progress' as const, correlation: { projectId: 'hrm' as const, iterationId: 'recruitment-workflow', runId: sourceRunId, workflowId: 'productDevelopmentWorkflow' as const }, formalSpecifications: [{ kind: 'product' as const, handoff, paths: ['specs/product-spec.md'], upstreamCommits: [] }] };
+    const baseline = buildSuccessorBaseline(f.root, sourceRunId, source, ['product'], '补充重复投递规则');
+    assert.equal(baseline.sourceRunId, sourceRunId);
+    assert.equal(baseline.artifacts[0].content, '# 产品基线\n');
+    assert.throws(() => buildSuccessorBaseline(f.root, sourceRunId, source, ['development'], '补充规则'), /不包含/);
+    assert.throws(() => buildSuccessorBaseline(f.root, sourceRunId, { ...source, formalSpecifications: [{ ...source.formalSpecifications[0], handoff: { ...handoff, files: { 'specs/product-spec.md': '0'.repeat(64) } } }] }, ['product'], '补充规则'), /散列/);
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });
 

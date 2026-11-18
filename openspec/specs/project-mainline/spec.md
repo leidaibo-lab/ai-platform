@@ -116,3 +116,31 @@ Run 标识而非客户端提交的任意 Git ref；同一 Run 不得创建阶段
 - **THEN** 系统 SHALL 在同一 Run 分支追加提交，不得改写既有 Git 历史
 - **AND** SHALL 使依赖旧提交的产品、开发和测试 Spec 失效
 - **AND** SHALL 要求重新确认并推送受影响的下游 Spec 后才允许继续实施、测试或发布
+
+### Requirement: A successor Run imports only verified formal specification baselines
+
+已结束 Run 的后继 Run SHALL 仅从来源 Run 已确认并已推送的正式规格中导入经散列校验的只读基线。
+后继 Run SHALL 使用新的 Run 标识和新的 `run/<主要能力>-<runId>` 分支，且不得继承来源 Run 的人工审批、调用预算、测试结果、发布授权或外部回执。
+
+#### Scenario: Create a successor from a blocked Run
+
+- **WHEN** 用户选择来源 Run 中一个或多个已确认的产品、开发或测试 Spec 并提交新的变更说明
+- **THEN** 服务端 SHALL 从 Mastra Store 的规格回执解析固定 branch、commit、path 与 hash，并从受控仓库读取并重算内容散列
+- **AND** 系统 SHALL 将来源 Run、已校验的制品版本及变更说明保存为新 Run 的 Workflow 事实
+- **AND** 新 Run SHALL 从产品澄清及人工确认开始，而不是恢复或复制来源 Run 的执行状态
+
+#### Scenario: Source specification is missing or has drifted
+
+- **WHEN** 来源 Run 没有对应的已确认回执、Git 固定版本不可读取或文件散列不匹配
+- **THEN** 系统 SHALL 拒绝创建后继 Run
+- **AND** SHALL NOT 接受浏览器提供的 Git branch、commit、仓库路径、文件正文或审批数据作为替代
+
+### Requirement: Product review can re-enter same-Run clarification before confirmation
+
+产品负责人对未确认产品稿请求返工时，系统 SHALL 在同一 Run 中保存来源稿、散列、审阅意见和返工轮次，并回到需求澄清；不得推送该未确认版本、进入开发或复用旧审批。
+
+#### Scenario: Product reviewer requests clarification and rework
+
+- **WHEN** 人工产品确认以 `rework` 决定提交当前稿的审阅意见
+- **THEN** 系统 SHALL 使当前待审产品稿失效，并从该 Run 的需求澄清节点重新开始
+- **AND** 产品经理 SHALL 获得受控的来源稿与反馈上下文，重新形成产品稿后等待新的人工确认

@@ -10,9 +10,12 @@ import type { IntakeWorkflow } from './service.js';
 import { GateInputError, readIntake, respondIntake } from './service.js';
 import { projectLiveOutputEvent, projectWorkflowActivity } from './run-timeline.js';
 import { intakeModeSchema } from './contracts.js';
+import { deliverySchema } from '../mastra/workflows/delivery.js';
+import { buildSuccessorBaseline } from './successor-run.js';
 import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
 import type { WorkflowStreamEvent } from '@mastra/core/workflows';
 const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned'), intakeMode: intakeModeSchema.default('clarify') });
+const successorRequestSchema = z.object({ runId: z.string().uuid(), artifactKinds: z.array(z.enum(['product', 'development', 'testing'])).min(1).max(3), changeBrief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.optional(), intakeMode: intakeModeSchema.default('clarify') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
 export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
   const busy = new Set<string>();
@@ -82,6 +85,31 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
           }
           const run = await workflow.createRun({ runId: id });
           await run.start({ inputData: { brief: input.brief, iterationId: input.iterationId, intakeMode: input.intakeMode, guidedIntake: input.intakeMode === 'clarify' } });
+          return c.json(await readIntake(workflow, id));
+        } catch (error) { return failure(c, error); }
+        finally { if (id && acquired) busy.delete(id); }
+      },
+    }),
+    registerApiRoute('/intake-api/runs/:sourceRunId/successors', { method: 'POST',
+      /** 后继 Run 只由服务端读取旧 Run 已确认规格；页面无法提供 branch、commit、仓库或正文。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        let id: string | undefined; let acquired = false;
+        try {
+          origin(c); if (!config?.hrmRepositoryRoot) throw new Error('后继 Run 缺少受控项目仓库');
+          const sourceRunId = z.string().uuid().parse(c.req.param('sourceRunId'));
+          const request = successorRequestSchema.parse(await c.req.json()); id = request.runId;
+          if (id === sourceRunId) throw new Error('后继 Run 必须使用新的 Run 标识');
+          if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
+          if (await workflow.getWorkflowRunById(id)) throw new Error('该 Run 标识已经存在');
+          const source = await workflow.getWorkflowRunById(sourceRunId);
+          if (!source || source.status !== 'success') throw new Error('只能基于已结束 Run 创建后继 Run');
+          const candidates = Object.entries(source.steps ?? {}).filter(([, value]) => !Array.isArray(value)).map(([, value]) => deliverySchema.safeParse((value as any).output)).filter(item => item.success).map(item => item.data);
+          const delivery = candidates.find(item => item.formalSpecifications?.length) ?? candidates.at(0);
+          if (!delivery?.correlation || !delivery.formalSpecifications?.length) throw new Error('来源 Run 不包含已确认并推送的正式规格');
+          const baseline = buildSuccessorBaseline(config.hrmRepositoryRoot, sourceRunId, delivery, request.artifactKinds, request.changeBrief);
+          const run = await workflow.createRun({ runId: id });
+          await run.start({ inputData: { brief: request.changeBrief, iterationId: request.iterationId ?? delivery.correlation.iterationId, intakeMode: request.intakeMode, guidedIntake: request.intakeMode === 'clarify', successorBaseline: baseline } });
           return c.json(await readIntake(workflow, id));
         } catch (error) { return failure(c, error); }
         finally { if (id && acquired) busy.delete(id); }

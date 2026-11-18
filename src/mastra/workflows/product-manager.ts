@@ -58,6 +58,7 @@ export function createProductManagerWorkflow(
           brief: inputData.brief,
           confirmedIntake: inputData.intake,
           confirmedDecisions: inputData.intake ? collectConfirmedDecisions(inputData.intake) : [],
+          successorBaseline: inputData.successorBaseline ? { sourceRunId: inputData.successorBaseline.sourceRunId, changeBrief: inputData.successorBaseline.changeBrief, artifacts: inputData.successorBaseline.artifacts.map(item => ({ kind: item.kind, path: item.path, commit: item.commit, content: item.content })) } : undefined,
           previousWork: inputData.productWork?.entries ?? [],
           rework: inputData.productRework,
           instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}`,

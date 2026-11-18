@@ -59,7 +59,11 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string) {
   const clarify = snapshot.status === 'success' && blockage && !preparationRequired && development.success ? { hash: developmentHash({ runId, development: development.data, outcome: (snapshot.result as any).outcome }), title: development.data.completedTasks.length ? '处理后期业务缺口，修订产品稿并回归' : '补齐业务选择并修订产品稿' } : undefined;
   const reconfigure = snapshot.status === 'success' && blockage && preparationRequired && development.success && !development.data.completedTasks.length && !development.data.approvedHash && !development.data.delivery ? { hash: developmentHash({ runId, development: development.data, action: 'reconfirm-project' }) } : undefined;
   const intakeMode = state?.success ? state.data.intakeMode ?? state.data.intake?.intakeMode ?? (state.data.intake?.enabled ? 'clarify' : 'autofill') : intake.success ? intake.data.intakeMode ?? (intake.data.enabled ? 'clarify' : 'autofill') : undefined;
-  return { developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: state?.success ? state.data.mode : sync.success ? sync.data.mode : undefined, intakeMode, brief: state?.success ? state.data.brief : '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  /** 正式规格在产品确认步骤写入，不能只读取初始化步骤的早期快照。 */
+  const delivery = Object.values(snapshot.steps ?? {}).map(entry => Array.isArray(entry) ? undefined : deliverySchema.safeParse((entry as any)?.output)).find(item => item?.success && item.data.formalSpecifications?.length)?.data ?? (state?.success ? state.data : undefined);
+  const successor = delivery?.formalSpecifications?.length ? { sourceRunId: runId, iterationId: delivery.correlation?.iterationId, artifacts: delivery.formalSpecifications.map(item => ({ kind: item.kind, branch: item.handoff.branch, commit: item.handoff.commit, paths: item.paths })) } : undefined;
+  const successorBaseline = delivery?.successorBaseline ? { sourceRunId: delivery.successorBaseline.sourceRunId, changeBrief: delivery.successorBaseline.changeBrief, artifacts: delivery.successorBaseline.artifacts.map(item => ({ kind: item.kind, branch: item.branch, commit: item.commit, path: item.path, hash: item.hash })) } : undefined;
+  return { developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, successor, successorBaseline, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: delivery?.mode ?? (sync.success ? sync.data.mode : undefined), intakeMode, brief: delivery?.brief ?? '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
@@ -160,7 +164,19 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     step = ['product-team', 'draft-product', 'guided-requirements', 'requirements-round', 'confirm-requirements'];
   } else if (current.step === 'review-product' && current.product) {
     resumeData = validateReview(current.product, reviewSchema.parse(input));
-    if (resumeData.decision === 'rework') throw new Error('请另起需求完善；当前页面仅支持确认或终止');
+    if (resumeData.decision === 'rework') {
+      const snapshot = await workflow.getWorkflowRunById(runId);
+      const review = findStep(snapshot, 'review-product');
+      const source = deliverySchema.parse(review?.payload);
+      const artifact = source.artifacts.at(-1);
+      if (!artifact || artifact.stage !== 'product') throw new GateInputError('当前待审产品稿已变化，请刷新');
+      const nextRound = (source.productRework?.round ?? 0) + 1;
+      const rework = { sourceRunId: runId, sourceHash: artifact.hash, sourceContent: artifact.content, reviewer: resumeData.reviewer, feedback: resumeData.comment, round: nextRound };
+      const restart = deliverySchema.parse({ ...source, intake: { intakeMode: 'clarify', enabled: true, ready: false, round: 0, history: [] }, intakeMode: 'clarify', artifacts: [], reviews: [], productWork: undefined, productQualityReview: undefined, productRework: rework, outcome: 'in-progress' });
+      const run = await workflow.createRun({ runId });
+      await run.timeTravel({ step: ['product-team', 'draft-product', 'guided-requirements'], inputData: restart });
+      return readIntake(workflow, runId);
+    }
     step = ['product-team', 'review-product'];
   } else if (current.gate) {
     const snapshot = await workflow.getWorkflowRunById(runId);

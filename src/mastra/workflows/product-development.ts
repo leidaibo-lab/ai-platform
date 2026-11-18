@@ -10,7 +10,7 @@ import type { PracticeConfig } from '../config.js';
 import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
 import { createProductTeamWorkflow } from './product-team.js';
 import { createDevelopmentTeamWorkflow } from './development-team.js';
-import { deliverySchema } from './delivery.js';
+import { deliverySchema, successorBaselineSchema } from './delivery.js';
 import { stateV2Schema } from '../../development/v2/contracts.js';
 import { developmentHash } from '../../development/contracts.js';
 import { emptyQuality, lifecycleSchema, qualityHash, releaseHash } from '../../delivery/contracts.js';
@@ -23,7 +23,7 @@ import { intakeModeSchema } from '../../intake/contracts.js';
 import { loadNacosSnapshot } from '../nacos-resources.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
 
-const inputSchema = z.object({ intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000) });
+const inputSchema = z.object({ intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000), successorBaseline: successorBaselineSchema.optional() });
 
 /** 采用 Workflow 嵌套和 foreach；人工批准保持为原生 suspend/resume。 */
 export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; storage?: MastraCompositeStore } = {}) {
@@ -34,7 +34,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       if (config.hrmRepositoryRoot) registerAssetRun(config.hrmRepositoryRoot, correlation, inputData.brief);
       const intakeMode = inputData.intakeMode ?? (inputData.guidedIntake === true ? 'clarify' : 'autofill');
       const nacosResources = config.nacosResources ? await loadNacosSnapshot(config.nacosResources) : undefined;
-      return { nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' as const };
+      return { nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, successorBaseline: inputData.successorBaseline, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' as const };
     },
   });
   const developmentTeam = createDevelopmentTeamWorkflow(agents, config, generate, options);
