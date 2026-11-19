@@ -54,8 +54,9 @@ test('113 项真实产品 Skill 包可全部通过版本读取、快照和原生
     await verifyNacosAccess(config, snapshot);
     const agents = createAgents({ rootDir: resolve('.'), mode: 'fixture', databaseUrl: 'file::memory:', port: 4111, modelId: 'openai/fixture' }, { resources: snapshot, workspace: false });
     assert.equal((await agents.productManagerAgent.listSkills()).length, 113);
-    assert.equal((await agents.productReviewerAgent.listSkills()).length, manifest.reviewerSkills.length);
-    assert.ok(manifest.reviewerSkills.includes('product-requirements-handoff'));
+    const reviewerSkills = await agents.productReviewerAgent.listSkills();
+    assert.equal(reviewerSkills.length, manifest.reviewerSkills.length);
+    assert.ok(reviewerSkills.some(/** 审查角色必须能发现与产品经理共用的版式 Skill。 */skill => skill.name === 'product-requirements-handoff'));
     const layout = frozenSkills.find(skill => skill.name === 'product-requirements-handoff')?.references['document-layout.md'];
     assert.match(layout ?? '', /状态流转用表格[\s\S]*处理结果按业务阶段分组[\s\S]*顺序流程用编号列表/);
   } finally {
