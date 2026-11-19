@@ -29,6 +29,7 @@ export const reviewSchema = z.object({
 export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
+  requirementTracking: z.literal(true).optional(),
   nacosResources: nacosSnapshotSchema.optional(),
   intake: intakeSchema.optional(),
   // 顶层保留入口策略，便于恢复和页面投影不依赖当前暂停点。

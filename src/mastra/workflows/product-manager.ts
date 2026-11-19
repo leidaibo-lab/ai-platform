@@ -1,3 +1,4 @@
+import { acceptanceRequirementsInstruction, readAcceptanceRequirements } from '../../development/v2/acceptance-requirements.js';
 import { createHash } from 'node:crypto';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
@@ -61,9 +62,10 @@ export function createProductManagerWorkflow(
           successorBaseline: inputData.successorBaseline ? { sourceRunId: inputData.successorBaseline.sourceRunId, changeBrief: inputData.successorBaseline.changeBrief, artifacts: inputData.successorBaseline.artifacts.map(item => ({ kind: item.kind, path: item.path, commit: item.commit, content: item.content })) } : undefined,
           previousWork: inputData.productWork?.entries ?? [],
           rework: inputData.productRework,
-          instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}`,
+          instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' && inputData.requirementTracking ? acceptanceRequirementsInstruction : ''}`,
         }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event));
         const content = z.string().trim().min(1).max(100000).parse(result.text);
+        if (role === 'writing' && inputData.requirementTracking) readAcceptanceRequirements(content);
         const facts = projectToolFacts(result.toolResults);
         const entry = {
           role,
@@ -91,6 +93,7 @@ export function createProductManagerWorkflow(
     execute: async ({ inputData }) => {
       const content = inputData.revision?.content ?? inputData.productWork?.entries.at(-1)?.content;
       if (!content) throw new Error('产品写作未产生可审阅正文');
+      if (inputData.requirementTracking) readAcceptanceRequirements(content);
       const hash = createHash('sha256').update(JSON.stringify({ stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content, revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork, ...(inputData.nacosResources ? { resources: nacosResourceIdentity(inputData.nacosResources) } : {}) })).digest('hex');
       return { ...inputData, artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };
     },

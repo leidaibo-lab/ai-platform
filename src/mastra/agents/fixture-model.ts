@@ -35,7 +35,10 @@ export function createFixtureModel(stage: string) {
     /** 普通生成和修订共享固定样例，任务标记只决定是否显示修订段落。 */
     function productText(prompt: unknown) {
       const serialized = JSON.stringify(prompt);
-      return drafts[stage] + (serialized.includes('revision-task') ? '\n\n## 修订样例（fixture）\n此为修订流程固定输出；具体结论须由人工检查，不代表模型理解或确认。' : '') + (serialized.includes('sourceContent') ? '\n\n返工样例（fixture）：已进入带来源和反馈的新轮次；此固定文本不代表理解或解决反馈。' : '');
+      const requirements = serialized.includes('REQ-APPLICATION-SUBMIT')
+        ? `\n\n## 可验收需求\n- REQ-FIXTURE-A: 固定模块返回声明值 | 验收: ${serialized.includes('revision-task') ? '修订版检查返回 1' : '登记检查返回 1'}`
+        : '';
+      return drafts[stage] + requirements + (serialized.includes('revision-task') ? '\n\n## 修订样例（fixture）\n此为修订流程固定输出；具体结论须由人工检查，不代表模型理解或确认。' : '') + (serialized.includes('sourceContent') ? '\n\n返工样例（fixture）：已进入带来源和反馈的新轮次；此固定文本不代表理解或解决反馈。' : '');
     }
     /** 所有固定产品角色真实执行已注册工具，再输出各自样例。 */
     function productResponse(prompt: readonly { role: string }[]) {

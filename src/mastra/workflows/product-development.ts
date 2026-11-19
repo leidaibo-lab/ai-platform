@@ -26,7 +26,7 @@ import type { MastraCompositeStore } from '@mastra/core/storage';
 const inputSchema = z.object({ intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000), successorBaseline: successorBaselineSchema.optional() });
 
 /** 采用 Workflow 嵌套和 foreach；人工批准保持为原生 suspend/resume。 */
-export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; storage?: MastraCompositeStore } = {}) {
+export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; fixtureRequirementTracking?: boolean; storage?: MastraCompositeStore } = {}) {
   const initialize = createStep({ id: 'initialize-product-development', description: '从原始需求启动完整产研流程', inputSchema, outputSchema: deliverySchema,
     // 不接受客户端伪造产品稿、批准或模式。
     execute: async ({ inputData, runId }) => {
@@ -34,7 +34,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       if (config.hrmRepositoryRoot) registerAssetRun(config.hrmRepositoryRoot, correlation, inputData.brief);
       const intakeMode = inputData.intakeMode ?? (inputData.guidedIntake === true ? 'clarify' : 'autofill');
       const nacosResources = config.nacosResources ? await loadNacosSnapshot(config.nacosResources) : undefined;
-      return { nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, successorBaseline: inputData.successorBaseline, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' as const };
+      return { ...(config.mode === 'live' || options.fixtureRequirementTracking ? { requirementTracking: true as const } : {}), nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, successorBaseline: inputData.successorBaseline, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' as const };
     },
   });
   const developmentTeam = createDevelopmentTeamWorkflow(agents, config, generate, options);

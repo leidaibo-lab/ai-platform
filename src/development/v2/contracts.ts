@@ -1,3 +1,4 @@
+import { requirementImpactSchema } from './acceptance-requirements.js';
 import { contextBudgetFailureSchema } from '../../delivery/context-budget.js';
 import { formalSpecificationReceiptSchema, remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 /** v2 独立契约：不可变证据快照由原生 Workflow 持有，不迁移 v1 状态。 */
@@ -9,7 +10,7 @@ import { architectureSchema, commandEvidenceSchema, developmentInputSchema, deve
 
 /** 新Run显式选择自主政策；缺省不改变历史批准/恢复散列。 */
 export const autonomyPolicySchema = z.object({ version: z.literal('autonomy.v1'), maxCheckRuns: z.number().int().min(2).max(96).default(24), maxNoProgress: z.number().int().min(1).max(5).default(2) });
-export const inputV2Schema = developmentInputSchema.extend({ autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+export const inputV2Schema = developmentInputSchema.extend({ requirementTracking: z.literal(true).optional(), requirementImpact: requirementImpactSchema.optional(), autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -41,6 +42,7 @@ export const verificationRecordSchema = z.object({ sequence: z.number().int().po
 /** 返工保留失败签名和责任任务；源码变化本身不是进展。 */
 export const repairRecordSchema = z.object({ round: z.number().int().nonnegative(), sourceHash: hash, signature: hash, tasks: z.array(z.string()), noProgress: z.number().int().nonnegative(), kind: z.enum(['code', 'environment', 'business', 'authorization']) });
 export const stateV2Schema = z.object({
+  priorAcceptanceCases: z.array(z.object({ id: z.string(), requirementRefs: z.array(z.string()) })).optional(),
   verificationHistory: z.array(verificationRecordSchema).optional(), repairHistory: z.array(repairRecordSchema).optional(),
   stopReason: z.enum(['business-decision', 'authorization-required', 'repair-budget', 'verification-budget', 'no-progress']).optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),
@@ -96,6 +98,7 @@ export function validatePlanV2(plan: z.infer<typeof planV2Schema>, state: StateV
     (path) => `file:${path}`,
   ));
   for (const task of plan.tasks) {
+    if (state.input.requirementTracking && [task.requirementRefs, task.acceptanceRefs].some(refs => new Set(refs).size !== refs.length)) throw new SyntaxError('任务需求或验收引用重复');
     for (const ref of [...task.requirementRefs, ...task.acceptanceRefs]) if (!requirements.has(ref)) throw new SyntaxError('任务引用未知需求或验收');
     for (const ref of task.contextRefs) if (!context.has(ref)) throw new SyntaxError('任务引用未知上下文');
     for (const ref of task.verificationRefs) if (!state.verificationRefs.includes(ref)) throw new SyntaxError('任务引用未登记检查');

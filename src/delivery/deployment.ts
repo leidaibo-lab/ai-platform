@@ -13,12 +13,12 @@ import type { createExecutionScope } from '../development/v2/execution-scope.js'
 import { validateIdentityV2 } from '../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
 import { assertCandidate } from './testing.js';
-import { lifecycleSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema, releaseHash, qualityHash, type Lifecycle } from './contracts.js';
+import { lifecycleSchema, matchesAcceptancePlan, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema, releaseHash, qualityHash, type Lifecycle } from './contracts.js';
 import { withRepositoryAssets } from './repository-assets.js';
 
 /** 发布只消费通过独立测试的同一源码和产品/任务批准版本。 */
 function assertReleaseInput(state: Lifecycle): void {
-  if (state.outcome !== 'in-progress' || state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || state.quality.reportHash !== qualityHash(state) || state.quality.sourceHash !== state.development.checkpointHash || state.development.delivery?.sourceHash !== state.development.checkpointHash || state.development.delivery?.productHash !== state.development.input.source.hash || state.development.delivery?.planHash !== state.development.planHash) throw new Error('发布缺少同版本产品、研发和独立测试通过证据');
+  if (state.outcome !== 'in-progress' || (state.development.input.requirementTracking && !matchesAcceptancePlan(state)) || state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || state.quality.reportHash !== qualityHash(state) || state.quality.sourceHash !== state.development.checkpointHash || state.development.delivery?.sourceHash !== state.development.checkpointHash || state.development.delivery?.productHash !== state.development.input.source.hash || state.development.delivery?.planHash !== state.development.planHash) throw new Error('发布缺少同版本产品、研发和独立测试通过证据');
 }
 
 /** 在不执行任意命令或访问远程平台的条件下，收集外部发布和验证结果。 */
@@ -138,7 +138,7 @@ export function createDeploymentWorkflow(agents: ReturnType<typeof createAgents>
       if (!business.length || !['rolled-back', 'in-progress'].includes(state.outcome)) return state;
       const development = state.development;
       const blockers = [...new Set([...(development.plan?.blockers ?? []), ...business.map(finding => `发布业务待决：${finding.detail}`)])];
-      return lifecycleSchema.parse({ ...state, development: { ...development, outcome: 'clarification-required', delivery: null, plan: { ...development.plan!, blockers } }, developmentHistory: [...state.developmentHistory, development.delivery!], releaseHistory: [...state.releaseHistory, state.release], release: { plan: null, qualityHash: null, approval: null, hash: null, receipt: null, health: null, rollback: null, authority: 'local-human-report' }, outcome: 'blocked' });
+      return lifecycleSchema.parse({ ...state, development: { ...development, outcome: 'clarification-required', delivery: null, priorAcceptanceCases: state.quality.approval?.cases.map(/** 只保留修订影响计算需要的历史映射。 */({ id, requirementRefs }) => ({ id, requirementRefs })), plan: { ...development.plan!, blockers } }, developmentHistory: [...state.developmentHistory, development.delivery!], releaseHistory: [...state.releaseHistory, state.release], release: { plan: null, qualityHash: null, approval: null, hash: null, receipt: null, health: null, rollback: null, authority: 'local-human-report' }, outcome: 'blocked' });
     },
   });
   const cycle = createWorkflow({ id: 'deployment-and-rollback-cycle', description: '发布授权 → 外部执行回执 → 健康确认 → 失败回滚', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema }).then(withRepositoryAssets(scope.bind(prepare), config)).then(withRepositoryAssets(scope.bind(approve), config)).then(withRepositoryAssets(scope.bind(execute), config)).then(withRepositoryAssets(scope.bind(health), config)).then(withRepositoryAssets(rollback, config)).then(withRepositoryAssets(routeBusinessGap, config)).commit();

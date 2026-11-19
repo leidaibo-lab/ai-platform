@@ -4,6 +4,7 @@
 
 ## 应用与操作
 
+- [Mastra 主流程架构图](./application/visual-framework.md#当前主流程与建设方向)汇总当前运行路径、Harness 职责及待建设方向，提供可编辑源图。
 - [产研可视化框架](./application/visual-framework.md)：主流程总览、Git 数据流、Nacos 资源流及事实源边界。
 - [完整产研流程](./application/unified-workflow.md)：产品、研发、测试、部署和交付团队的主流程与人工关口。
 - [产研角色资源清单与绑定](./application/agent-resource-inventory.md)：产品 Prompt、Skill 的当前来源、目标绑定与迁移缺口，以及宿主执行边界。

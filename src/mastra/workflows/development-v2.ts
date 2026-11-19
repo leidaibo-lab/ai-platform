@@ -17,6 +17,7 @@ import { assembleTeam, createTeamExecution } from '../../development/v2/team.js'
 import type { ExecutionPort } from '../../development/v2/execution-scope.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { publishFormalSpecification, type FormalSpecificationReceipt } from '../../delivery/remote-handoff.js';
+import { readAcceptanceRequirements } from '../../development/v2/acceptance-requirements.js';
 import { createProductUnits } from '../../development/v2/product-units.js';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
 import { publishLiveOutput } from '../../intake/live-output.js';
@@ -55,7 +56,10 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         ([path, content]) => [path, createHash('sha256').update(content).digest('hex')],
       ));
       if (developmentHash(files) !== developmentHash(expected)) throw new Error('v2初始候选与manifest不符');
-      const requirements = createProductUnits(inputData.source.content);
+      const requirements = inputData.requirementTracking
+        ? readAcceptanceRequirements(inputData.source.content)
+        : createProductUnits(inputData.source.content);
+      if (inputData.requirementImpact && inputData.requirementImpact.productHash !== inputData.source.hash) throw new Error('需求修订影响与当前产品版本不匹配');
       return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
     },
   });
@@ -169,7 +173,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         const capability = inputData.input.correlation?.iterationId;
         const product = inputData.input.formalSpecifications?.find(item => item.kind === 'product');
         if (!root || !capability || !product) throw new Error('开发规格确认缺少已推送的产品规格或受控仓库绑定');
-        const handoff = await publishFormalSpecification(root, runId, capability, { 'specs/development-spec.md': `${JSON.stringify({ plan: inputData.plan, readiness: inputData.readiness, sourceHash: inputData.input.source.hash }, null, 2)}\n` }, 'docs(spec): 提交已确认开发规格');
+        const handoff = await publishFormalSpecification(root, inputData.input.correlation?.runId ?? runId, capability, { 'specs/development-spec.md': `${JSON.stringify({ plan: inputData.plan, readiness: inputData.readiness, sourceHash: inputData.input.source.hash }, null, 2)}\n` }, 'docs(spec): 提交已确认开发规格');
         formalSpecification = { kind: 'development', handoff, paths: ['specs/development-spec.md'], upstreamCommits: [product.handoff.commit] } satisfies FormalSpecificationReceipt;
       }
       return { ...inputData, formalSpecification, approvedHash: approved ? review.hash : null, reviews: [...inputData.reviews, { ...review, authority: resumeData ? 'local-human-label' as const : 'evaluation-policy' as const }], phase: 'implement' as const, route: 'all' as const, outcome: approved ? 'in-progress' as const : 'rejected' as const };

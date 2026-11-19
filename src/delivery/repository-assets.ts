@@ -1,3 +1,4 @@
+import { projectAcceptanceEvidence } from './acceptance-evidence.js';
 import { withRunArchive } from './run-archive.js';
 import { z } from 'zod';
 import { legacyArchitectureCachePath, readLegacyArchitectureResult, validateLegacyArchitectureResult } from './legacy-sync.js';
@@ -45,6 +46,8 @@ function projectAssets(value: unknown): { correlation?: AssetCorrelation; runId?
   if (lifecycle.success) {
     const state = lifecycle.data;
     const files: Record<string, string> = { 'quality.json': json(state.quality), 'quality-history.json': json(state.qualityHistory), 'source.json': json({ productHash: state.development.input.source.hash, sourceHash: state.development.checkpointHash, planHash: state.development.planHash }), 'outcome.json': json({ mode: state.development.mode, outcome: state.outcome, limitations: state.limitations }) };
+    const acceptanceEvidence = projectAcceptanceEvidence(state);
+    if (acceptanceEvidence) files['acceptance-evidence.json'] = json(acceptanceEvidence);
     if (state.quality.plan) files['test-plan.md'] = state.quality.plan.content;
     if (state.quality.approval) files['test-cases.json'] = json(state.quality.approval.cases);
     if (state.release.plan) {

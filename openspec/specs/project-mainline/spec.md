@@ -144,3 +144,20 @@ Run 标识而非客户端提交的任意 Git ref；同一 Run 不得创建阶段
 - **WHEN** 人工产品确认以 `rework` 决定提交当前稿的审阅意见
 - **THEN** 系统 SHALL 使当前待审产品稿失效，并从该 Run 的需求澄清节点重新开始
 - **AND** 产品经理 SHALL 获得受控的来源稿与反馈上下文，重新形成产品稿后等待新的人工确认
+
+### Requirement: Approved requirements link to versioned acceptance evidence
+
+新建 live 产研 Run 的产品稿 SHALL 声明带唯一 `REQ-` ID 的可独立验收条目，条目正文 SHALL 包含可观察的验收预期。产品审批绑定整份正文与其中的 ID。研发任务及测试用例 SHALL 引用当前批准 ID，且各自覆盖全部条目。系统 SHALL 提供可按需求查看的任务、用例、结果、证据来源和版本。历史无 ID 的 Run SHALL 保留已保存的原文锚点与审批绑定。
+
+#### Scenario: Approved requirements reach independent QA
+
+- **WHEN** 产品稿确认后进入研发和独立测试
+- **THEN** 系统 SHALL 使用稿件内的 ID 进行结构覆盖检查，拒绝重复、未知及遗漏的引用
+- **AND** 验收结果 SHALL 绑定当前产品、方案及候选版本，并保留各用例的实际证据来源
+
+#### Scenario: Product revision affects existing acceptance cases
+
+- **WHEN** 已批准产品稿进入修订审阅
+- **THEN** 系统 SHALL 按 ID 与条目正文比较新旧稿，区分新增、修改和移除，列出受影响的历史用例及需要重建或补齐的覆盖
+- **AND** 新版 SHALL 重新确认并执行现有全量质量门，历史通过结果只作为历史证据
+- **AND** 对无稳定 ID 的历史材料 SHALL 明确采用保守全量回归
