@@ -1,3 +1,4 @@
+import { verifyProductHandoff } from '../../business-engineering/product-handoff.js';
 import { cipGit } from '../../business-engineering/hrm-cip.js';
 import { projectRepositoryRoot, assertProjectCorrelation, loadEngineeringProject } from '../../business-engineering/project.js';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
@@ -70,14 +71,19 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
       if (inputData.mode !== config.mode) throw new Error('项目授权模式发生变化');
       const product = inputData.artifacts.find((artifact) => artifact.stage === 'product');
       if (!product || !inputData.reviews.some((review) => review.role === 'product' && review.decision === 'approve' && review.artifactHash === product.hash)) throw new Error('开发缺少当前产品批准');
-      // live 开发只能以同一 Run 分支的已推送产品规格作为上游版本；本地产品稿仅保留为审批散列绑定。
-      if (config.mode === 'live') {
-        const formal = inputData.formalSpecifications?.find(item => item.kind === 'product');
-        if (!formal || !formal.paths.includes('specs/requirements.md') || !formal.paths.includes('specs/product-spec.md')) throw new Error('开发缺少已推送的需求文档或产品规格');
-        const remoteProduct = readHandoffFile(projectRepositoryRoot(config)!, formal.handoff, 'specs/product-spec.md');
-        if (remoteProduct !== `${product.content.endsWith('\n') ? product.content : `${product.content}\n`}`) throw new Error('已推送产品规格与当前人工批准版本不一致');
-      }
       assertProjectCorrelation(config, inputData.correlation);
+      if (config.mode === 'live') {
+        const root = projectRepositoryRoot(config);
+        const correlation = inputData.correlation;
+        const formal = inputData.formalSpecifications?.find(/** 读取当前 Run 的产品回执。 */item => item.kind === 'product');
+        if (!root || !correlation || !formal) throw new Error('开发缺少已发布的产品交接版本');
+        if (inputData.productHandoffFormat) verifyProductHandoff(root, correlation.runId, correlation.iterationId, formal, product.content);
+        else {
+          if (!formal.paths.includes('specs/requirements.md') || !formal.paths.includes('specs/product-spec.md')) throw new Error('开发缺少已推送的需求文档或产品规格');
+          const remoteProduct = readHandoffFile(root, formal.handoff, 'specs/product-spec.md');
+          if (remoteProduct !== `${product.content.endsWith('\n') ? product.content : `${product.content}\n`}`) throw new Error('已推送产品规格与当前人工批准版本不一致');
+        }
+      }
       if (!resumeData) return suspend({ productHash: product.hash, instruction: '确认已关联仓库、当前代码版本与整体权限。技术文件拆分和实际团队由研发团队提出，方案批准后才实施。', projectFields: ['id', 'files', 'writablePaths', 'checkFiles', 'roles'] });
       if (config.engineeringProject && developmentHash(resumeData.project) !== developmentHash(loadEngineeringProject(config.engineeringProject).candidate)) throw new Error('已确认项目与登记的候选或保护检查不一致');
       if (config.mode === 'live' && resumeData.project.engineeringRevision) {
@@ -85,7 +91,7 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
         const revision = resumeData.project.engineeringRevision;
         if (cipGit(projectRepositoryRoot(config)!, ['merge-base', revision, formal.handoff.commit]).trim() !== revision) throw new Error('开发范围必须使用产品规格分支的工程基线');
       }
-      return inputV2Schema.parse({ ...(inputData.requirementTracking ? { requirementTracking: inputData.requirementTracking } : {}), repositoryHandoff: inputData.repositoryHandoff, formalSpecifications: inputData.formalSpecifications, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
+      return inputV2Schema.parse({ productHandoffFormat: inputData.productHandoffFormat, ...(inputData.requirementTracking ? { requirementTracking: inputData.requirementTracking } : {}), repositoryHandoff: inputData.repositoryHandoff, formalSpecifications: inputData.formalSpecifications, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
     },
   });
   const development = createDevelopmentWorkflowV2(config, execution.port, false, generate, { id: 'development-execution', team: true, bind: execution.bind });

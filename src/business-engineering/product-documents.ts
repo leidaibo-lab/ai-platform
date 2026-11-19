@@ -15,6 +15,7 @@ export function productPaths(iterationId: string) {
 export function readProductDocuments(content: string) {
   const lines = content.split(/\r?\n/);
   const headings: { title: string; line: number }[] = [];
+  const bodyLines: { line: string; index: number }[] = [];
   let fence: string | undefined;
   for (const [index, line] of lines.entries()) {
     const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
@@ -23,7 +24,9 @@ export function readProductDocuments(content: string) {
       else if (marker[1]!.startsWith(fence) && !marker[2]!.trim()) fence = undefined;
       continue;
     }
-    if (!fence && /^ {0,3}#\s/.test(line)) headings.push({ title: line.trim(), line: index });
+    if (fence) continue;
+    bodyLines.push({ line, index });
+    if (/^ {0,3}#\s/.test(line)) headings.push({ title: line.trim(), line: index });
   }
   const [requirementsHeading, specificationHeading] = headings;
   if (fence || headings.length !== 2 || requirementsHeading?.title !== '# 需求文档' || requirementsHeading.line !== 0 || specificationHeading?.title !== '# 产品规格') {
@@ -34,7 +37,8 @@ export function readProductDocuments(content: string) {
   const requirementIds = new Set(readAcceptanceRequirements(requirements).map(/** 索引本版本中已声明的需求 ID。 */item => item.id));
   const taskIds = new Set<string>();
   const coveredIds = new Set<string>();
-  for (const line of specification.split('\n')) {
+  for (const { line, index } of bodyLines) {
+    if (index <= specificationHeading.line) continue;
     if (/^\s*[-*+]\s+(?:\*\*)?REQ-/i.test(line)) throw new Error('需求条目必须声明在需求文档中');
     if (!/^\s*[-*+]\s+(?:\*\*)?TASK-/i.test(line)) continue;
     const task = /^- (TASK-[A-Z0-9]+(?:-[A-Z0-9]+)*):\s*(.+?)\s*\|\s*需求[:：]\s*(.+)$/.exec(line.trim());

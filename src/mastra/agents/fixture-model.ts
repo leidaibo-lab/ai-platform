@@ -35,6 +35,10 @@ export function createFixtureModel(stage: string) {
     /** 普通生成和修订共享固定样例，任务标记只决定是否显示修订段落。 */
     function productText(prompt: unknown) {
       const serialized = JSON.stringify(prompt);
+      if (serialized.includes('只使用两个一级标题')) {
+        const expected = serialized.includes('revision-task') ? '修订版检查返回 1' : '登记检查返回 1';
+        return `# 需求文档\n\n## 固定样例\n- REQ-FIXTURE-A: 固定模块返回声明值 | 验收: ${expected}\n\n### Scenario: 验证模块输出\n- **WHEN** 执行登记检查\n- **THEN** ${expected}\n\n# 产品规格\n\n- TASK-FIXTURE-MODULES: 实现固定模块并通过登记检查 | 需求: REQ-FIXTURE-A`;
+      }
       const requirements = serialized.includes('REQ-APPLICATION-SUBMIT')
         ? `\n\n## 可验收需求\n- REQ-FIXTURE-A: 固定模块返回声明值 | 验收: ${serialized.includes('revision-task') ? '修订版检查返回 1' : '登记检查返回 1'}`
         : '';

@@ -71,9 +71,11 @@ export function IntakeApp() {
   const [liveActivity, setLiveActivity] = useState<LiveActivity>();
   const [productStream, setProductStream] = useState<ProductStreamView>();
   const [browsedTeam, setBrowsedTeam] = useState<Team>();
-  const activeTeam = document ? projectRunFlow(document).active : 'product';
+  const flow = document ? projectRunFlow(document) : undefined;
+  const activeTeam = flow?.active ?? 'product';
   const selectedTeam = browsedTeam ?? activeTeam;
   const onActiveTeam = selectedTeam === activeTeam;
+  const publishedProduct = document?.specifications?.some(/** 正式交付后不重复展示已批准全文。 */item => item.kind === 'product');
   const intake = document?.intake;
   /** 点击当前团队时恢复自动跟随。 */
   function selectTeam(team: Team) { setBrowsedTeam(team === activeTeam ? undefined : team); }
@@ -260,8 +262,8 @@ export function IntakeApp() {
         {document?.successor && document.status === 'success' && <section className="intake-card"><div className="intake-eyebrow">后继 Run</div><h2>基于已确认规格创建新 Run</h2><p>旧 Run 的审批、预算、测试与发布回执不会继承。系统会重新校验下列固定 commit 与散列，并让新 Run 从需求澄清开始。</p>{showSuccessor ? <><label>本轮变更说明<textarea value={successorBrief} maxLength={12000} rows={4} onChange={event => setSuccessorBrief(event.target.value)} /></label>{document.successor.artifacts.map(item => <label className="intake-mode-toggle" key={item.kind}><input type="checkbox" checked={successorKinds.includes(item.kind)} onChange={event => setSuccessorKinds(event.target.checked ? [...successorKinds, item.kind] : successorKinds.filter(kind => kind !== item.kind))} /><span><strong>{item.kind === 'product' ? '产品 Spec' : item.kind === 'development' ? '开发 Spec' : '测试 Spec'}</strong><small>{item.branch} · {item.commit.slice(0, 12)}</small></span></label>)}<div className="intake-actions"><button className="primary" disabled={busy || !successorBrief.trim() || !successorKinds.length} onClick={startSuccessor}>校验规格并新建 Run →</button><button disabled={busy} onClick={() => setShowSuccessor(false)}>取消</button></div></> : <button className="primary" disabled={busy || uncertain} onClick={() => { setSuccessorBrief(''); setSuccessorKinds(document.successor!.artifacts.map(item => item.kind)); setShowSuccessor(true); }}>基于已确认版本新建 Run →</button>}</section>}
         {document && <RunFlowMini key={document.runId} document={document} selected={selectedTeam} onSelect={selectTeam} recoveryDisabled={busy || uncertain} onRecover={document.retry ? () => void submit({ retryHash: document.retry!.hash }) : undefined} />}
         {onActiveTeam && document && <RunActivityFeed stream={productStream} timeline={document.timeline} status={document.status} liveActivity={liveActivity} progressText={document.progress?.detail} nextText={document.progress?.next} />}
-        {document && <TeamSpecifications team={selectedTeam} specifications={document.specifications ?? []} />}
-        {selectedTeam === 'product' && document?.approvedProduct && <section className="intake-card" aria-label="审阅交接 · 已批准产品稿">
+        {document && <TeamSpecifications team={selectedTeam} specifications={document.specifications ?? []} approval={document.approvedProduct} />}
+        {selectedTeam === 'product' && !publishedProduct && document?.approvedProduct && <section className="intake-card" aria-label="审阅交接 · 已批准产品稿">
           <h2>审阅交接 · 已批准产品稿</h2><p>批准人 {document.approvedProduct.reviewer}</p>
           <details><summary>查看已批准正文</summary><Markdown business>{document.approvedProduct.content}</Markdown><code>{document.approvedProduct.hash}</code></details>
         </section>}
@@ -283,7 +285,7 @@ export function IntakeApp() {
           </>}
           {correctionError && <p role="alert">{correctionError}</p>}
         </section>}
-        {document?.directionDraft && !intake && <details className="intake-card" open={!document.approvedProduct && !document.product && !document.gate}><summary>对齐方向 · AI 初稿快照</summary><p className="intake-boundary-note">正文状态对应初稿生成时点。当前产品审批进度请查看「审阅交接」。</p><Markdown business>{document.directionDraft}</Markdown></details>}
+        {document?.directionDraft && !intake && !document.approvedProduct && !document.product && onActiveTeam && flow?.productPhase === '对齐方向' && !flow.businessReturn && <details className="intake-card" open><summary>对齐方向 · AI 初稿</summary><Markdown business>{document.directionDraft}</Markdown></details>}
         {intake && <section id="product-clarification" aria-label="产品团队 · 对齐方向">
           <div className="intake-eyebrow">产品团队 · 对齐方向</div>
           <InlineClarificationNode

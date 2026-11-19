@@ -1,3 +1,4 @@
+import { productDocumentsInstruction, readProductDocuments } from '../../business-engineering/product-documents.js';
 import type { projectSpec } from '../../business-engineering/project.js';
 import { acceptanceRequirementsInstruction, readAcceptanceRequirements } from '../../business-engineering/acceptance-requirements.js';
 import { createHash } from 'node:crypto';
@@ -75,12 +76,15 @@ export function createProductManagerPhases(
           previousWork: inputData.productWork?.entries ?? [],
           rework: inputData.productRework,
           priorFeedback: inputData.productReworkHistory?.map(({ round, feedback }) => ({ round, feedback })),
-          instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' && inputData.requirementTracking ? acceptanceRequirementsInstruction : ''}`,
+          instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' ? (inputData.productHandoffFormat ? productDocumentsInstruction : inputData.requirementTracking ? acceptanceRequirementsInstruction : '') : ''}`,
         }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event), signal));
         if (attempt.correction) return suspend(attempt.correction);
         const result = attempt.output;
         const content = z.string().trim().min(1).max(100000).parse(result.text);
-        if (role === 'writing' && inputData.requirementTracking) readAcceptanceRequirements(content);
+        if (graph !== 'native' && role === 'writing') {
+          if (inputData.productHandoffFormat) readProductDocuments(content);
+          else if (inputData.requirementTracking) readAcceptanceRequirements(content);
+        }
         const facts = projectToolFacts(result.toolResults);
         const entry = {
           role,
@@ -104,7 +108,8 @@ export function createProductManagerPhases(
   function publishDraft(inputData: Delivery): Delivery {
     const content = inputData.revision?.content ?? inputData.productWork?.entries.at(-1)?.content;
     if (!content) throw new Error('产品写作未产生可审阅正文');
-    if (inputData.requirementTracking) readAcceptanceRequirements(content);
+    if (inputData.productHandoffFormat) readProductDocuments(content);
+    else if (inputData.requirementTracking) readAcceptanceRequirements(content);
     const hash = createHash('sha256').update(JSON.stringify({ stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content, revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork, ...(inputData.nacosResources ? { resources: nacosResourceIdentity(inputData.nacosResources) } : {}) })).digest('hex');
     return { ...inputData, artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };
   }
@@ -127,7 +132,7 @@ export function createProductManagerPhases(
         brief: inputData.brief,
         product: artifact.content,
         corrections: productReworkFeedback(inputData),
-        instruction: '独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。只输出审查发现与依据，不修改产品稿，不代替人工审批。',
+        instruction: '独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。检查需求文档中的场景是否忠实覆盖确认的业务规则，产品规格中的交付任务是否与需求对应。只输出审查发现与依据，不修改产品稿，不代替人工审批。',
       }), 'reviewer', mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event), signal));
       if (attempt.correction) return suspend(attempt.correction);
       const result = attempt.output;

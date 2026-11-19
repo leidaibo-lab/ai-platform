@@ -1,3 +1,4 @@
+import { productPaths } from '../business-engineering/product-documents.js';
 import { lifecycleSchema } from '../delivery/contracts.js';
 import { z } from 'zod';
 import { readHandoffFile } from '../delivery/remote-handoff.js';
@@ -26,14 +27,20 @@ export function buildSuccessorBaseline(root: string, sourceRunId: string, source
   const delivery = deliverySchema.parse(source);
   const selected = [...new Set(successorArtifactKindsSchema.parse(kinds))];
   if (!delivery.formalSpecifications?.length) throw new Error('来源 Run 不包含已确认并推送的正式规格');
-  const artifacts = selected.map(kind => {
-    const receipt = delivery.formalSpecifications!.find(item => item.kind === kind);
-    const path = kind === 'product' ? 'specs/product-spec.md' : kind === 'development' ? 'specs/development-spec.md' : 'specs/test-spec.md';
-    if (!receipt || !receipt.paths.includes(path)) throw new Error(`来源 Run 不包含已确认的${kind}规格`);
-    const content = readHandoffFile(root, receipt.handoff, path);
-    const hash = receipt.handoff.files[path];
-    if (!hash) throw new Error('来源规格回执不完整');
-    return { kind, branch: receipt.handoff.branch, commit: receipt.handoff.commit, path, hash, content };
+  const artifacts = selected.flatMap(kind => {
+    const receipt = delivery.formalSpecifications!.find(/** 只取已登记的对应角色回执。 */item => item.kind === kind);
+    if (!receipt) throw new Error(`来源 Run 不包含已确认的${kind}规格`);
+    const scoped = delivery.correlation && productPaths(delivery.correlation.iterationId);
+    const paths = kind === 'product'
+      ? (scoped && receipt.paths.includes(scoped.specification) ? [scoped.requirements, scoped.specification] : ['specs/product-spec.md'])
+      : [kind === 'development' ? 'specs/development-spec.md' : 'specs/test-spec.md'];
+    return paths.map(/** 校验每份固定 Git 文件；产品基线同时包含业务规则与交付任务。 */path => {
+      if (!receipt.paths.includes(path)) throw new Error(`来源 Run 不包含已确认的${kind}规格`);
+      const content = readHandoffFile(root, receipt.handoff, path);
+      const hash = receipt.handoff.files[path];
+      if (!hash) throw new Error('来源规格回执不完整');
+      return { kind, branch: receipt.handoff.branch, commit: receipt.handoff.commit, path, hash, content };
+    });
   });
   return successorBaselineSchema.parse({ sourceRunId: z.string().uuid().parse(sourceRunId), changeBrief, artifacts, projectId: delivery.correlation?.projectId });
 }

@@ -58,6 +58,9 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
         const pending = paused(result); const id = pending.path.at(-1)!; const p = pending.payload;
         assert.ok(p, `缺少暂停载荷 ${JSON.stringify(result)}`); visited.push(id);
         let data: any;
+        if (id === 'review-product' && scenario.startsWith('stable-')) {
+          assert.match(p.artifact.content, /^# 需求文档[\s\S]*REQ-FIXTURE-A[\s\S]*# 产品规格[\s\S]*TASK-FIXTURE-MODULES/);
+        }
         if (id === 'review-product') data = { ...actor, role: 'product', artifactHash: scenario === 'stale-product' ? '0'.repeat(64) : p.artifact.hash, decision: scenario === 'reject-product' ? 'reject' : 'approve' };
         else if (id === 'confirm-project-scope') data = { ...actor, project: scenario.startsWith('browser-') ? { ...project, files: { ...project.files, 'page.html': '<!doctype html><p id="result">候选页面</p>' } } : project, maxReworks: 1 };
         else if (id === 'approve-architecture') { assert.equal(p.team.members.length, 2); data = { ...actor, hash: p.hash, decision: 'approve' }; }

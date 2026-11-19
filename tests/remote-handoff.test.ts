@@ -5,8 +5,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formalRunBranch, publishFormalSpecification, publishHandoff, readHandoffFile } from '../src/delivery/remote-handoff.js';
+import { formalRunBranch, publishFormalSpecification, publishHandoff, publishReviewedCandidate, readHandoffFile } from '../src/delivery/remote-handoff.js';
 import { createTaskContext, contextLimits } from '../src/delivery/task-context.js';
+import { publishProductHandoff, verifyProductHandoff } from '../src/business-engineering/product-handoff.js';
+import { productPaths, readProductDocuments } from '../src/business-engineering/product-documents.js';
 import { buildSuccessorBaseline } from '../src/intake/successor-run.js';
 
 /** 创建独立工作树与 bare 远端；只使用合成文件。 */
@@ -91,6 +93,66 @@ test('后继 Run 只从已确认回执导入固定 Git 规格，拒绝遗漏与�
     assert.equal(baseline.artifacts[0].content, '# 产品基线\n');
     assert.throws(() => buildSuccessorBaseline(f.root, sourceRunId, source, ['development'], '补充规则'), /不包含/);
     assert.throws(() => buildSuccessorBaseline(f.root, sourceRunId, { ...source, formalSpecifications: [{ ...source.formalSpecifications[0], handoff: { ...handoff, files: { 'specs/product-spec.md': '0'.repeat(64) } } }] }, ['product'], '补充规则'), /散列/);
+  } finally { rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+const moduleSelector = `# 需求文档
+
+## 适用模块选择
+
+- REQ-AM-OPTIONS: 启用的字典模块按值排序，上级节点不可选 | 验收: 全部停用时下拉框无可选项
+- REQ-AM-CONFIRM: 选择模块后才能确定 | 验收: 确定时打开所选模块的产品分配穿梭框
+
+### Scenario: 确定后进入穿梭框
+- **WHEN** 用户选择模块后点击确定
+- **THEN** 当前弹窗关闭，打开该模块的产品分配穿梭框
+
+# 产品规格
+
+- TASK-AM-OPTIONS: 交付模块字典下拉及空态 | 需求: REQ-AM-OPTIONS
+- TASK-AM-ELIGIBILITY: 交付确定按钮与穿梭框跳转 | 需求: REQ-AM-CONFIRM`;
+
+test('产品任务须在正文中覆盖有效需求', /** 拒绝不完整或不可追溯的待审稿。 */() => {
+  assert.throws(() => readProductDocuments(moduleSelector.replace(/- TASK-AM-ELIGIBILITY.*/, '')), /全部需求/);
+  assert.throws(() => readProductDocuments(moduleSelector.replace('需求: REQ-AM-CONFIRM', '需求: REQ-AM-UNKNOWN')), /未知/);
+  assert.throws(() => readProductDocuments(moduleSelector.replace('TASK-AM-ELIGIBILITY', 'TASK-AM-OPTIONS')), /重复/);
+  assert.throws(() => readProductDocuments(moduleSelector.replace('需求: REQ-AM-CONFIRM', '需求: REQ-AM-CONFIRM, REQ-AM-CONFIRM')), /重复/);
+  assert.throws(() => readProductDocuments(moduleSelector.replace(/(- TASK-AM-ELIGIBILITY.*)/, '```text\n$1\n```')), /全部需求/);
+});
+
+test('新 Run 的产品双文档在本地远端发布、核验、修订并作为后续基线读取', /** 真 Git 交接使用本地 bare 远端。 */async () => {
+  const f = repositories();
+  const runId = 'c84353b9-e22c-4ea9-b412-c6f28800c597';
+  const iterationId = 'applicable-module-selector';
+  const { requirements, specification } = productPaths(iterationId);
+  try {
+    const baseline = f.git(['rev-parse', 'HEAD']);
+    f.git(['push', 'origin', 'main']);
+    const receipt = await publishProductHandoff(f.root, runId, iterationId, moduleSelector, baseline);
+    assert.deepEqual(receipt.paths, [requirements, specification]);
+    assert.match(readHandoffFile(f.root, receipt.handoff, requirements), /Scenario: 确定后进入穿梭框/);
+    assert.match(readHandoffFile(f.root, receipt.handoff, specification), /^# 产品规格[\s\S]*TASK-AM-ELIGIBILITY/);
+    assert.doesNotMatch(readHandoffFile(f.root, receipt.handoff, specification), /\*\*WHEN\*\*/);
+    verifyProductHandoff(f.root, runId, iterationId, receipt, moduleSelector);
+    assert.deepEqual(await publishProductHandoff(f.root, runId, iterationId, moduleSelector, baseline), receipt);
+    assert.throws(() => verifyProductHandoff(f.root, runId, iterationId, { ...receipt, paths: [specification] }, moduleSelector), /缺少/);
+    assert.throws(() => verifyProductHandoff(f.root, runId, iterationId, { ...receipt, handoff: { ...receipt.handoff, files: { ...receipt.handoff.files, [requirements]: '0'.repeat(64) } } }, moduleSelector), /散列/);
+    await assert.rejects(() => publishFormalSpecification(f.root, runId, iterationId, { 'product/another/requirements.md': '越界' }, 'docs(spec): 保存需求'), /受控路径/);
+    const revised = moduleSelector.replace('上级节点不可选', '上级节点置灰且不可选');
+    const revisedReceipt = await publishProductHandoff(f.root, runId, iterationId, revised, baseline);
+    assert.equal(f.git(['rev-parse', `${revisedReceipt.handoff.commit}^`]), receipt.handoff.commit);
+    verifyProductHandoff(f.root, runId, iterationId, revisedReceipt, revised);
+    assert.throws(() => verifyProductHandoff(f.root, runId, iterationId, revisedReceipt, moduleSelector), /批准版本/);
+    const development = await publishFormalSpecification(f.root, runId, iterationId, { 'specs/development-spec.md': '开发规格\n' }, 'docs(spec): 保存开发规格');
+    const testing = await publishFormalSpecification(f.root, runId, iterationId, { 'specs/test-spec.md': '测试规格\n' }, 'docs(spec): 保存测试规格');
+    const final = await publishReviewedCandidate(f.root, testing, {}, [], [...revisedReceipt.paths, 'specs/development-spec.md', 'specs/test-spec.md'], baseline);
+    assert.equal(final, testing.commit);
+    assert.equal(f.git(['rev-parse', `${testing.commit}^`]), development.commit);
+    assert.match(f.git(['show', `${final}:${requirements}`]), /上级节点置灰且不可选/);
+    assert.equal(f.git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0], baseline);
+    const source = { brief: '适用模块选择', mode: 'live', artifacts: [], reviews: [], outcome: 'in-progress', correlation: { projectId: 'hrm', iterationId, runId, workflowId: 'productDevelopmentWorkflow' }, formalSpecifications: [revisedReceipt] };
+    const next = buildSuccessorBaseline(f.root, runId, source, ['product'], '完善停用模块回显');
+    assert.deepEqual(next.artifacts.map(item => item.path), [requirements, specification]);
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });
 
@@ -233,7 +295,6 @@ test('候选归档读取实际正文，散列快照只用于版本校验', /** �
 });
 
 test('QA 候选只写 Run 分支并复用 MR，源 SHA 漂移时拒绝交付', async () => {
-  const { publishReviewedCandidate } = await import('../src/delivery/remote-handoff.js');
   const { openMergeRequest } = await import('../src/delivery/merge-request.js');
   const f = repositories();
   const previousPath = process.env.PATH;

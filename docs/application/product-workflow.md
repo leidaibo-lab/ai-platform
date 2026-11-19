@@ -25,6 +25,17 @@ product-team｜产品团队
 
 `productWork.entries` 保存产品经理的阶段产物和执行事实，`productQualityReview` 保存独立审查结果。质量审查失败时从原生检查点复用已固化的产品稿。人工批准当前版本后由 `route-product-team-result` 放行研发。返工按影响重做方向或规格，并重新提交人工审阅。
 
+## 新 Run 的正式交付
+
+新建 live Run 在一次审阅中展示两份正文。需求文档记录业务目标、范围、规则及验收场景，产品规格将规则拆为可独立交付的任务。每项任务通过 `REQ-` ID 引用需求。结构校验拒绝缺失的文档、未知或重复引用以及未覆盖的需求。人工确认仍负责判断正文是否忠实表达实际业务。
+
+初次批准和业务阻塞回流后的修订批准都将两份文档写入同一个正式 Run 分支的同一次提交。目录使用新建 Run 时输入的迭代标识。
+
+- `product/<迭代标识>/requirements.md` 保存批准的需求正文。
+- `product/<迭代标识>/product-spec.md` 保存批准的产品任务。
+
+研发授权前按固定回执校验两份文件及其批准版本，研发任务和测试用例继续引用需求 ID。开发、测试规格仍在同一 Run 分支追加。产品团队页面发布后集中展示审批版本、批准人与正式文件入口。AI 方向初稿只在对齐方向阶段展示，原始输入仍可从「原始需求」查看。
+
 ## 恢复历史 Run
 
 此前在 `product-team.draft-product` 下运行的三阶段 Run 使用 `MASTRA_NESTED_PRODUCT_WORKFLOW=true` 恢复。更早的四段产品经理图含 `product-clarification` 和 `product-scope-priority`，使用 `MASTRA_LEGACY_PRODUCT_WORKFLOW=true` 恢复。两项配置分别装配对应历史图，实例启动时只能选择一种。
