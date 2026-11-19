@@ -8,17 +8,29 @@
 
 ## Workflow 执行链路图
 
-![同一 Run 内的产品、研发、测试与 MR 交付执行链路](../assets/mastra-workflow-execution.png)
+![当前默认产研执行链路，含产品四步、研发、测试、MR 交付及返工路径](../assets/mastra-workflow-current.png)
 
-[Draw.io 可编辑源图](../assets/mastra-workflow-execution.drawio) · [SVG](../assets/mastra-workflow-execution.svg) · [PNG](../assets/mastra-workflow-execution.png)
+[查看原尺寸 PNG](../assets/mastra-workflow-current.png) · [SVG 矢量图](../assets/mastra-workflow-current.svg) · [Draw.io 可编辑源图](../assets/mastra-workflow-current.drawio)
+
+蓝色箭头表示同一 Run 内的阶段交接，琥珀色箭头表示纠偏、阻塞、返工和交付重试。Live 模式交付已核验的 MR 回执，默认流程在此结束。启用阶段资料远端同步时，失败可从已保存的产物重试同步。更多节点 ID 和操作入口见下方「工作台与 Studio」。
+
+图中的「产品返工」共用 `product-rework.v1` 路由判断。立即纠偏和待审稿退回按影响重跑产品节点。研发和 QA 已记录的业务缺口直接进入同一 Run 内的 `resolve-development-blockers` 人工澄清，原生检查点保存来源产品版本、返工决定与已有发现引用。QA 先保存阻塞结果，再由人工发起澄清。修订稿获批后，研发按新版本重新规划并等待开工审批，随后重新验证和测试。
+
+### 历史执行链路图
+
+以下图档记录产品三阶段版本的产研执行链路。
+
+[历史图 PNG](../assets/mastra-workflow-execution.png) · [Draw.io 可编辑源图](../assets/mastra-workflow-execution.drawio) · [SVG](../assets/mastra-workflow-execution.svg)
 
 ### 产品返工目标链路
 
-目标设计中，研发和 QA 发现业务缺口时，将已批准的产品版本、缺口证据及受影响的需求或用例交给产品团队，与立即纠偏、审阅退回共用返工判断。产品团队选择重做起点，缺少业务决定或已有规则冲突时发起人工澄清。修订稿获批后，主 Workflow 根据版本影响编排研发与 QA 返工，重新取得失效的放行证据。
+下图保留最初的目标设计。当前默认链路已将下游业务缺口接入共享返工判断，并按缺口类型固定进入人工澄清。当前链路的入口和关口以上方执行图为准。
 
 ![产品返工目标链路](../assets/mastra-workflow-target.png)
 
 [Draw.io 可编辑源图](../assets/mastra-workflow-target.drawio) · [SVG](../assets/mastra-workflow-target.svg) · [PNG](../assets/mastra-workflow-target.png)
+
+研发节点收敛前创建的 Run 使用 `MASTRA_LEGACY_DEVELOPMENT_WORKFLOW=true` 装配原执行图，按原有暂停路径恢复。新图在生成开发方案步骤内保存上下文，在审查步骤内保存发现及人工裁决。并行任务与固定检查各自保留原生检查点，开发交付绑定同一批准方案与候选源码版本。
 
 ### 工作台与 Studio
 
@@ -29,27 +41,19 @@
 ```text
 原始需求
   → product-team
-       ├─ product-direction：对齐方向，逐项澄清或生成方向建议
-       ├─ product-specification：完善规格，固化待审稿并执行独立产品审查
-       └─ review-product：审阅交接，人工批准当前版本
+       ├─ align-product-requirements｜对齐需求，多轮澄清或形成方向建议
+       ├─ product-writing｜生成待审规格，校验并固化需求文档和产品规格
+       ├─ review-product-quality｜独立质量审查，核对规则、异常和验收覆盖
+       └─ review-product｜人工审批与交接，批准当前版本后发布
   → route-product-team-result：仅批准版本进入下游
   → development-team
-       ├─ plan-development
-       │    ├─ confirm-project-scope：人工确认项目、文件快照、可写范围和任务角色
-       │    ├─ prepare-context / architecture / assemble-agent-team
-       │    │    └─ development-lead-agent：核实上下文、技术方案、任务拆分与动态组队
-       │    ├─ assess-readiness
-       │    │    └─ development-reviewer-agent：实施前独立就绪审查
-       │    └─ approve-architecture：人工确认方案、团队和权限
-       ├─ develop-and-check
-       │    ├─ execute-agent-team：按依赖波次执行，最多3个独立任务并行
-       │    │    └─ development-implementer-agent：按任务动态创建；frontend/backend/infrastructure 仅为任务角色
-       │    └─ development-self-check：确定性固定工程检查，不调用 Agent
-       ├─ review-development-quality
-       │    ├─ review-code
-       │    │    └─ development-reviewer-agent：实施后独立只读代码审查
-       │    └─ assess-delivery：确定性交付门
-       └─ resolve-development-blockers：保存证据、返工或回流产品团队
+       ├─ confirm-project-scope｜确认项目与权限
+       ├─ plan-development｜生成开发方案，核实上下文、拆分任务与组队
+       ├─ assess-readiness｜独立就绪审查，必要时暂停等待人工裁决
+       ├─ approve-architecture｜人工审批开工，绑定当前方案、团队和预算
+       ├─ develop-and-check｜按方案实施与验证，按依赖波次执行并跑登记检查
+       ├─ review-development-quality｜独立代码评审与交接，核对当前候选证据
+       └─ 发现业务缺口时，经 resolve-development-blockers 回流产品团队
   → test-team
        → test-and-regression-cycle：独立测试、缺陷回归和质量确认
        prepare-test-plan：测试角色读取需求与实际源码
@@ -234,7 +238,7 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 
 研发团队的独立节点评测与独立评审专项见[开发独立节点评测](../../evaluations/native/development-nodes/README.md)及[独立评审与缺陷返工专项](../../evaluations/native/review-rework/README.md)。专项评测不代表动态团队、业务审批或发布路径已验收。
 
-前端需求澄清、完整稿及全部后续人工关口见[工作台契约](./guided-intake.md)；直接使用 Studio 原始输入默认跳过澄清。
+前端需求澄清、完整稿及全部后续人工关口见[工作台契约](./guided-intake.md)；直接使用 Studio 原始输入默认跳过澄清。若通过 Studio 调试开启逐项澄清的 Run，`align-product-requirements` 的 Resume JSON 接收 `{ intake, response }`，其中 `intake` 是当前暂停载荷，`response` 是本轮人工回答。工作台的 HTTP 接口根据原生暂停载荷自动装配这两个字段。
 
 ## 角色远端交接
 

@@ -1,27 +1,15 @@
 # 产品团队 Workflow
 
-本文描述当前主入口 `productDevelopmentWorkflow` 中的产品团队边界。产品团队是一个顶层团队 Workflow，内部再按产品经理、产品审查和人工审批划分职责；这些内部步骤不是主流程中的平行团队。
+主入口 `productDevelopmentWorkflow` 的产品团队包含四个直属步骤。Mastra Studio 与工作台使用同一套中文名称和职责说明。
 
-## 流程与 Agent 对应关系
-
-```text
-product-team｜产品团队
-├─ product-direction｜对齐方向
-│  ├─ guided-requirements｜多轮需求澄清与人工确认
-│  └─ product-analysis｜AI 主动补全的方向建议
-├─ product-specification｜完善规格
-│  ├─ product-writing｜生成产品稿并固化待审版本
-│  └─ review-product-quality｜独立质量审查
-└─ review-product｜审阅交接
-```
-
-逐项澄清模式在关键业务决定已收敛后直接进入完善规格。AI 主动补全模式由产品经理先形成方向建议，再生成待审稿，推断需标注为建议或待确认项。
-
-| 阶段 | 负责人 | 产出 |
+| 步骤 | 负责方 | 中文备注 |
 | --- | --- | --- |
-| 对齐方向 | 产品经理 Agent、业务确认人 | 方向建议或已收敛的人工业务决定 |
-| 完善规格 | 产品经理 Agent、产品审查 Agent | 待审产品稿及独立质量证据 |
-| 审阅交接 | 产品负责人 | 绑定当前产品稿哈希的人工决定与正式规格回执 |
+| `align-product-requirements` 对齐需求 | 产品经理 Agent、业务确认人 | 明确目标、范围和业务规则，有关键缺口时等待用户补充。 |
+| `product-writing` 生成待审规格 | 产品经理 Agent | 生成需求文档和产品规格，校验并固化待审版本。 |
+| `review-product-quality` 独立质量审查 | 产品审查 Agent | 独立核对待审版本的业务规则、异常流程和验收覆盖。 |
+| `review-product` 人工审批与交接 | 产品负责人 | 由产品负责人审阅当前版本，批准后发布正式文档并交接研发。 |
+
+逐项澄清在对齐需求步骤中多轮暂停和恢复。每次回答关联当前方案版本，已提交回答随原生 Run 保存。关键业务决定收敛后进入写作。AI 主动补全在同一步骤形成方向建议，推断标注为建议或待确认项。
 
 `productWork.entries` 保存产品经理的阶段产物和执行事实，`productQualityReview` 保存独立审查结果。质量审查失败时从原生检查点复用已固化的产品稿。人工批准当前版本后由 `route-product-team-result` 放行研发。返工按影响重做方向或规格，并重新提交人工审阅。
 
@@ -38,7 +26,7 @@ product-team｜产品团队
 
 ## 恢复历史 Run
 
-此前在 `product-team.draft-product` 下运行的三阶段 Run 使用 `MASTRA_NESTED_PRODUCT_WORKFLOW=true` 恢复。更早的四段产品经理图含 `product-clarification` 和 `product-scope-priority`，使用 `MASTRA_LEGACY_PRODUCT_WORKFLOW=true` 恢复。两项配置分别装配对应历史图，实例启动时只能选择一种。
+在 `product-team.product-direction` 和 `product-team.product-specification` 下运行的三阶段 Run 使用 `MASTRA_NATIVE_THREE_STAGE_PRODUCT_WORKFLOW=true` 恢复。此前在 `product-team.draft-product` 下运行的三阶段 Run 使用 `MASTRA_NESTED_PRODUCT_WORKFLOW=true` 恢复。更早的四段产品经理图含 `product-clarification` 和 `product-scope-priority`，使用 `MASTRA_LEGACY_PRODUCT_WORKFLOW=true` 恢复。每个恢复实例启动时选择对应的历史流程图。默认实例装配四步流程。
 
 ## 代码落点
 

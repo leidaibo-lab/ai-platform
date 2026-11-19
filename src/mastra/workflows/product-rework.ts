@@ -5,7 +5,7 @@ import { correctionPauseSchema } from '../../intake/product-interruption.js';
 import { nativeInvocationMemory } from '../context-memory.js';
 import { productManagerStages, productReworkSchema, type ProductRework } from './product-contract.js';
 
-const routeSchema = z.object({
+const productReworkRouteSchema = z.object({
   target: z.enum(['guided-requirements', ...productManagerStages]),
   reason: z.string().trim().min(1).max(500),
 });
@@ -13,15 +13,31 @@ type ClassifyRework = (prompt: string, options: {
   memory: ReturnType<typeof nativeInvocationMemory>;
   maxSteps: number;
   modelSettings: { maxRetries: number; timeout: { totalMs: number; stepMs: number } };
-  structuredOutput: { schema: typeof routeSchema };
+  structuredOutput: { schema: typeof productReworkRouteSchema };
 }) => Promise<unknown>;
 
-export type ProductReworkRoute = z.infer<typeof routeSchema>;
+export type ProductReworkRoute = z.infer<typeof productReworkRouteSchema>;
 export const productReworkMethod = 'product-rework.v1';
 
+export const downstreamProductReworkSchema = productReworkRouteSchema.extend({
+  target: z.literal('guided-requirements'),
+  method: z.literal(productReworkMethod),
+  sourceHash: z.string().length(64),
+  findingRefs: z.array(z.object({ id: z.string(), refs: z.array(z.string()), evidence: z.string() })),
+});
+type DownstreamEvidence = Pick<z.infer<typeof downstreamProductReworkSchema>, 'sourceHash' | 'findingRefs'>;
+
 /** 产品团队根据上游产物和反馈选择重做起点。 */
-export async function planProductRework(source: Delivery, feedback: string, classify?: ClassifyRework): Promise<ProductReworkRoute> {
+export function planProductRework(source: Delivery, feedback: string, classify?: ClassifyRework): Promise<ProductReworkRoute>;
+export function planProductRework(source: Delivery, feedback: DownstreamEvidence): Promise<z.infer<typeof downstreamProductReworkSchema>>;
+export async function planProductRework(source: Delivery, feedback: string | DownstreamEvidence, classify?: ClassifyRework) {
   const clarify: ProductReworkRoute = { target: 'guided-requirements', reason: '需要重新核对业务决定和需求边界。' };
+  if (typeof feedback !== 'string') {
+    return downstreamProductReworkSchema.parse({
+      ...clarify, ...feedback, method: productReworkMethod,
+      reason: '下游已记录业务缺口，需要人工澄清后再修订已批准的产品稿。',
+    });
+  }
   if (source.mode === 'fixture') {
     if (/^(文案|错别字|术语|标题|措辞)[：:]/.test(feedback)) return { target: 'writing', reason: '样例反馈仅修改产品稿表述。' };
     if (/^(范围|优先级)[：:]/.test(feedback)) return { target: 'scope-priority', reason: '样例反馈调整范围或优先级。' };
@@ -52,9 +68,9 @@ export async function planProductRework(source: Delivery, feedback: string, clas
       memory: nativeInvocationMemory(),
       maxSteps: 1,
       modelSettings: { maxRetries: 0, timeout: { totalMs: 20000, stepMs: 20000 } },
-      structuredOutput: { schema: routeSchema },
+      structuredOutput: { schema: productReworkRouteSchema },
     });
-    return routeSchema.parse(result);
+    return productReworkRouteSchema.parse(result);
   } catch {
     return clarify;
   }
@@ -85,7 +101,9 @@ export function prepareProductRework(source: Delivery, rework: ProductRework, ro
     ? target === 'writing' ? 'product-specification' : 'product-direction'
     : 'draft-product';
   return {
-    step: ['product-team', container, restartDirection ? target : `product-${target}`],
+    step: source.productFlow === 'four-step'
+      ? ['product-team', target === 'writing' ? 'product-writing' : 'align-product-requirements']
+      : ['product-team', container, restartDirection ? target : `product-${target}`],
     input: {
       ...source, intake, intakeMode: restartDirection ? 'clarify' as const : source.intakeMode,
       revision: undefined, artifacts: [], reviews: [], productQualityReview: undefined,
@@ -111,7 +129,7 @@ export function appliedProductRework(steps: Record<string, unknown>) {
     const parsed = productReworkSchema.safeParse(step.output?.productRework ?? step.payload?.productRework);
     if (!parsed.success || !parsed.data.target) continue;
     const targetStep = parsed.data.target === 'guided-requirements' ? 'analyze-requirements' : `product-${parsed.data.target}`;
-    if (path.endsWith(`.${targetStep}`) && parsed.data.round > (applied?.round ?? 0)) applied = parsed.data;
+    if ((path.endsWith(`.${targetStep}`) || path === 'product-team.align-product-requirements' && parsed.data.target !== 'writing') && parsed.data.round > (applied?.round ?? 0)) applied = parsed.data;
   }
   return applied && { attempt: applied.attempt, target: applied.target, round: applied.round };
 }
@@ -121,10 +139,11 @@ const suspendedStepSchema = z.object({ status: z.literal('suspended'), suspendPa
 /** 从团队自己的暂停点还原返工输入及来源版本。 */
 export function readProductCorrectionCheckpoint(steps: Record<string, unknown>, runId: string, attempt: string) {
   for (const [path, entry] of Object.entries(steps)) {
-    if (!/^product-team\.(draft-product|product-direction|product-specification)\./.test(path)) continue;
+    if (!/^product-team\.((draft-product|product-direction|product-specification)\.|(align-product-requirements|product-writing|review-product-quality)$)/.test(path)) continue;
     const step = suspendedStepSchema.safeParse(entry);
     if (!step.success || step.data.suspendPayload.attempt !== attempt) continue;
-    const source = deliverySchema.parse(step.data.payload);
+    const saved = deliverySchema.parse(step.data.payload);
+    const source = step.data.suspendPayload.intake ? { ...saved, intake: step.data.suspendPayload.intake } : saved;
     const { reviewer, feedback } = step.data.suspendPayload;
     const draft = source.artifacts.find(artifact => artifact.stage === 'product');
     const rework: ProductRework = {

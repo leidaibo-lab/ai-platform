@@ -1,3 +1,4 @@
+import { describeProductStep, productSteps } from './product-steps.js';
 import { publishProductHandoff } from '../../business-engineering/product-handoff.js';
 import { projectRepositoryRoot, projectSpec } from '../../business-engineering/project.js';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
@@ -21,12 +22,12 @@ export async function resolveProductAgents(config: PracticeConfig, resources: Na
   return createAgents(config, { resources, storage, workspace: productWorkspace(config) });
 }
 
-/** 装配产品团队原生三阶段及历史流程图。 */
+/** 装配产品团队四步流程及历史流程图。 */
 export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, storage?: MastraCompositeStore) {
   const bind: StepBinder = (step) => withRepositoryAssets(step, config);
   const review = createStep({
     id: 'review-product',
-    description: '审阅交接｜产品负责人批准当前版本',
+    description: describeProductStep(productSteps[3]),
     inputSchema: deliverySchema,
     outputSchema: deliverySchema,
     suspendSchema: pendingSchema,
@@ -60,8 +61,9 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
   const phases = createProductManagerPhases(agents, config.mode, bind, projectRepositoryRoot(config),
     /** 调用前复核授权并从 Run 快照装配。 */
     async resources => resolveProductAgents(config, resources, storage), projectSpec(config, 'product'),
-    config.legacyProductWorkflow ? 'legacy' : config.nestedProductWorkflow ? 'nested' : 'native');
-  const team = createWorkflow({ id: 'product-team', description: '对齐方向 → 完善规格 → 审阅交接', inputSchema: deliverySchema, outputSchema: deliverySchema });
+    config.legacyProductWorkflow ? 'legacy' : config.nestedProductWorkflow ? 'nested' : config.nativeThreeStageProductWorkflow ? 'native' : 'flat');
+  const team = createWorkflow({ id: 'product-team', description: productSteps.map(step => step.title).join(' → '), inputSchema: deliverySchema, outputSchema: deliverySchema });
+  if (phases.graph === 'flat') return team.then(phases.align).then(phases.writing).then(phases.qualityReview).then(bind(review)).commit();
   if (phases.graph === 'native') return team.then(phases.direction).then(phases.specification).then(bind(review)).commit();
 
   const complete = createStep({

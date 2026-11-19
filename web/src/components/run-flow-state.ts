@@ -1,3 +1,5 @@
+import { developmentSteps } from '../../../src/mastra/workflows/development-steps';
+import { productSteps } from '../../../src/mastra/workflows/product-steps';
 import type { RunTimelineDocument, TimelineNode } from './run-timeline-types';
 
 export const teams = ['product', 'development', 'testing', 'delivery'] as const;
@@ -23,22 +25,24 @@ export interface RunFlowDocument {
 }
 
 const productReturn = /^(analyze-blocker-questions|confirm-blocker-answers|write-revised-product|review-revised-product)$/;
-export const productPhases = ['对齐方向', '完善规格', '审阅交接'] as const;
+const [alignment, writing, quality, approval] = productSteps;
+export const productPhases = productSteps.map(step => step.title);
 const productContainers = new Set(['product-team', 'draft-product', 'guided-requirements', 'requirements-round']);
 
 /** 将初稿、历史流程和下游返工路径投影到同一组产品阶段。 */
 function productPhaseForPath(path = '') {
   const step = path.replace(/#\d+$/, '').split('.').at(-1) ?? '';
-  if (/^(product-specification|product-writing|publish-product|review-product-quality|write-revised-product)$/.test(step)) return productPhases[1];
-  if (/^(review-product|review-revised-product|complete-product-team)$/.test(step)) return productPhases[2];
-  return productPhases[0];
+  if (/^(product-specification|product-writing|publish-product|write-revised-product)$/.test(step)) return writing.title;
+  if (step === quality.id) return quality.title;
+  if (/^(review-product|review-revised-product|complete-product-team)$/.test(step)) return approval.title;
+  return alignment.title;
 }
 
 /** 取当前产品操作对应的阶段，用于标题与详情的统一展示。 */
 function currentProductPhase(document: RunFlowDocument, node?: TimelineNode) {
-  if (document.product) return productPhases[2];
-  if (document.gate?.key === 'review-revised-product') return productPhases[2];
-  if (document.intake || document.clarify) return productPhases[0];
+  if (document.product) return approval.title;
+  if (document.gate?.key === 'review-revised-product') return approval.title;
+  if (document.intake || document.clarify) return alignment.title;
   return productPhaseForPath(document.gate?.key ?? document.retry?.step ?? node?.id ?? document.step);
 }
 
@@ -57,19 +61,52 @@ export function projectProductPhases(document: RunFlowDocument, flow: ReturnType
   else if (document.clarify || document.productCorrection || document.status === 'suspended') activeStatus = 'suspended';
   else if (document.status === 'waiting') activeStatus = 'waiting';
   else if (document.status === 'running') activeStatus = 'running';
-  return productPhases.map(phase => ({
-    phase,
+  return productSteps.map(({ title: phase, description }) => ({
+    phase, description,
     status: flow.active === 'product' && phase === current ? activeStatus : latest.get(phase) ?? 'pending',
   }));
+}
+
+const developmentAliases = [
+  ['confirm-project-scope'],
+  ['plan-development', 'initialize-development', 'prepare-context', 'architecture', 'assemble-agent-team'],
+  ['assess-readiness', 'resolve-readiness'],
+  ['approve-architecture'],
+  ['develop-and-check', 'execute-agent-team', 'dispatch-ready-tasks', 'execute-team-member', 'merge-team-results', 'implement', 'development-self-check'],
+  ['review-development-quality', 'review-code', 'assess-delivery', 'resolve-findings'],
+];
+
+/** 将原生步骤与历史节点对应到研发业务步骤。 */
+function developmentStage(path = '') {
+  const leaf = path.replace(/#\d+$/, '').split('.').at(-1) ?? '';
+  return developmentAliases.findIndex(names => names.includes(leaf));
+}
+
+/** 按时间选取对应步骤的证据，忽略对新图已有父步骤的内部探针。 */
+export function projectDevelopmentStages(document: RunFlowDocument, flow: ReturnType<typeof projectRunFlow>) {
+  const evidence = relevantNodes(document).filter(node => nodeTeam(node) === 'development' && node.status !== 'pending');
+  const current = developmentStage(document.retry?.step ?? (document.gate?.key === 'recover-development' ? flow.node?.id : document.gate?.key) ?? flow.node?.id ?? document.step);
+  return developmentSteps.map(({ id, title, description }, index) => {
+    const sameStage = evidence.filter(node => developmentStage(node.id) === index);
+    const native = sameStage.find(node => node.id.replace(/#\d+$/, '').split('.').at(-1) === id);
+    let status: TimelineNode['status'] = (native ?? sameStage[0])?.status ?? 'pending';
+    if (flow.active === 'development' && index === current) {
+      if (flow.states.development === 'failed') status = 'failed';
+      else if (document.status === 'suspended') status = 'suspended';
+      else if (document.status === 'waiting') status = 'waiting';
+      else if (document.status === 'running') status = 'running';
+    }
+    return { title, description, status };
+  });
 }
 
 /** 按业务职责解释步骤路径，兼容嵌套在其他团队 Workflow 中的历史子流程。 */
 export function teamForPath(path = ''): Team | undefined {
   const parts = path.replace(/#\d+$/, '').split('.');
   const leaf = parts.at(-1) ?? '';
-  if (productReturn.test(leaf) || parts.includes('product-team') || /^(guided-requirements|confirm-requirements|analyze-requirements|product-.+|review-product|review-product-quality|publish-product)$/.test(leaf)) return 'product';
+  if (productReturn.test(leaf) || parts.includes('product-team') || /^(align-product-requirements|guided-requirements|confirm-requirements|analyze-requirements|product-.+|review-product|review-product-quality|publish-product)$/.test(leaf)) return 'product';
   if (parts.some(part => /^(delivery-team|deployment-team|submit-merge-request|confirm-final-delivery|approve-release-scope|execute-release-externally|verify-release-health|execute-rollback-externally)$/.test(part))) return 'delivery';
-  if (parts.some(part => /^(development-team|qa-defect-repair|replanned-development|confirm-project-scope|approve-architecture|resolve-readiness|resolve-findings|recover-development)$/.test(part))) return 'development';
+  if (developmentStage(path) >= 0 || parts.some(part => /^(development-team|qa-defect-repair|replanned-development|confirm-project-scope|approve-architecture|resolve-readiness|resolve-findings|recover-development)$/.test(part))) return 'development';
   if (parts.some(part => /^(test-team|testing-team|test-and-regression-cycle|approve-test-cases|review-test-results)$/.test(part))) return 'testing';
 }
 

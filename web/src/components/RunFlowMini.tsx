@@ -1,11 +1,11 @@
 import { useEffect, useId, useState } from 'react';
 import { Check, CircleCheck, Clock3, Code2, GitPullRequest, Sparkles } from 'lucide-react';
 import type { TimelineNode } from './RunActivityFeed';
-import { nodeTeam, productPhases, projectProductPhases, projectRunFlow, teams, type RunFlowDocument, type Team, type TeamState } from './run-flow-state';
+import { nodeTeam, productPhases, projectDevelopmentStages, projectProductPhases, projectRunFlow, teamForPath, teams, type RunFlowDocument, type Team, type TeamState } from './run-flow-state';
 
 const teamDetails = {
   product: { label: '产品团队', icon: Sparkles, steps: productPhases.join(' · ') },
-  development: { label: '研发团队', icon: Code2, steps: '项目授权 · 实施 · 代码评审' },
+  development: { label: '研发团队', icon: Code2, steps: '项目授权 · 开发方案 · 实施验证 · 评审交接' },
   testing: { label: '测试团队', icon: CircleCheck, steps: '用例确认 · 验证 · QA 放行' },
   delivery: { label: '交付团队', icon: GitPullRequest, steps: '提交指向 main 的 MR · 核验回执' },
 };
@@ -29,9 +29,10 @@ function formatDuration(ms: number | null) {
 }
 
 /** 展示选中团队的执行证据和已存在的恢复入口。 */
-function TeamActivity({ title, status, attempt, canRecover, recoveryDisabled, onRecover }: Pick<TimelineNode, 'title' | 'status'> & { attempt?: number | null; canRecover?: boolean; recoveryDisabled?: boolean; onRecover?: () => void }) {
+function TeamActivity({ title, status, description, attempt, canRecover, recoveryDisabled, onRecover }: Pick<TimelineNode, 'title' | 'status'> & { description?: string; attempt?: number | null; canRecover?: boolean; recoveryDisabled?: boolean; onRecover?: () => void }) {
   return <article className={`workflow-board-card ${status}`}>
     <strong>{title}</strong>
+    {description && <p className="workflow-node-description">{description}</p>}
     <small><i aria-hidden="true" />{activityLabels[status]}{attempt != null ? ` · 第 ${attempt} 轮` : ''}</small>
     {canRecover && onRecover && <button type="button" className="workflow-recover-button" disabled={recoveryDisabled} onClick={onRecover}>重试</button>}
   </article>;
@@ -55,7 +56,9 @@ export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryD
   const nodeDuration = flow.node?.status === 'running' && live && Number.isFinite(nodeStartedAt) ? now - nodeStartedAt : flow.node?.durationMs ?? null;
   const currentTitle = flow.title ?? teamDetails[flow.active].label;
   const nodes = document.timeline?.nodes.filter(node => nodeTeam(node) === selected) ?? [];
-  const productRetry = selected === 'product' && nodes.find(node => node.status === 'failed' && node.id === document.retry?.step);
+  const condensed = selected === 'product' || selected === 'development';
+  const retry = condensed && document.retry && teamForPath(document.retry.step) === selected ? document.retry : undefined;
+  const records = selected === 'development' ? nodes.filter(node => !/(?:^|\.)(?:state-after-[^.]+|select-candidate-checkpoint)(?:#\d+)?$/.test(node.id)) : nodes;
   const inClarification = !!document.intake;
   const needsProductAction = inClarification || !!document.product || !!document.clarify || !!document.productCorrection
     || ['confirm-blocker-answers', 'review-revised-product'].includes(document.gate?.key ?? '');
@@ -93,14 +96,16 @@ export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryD
       <div className="workflow-team-activity-head"><h3>{teamDetails[selected].label}</h3><button type="button" aria-controls={sectionId} aria-expanded={showDetails} onClick={/** 保留团队选择，仅展开执行记录。 */() => setShowDetails(!showDetails)}>{showDetails ? '收起执行详情' : '查看执行详情'}</button></div>
       {showDetails && <div id={sectionId}>
         {selected === 'product' && needsProductAction && <a href={inClarification ? '#product-clarification' : '#product-team-action'}>前往{inClarification ? '需求澄清' : '产品团队当前操作'}</a>}
-        {selected === 'product' ? <>
-          <div className="workflow-team-events" aria-label="产品阶段">
-            {projectProductPhases(document, flow).map(({ phase, status }) => <TeamActivity key={phase} title={phase} status={status} />)}
-          </div>
-          {productRetry && onRecover && <button type="button" className="workflow-recover-button" disabled={recoveryDisabled} onClick={onRecover}>重试：{productRetry.title}</button>}
-          {nodes.length > 0 && <details className="workflow-team-records">
-            <summary>原始执行记录（{nodes.length}）</summary>
-            <div className="workflow-team-events">{nodes.map(node => <TeamActivity key={node.id} title={node.title} status={node.status} attempt={node.attempt} />)}</div>
+        {condensed ? <>
+          {selected === 'product' ? <div className="workflow-team-events" aria-label="产品执行节点">
+            {projectProductPhases(document, flow).map(({ phase, description, status }) => <TeamActivity key={phase} title={phase} description={description} status={status} />)}
+          </div> : <div className="workflow-team-events" aria-label="研发执行节点">
+            {projectDevelopmentStages(document, flow).map(({ title, description, status }) => <TeamActivity key={title} title={title} description={description} status={status} />)}
+          </div>}
+          {retry && onRecover && <button type="button" className="workflow-recover-button" disabled={recoveryDisabled} onClick={onRecover}>重试：{retry.title}</button>}
+          {records.length > 0 && <details className="workflow-team-records">
+            <summary>原始执行记录（{records.length}）</summary>
+            <div className="workflow-team-events">{records.map(node => <TeamActivity key={node.id} title={node.title} status={node.status} attempt={node.attempt} />)}</div>
           </details>}
         </> : nodes.length ? <div className="workflow-team-events">{nodes.map(node => <TeamActivity key={node.id} title={node.title} status={node.status} attempt={node.attempt} canRecover={node.status === 'failed' && node.id === document.retry?.step} onRecover={onRecover} recoveryDisabled={recoveryDisabled} />)}</div> : <p>暂无执行记录。</p>}
       </div>}

@@ -1,3 +1,4 @@
+import { describeDevelopmentStep, developmentSteps } from './development-steps.js';
 import { projectRepositoryRoot } from '../../business-engineering/project.js';
 import { reworkState, stopAutonomy, runVerification, VerificationBudgetError } from '../../development/v2/autonomy.js';
 /** 版本化受限开发流水线；阶段状态由原生dountil/suspend保存，终态只由交付门写入。 */
@@ -30,6 +31,7 @@ export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], pha
 
 /** 与v1隔离的原生步骤，复用执行Adapter；评测自动批准仅接受明确合成来源。 */
 function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPort, evaluationPolicy = false, generate: GeneratorV2 = generateV2, options: DevelopmentWorkflowOptions = {}) {
+  const consolidated = options.team && !!options.id && !options.legacySequential && !config.legacyDevelopmentWorkflow;
   const methods = loadDevelopmentMethods(config.rootDir);
   // 默认保留现有 CLI 的固定执行环境；Studio 注入每步骤的运行作用域。
   const executionBind = options.bind ?? (
@@ -66,49 +68,53 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   });
   const context = createStep({ id: 'prepare-context', description: 'plan-development｜prepare-context｜development-lead-agent 核实工程上下文', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 提供实际读取文件而非编造仓库概况；宿主绑定产品/方法/基线。
-    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
-      if (!active(inputData, 'prepare-context')) return inputData;
-      await guard(inputData);
-      const files = await execution.snapshot();
-      const contents: Record<string, string> = {};
-      for (const path of Object.keys(files)) if (path !== 'pnpm-lock.yaml') contents[path] = await execution.readFile(path);
-      const called = await invokeV2(config, execution, 'context', inputData, [], { files: contents }, methods, generate,
-        // 上下文规则只能引用实际读取文件和批准原文。
-        (text) => {
-          const draft = contextDraftSchema.parse(parseDevelopmentJson(text));
-          const refs = new Set([...inputData.requirements.map(
-            // 引用原文行避免规则脱离批准版本。
-            (item) => item.id,
-          ), ...Object.keys(files).map(
-            // 文件引用来自此次完整读取。
-            (path) => `file:${path}`,
-          )]);
-          for (const rule of draft.rules) for (const ref of rule.refs) if (!refs.has(ref)) throw new SyntaxError('上下文引用未知来源');
-        }, undefined, event => publishLiveOutput(pubsub, runId, event));
-      if (!called.entry) return called.state;
-      const draft = contextDraftSchema.parse(parseDevelopmentJson(called.entry.text));
-      return { ...called.state, context: { ...draft, files, productHash: inputData.input.source.hash, baselineHash: inputData.checkpointHash, methodBundleHash: methods.hash }, phase: 'architecture' as const, work: [...called.state.work, called.entry] };
-    },
+    execute: ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => prepareContext(inputData, runId, pubsub),
   });
+  /** 执行 工程上下文核实。 */
+  async function prepareContext(inputData: StateV2, runId: string, pubsub: Parameters<typeof publishLiveOutput>[0]): Promise<StateV2> {
+    if (!active(inputData, 'prepare-context')) return inputData;
+    await guard(inputData);
+    const files = await execution.snapshot();
+    const contents: Record<string, string> = {};
+    for (const path of Object.keys(files)) if (path !== 'pnpm-lock.yaml') contents[path] = await execution.readFile(path);
+    const called = await invokeV2(config, execution, 'context', inputData, [], { files: contents }, methods, generate,
+      // 上下文规则只能引用实际读取文件和批准原文。
+      (text) => {
+        const draft = contextDraftSchema.parse(parseDevelopmentJson(text));
+        const refs = new Set([...inputData.requirements.map(
+          // 引用原文行避免规则脱离批准版本。
+          (item) => item.id,
+        ), ...Object.keys(files).map(
+          // 文件引用来自此次完整读取。
+          (path) => `file:${path}`,
+        )]);
+        for (const rule of draft.rules) for (const ref of rule.refs) if (!refs.has(ref)) throw new SyntaxError('上下文引用未知来源');
+      }, undefined, event => publishLiveOutput(pubsub, runId, event));
+    if (!called.entry) return called.state;
+    const draft = contextDraftSchema.parse(parseDevelopmentJson(called.entry.text));
+    return { ...called.state, context: { ...draft, files, productHash: inputData.input.source.hash, baselineHash: inputData.checkpointHash, methodBundleHash: methods.hash }, phase: 'architecture' as const, work: [...called.state.work, called.entry] };
+  }
   const architecture = createStep({ id: 'architecture', description: 'plan-development｜architecture｜development-lead-agent 产出技术方案与任务包', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 任务包严格按manifest和原文索引校验；计划变更清空旧批准。
-    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
-      if (!active(inputData, 'architecture')) return inputData;
-      await guard(inputData);
-      const called = await invokeV2(config, execution, 'architect', inputData, [], { priorGates: inputData.gates, priorReports: inputData.codeReviews }, methods, generate,
-        // 结构错误保留故障，不能跳到人工批准。
-        (text) => { parsePlan(text, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event));
-      if (!called.entry) return called.state;
-      const plan = parsePlan(called.entry.text, inputData);
-      const preparationIssues = inputData.input.project.preparationIssues;
-      if (inputData.input.project.planning === 'agent' && !plan.blockers.length) {
-        const existing = await execution.snapshot();
-        for (const task of plan.tasks) for (const path of task.paths) if (!(path in existing)) await execution.writeFile(path, '');
-      }
-      const checkpointHash = developmentHash(await execution.snapshot());
-      return { ...called.state, checkpointHash, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: preparationIssues?.length ? 'manual-attention' as const : plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
-    },
+    execute: ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => createPlan(inputData, runId, pubsub),
   });
+  /** 执行 开发方案生成。 */
+  async function createPlan(inputData: StateV2, runId: string, pubsub: Parameters<typeof publishLiveOutput>[0]): Promise<StateV2> {
+    if (!active(inputData, 'architecture')) return inputData;
+    await guard(inputData);
+    const called = await invokeV2(config, execution, 'architect', inputData, [], { priorGates: inputData.gates, priorReports: inputData.codeReviews }, methods, generate,
+      // 结构错误保留故障，不能跳到人工批准。
+      (text) => { parsePlan(text, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event));
+    if (!called.entry) return called.state;
+    const plan = parsePlan(called.entry.text, inputData);
+    const preparationIssues = inputData.input.project.preparationIssues;
+    if (inputData.input.project.planning === 'agent' && !plan.blockers.length) {
+      const existing = await execution.snapshot();
+      for (const task of plan.tasks) for (const path of task.paths) if (!(path in existing)) await execution.writeFile(path, '');
+    }
+    const checkpointHash = developmentHash(await execution.snapshot());
+    return { ...called.state, checkpointHash, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: preparationIssues?.length ? 'manual-attention' as const : plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
+  }
   /** 先附加不可绕过的工程事实再校验任务包；未建工程时可保存零实施任务的受阻方案。 */
   function parsePlan(text: string, state: StateV2) {
     const plan = planV2Schema.parse(parseDevelopmentJson(text));
@@ -118,46 +124,58 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   }
   const assemble = createStep({ id: 'assemble-agent-team', description: 'plan-development｜assemble-agent-team｜按批准任务动态组建 development-implementer-agent', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 团队在就绪审查前展示并进入技术方案批准绑定。
-    execute: async ({ inputData }) => inputData.phase !== 'assemble-team' || inputData.outcome !== 'in-progress' ? inputData : { ...inputData, team: assembleTeam(inputData), delegations: [], phase: 'assess-readiness' as const },
+    execute: async ({ inputData }) => prepareTeam(inputData),
   });
+  /** 按方案确定任务负责人，并把执行团队纳入就绪审查。 */
+  function prepareTeam(state: StateV2): StateV2 {
+    if (!active(state, 'assemble-team')) return state;
+    return { ...state, team: assembleTeam(state), delegations: [], phase: 'assess-readiness' };
+  }
   const readiness = createStep({ id: 'assess-readiness', description: 'plan-development｜assess-readiness｜development-reviewer-agent 实施前独立就绪审查', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 独立只读语义调用；CONCERNS需逐项证据裁决，FAIL保留阻塞。
-    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
-      if (!active(inputData, 'assess-readiness')) return inputData;
-      await guard(inputData);
-      validatePlanV2(inputData.plan!, inputData);
-      const called = await invokeV2(config, execution, 'readiness', inputData, [], null, methods, generate,
-        // 判定、发现和覆盖都必须结构一致。
-        (text) => validateAssessment(assessmentSchema.parse(parseDevelopmentJson(text)), inputData), undefined, event => publishLiveOutput(pubsub, runId, event));
-      if (!called.entry) return called.state;
-      const report = reportV2(assessmentSchema.parse(parseDevelopmentJson(called.entry.text)), called.state);
-      const state = { ...called.state, readiness: report, work: [...called.state.work, called.entry] };
-      if (report.assessment.verdict === 'CONCERNS') return { ...state, phase: 'resolve-readiness' as const };
-      if (report.assessment.verdict !== 'PASS') return { ...state, outcome: report.assessment.findings.some(
-        // 业务缺口回产品，其他关注保留人工审查事实。
-        (item) => item.category === 'business',
-      ) ? 'clarification-required' as const : 'manual-attention' as const };
-      return { ...state, approvalHash: approvalHashV2(state), phase: 'approve-architecture' as const };
-    },
+    execute: ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => assessReadiness(inputData, runId, pubsub),
   });
+  /** 执行 独立就绪审查。 */
+  async function assessReadiness(inputData: StateV2, runId: string, pubsub: Parameters<typeof publishLiveOutput>[0]): Promise<StateV2> {
+    if (!active(inputData, 'assess-readiness')) return inputData;
+    await guard(inputData);
+    validatePlanV2(inputData.plan!, inputData);
+    const called = await invokeV2(config, execution, 'readiness', inputData, [], null, methods, generate,
+      // 判定、发现和覆盖都必须结构一致。
+      (text) => validateAssessment(assessmentSchema.parse(parseDevelopmentJson(text)), inputData), undefined, event => publishLiveOutput(pubsub, runId, event));
+    if (!called.entry) return called.state;
+    const report = reportV2(assessmentSchema.parse(parseDevelopmentJson(called.entry.text)), called.state);
+    const state = { ...called.state, readiness: report, work: [...called.state.work, called.entry] };
+    if (report.assessment.verdict === 'CONCERNS') return { ...state, phase: 'resolve-readiness' as const };
+    if (report.assessment.verdict !== 'PASS') return { ...state, outcome: report.assessment.findings.some(
+      // 业务缺口回产品，其他关注保留人工审查事实。
+      (item) => item.category === 'business',
+    ) ? 'clarification-required' as const : 'manual-attention' as const };
+    return { ...state, approvalHash: approvalHashV2(state), phase: 'approve-architecture' as const };
+  }
   const resolveReadiness = createStep({ id: 'resolve-readiness', description: 'plan-development｜resolve-readiness｜人工逐项裁决就绪问题', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     suspendSchema: z.object({ hash: z.string(), report: z.unknown() }), resumeSchema: findingsReviewSchema,
     // CONCERNS逐项引用裁决；FAIL和结构失败不能通过此节点放行。
-    execute: async ({ inputData, resumeData, suspend, runId }) => {
+    execute: async ({ inputData, resumeData, suspend }) => {
       if (!active(inputData, 'resolve-readiness')) return inputData;
+      if (resumeData) return applyReadinessDecision(inputData, resumeData);
       await guard(inputData);
       if (inputData.readiness?.assessment.verdict !== 'CONCERNS') throw new Error('仅CONCERNS允许就绪裁决');
-      const hash = findingsHashV2(inputData);
-      if (!resumeData) return suspend({ hash, report: inputData.readiness });
-      if (resumeData.hash !== hash) throw new Error('就绪裁决版本不匹配');
-      const resolved = applyFindingsReview(inputData, resumeData);
-      if (resolved.outcome !== 'in-progress') return resolved;
-      const assessment = { ...inputData.readiness.assessment, verdict: 'PASS' as const, findings: [], resolutions: resumeData.decisions };
-      const state = { ...resolved, readinessHistory: [...resolved.readinessHistory, inputData.readiness], readiness: reportV2(assessment, resolved), phase: 'approve-architecture' as const };
-      return { ...state, approvalHash: approvalHashV2(state) };
+      return suspend({ hash: findingsHashV2(inputData), report: inputData.readiness });
     },
   });
-  const approve = createStep({ id: 'approve-architecture', description: 'plan-development｜approve-architecture｜人工批准方案、团队与权限', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
+  /** 在原候选检查点应用人工裁决。 */
+  async function applyReadinessDecision(inputData: StateV2, resumeData: z.infer<typeof findingsReviewSchema>): Promise<StateV2> {
+    await guard(inputData);
+    if (inputData.readiness?.assessment.verdict !== 'CONCERNS') throw new Error('仅CONCERNS允许就绪裁决');
+    if (resumeData.hash !== findingsHashV2(inputData)) throw new Error('就绪裁决版本不匹配');
+    const resolved = applyFindingsReview(inputData, resumeData);
+    if (resolved.outcome !== 'in-progress') return resolved;
+    const assessment = { ...inputData.readiness!.assessment, verdict: 'PASS' as const, findings: [], resolutions: resumeData.decisions };
+    const state = { ...resolved, readinessHistory: [...resolved.readinessHistory, inputData.readiness!], readiness: reportV2(assessment, resolved), phase: 'approve-architecture' as const };
+    return { ...state, approvalHash: approvalHashV2(state) };
+  }
+  const approve = createStep({ id: 'approve-architecture', description: describeDevelopmentStep(developmentSteps[3]), inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     suspendSchema: z.object({ hash: z.string(), plan: planV2Schema, readiness: assessmentSchema, contextHash: z.string(), methodBundleHash: z.string(), team: stateV2Schema.shape.team, executionBudget: z.object({ maxReworks: z.number(), maxCalls: z.number(), autonomy: inputV2Schema.shape.autonomy }).optional() }), resumeSchema: approvalV2Schema,
     // 正式运行在原生暂停点等待对整个包的人工确认。
     execute: async ({ inputData, resumeData, suspend, runId }) => {
@@ -219,89 +237,96 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   });
   const review = createStep({ id: 'review-code', description: 'review-development-quality｜review-code｜development-reviewer-agent 实施后独立代码审查', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // reviewer失败和缺失报告均保留在评审阶段，绝不降级为成功。
-    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
-      if (!active(inputData, 'review-code')) return inputData;
-      await guard(inputData);
-      if (!checksPassedV2(inputData) || inputData.checkedSourceHash !== inputData.checkpointHash) throw new Error('v2评审缺少当前成功检查');
-      const contents: Record<string, string> = {};
-      for (const path of Object.keys(await execution.snapshot())) contents[path] = await execution.readFile(path);
-      const called = await invokeV2(config, execution, 'reviewer', inputData, [], { files: contents, baselineFiles: inputData.input.project.files, changedFiles: Object.keys(contents).filter(
-        // 变更内容与初始源码同时交给只读评审。
-        (path) => contents[path] !== inputData.input.project.files[path],
-      ) }, methods, generate,
-        // 报告解析错误必须保存故障，不使用空数组默认通过。
-        (text) => { const assessment = assessmentSchema.parse(parseDevelopmentJson(text)); validateAssessment(assessment, inputData); validateReviewResolutions(assessment, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event));
-      if (!called.entry) return called.state;
-      const report = reportV2(assessmentSchema.parse(parseDevelopmentJson(called.entry.text)), called.state);
-      const resolutions = [...inputData.resolutions];
-      for (const resolution of report.assessment.resolutions) {
-        const prior = inputData.codeReviews.filter(
-          // 一个处理记录绑定全部同ID旧发现，但不关闭当前新报告发现。
-          (item) => item.assessment.findings.some(
-            // 原始发现保持原样，只追加独立结论。
-            (finding) => finding.id === resolution.findingId,
-          ),
-        );
-        if (!prior.length || resolution.decision !== 'fixed') throw new SyntaxError('评审仅可证据化确认旧发现已修复');
-        for (const item of prior) resolutions.push({ ...resolution, reportHash: item.hash, authority: 'reviewer' });
-      }
-      return { ...called.state, codeReviews: [...inputData.codeReviews, report], resolutions, phase: 'assess-delivery' as const, work: [...called.state.work, called.entry] };
-    },
+    execute: ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => reviewCandidate(inputData, runId, pubsub),
   });
+  /** 执行 候选代码审查。 */
+  async function reviewCandidate(inputData: StateV2, runId: string, pubsub: Parameters<typeof publishLiveOutput>[0]): Promise<StateV2> {
+    if (!active(inputData, 'review-code')) return inputData;
+    await guard(inputData);
+    if (!checksPassedV2(inputData) || inputData.checkedSourceHash !== inputData.checkpointHash) throw new Error('v2评审缺少当前成功检查');
+    const contents: Record<string, string> = {};
+    for (const path of Object.keys(await execution.snapshot())) contents[path] = await execution.readFile(path);
+    const called = await invokeV2(config, execution, 'reviewer', inputData, [], { files: contents, baselineFiles: inputData.input.project.files, changedFiles: Object.keys(contents).filter(
+      // 变更内容与初始源码同时交给只读评审。
+      (path) => contents[path] !== inputData.input.project.files[path],
+    ) }, methods, generate,
+      // 报告解析错误必须保存故障，不使用空数组默认通过。
+      (text) => { const assessment = assessmentSchema.parse(parseDevelopmentJson(text)); validateAssessment(assessment, inputData); validateReviewResolutions(assessment, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event));
+    if (!called.entry) return called.state;
+    const report = reportV2(assessmentSchema.parse(parseDevelopmentJson(called.entry.text)), called.state);
+    const resolutions = [...inputData.resolutions];
+    for (const resolution of report.assessment.resolutions) {
+      const prior = inputData.codeReviews.filter(
+        // 一个处理记录绑定全部同ID旧发现，但不关闭当前新报告发现。
+        (item) => item.assessment.findings.some(
+          // 原始发现保持原样，只追加独立结论。
+          (finding) => finding.id === resolution.findingId,
+        ),
+      );
+      if (!prior.length || resolution.decision !== 'fixed') throw new SyntaxError('评审仅可证据化确认旧发现已修复');
+      for (const item of prior) resolutions.push({ ...resolution, reportHash: item.hash, authority: 'reviewer' });
+    }
+    return { ...called.state, codeReviews: [...inputData.codeReviews, report], resolutions, phase: 'assess-delivery' as const, work: [...called.state.work, called.entry] };
+  }
   const delivery = createStep({ id: 'assess-delivery', description: 'review-development-quality｜assess-delivery｜确定性交付门', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 最终门只消费当前批准/检查/评审，按问题归属有界返工。
-    execute: async ({ inputData }) => {
-      if (!active(inputData, 'assess-delivery')) return inputData;
-      await guard(inputData); assertApprovalV2(inputData);
-      if (inputData.plan!.tasks.some(
-        // 交付前必须完成全部批准任务，不能只凭smoke和评审通过。
-        (task) => !inputData.completedTasks.includes(task.id),
-      )) throw new Error('v2批准任务尚未全部完成');
-      const latest = inputData.codeReviews.at(-1);
-      if (!latest || latest.hash !== developmentHash({ assessment: latest.assessment, sourceHash: latest.sourceHash, planHash: latest.planHash, checksHash: latest.checksHash }) || latest.sourceHash !== inputData.checkpointHash || latest.planHash !== inputData.planHash || latest.checksHash !== developmentHash(inputData.checks) || inputData.checkedSourceHash !== inputData.checkpointHash || !checksPassedV2(inputData) || inputData.approvedHash !== inputData.approvalHash) throw new Error('v2交付证据缺失或漂移');
-      const findings = unresolvedV2(inputData);
-      if (findings.length) {
-        const routes = new Set(findings.map(
-          // 新政策联合修复多责任任务；历史政策仍保留人工裁决。
-          (finding) => finding.route,
-        ));
-        const route = findings.some(
-          // 业务/完整性问题不能通过实现重试或接受风险绕过。
-          (finding) => finding.category === 'business',
-        ) ? 'product' : findings.some(
-          // 真实完整性问题直接停止人工处理。
-          (finding) => finding.category === 'integrity',
-        ) ? 'human' : routes.has('architecture') ? 'architecture' : routes.size === 1 && !routes.has('human') ? [...routes][0] : inputData.input.autonomy ? 'all' : 'human';
-        const decision = route === 'product' ? 'clarify' as const : route === 'architecture' ? 'replan' as const : route === 'human' ? 'stop' as const : 'rework' as const;
-        const state = { ...inputData, gates: [...inputData.gates, { decision, reasons: findings.map(
-          // 完整保存所有未解决发现ID。
-          (finding) => finding.id,
-        ), sourceHash: inputData.checkpointHash, reportHash: latest.hash }] };
-        if (route === 'product') return state.input.autonomy ? stopAutonomy(state, 'business-decision') : { ...state, outcome: 'clarification-required' as const };
-        if (route === 'human' && state.input.autonomy && findings.some(/** 完整性异常不得当作可修复代码问题。 */finding => finding.category === 'integrity')) return stopAutonomy(state, 'authorization-required');
-        if (route === 'human') return { ...state, phase: 'resolve-findings' as const, outcome: findings.some(
-          // 完整性问题不提供接受风险后通过的旁路。
-          (finding) => finding.category === 'integrity',
-        ) ? 'manual-attention' as const : 'in-progress' as const };
-        return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement');
-      }
-      // 非PASS原报告只能在全部原发现已有明确处理后进入此处；原报告保留。
-      return { ...inputData, outcome: 'development-delivered' as const, gates: [...inputData.gates, { decision: 'deliver' as const, reasons: [], sourceHash: inputData.checkpointHash, reportHash: latest.hash }], delivery: { version: 'development-delivery.v2' as const, productHash: inputData.input.source.hash, planHash: inputData.planHash!, approvalHash: inputData.approvalHash!, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hash, readinessHash: inputData.readiness!.hash, reviewHash: latest.hash, sourceHash: inputData.checkpointHash, files: await execution.snapshot(), checks: inputData.checks, resolutions: inputData.resolutions, limitations: ['受限研发交付；固定Node语法和登记smoke，不等于独立业务验收', '只读模型评审不证明完整业务质量；fixture仅验证原生控制流', '无生产部署、跨库原子交接和跨实例启动幂等'] } };
-    },
+    execute: ({ inputData }) => assessDelivery(inputData),
   });
+  /** 执行 候选交付判定。 */
+  async function assessDelivery(inputData: StateV2): Promise<StateV2> {
+    if (!active(inputData, 'assess-delivery')) return inputData;
+    await guard(inputData); assertApprovalV2(inputData);
+    if (inputData.plan!.tasks.some(
+      // 交付前必须完成全部批准任务，不能只凭smoke和评审通过。
+      (task) => !inputData.completedTasks.includes(task.id),
+    )) throw new Error('v2批准任务尚未全部完成');
+    const latest = inputData.codeReviews.at(-1);
+    if (!latest || latest.hash !== developmentHash({ assessment: latest.assessment, sourceHash: latest.sourceHash, planHash: latest.planHash, checksHash: latest.checksHash }) || latest.sourceHash !== inputData.checkpointHash || latest.planHash !== inputData.planHash || latest.checksHash !== developmentHash(inputData.checks) || inputData.checkedSourceHash !== inputData.checkpointHash || !checksPassedV2(inputData) || inputData.approvedHash !== inputData.approvalHash) throw new Error('v2交付证据缺失或漂移');
+    const findings = unresolvedV2(inputData);
+    if (findings.length) {
+      const routes = new Set(findings.map(
+        // 新政策联合修复多责任任务；历史政策仍保留人工裁决。
+        (finding) => finding.route,
+      ));
+      const route = findings.some(
+        // 业务/完整性问题不能通过实现重试或接受风险绕过。
+        (finding) => finding.category === 'business',
+      ) ? 'product' : findings.some(
+        // 真实完整性问题直接停止人工处理。
+        (finding) => finding.category === 'integrity',
+      ) ? 'human' : routes.has('architecture') ? 'architecture' : routes.size === 1 && !routes.has('human') ? [...routes][0] : inputData.input.autonomy ? 'all' : 'human';
+      const decision = route === 'product' ? 'clarify' as const : route === 'architecture' ? 'replan' as const : route === 'human' ? 'stop' as const : 'rework' as const;
+      const state = { ...inputData, gates: [...inputData.gates, { decision, reasons: findings.map(
+        // 完整保存所有未解决发现ID。
+        (finding) => finding.id,
+      ), sourceHash: inputData.checkpointHash, reportHash: latest.hash }] };
+      if (route === 'product') return state.input.autonomy ? stopAutonomy(state, 'business-decision') : { ...state, outcome: 'clarification-required' as const };
+      if (route === 'human' && state.input.autonomy && findings.some(/** 完整性异常不得当作可修复代码问题。 */finding => finding.category === 'integrity')) return stopAutonomy(state, 'authorization-required');
+      if (route === 'human') return { ...state, phase: 'resolve-findings' as const, outcome: findings.some(
+        // 完整性问题不提供接受风险后通过的旁路。
+        (finding) => finding.category === 'integrity',
+      ) ? 'manual-attention' as const : 'in-progress' as const };
+      return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement');
+    }
+    // 非PASS原报告只能在全部原发现已有明确处理后进入此处；原报告保留。
+    return { ...inputData, outcome: 'development-delivered' as const, gates: [...inputData.gates, { decision: 'deliver' as const, reasons: [], sourceHash: inputData.checkpointHash, reportHash: latest.hash }], delivery: { version: 'development-delivery.v2' as const, productHash: inputData.input.source.hash, planHash: inputData.planHash!, approvalHash: inputData.approvalHash!, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hash, readinessHash: inputData.readiness!.hash, reviewHash: latest.hash, sourceHash: inputData.checkpointHash, files: await execution.snapshot(), checks: inputData.checks, resolutions: inputData.resolutions, limitations: ['受限研发交付；固定Node语法和登记smoke，不等于独立业务验收', '只读模型评审不证明完整业务质量；fixture仅验证原生控制流', '无生产部署、跨库原子交接和跨实例启动幂等'] } };
+  }
   const resolveFindings = createStep({ id: 'resolve-findings', description: 'review-development-quality｜resolve-findings｜人工裁决评审发现或进入有界返工', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     suspendSchema: z.object({ hash: z.string(), reports: z.unknown() }), resumeSchema: findingsReviewSchema,
     // 无法自动归属、误报或低严重性延期由人工显式记录，源码变化即拒绝。
     execute: async ({ inputData, resumeData, suspend }) => {
       if (!active(inputData, 'resolve-findings')) return inputData;
+      if (resumeData) return applyCodeReviewDecision(inputData, resumeData);
       await guard(inputData);
-      const hash = findingsHashV2(inputData);
-      if (!resumeData) return suspend({ hash, reports: inputData.codeReviews });
-      if (resumeData.hash !== hash) throw new Error('评审裁决版本不匹配');
-      const state = applyFindingsReview(inputData, resumeData);
-      return { ...state, phase: 'assess-delivery' as const };
+      return suspend({ hash: findingsHashV2(inputData), reports: inputData.codeReviews });
     },
   });
+  /** 在原候选检查点应用人工裁决。 */
+  async function applyCodeReviewDecision(inputData: StateV2, resumeData: z.infer<typeof findingsReviewSchema>): Promise<StateV2> {
+    await guard(inputData);
+    if (resumeData.hash !== findingsHashV2(inputData)) throw new Error('评审裁决版本不匹配');
+    return { ...applyFindingsReview(inputData, resumeData), phase: 'assess-delivery' };
+  }
   const recovery = createStep({ id: 'recover-development', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     suspendSchema: z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), budget: stateV2Schema.shape.recovery.unwrap().shape.budget, modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall }), resumeSchema: recoveryReviewSchema,
     // 连续重试阈值只决定暂停；人工可多轮继续，不清零累计调用。
@@ -314,36 +339,34 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       return applyRecoveryDecision(inputData, resumeData);
     },
   });
-  /** ADR: docs/decisions/2026-11-08-mastra-stage-state-flow.md
-   * 模型故障就地暂停，保存失败后的预算/检查点；未完成阶段不能正常返回冒充完成。
-   */
+  const recoveryPause = z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), budget: stateV2Schema.shape.recovery.unwrap().shape.budget, modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall, recoveryState: stateV2Schema });
+  const findingsPause = z.object({ hash: z.string(), report: z.unknown().optional(), reports: z.unknown().optional(), findingsState: stateV2Schema });
+  /** 原生暂停载荷保存恢复后的源码版本和累计预算。 */
+  async function recoverState(state: StateV2, saved: StateV2 | undefined, resumeData: unknown) {
+    if (!saved) return state;
+    await guard(saved);
+    return applyRecoveryDecision(saved, recoveryReviewSchema.parse(resumeData));
+  }
+  /** 达到调用边界时将当前业务步骤交还给原生暂停点。 */
+  function modelCheckpoint(state: StateV2, role: StateV2['work'][number]['role']) {
+    const paused = state.calls >= state.maxCalls && !state.recovery ? pauseForCallBudget(state, role) : state;
+    return paused.recovery ? { ...paused.recovery, recoveryState: paused } : undefined;
+  }
+  /** 历史叶节点和并行实施子流程继续使用原生故障暂停。 */
   function recoverable<T extends Step<any, any, any, any, any, any>>(step: T): T {
     if (options.legacySequential) return step;
     const execute = step.execute;
     step.resumeSchema = recoveryReviewSchema;
-    step.suspendSchema = z.object({ hash: z.string(), checkpointHash: z.string(), phase: z.string(), role: z.string(), kind: z.string(), taskId: z.string().nullable(), budget: stateV2Schema.shape.recovery.unwrap().shape.budget, modelCall: stateV2Schema.shape.recovery.unwrap().shape.modelCall, recoveryState: stateV2Schema });
-    // suspendData 来自原生持久化，不接收客户端替代源码或失败状态。
+    step.suspendSchema = recoveryPause;
+    /** 人工接续只重试有效的业务检查点。 */
     step.execute = async (context) => {
-      let state: StateV2 = context.inputData;
-      if (context.suspendData?.recoveryState) {
-        state = stateV2Schema.parse(context.suspendData.recoveryState);
-        await guard(state);
-        const decision = recoveryReviewSchema.parse(context.resumeData);
-        if (!state.recovery || decision.hash !== state.recovery.hash || !matchesRecoveryHashV2(state, decision.hash)) throw new Error('恢复版本发生漂移');
-        state = applyRecoveryDecision(state, decision);
-        if (state.outcome !== 'in-progress') return state;
-      }
-      if (state.calls >= state.maxCalls) {
-        const role = state.recovery?.role ?? (step.id === 'architecture' ? 'architect' : step.id === 'prepare-context' ? 'context' : step.id === 'assess-readiness' ? 'readiness' : step.id === 'review-code' ? 'reviewer' : 'backend');
-        const paused = pauseForCallBudget(state, role);
-        return context.suspend({ ...paused.recovery, recoveryState: paused });
-      }
-      // 人工决定恢复的是业务检查点；团队子流程需开始下一波次，不能恢复一个已完成的旧子Run。
+      const state = await recoverState(context.inputData, context.suspendData?.recoveryState, context.resumeData);
+      if (state.outcome !== 'in-progress') return state;
+      const role = state.phase === 'architecture' ? 'architect' : state.phase === 'prepare-context' ? 'context' : state.phase === 'assess-readiness' ? 'readiness' : state.phase === 'review-code' ? 'reviewer' : 'backend';
+      const checkpoint = modelCheckpoint(state, role);
+      if (checkpoint) return context.suspend(checkpoint);
       const result = await execute.call(step, { ...context, inputData: state, resumeData: undefined, suspendData: undefined, resume: undefined, restart: false });
-      if (result && result.recovery) {
-        return context.suspend({ ...result.recovery, recoveryState: result });
-      }
-      return result;
+      return result?.recovery ? context.suspend({ ...result.recovery, recoveryState: result }) : result;
     };
     return step;
   }
@@ -351,11 +374,88 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   const definition = createWorkflow({ id: options.id ? `${options.id}-iteration` : 'development-iteration-v2', inputSchema: stateV2Schema, outputSchema: stateV2Schema });
   let flow: any = definition;
   let prior: string | undefined;
+  /** 聚合方案及评审执行，内部函数保留原有状态与权限校验。 */
+  function appendConsolidatedStages(teamExecution: ReturnType<typeof createTeamExecution>) {
+    const planning = createStep({
+      id: developmentSteps[1].id, description: describeDevelopmentStep(developmentSteps[1]),
+      inputSchema: stateV2Schema, outputSchema: stateV2Schema, suspendSchema: recoveryPause, resumeSchema: recoveryReviewSchema,
+      /** 上下文完成后从结构化方案继续，故障时保存已完成的工作。 */
+      execute: async ({ inputData, suspendData, resumeData, suspend, runId, [PUBSUB_SYMBOL]: pubsub }) => {
+        let state = await recoverState(inputData, suspendData?.recoveryState, resumeData);
+        if (active(state, 'prepare-context')) {
+          const checkpoint = modelCheckpoint(state, 'context');
+          if (checkpoint) return suspend(checkpoint);
+          state = stateV2Schema.parse(await prepareContext(state, runId, pubsub));
+        }
+        if (active(state, 'architecture')) {
+          const checkpoint = modelCheckpoint(state, 'architect');
+          if (checkpoint) return suspend(checkpoint);
+          state = await createPlan(state, runId, pubsub);
+        }
+        if (state.recovery) return suspend({ ...state.recovery, recoveryState: state });
+        return prepareTeam(state);
+      },
+    });
+    const ready = createStep({
+      id: developmentSteps[2].id, description: describeDevelopmentStep(developmentSteps[2]),
+      inputSchema: stateV2Schema, outputSchema: stateV2Schema,
+      suspendSchema: z.union([recoveryPause, findingsPause]), resumeSchema: z.union([findingsReviewSchema, recoveryReviewSchema]),
+      /** 在同一步骤保留独立就绪报告和人工裁决。 */
+      execute: async ({ inputData, suspendData, resumeData, suspend, runId, [PUBSUB_SYMBOL]: pubsub }) => {
+        const modelState = suspendData && 'recoveryState' in suspendData ? suspendData.recoveryState : undefined;
+        const findingsState = suspendData && 'findingsState' in suspendData ? suspendData.findingsState : undefined;
+        let state = findingsState ?? await recoverState(inputData, modelState, resumeData);
+        if (active(state, 'assess-readiness')) {
+          const checkpoint = modelCheckpoint(state, 'readiness');
+          if (checkpoint) return suspend(checkpoint);
+          state = await assessReadiness(state, runId, pubsub);
+        }
+        if (state.recovery) return suspend({ ...state.recovery, recoveryState: state });
+        if (!active(state, 'resolve-readiness')) return state;
+        if (findingsState) return applyReadinessDecision(state, findingsReviewSchema.parse(resumeData));
+        await guard(state);
+        return suspend({ hash: findingsHashV2(state), report: state.readiness, findingsState: state });
+      },
+    });
+    const implementation = createWorkflow({
+      id: developmentSteps[4].id, description: describeDevelopmentStep(developmentSteps[4]), inputSchema: stateV2Schema, outputSchema: stateV2Schema,
+    }).then(bind(recoverable(teamExecution))).branch([[/** 完成最后一波任务后执行固定检查。 */async ({ inputData }) => active(inputData, 'development-self-check'), bind(selfCheck)]])
+      .map(/** 下一波任务复用原生合并输出。 */async ({ inputData, getStepResult }) => inputData['development-self-check'] ?? getStepResult(teamExecution), { id: 'select-candidate-checkpoint' }).commit();
+    const quality = createStep({
+      id: developmentSteps[5].id, description: describeDevelopmentStep(developmentSteps[5]),
+      inputSchema: stateV2Schema, outputSchema: stateV2Schema,
+      suspendSchema: z.union([recoveryPause, findingsPause]), resumeSchema: z.union([findingsReviewSchema, recoveryReviewSchema]),
+      /** 评审绑定固定检查，裁决之后在同一步骤复核交付条件。 */
+      execute: async ({ inputData, suspendData, resumeData, suspend, runId, [PUBSUB_SYMBOL]: pubsub }) => {
+        const modelState = suspendData && 'recoveryState' in suspendData ? suspendData.recoveryState : undefined;
+        const findingsState = suspendData && 'findingsState' in suspendData ? suspendData.findingsState : undefined;
+        let state = findingsState ?? await recoverState(inputData, modelState, resumeData);
+        if (active(state, 'review-code')) {
+          const checkpoint = modelCheckpoint(state, 'reviewer');
+          if (checkpoint) return suspend(checkpoint);
+          state = await reviewCandidate(state, runId, pubsub);
+        }
+        if (state.recovery) return suspend({ ...state.recovery, recoveryState: state });
+        if (findingsState && active(state, 'resolve-findings')) {
+          state = await applyCodeReviewDecision(state, findingsReviewSchema.parse(resumeData));
+        }
+        state = await assessDelivery(state);
+        if (!active(state, 'resolve-findings')) return state;
+        await guard(state);
+        return suspend({ hash: findingsHashV2(state), reports: state.codeReviews, findingsState: state });
+      },
+    });
+    append(bind(planning), 'prepare-context', 'architecture', 'assemble-team');
+    append(bind(ready), 'assess-readiness', 'resolve-readiness');
+    append(bind(approve), 'approve-architecture');
+    append(implementation, 'implement');
+    append(bind(quality), 'review-code', 'assess-delivery', 'resolve-findings');
+  }
   /** 原生条件分支跳过非当前业务阶段；映射仅传递状态，不冒充业务步骤已执行。 */
-  function append(step: Step<any, any, any, any, any, any>, phase?: StateV2['phase']) {
+  function append(step: Step<any, any, any, any, any, any>, ...phases: StateV2['phase'][]) {
     const previous = prior;
     const mapId = `state-after-${step.id}`;
-    flow = flow.branch([[/** 故障优先于正常阶段，旧恢复记录仍可接续。 */async ({ inputData }: { inputData: StateV2 }) => phase ? active(inputData, phase) : inputData.outcome === 'in-progress' && !!inputData.recovery, step]])
+    flow = flow.branch([[/** 故障优先于正常阶段，旧恢复记录仍可接续。 */async ({ inputData }: { inputData: StateV2 }) => phases.length ? phases.some(phase => active(inputData, phase)) : inputData.outcome === 'in-progress' && !!inputData.recovery, step]])
       .map(/** 未选择分支时沿用上一份原生状态，不执行该业务阶段。 */async ({ inputData, getInitData, getStepResult }: any) => {
         const values = Object.values(inputData).filter(/** 只有执行过的分支有输出。 */value => value !== undefined);
         if (values.length > 1) throw new Error('开发流程命中多个阶段');
@@ -367,6 +467,8 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     // 仅供历史图迁移回归，正式入口不使用无条件业务步骤。
     flow = definition.then(bind(context)).then(bind(architecture)).then(bind(assemble)).then(bind(readiness)).then(bind(resolveReadiness)).then(bind(approve))
       .then(teamExecution ?? bind(implement)).then(bind(selfCheck)).then(bind(review)).then(bind(delivery)).then(bind(resolveFindings)).then(bind(recovery));
+  } else if (consolidated && teamExecution) {
+    appendConsolidatedStages(teamExecution);
   } else {
     append(bind(recoverable(context)), 'prepare-context');
     append(bind(recoverable(architecture)), 'architecture');

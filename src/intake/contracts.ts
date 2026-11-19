@@ -37,6 +37,8 @@ export const generatedPlanSchema = planSchema.safeExtend({ maturity: maturitySch
 export const answerSchema = z.object({ questionId: text, selected: z.array(text).max(8), custom: z.string().trim().max(4000) });
 export const responseSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), action: z.enum(['refine', 'finalize']), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(8), supplement: z.string().trim().max(4000) });
 export const intakeSchema = z.object({ intakeMode: intakeModeSchema.optional(), enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })) });
+/** 恢复输入同时保存服务端核对过的暂停版本，供模型失败后使用。 */
+export const alignmentResumeSchema = z.object({ intake: intakeSchema, response: responseSchema });
 export type Intake = z.infer<typeof intakeSchema>;
 /** 已确认规则是由人工提交答案派生的只读视图，不把推荐或假设升级为业务事实。 */
 export const confirmedDecisionSchema = z.object({
@@ -89,4 +91,10 @@ export function validateAnswers(intake: Intake, value: unknown) {
     if (new Set(a.selected).size !== a.selected.length || a.selected.some(/** 选项仅允许当前服务端计划。 */id => !q.options.some(/** 匹配选项 ID。 */o => o.id === id)) || (q.kind === 'single' && a.selected.length > 1) || (q.kind === 'text' && a.selected.length)) throw new Error('回答选项无效');
   }
   return response;
+}
+
+/** 校验并记录本轮人工决定，补充内容交由同一方向步骤重新评估。 */
+export function applyIntakeResponse(intake: Intake, value: unknown): Intake {
+  const response = validateAnswers(intake, value);
+  return { ...intake, ready: response.action === 'finalize' && canFinalizePlan(intake.plan!) && !response.answers.length && !response.supplement, history: [...intake.history, { plan: intake.plan!, response }] };
 }

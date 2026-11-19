@@ -57,7 +57,7 @@ test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修�
     current = await respondIntake(workflow, 'fixture', run.runId, { ...answer, hash: current.intake!.hash, action: 'finalize', answers: [] });
     assert.equal(current.step, 'review-product'); assert.ok(current.product);
     const productSnapshot = await workflow.getWorkflowRunById(run.runId);
-    const writing = productSnapshot?.steps?.['product-team.product-specification.product-writing'];
+    const writing = productSnapshot?.steps?.['product-team.product-writing'];
     assert.ok(writing && !Array.isArray(writing) && writing.status === 'success');
     assert.deepEqual((writing.output as { productWork: { entries: { role: string }[] } }).productWork.entries.map(entry => entry.role), ['writing']);
     const review = { role: 'product', artifactHash: current.product.artifact.hash, decision: 'approve', reviewer: 'test-human', comment: '合成批准' };
@@ -80,7 +80,7 @@ test('AI主动补全模式：跳过逐项澄清，直接生成待审产品稿', 
     assert.equal(result.status, 'suspended');
     const current = await readIntake(workflow, run.runId);
     const team = workflow.steps['product-team'] as { steps: Record<string, unknown> };
-    assert.deepEqual(Object.keys(team.steps), ['product-direction', 'product-specification', 'review-product']);
+    assert.deepEqual(Object.keys(team.steps), ['align-product-requirements', 'product-writing', 'review-product-quality', 'review-product']);
     assert.equal(current.intakeMode, 'autofill', JSON.stringify(current));
     assert.equal(current.step, 'review-product', JSON.stringify(current));
     assert.ok(current.product);
@@ -88,9 +88,9 @@ test('AI主动补全模式：跳过逐项澄清，直接生成待审产品稿', 
   } finally { void mastra; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('历史嵌套三阶段图从原暂停点恢复', /** 重新装配历史图后使用原 Run 的澄清关口。 */async () => {
+for (const layout of ['nested', 'native'] as const) test(`历史三阶段图 ${layout} 从原暂停点恢复`, /** 重新装配历史图后使用原 Run 的澄清关口。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'nested-product-intake-'));
-  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, nestedProductWorkflow: true, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, ...(layout === 'nested' ? { nestedProductWorkflow: true } : { nativeThreeStageProductWorkflow: true }), databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   let app = createStudioApplicationOptions(config);
   new Mastra(app);
   try {
@@ -106,7 +106,8 @@ test('历史嵌套三阶段图从原暂停点恢复', /** 重新装配历史图�
     const next = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake.hash, action: 'finalize', reviewer: 'test-human', supplement: '', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }] });
     assert.equal(next.step, 'review-product');
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    assert.ok(snapshot?.steps?.['product-team.draft-product.publish-product']);
+    const writingStep = layout === 'nested' ? 'product-team.draft-product.publish-product' : 'product-team.product-specification.product-writing';
+    assert.ok(snapshot?.steps?.[writingStep]);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -121,7 +122,7 @@ test('产品返工回到同 Run 澄清，保留审阅反馈且新稿必须重新
     current = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: oldHash, decision: 'rework', reviewer: 'test-human', comment: '请补齐异常处理与验收边界' });
     assert.equal(current.status, 'suspended'); assert.equal(current.step, 'guided-requirements'); assert.ok(current.intake);
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    const rework = (snapshot!.steps!['product-team.product-direction.guided-requirements'] as any).payload.productRework;
+    const rework = (snapshot!.steps!['product-team.align-product-requirements'] as any).payload.productRework;
     assert.equal(rework.sourceHash, oldHash); assert.equal(rework.feedback, '请补齐异常处理与验收边界');
     assert.equal((snapshot!.steps!['development-team'] as any)?.status, undefined);
     current = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake!.hash, action: 'finalize', reviewer: 'test-human', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }], supplement: '' });
@@ -142,14 +143,14 @@ test('产品 Harness 按审阅意见从写作重做并保留上游结论', async
     const original = await readIntake(workflow, run.runId);
     const oldHash = original.product!.artifact.hash;
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    const originalScope = snapshot?.steps?.['product-team.product-direction.product-analysis'];
+    const originalScope = snapshot?.steps?.['product-team.align-product-requirements'];
     const revised = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: oldHash, decision: 'rework', reviewer: 'test-human', comment: '术语：统一候选人称谓' });
     assert.equal(revised.runId, run.runId);
     assert.equal(revised.step, 'review-product');
     assert.equal(revised.appliedCorrection?.target, 'writing');
     assert.notEqual(revised.product!.artifact.hash, oldHash);
     const next = await workflow.getWorkflowRunById(run.runId);
-    const savedScope = next?.steps?.['product-team.product-direction.product-analysis'] as typeof originalScope;
+    const savedScope = next?.steps?.['product-team.align-product-requirements'] as typeof originalScope;
     assert.equal((savedScope as any).startedAt, (originalScope as any).startedAt);
     assert.deepEqual((savedScope as any).output.productWork, (originalScope as any).output.productWork);
     const development = next?.steps?.['development-team'];
@@ -348,7 +349,7 @@ test('产品写作 Time travel：方向判断不重跑、旧令牌拒绝、恢�
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成产品写作故障', iterationId: 'writing-recovery' } });
     const before = await readIntake(workflow, run.runId);
-    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.product-specification.product-writing'); assert.equal(before.retry?.preserved.length, 1);
+    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.product-writing'); assert.equal(before.retry?.preserved.length, 1);
     assert.equal(before.retry?.reason, '模型执行未完成，未取得明确故障来源');
     const attemptDetails = before.retry && 'attemptDetails' in before.retry ? before.retry.attemptDetails : undefined;
     assert.equal(attemptDetails?.length, 1);
@@ -361,7 +362,7 @@ test('产品写作 Time travel：方向判断不重跑、旧令牌拒绝、恢�
     assert.deepEqual(calls, { writing: 2 });
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: before.retry!.hash }));
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    const writing = snapshot!.steps!['product-team.product-specification.product-writing'] as any;
+    const writing = snapshot!.steps!['product-team.product-writing'] as any;
     assert.equal(writing.output.productWork.entries.length, 2); assert.equal(writing.output.reviews.length, 0);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -383,7 +384,7 @@ test('历史产品预算失败无需升档恢复且不重跑前序角色', /** �
     assert.equal(after.status, 'suspended'); assert.equal(after.step, 'review-product'); assert.ok(after.product);
     assert.deepEqual(counts, { writing: 2 });
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    assert.equal((snapshot!.steps!['product-team.product-specification.product-writing'] as any).output.contextBudgetLevel, 0);
+    assert.equal((snapshot!.steps!['product-team.product-writing'] as any).output.contextBudgetLevel, 0);
     assert.equal((snapshot!.steps!['product-team.review-product'] as any).status, 'suspended');
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -420,10 +421,10 @@ test('产品质量审查失败后从原检查点恢复并保留产品稿', async
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成审查故障', iterationId: 'quality-recovery' } });
     const before = await readIntake(workflow, run.runId);
-    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.product-specification.review-product-quality');
+    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.review-product-quality');
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    const saved = (snapshot!.steps!['product-team.product-specification.product-writing'] as any).output.artifacts.at(-1);
-    const alteredSteps = { ...snapshot!.steps, 'product-team.product-specification.product-writing': { ...(snapshot!.steps!['product-team.product-specification.product-writing'] as any), output: { ...(snapshot!.steps!['product-team.product-specification.product-writing'] as any).output, brief: '不一致的产品输入' } } };
+    const saved = (snapshot!.steps!['product-team.product-writing'] as any).output.artifacts.at(-1);
+    const alteredSteps = { ...snapshot!.steps, 'product-team.product-writing': { ...(snapshot!.steps!['product-team.product-writing'] as any), output: { ...(snapshot!.steps!['product-team.product-writing'] as any).output, brief: '不一致的产品输入' } } };
     assert.equal(describeRecovery(run.runId, 'failed', alteredSteps), undefined);
     assert.equal(describeRecovery(run.runId, 'failed', { ...snapshot!.steps, 'product-team.review-product': { status: 'success' } }), undefined);
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: '0'.repeat(64) }));

@@ -51,7 +51,7 @@ test('阻塞终态不标为交付完成，已放行交付才完成四团队', ()
   assert.deepEqual(Object.values(done.states), ['done', 'done', 'done', 'done']);
 });
 
-test('产品详情汇总三阶段，容器和 Agent 不覆盖步骤状态', () => {
+test('产品详情展示四步中文说明，容器和 Agent 不覆盖步骤状态', () => {
   const document: RunFlowDocument = { runId: '1', status: 'suspended', gate: { key: 'confirm-project-scope', title: '确认范围' }, timeline: timeline(
     step('product-team.draft-product.guided-requirements.requirements-round.confirm-requirements#2', 'requirements', 'completed'),
     step('product-team.draft-product.product-writing', 'product', 'completed'),
@@ -60,16 +60,19 @@ test('产品详情汇总三阶段，容器和 Agent 不覆盖步骤状态', () =
     step('product-team.review-product', 'product', 'completed'),
     step('product-team.draft-product', null, 'completed'),
   ) };
-  assert.deepEqual(projectProductPhases(document, projectRunFlow(document)), [
-    { phase: '对齐方向', status: 'completed' },
-    { phase: '完善规格', status: 'completed' },
-    { phase: '审阅交接', status: 'completed' },
+  const phases = projectProductPhases(document, projectRunFlow(document));
+  assert.ok(phases.every(({ description }) => /[\u4e00-\u9fff]/.test(description)));
+  assert.deepEqual(phases.map(({ phase, status }) => ({ phase, status })), [
+    { phase: '对齐需求', status: 'completed' },
+    { phase: '生成待审规格', status: 'completed' },
+    { phase: '独立质量审查', status: 'completed' },
+    { phase: '人工审批与交接', status: 'completed' },
   ]);
 });
 
 test('产品返工阶段以当前关口与失败证据为准', () => {
   const waiting: RunFlowDocument = { runId: '1', status: 'suspended', gate: { key: 'review-revised-product', title: '审阅修订稿' } };
-  assert.equal(projectProductPhases(waiting, projectRunFlow(waiting))[2].status, 'suspended');
+  assert.equal(projectProductPhases(waiting, projectRunFlow(waiting))[3].status, 'suspended');
   const failed: RunFlowDocument = { runId: '1', status: 'failed', retry: { step: 'product-team.draft-product.product-writing', title: '产品稿写作' } };
   assert.equal(projectProductPhases(failed, projectRunFlow(failed))[1].status, 'failed');
 });

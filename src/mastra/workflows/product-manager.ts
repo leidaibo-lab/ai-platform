@@ -9,7 +9,7 @@ import type { createAgents } from '../agents/index.js';
 import type { Delivery } from './delivery.js';
 import { deliverySchema } from './delivery.js';
 import { maxProductReworks, productQualityReviewSchema, productManagerStages } from './product-contract.js';
-import { createIntakeWorkflow } from '../../intake/workflow.js';
+import { createIntakeWorkflow, createProductAlignmentStep } from '../../intake/workflow.js';
 import { collectConfirmedDecisions } from '../../intake/contracts.js';
 import { generateProductContent } from '../../intake/product-generation.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
@@ -17,6 +17,7 @@ import { nacosResourceIdentity, type NacosSnapshot } from '../nacos-resources.js
 import { correctionPauseSchema, runInterruptibleProductAttempt } from '../../intake/product-interruption.js';
 import { productReworkFeedback } from './product-rework.js';
 import { publishLiveOutput } from '../../intake/live-output.js';
+import { describeProductStep, productSteps } from './product-steps.js';
 
 type StepBinder = <T extends Step<any, any, any, any, any, any>>(step: T) => T;
 
@@ -36,9 +37,10 @@ export function createProductManagerPhases(
   repositoryRoot?: string,
   resolveAgents?: (resources: NacosSnapshot) => Promise<ReturnType<typeof createAgents>>,
   engineeringSpec?: ReturnType<typeof projectSpec>,
-  graph: 'native' | 'nested' | 'legacy' = 'native',
+  graph: 'flat' | 'native' | 'nested' | 'legacy' = 'flat',
 ) {
   const legacy = graph === 'legacy';
+  const inlinePublish = graph === 'flat' || graph === 'native';
   const manager = agents.productManagerAgent;
   const reviewer = agents.productReviewerAgent;
 
@@ -46,13 +48,13 @@ export function createProductManagerPhases(
   function managerPhase(role: typeof productManagerStages[number]) {
     return createStep({
       id: `product-${role}`,
-      description: `product-manager-agent｜${managerPhaseInstructions[role]}`,
+      description: graph === 'flat' && role === 'writing' ? describeProductStep(productSteps[1]) : `product-manager-agent｜${managerPhaseInstructions[role]}`,
       inputSchema: deliverySchema,
       outputSchema: deliverySchema,
       suspendSchema: correctionPauseSchema,
       execute: async ({ inputData, runId, abortSignal, suspend, [PUBSUB_SYMBOL]: pubsub }) => {
         if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式生成产品稿');
-        if (inputData.revision) return graph === 'native' && role === 'writing' ? publishDraft(inputData) : inputData;
+        if (inputData.revision) return inlinePublish && role === 'writing' ? publishDraft(inputData) : inputData;
         if (!legacy && role === 'analysis' && inputData.intake?.enabled && inputData.intake.ready) return inputData;
         const phaseInstruction = !legacy && role === 'analysis'
           ? '对齐方向：用简短结构梳理目标、用户与场景、本期范围、非目标和关键假设。明确区分用户已给出的事实与 AI 建议，不擅自选择需要人决定的业务规则。'
@@ -81,7 +83,7 @@ export function createProductManagerPhases(
         if (attempt.correction) return suspend(attempt.correction);
         const result = attempt.output;
         const content = z.string().trim().min(1).max(100000).parse(result.text);
-        if (graph !== 'native' && role === 'writing') {
+        if (!inlinePublish && role === 'writing') {
           if (inputData.productHandoffFormat) readProductDocuments(content);
           else if (inputData.requirementTracking) readAcceptanceRequirements(content);
         }
@@ -99,7 +101,7 @@ export function createProductManagerPhases(
           generation: result.generation,
         };
         const resultState = { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] } };
-        return graph === 'native' && role === 'writing' ? publishDraft(resultState) : resultState;
+        return inlinePublish && role === 'writing' ? publishDraft(resultState) : resultState;
       },
     });
   }
@@ -117,7 +119,7 @@ export function createProductManagerPhases(
   /** 独立产品审查只产生质量证据，不修改产品稿，也不替代人工审批。 */
   const qualityReview = createStep({
     id: 'review-product-quality',
-    description: 'product-reviewer-agent｜独立闭环检查',
+    description: describeProductStep(productSteps[2]),
     inputSchema: deliverySchema,
     outputSchema: deliverySchema,
     suspendSchema: correctionPauseSchema,
@@ -150,9 +152,13 @@ export function createProductManagerPhases(
     },
   });
 
+  const writing = bind(managerPhase('writing'));
+  if (graph === 'flat') {
+    const align = createProductAlignmentStep(agents, mode, bind, resolveAgents, engineeringSpec, managerPhase('analysis').execute);
+    return { graph, align, writing, qualityReview: bind(qualityReview) } as const;
+  }
   const intake = createIntakeWorkflow(agents, mode, bind, resolveAgents, engineeringSpec);
   const analysis = bind(managerPhase('analysis'));
-  const writing = bind(managerPhase('writing'));
   if (graph === 'native') {
     const direction = createWorkflow({ id: 'product-direction', description: '对齐方向', inputSchema: deliverySchema, outputSchema: deliverySchema })
       .then(intake).then(analysis).commit();

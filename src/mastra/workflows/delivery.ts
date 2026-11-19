@@ -34,7 +34,7 @@ export const deliverySchema = z.object({
   requirementTracking: z.literal(true).optional(),
   nacosResources: nacosSnapshotSchema.optional(),
   intake: intakeSchema.optional(),
-  productFlow: z.enum(['three-stage', 'native-three-stage']).optional(),
+  productFlow: z.enum(['three-stage', 'native-three-stage', 'four-step']).optional(),
   // 顶层保留入口策略，便于恢复和页面投影不依赖当前暂停点。
   intakeMode: intakeModeSchema.optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),

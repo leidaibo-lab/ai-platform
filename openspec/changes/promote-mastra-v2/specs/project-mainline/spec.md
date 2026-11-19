@@ -98,6 +98,14 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 产品团队 Harness SHALL 对生成中的立即纠偏及待审产品稿的返工使用同一套版本化影响判断。团队 SHALL 从可重跑的产品节点中选择覆盖影响的最早节点，保留上游有效结论。判断不明或现有业务决定需要重新确认时 SHALL 回到需求澄清。修订稿 SHALL 经过独立产品检查和新的人工确认。
 真实模型的每次返工分类调用 SHALL 使用独立的 Mastra Memory 线程。
 
+#### Scenario: A downstream business gap returns to Product Harness
+
+- **WHEN** 研发或质量确认将当前已批准产品版本中的业务缺口送入产品团队
+- **THEN** 产品团队 SHALL 使用与立即纠偏及待审稿退回相同的版本化返工判断，绑定已批准版本、保存的缺口证据及已有需求或用例引用
+- **AND** 已明确标记的业务缺口 SHALL 进入同 Run 的人工澄清关口，保持其为必答事项，保留未受影响的已批准结论
+- **AND** 修订稿 SHALL 获得新的人工批准，随后沿用既有授权和累计额度重新规划、实施并验证，旧 QA 放行不得用于修订版本
+- **AND** 已暂停的历史关口 SHALL 按原版本校验恢复
+
 #### Scenario: Product reviewer requests rework
 
 - **WHEN** 人工以 `rework` 提交当前待审版本和意见
@@ -174,12 +182,19 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **AND** 待执行、等待确认、受阻及完成 SHALL 可区分，只有实际的交付完成结果才将四个团队全部标为完成
 - **AND** 产品交互和恢复入口 SHALL 继续提交给相应原生关口
 
-#### Scenario: Product details summarize three business phases
+#### Scenario: Product details show four execution steps
 
 - **WHEN** 用户打开产品团队详情
-- **THEN** 工作台 SHALL 按对齐方向、完善规格、审阅交接展示阶段状态，状态来自当前 Run 的执行证据
+- **THEN** 工作台 SHALL 按对齐需求、生成待审规格、独立质量审查、人工审批与交接展示四个节点及中文职责说明，状态来自当前 Run 的执行证据
 - **AND** 原始节点和 Agent 活动 SHALL 默认折叠并可展开查看，当前人工操作与可恢复失败的重试入口 SHALL 可直接访问
 - **AND** 方向对齐期间展示的 AI 建议 SHALL 标记为初稿，当前审批状态以审阅交接的执行证据为准
+
+#### Scenario: Development team executes six business steps
+
+- **WHEN** 新 Run 进入研发团队
+- **THEN** 默认流程 SHALL 依次执行确认项目与权限、生成开发方案、独立就绪审查、人工审批开工、按方案实施与验证、独立代码评审与交接，并在工作台显示中文职责说明
+- **AND** 上下文与组队 SHALL 归入方案步骤。就绪疑问及代码评审发现 SHALL 在对应审查步骤内按需暂停。固定检查、并行任务检查点、人工批准和确定性交付校验 SHALL 继续生效
+- **AND** 恢复 SHALL 复用已保存的上下文、候选版本、成功任务和累计预算。业务缺口 SHALL 按既有机制回流产品。历史 Run SHALL 可使用创建时的执行图恢复
 
 #### Scenario: Switching teams restores their saved deliverables
 
@@ -197,7 +212,7 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 
 ### Requirement: Product workflow focuses on direction, specification and handoff
 
-默认产品团队 Workflow SHALL 以对齐方向、完善规格和审阅交接推进。逐项澄清 SHALL 复用已收敛的方向结论进入规格写作。AI 主动补全 SHALL 先形成可观察的方向建议，再写作。方向判断 SHALL 覆盖目标、用户与场景、范围与非目标、业务决策及假设。独立产品审查 SHALL 保留为规格质量检查。研发交接 SHALL 绑定人工批准的产品版本。
+默认产品团队 Workflow SHALL 以对齐需求、生成待审规格、独立质量审查、人工审批与交接推进。逐项澄清 SHALL 复用已收敛的方向结论进入规格写作。AI 主动补全 SHALL 先形成可观察的方向建议，再写作。方向判断 SHALL 覆盖目标、用户与场景、范围与非目标、业务决策及假设。独立产品审查 SHALL 保留为规格质量检查。研发交接 SHALL 绑定人工批准的产品版本。
 
 #### Scenario: Product roles use portable Markdown layouts
 
@@ -209,7 +224,8 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 #### Scenario: Native workflow matches the product phases
 
 - **WHEN** 服务按默认配置装配产品团队 Workflow
-- **THEN** `product-team` SHALL 依次包含 `product-direction`（对齐方向）、`product-specification`（完善规格）和 `review-product`（审阅交接）三个直属节点
+- **THEN** `product-team` SHALL 依次包含 `align-product-requirements`（对齐需求）、`product-writing`（生成待审规格）、`review-product-quality`（独立质量审查）和 `review-product`（人工审批与交接）四个直属步骤，各步骤 SHALL 有中文职责说明
+- **AND** 逐项澄清与 AI 主动补全 SHALL 在对齐需求步骤内执行。逐项澄清的每轮模型判断、人工回答与再评估 SHALL 使用该步骤的原生暂停和恢复，保存回答和版本校验
 - **AND** 待审版本固化 SHALL 随写作一起完成，独立审查 SHALL 保留原生检查点，人工审批 SHALL 保留原生暂停和恢复
 - **AND** 既有 Run SHALL 可使用创建时对应的流程图恢复，保留其原生步骤路径
 

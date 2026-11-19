@@ -344,6 +344,7 @@
 .workflow-team-activity { margin-top: 14px; padding-top: 12px; border-top: 1px solid #dfe9e4; }
 .workflow-team-activity-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
 .workflow-team-activity-head h3 { margin: 0; font-size: 14px; }
+.workflow-node-description { margin: 5px 0 0; color: #50665c; font-size: 12px; line-height: 1.5; }
 .workflow-team-events { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(165px, 100%), 1fr)); gap: 0 8px; }
 .workflow-team-records { margin-top: 12px; }
 .workflow-team-records > summary { cursor: pointer; color: #52655e; font-size: 12px; }

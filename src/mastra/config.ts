@@ -17,10 +17,14 @@ export interface PracticeConfig {
   roleModels?: Partial<Record<'product' | 'development', `openai/${string}`>>;
   /** 恢复旧部署试点流程时使用原流程图。 */
   legacyDeployment?: true;
+  /** 使用收敛前的研发执行图恢复历史 Run。 */
+  legacyDevelopmentWorkflow?: true;
   /** 使用历史四段产品图恢复已有暂停点。 */
   legacyProductWorkflow?: true;
   /** 使用此前嵌套的三阶段产品图恢复已有 Run。 */
   nestedProductWorkflow?: true;
+  /** 使用上一个版本的原生三阶段图恢复已有 Run。 */
+  nativeThreeStageProductWorkflow?: true;
   apiKey?: string;
   baseUrl?: string;
   /** Studio 显式绑定的业务仓库；旧 CLI/评测未设置时保持原材料边界。 */
@@ -49,10 +53,12 @@ export function readConfig(): PracticeConfig {
   if (baseUrl) z.url().parse(baseUrl);
   const nacosResources = readNacosConfig(process.env);
   const legacyDeployment = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEPLOYMENT) === 'true';
+  const legacyDevelopmentWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEVELOPMENT_WORKFLOW) === 'true';
   const legacyProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_PRODUCT_WORKFLOW) === 'true';
   const nestedProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NESTED_PRODUCT_WORKFLOW) === 'true';
-  if (legacyProductWorkflow && nestedProductWorkflow) throw new Error('只能选择一种历史产品流程图');
-  return { rootDir: root, mode, port, ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), ...(legacyDeployment ? { legacyDeployment: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  const nativeThreeStageProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NATIVE_THREE_STAGE_PRODUCT_WORKFLOW) === 'true';
+  if ([legacyProductWorkflow, nestedProductWorkflow, nativeThreeStageProductWorkflow].filter(Boolean).length > 1) throw new Error('只能选择一种历史产品流程图');
+  return { rootDir: root, mode, port, ...(legacyDevelopmentWorkflow ? { legacyDevelopmentWorkflow: true } : {}), ...(nativeThreeStageProductWorkflow ? { nativeThreeStageProductWorkflow: true } : {}), ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), ...(legacyDeployment ? { legacyDeployment: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
 }
 
 /** 默认启用注册中心；只有明确关闭才允许本地兼容路径。 */

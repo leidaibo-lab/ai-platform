@@ -1,3 +1,5 @@
+import { developmentSteps } from '../mastra/workflows/development-steps.js';
+import { productSteps } from '../mastra/workflows/product-steps.js';
 import { createHash } from 'node:crypto';
 import type { WorkflowRunStatus } from '@mastra/core/workflows';
 import { stateV2Schema } from '../development/v2/contracts.js';
@@ -114,15 +116,16 @@ const stepTitles: Record<string, string> = {
   'product-team': '产品团队',
   'product-direction': '对齐方向',
   'product-specification': '完善规格',
+  'align-product-requirements': productSteps[0].title,
   'product-analysis': '需求分析',
   'product-clarification': '需求澄清整理',
   'product-scope-priority': '范围与优先级',
-  'product-writing': '产品稿写作',
-  'review-product-quality': '产品质量审查',
+  'product-writing': productSteps[1].title,
+  'review-product-quality': productSteps[2].title,
   'guided-requirements': '需求澄清',
   'analyze-requirements': '整理需求待决项',
   'confirm-requirements': '确认本轮需求澄清',
-  'review-product': '产品稿审阅',
+  'review-product': productSteps[3].title,
   'analyze-blocker-questions': '整理业务缺口',
   'confirm-blocker-answers': '确认业务缺口澄清',
   'write-revised-product': '修订产品稿',
@@ -166,6 +169,9 @@ function durationMs(startedAt: number | null, endedAt: number | null, now = Date
 /** 将嵌套步骤名压缩为用户可理解的节点标题。 */
 export function titleForStep(path: string): string {
   const leaf = path.split('.').at(-1) ?? path;
+  const developmentStep = developmentSteps.find(step => step.id === leaf);
+  if (developmentStep) return developmentStep.title;
+  if (leaf === 'product-writing' && /(?:draft-product|product-specification)\./.test(path)) return '产品稿写作';
   return stepTitles[leaf] ?? leaf.replaceAll('-', ' ');
 }
 
@@ -257,7 +263,7 @@ function collectFacts(snapshot: SnapshotLike): { work: WorkFact[]; files: string
 
 /** 根据已知步骤路径投影展示阶段，未知路径保持空值。 */
 function stageForStep(path: string): RunTimelineStage | null {
-  if (/product-direction|guided-requirements|product-analysis|product-clarification|product-scope-priority/.test(path)) return 'requirements';
+  if (/align-product-requirements|product-direction|guided-requirements|product-analysis|product-clarification|product-scope-priority/.test(path)) return 'requirements';
   if (/product-specification|product-writing|review-product/.test(path)) return 'product';
   if (/development-team/.test(path)) return 'development';
   if (/testing-team|deployment-team|delivery-team|submit-merge-request|confirm-final-delivery/.test(path)) return 'testing';

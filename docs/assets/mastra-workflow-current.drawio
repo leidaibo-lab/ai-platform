@@ -1,0 +1,331 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net">
+  <diagram id="mastra-current" name="完整产研流程">
+    <mxGraphModel grid="1" page="1" pageScale="1" pageWidth="1420" pageHeight="1564" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="heading" value="Mastra Workflow · 完整产研流程" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=34;fontColor=#182b43;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="27.0" width="1100" height="38" />
+        </mxCell>
+        <mxCell id="subtitle" value="当前默认流程   /   同一个 product-development Run 串联产品、研发、测试和交付" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=20;fontColor=#435b73;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="75.0" width="1250" height="24" />
+        </mxCell>
+        <mxCell id="main-heading" value="主执行链路" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=19;fontColor=#245dc1;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="114.5" width="650" height="23" />
+        </mxCell>
+        <mxCell id="side-heading" value="纠偏、阻塞与返工" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=19;fontColor=#9a5918;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="968" y="114.5" width="410" height="23" />
+        </mxCell>
+        <mxCell id="intake" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#85a9e6;fillColor=#f4f8ff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="150" width="655" height="78" />
+        </mxCell>
+        <mxCell id="intake-title" value="产研工作台" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#245dc1;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="163.0" width="615" height="26" />
+        </mxCell>
+        <mxCell id="intake-line0" value="提交需求，选择逐项澄清或 AI 主动补全。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="198.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="product-boundary" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#85a9e6;fillColor=#fafcff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="32" y="258" width="687" height="398" />
+        </mxCell>
+        <mxCell id="product" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#85a9e6;fillColor=#f4f8ff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="278" width="655" height="176" />
+        </mxCell>
+        <mxCell id="product-title" value="01  产品团队 · product-team" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#245dc1;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="291.0" width="615" height="26" />
+        </mxCell>
+        <mxCell id="product-line0" value="① 对齐需求，有关键缺口时等待人工回答，可多轮澄清。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="326.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="product-line1" value="② 生成待审规格，固化需求文档与产品规格。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="353.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="product-line2" value="③ 独立质量审查，核对业务规则、异常与验收覆盖。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="380.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="product-line3" value="④ 人工审批与交接，批准当前版本后发布正式文档。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="407.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="product-rework" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#d6b187;fillColor=#fff8ef;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="238" y="470" width="465" height="166" />
+        </mxCell>
+        <mxCell id="product-rework-title" value="产品返工" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#9a5918;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="258" y="483.0" width="425" height="26" />
+        </mxCell>
+        <mxCell id="product-rework-line0" value="立即纠偏或审阅退回：按影响重做步骤。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="258" y="518.0" width="425" height="22" />
+        </mxCell>
+        <mxCell id="product-rework-line1" value="研发或 QA 有业务缺口：澄清后生成修订稿。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="258" y="545.0" width="425" height="22" />
+        </mxCell>
+        <mxCell id="product-rework-line2" value="两条路径都要重新提交人工审批。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="258" y="572.0" width="425" height="22" />
+        </mxCell>
+        <mxCell id="product-rework-line3" value="业务修订获批后，交接新产品版本。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="258" y="599.0" width="425" height="22" />
+        </mxCell>
+        <mxCell id="dev" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#85a9e6;fillColor=#f4f8ff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="714" width="655" height="204" />
+        </mxCell>
+        <mxCell id="dev-title" value="02  研发团队 · development-team" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#245dc1;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="727.0" width="615" height="26" />
+        </mxCell>
+        <mxCell id="dev-line0" value="① 人工确认项目、工程基线与权限。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="762.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="dev-line1" value="② 生成开发方案与任务分工，独立就绪审查。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="789.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="dev-line2" value="③ 人工审批当前方案、团队与预算，批准后开工。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="816.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="dev-line3" value="④ 按依赖实施，合并候选并执行登记检查。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="843.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="dev-line4" value="⑤ 独立代码评审，核验通过后交接候选与证据。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="870.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="qa" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#85a9e6;fillColor=#f4f8ff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="974" width="655" height="176" />
+        </mxCell>
+        <mxCell id="qa-title" value="03  测试团队 · test-team" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#245dc1;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="987.0" width="615" height="26" />
+        </mxCell>
+        <mxCell id="qa-line0" value="① 基于需求及候选制定测试计划，人工批准用例。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1022.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="qa-line1" value="② 隔离执行登记检查及已批准的浏览器用例。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1049.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="qa-line2" value="③ 补齐人工用例结果与证据，再由人工做质量决定。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1076.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="qa-line3" value="④ 全部用例与固定检查通过且无缺陷，才放行。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1103.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="delivery" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#85a9e6;fillColor=#f4f8ff;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="1206" width="655" height="176" />
+        </mxCell>
+        <mxCell id="delivery-title" value="04  交付团队 · delivery-team" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#245dc1;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1219.0" width="615" height="26" />
+        </mxCell>
+        <mxCell id="delivery-line0" value="① 校验同版本 QA 证据、候选源码和正式规格。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1254.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="delivery-line1" value="② Live 推送 Run 分支，创建或复用指向 main 的 MR。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1281.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="delivery-line2" value="③ 核验源分支与提交 SHA，保存 MR 回执后结束。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1308.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="delivery-line3" value="Fixture 使用固定响应验证控制流。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1335.0" width="615" height="22" />
+        </mxCell>
+        <mxCell id="prepare" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#d6b187;fillColor=#fff8ef;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="968" y="692" width="404" height="112" />
+        </mxCell>
+        <mxCell id="prepare-title" value="工程条件缺失" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#9a5918;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="705.0" width="364" height="26" />
+        </mxCell>
+        <mxCell id="prepare-line0" value="暂停于只读规划，补齐工程条件。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="740.0" width="364" height="22" />
+        </mxCell>
+        <mxCell id="prepare-line1" value="重新确认项目与版本后再规划。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="767.0" width="364" height="22" />
+        </mxCell>
+        <mxCell id="fix" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#d6b187;fillColor=#fff8ef;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="968" y="1033" width="404" height="112" />
+        </mxCell>
+        <mxCell id="fix-title" value="代码缺陷返工" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#9a5918;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="1046.0" width="364" height="26" />
+        </mxCell>
+        <mxCell id="fix-line0" value="原研发团队按责任和预算修复。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="1081.0" width="364" height="22" />
+        </mxCell>
+        <mxCell id="fix-line1" value="重新自检、独立评审及独立测试。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="1108.0" width="364" height="22" />
+        </mxCell>
+        <mxCell id="retry" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#d6b187;fillColor=#fff8ef;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="968" y="1238" width="404" height="112" />
+        </mxCell>
+        <mxCell id="retry-title" value="MR 远端失败" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#9a5918;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="1251.0" width="364" height="26" />
+        </mxCell>
+        <mxCell id="retry-line0" value="暂停在原交付节点，保留 QA 结果。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="1286.0" width="364" height="22" />
+        </mxCell>
+        <mxCell id="retry-line1" value="重试时校验已有提交和 MR。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="988" y="1313.0" width="364" height="22" />
+        </mxCell>
+        <mxCell id="facts" style="rounded=1;absoluteArcSize=1;arcSize=8;strokeWidth=2;strokeColor=#81b9af;fillColor=#f1faf8;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="48" y="1424" width="1324" height="108" />
+        </mxCell>
+        <mxCell id="facts-title" value="执行事实与停机边界" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=22;fontColor=#147567;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1437.0" width="1284" height="26" />
+        </mxCell>
+        <mxCell id="facts-line0" value="Mastra Store 保存 Run、审批、暂停检查点和交付回执。工作台通过 SSE 与快照展示运行情况。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1472.0" width="1284" height="22" />
+        </mxCell>
+        <mxCell id="facts-line1" value="可恢复故障按当前关口及版本重试。人工拒绝或停止、完整性异常及不可恢复的预算耗尽均阻断下游。" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=18;fontColor=#182b43;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="68" y="1499.0" width="1284" height="22" />
+        </mxCell>
+        <mxCell id="start" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#245dc1;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="350" y="228" />
+            <mxPoint as="targetPoint" x="350" y="278" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="start-label" value="创建 Run" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#245dc1;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="364" y="234.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="p-dev" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#245dc1;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="120" y="454" />
+            <mxPoint as="targetPoint" x="120" y="714" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p-dev-label" value="已批准的产品版本" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#245dc1;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="136" y="670.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="d-qa" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#245dc1;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="350" y="918" />
+            <mxPoint as="targetPoint" x="350" y="974" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="d-qa-label" value="研发候选与验证证据" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#245dc1;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="364" y="936.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="qa-mr" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#245dc1;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="350" y="1150" />
+            <mxPoint as="targetPoint" x="350" y="1206" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="qa-mr-label" value="同版本 QA 放行" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#245dc1;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="364" y="1168.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="mr-facts" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#245dc1;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="350" y="1382" />
+            <mxPoint as="targetPoint" x="350" y="1424" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="mr-facts-label" value="记录终态与回执" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#245dc1;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="364" y="1393.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="p-out" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="167" y="454" />
+            <mxPoint as="targetPoint" x="238" y="502" />
+            <Array as="points">
+              <mxPoint x="167" y="502" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p-in" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="238" y="583" />
+            <mxPoint as="targetPoint" x="207" y="454" />
+            <Array as="points">
+              <mxPoint x="207" y="583" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p-in-label" value="重做" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="148" y="546.0" width="56" height="20" />
+        </mxCell>
+        <mxCell id="prep-out" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="703" y="754" />
+            <mxPoint as="targetPoint" x="968" y="754" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="prep-out-label" value="工程条件缺失" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="742" y="730.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="prep-in" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="968" y="792" />
+            <mxPoint as="targetPoint" x="703" y="792" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="prep-in-label" value="重新确认项目" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="742" y="768.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="biz-out" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="703" y="724" />
+            <mxPoint as="targetPoint" x="703" y="538" />
+            <Array as="points">
+              <mxPoint x="820" y="724" />
+              <mxPoint x="820" y="538" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="biz-out-label" value="研发业务阻塞回流" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="834" y="658.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="biz-in" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="480" y="636" />
+            <mxPoint as="targetPoint" x="480" y="714" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="biz-in-label" value="修订稿批准后重新规划和审批" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="496" y="670.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="qa-biz" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="703" y="1006" />
+            <mxPoint as="targetPoint" x="703" y="600" />
+            <Array as="points">
+              <mxPoint x="1395" y="1006" />
+              <mxPoint x="1395" y="600" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="qa-biz-label" value="QA 业务缺口阻塞后人工发起回流" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1000" y="576.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="qa-fix" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="703" y="1068" />
+            <mxPoint as="targetPoint" x="968" y="1068" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="qa-fix-label" value="代码缺陷需返工" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="742" y="1044.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="qa-again" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="968" y="1124" />
+            <mxPoint as="targetPoint" x="703" y="1124" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="qa-again-label" value="修复后回归" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="753" y="1100.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="mr-out" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="703" y="1272" />
+            <mxPoint as="targetPoint" x="968" y="1272" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="mr-out-label" value="远端调用失败" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="742" y="1248.0" width="390" height="20" />
+        </mxCell>
+        <mxCell id="mr-in" style="edgeStyle=none;endArrow=block;endFill=1;rounded=0;strokeWidth=2;strokeColor=#9a5918;" edge="1" parent="1">
+          <mxGeometry as="geometry" relative="1">
+            <mxPoint as="sourcePoint" x="968" y="1328" />
+            <mxPoint as="targetPoint" x="703" y="1328" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="mr-in-label" value="按保存版本重试" style="text;html=0;align=left;verticalAlign=middle;spacing=0;whiteSpace=nowrap;fontFamily=PingFang SC;fontSize=16;fontColor=#9a5918;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="742" y="1304.0" width="390" height="20" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

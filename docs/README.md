@@ -6,7 +6,7 @@
 
 - [Mastra 主流程架构图](./application/visual-framework.md#当前主流程与建设方向)汇总当前运行路径、Harness 职责及待建设方向，提供可编辑源图。
 - [产研可视化框架](./application/visual-framework.md)：主流程总览、Git 数据流、Nacos 资源流及事实源边界。
-- 产品、研发、测试与 MR 交付的阶段审阅、纠偏和返工路径见 [Workflow 执行链路图](./application/unified-workflow.md#workflow-执行链路图)。
+- [完整产研流程图](./application/unified-workflow.md#workflow-执行链路图)展示当前默认的产品四步、研发、测试与 MR 交付，含人工关口、纠偏和返工路径，提供 PNG、SVG 与 Draw.io 源图。
 - 研发与 QA 的业务缺口如何进入产品团队返工判断见 [产品返工目标链路](./application/unified-workflow.md#产品返工目标链路)。
 - [产研角色资源清单与绑定](./application/agent-resource-inventory.md)：产品 Prompt、Skill 的当前来源、目标绑定与迁移缺口，以及宿主执行边界。
 - [Nacos live 流程验证与待处理问题](./application/nacos-live-run-findings.md)：真实资源接入、故障恢复、审批事实与未完成的交付证据。

@@ -230,7 +230,7 @@ test('旧锚点上限失败仅在原批准和候选未变时恢复初始化', as
 
 test('历史failed架构受控Time travel：拒绝旧hash和源码漂移，重开后只恢复架构并等待方案批准', /** 模拟旧版本抛出的已知模型失败，不修改用户快照。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'architecture-time-travel-'));
-  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const config = { legacyDevelopmentWorkflow: true as const, rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   let app = createStudioApplicationOptions(config);
   let workflow = app.workflows.productDevelopmentWorkflow;
   const dev = workflow.steps['development-team'] as any;
@@ -270,7 +270,7 @@ test('历史failed架构受控Time travel：拒绝旧hash和源码漂移，重�
 
 test('缓存暂停包回放造成的架构结构失败仅在未实施检查点恢复', /** 旧兼容故障不应迫使用户重做产品或项目确认。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'architecture-cache-replay-'));
-  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const config = { legacyDevelopmentWorkflow: true as const, rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   const app = createStudioApplicationOptions(config); const workflow = app.workflows.productDevelopmentWorkflow;
   const dev = workflow.steps['development-team'] as any;
   let calls = 0;
@@ -312,5 +312,79 @@ test('架构返回业务阻塞时投影具体事项和产品依据，不冒充�
     assert.equal(current.status, 'success'); assert.equal(current.outcome, 'blocked'); assert.equal(current.gate, undefined); assert.equal(current.retry, undefined);
     assert.equal(current.blockage!.phase, '技术方案生成'); assert.deepEqual(current.blockage!.blockers, ['合成待确认：本期业务范围']); assert.equal(current.blockage!.taskCount, 1); assert.ok(current.blockage!.productContent.length > 0);
     const snapshot = await workflow.getWorkflowRunById(run.runId); assert.notEqual((snapshot!.steps!['testing'] as any)?.status, 'success');
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('研发六步图就地恢复方案、裁决就绪与评审问题，并复用固定检查', async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'development-consolidated-'));
+  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const actor = { reviewer: 'test', comment: '合成裁决' };
+  const project = { id: 'consolidated', files: { 'src/a.mjs': 'export const initial=0;', 'check.mjs': 'import {test} from "node:test"; import assert from "node:assert/strict"; import {fixtureValue} from "./src/a.mjs"; test("candidate",()=>assert.equal(fixtureValue(),1));' }, writablePaths: ['src/a.mjs'], checkFiles: ['check.mjs'], roles: ['backend'] };
+  const calls: string[] = [];
+  let failed = false;
+  /** 注入一次方案失败及两处需要人工处理的合成发现。 */
+  const generate: GeneratorV2 = async (...args) => {
+    const role = args[2];
+    calls.push(role);
+    if (role === 'architect' && !failed) { failed = true; throw new SyntaxError('合成方案格式错误'); }
+    const result = await generateV2(...args);
+    if (role !== 'readiness' && role !== 'reviewer') return result;
+    const report = JSON.parse(result.text);
+    return { ...result, text: JSON.stringify({ ...report, verdict: 'CONCERNS', findings: [{ id: `fixture-${role}`, severity: 'low', category: 'verification', route: 'human', detail: '合成待裁决项', evidence: '合成验证证据', refs: report.coverageRefs.slice(0, 1) }] }) };
+  };
+  /** 使用同一原生 Store 重装应用以核对恢复跨进程边界。 */
+  function open() {
+    const app = createStudioApplicationOptions(config);
+    const workflow = createProductDevelopmentWorkflow(app.agents as any, config, generate);
+    new Mastra({ ...app, workflows: { productDevelopmentWorkflow: workflow } });
+    return { ...app, workflow };
+  }
+  let app = open();
+  try {
+    const run = await app.workflow.createRun();
+    await run.start({ inputData: { brief: '验证研发六步', iterationId: 'consolidated' } });
+    const runId = run.runId;
+    let current = await readIntake(app.workflow, runId);
+    /** 走原 HTTP 服务的版本令牌与白名单校验。 */
+    async function submit(data: object) {
+      return respondIntake(app.workflow, 'fixture', runId, { gateHash: current.gate!.gateHash, data: { ...current.gate!.fixed, ...actor, ...data } }, config);
+    }
+    current = await respondIntake(app.workflow, 'fixture', runId, { role: 'product', artifactHash: current.product!.artifact.hash, decision: 'approve', ...actor });
+    current = await submit({ project });
+    assert.equal(current.gate?.key, 'recover-development');
+    assert.equal(current.gate?.recoveryInfo?.phase, '技术方案生成');
+    assert.deepEqual(calls, ['context', 'architect']);
+    await app.storage.close(); app = open();
+    current = await submit({ decision: 'retry' });
+    assert.deepEqual(calls, ['context', 'architect', 'architect', 'readiness']);
+    assert.equal(current.gate?.key, 'resolve-readiness');
+    assert.ok(current.timeline.nodes.some(node => node.id.endsWith('.assess-readiness') && node.status === 'suspended'));
+    assert.equal('findingsState' in current.gate.evidence, false);
+    /** 裁决表绑定已读报告及对应条目。 */
+    function decision(value: 'not-an-issue' | 'defer') {
+      const evidence = current.gate!.evidence;
+      const report = evidence.report ?? evidence.reports.at(-1);
+      const finding = report.assessment.findings[0];
+      return { decision: 'resolve', decisions: [{ reportHash: report.hash, findingId: finding.id, decision: value, reason: '合成裁决', refs: finding.refs }] };
+    }
+    await assert.rejects(submit(decision('defer')));
+    current = await submit(decision('not-an-issue'));
+    assert.equal(current.gate?.key, 'approve-architecture');
+    current = await submit({ decision: 'approve', resolutions: [] });
+    assert.equal(current.gate?.key, 'resolve-findings', JSON.stringify({ calls, status: current.status, outcome: current.outcome, nodes: current.timeline.nodes.filter(node => node.id.includes('development-team')).map(node => [node.id, node.status]) }));
+    assert.ok(current.timeline.nodes.some(node => node.id.endsWith('.review-development-quality') && node.status === 'suspended'));
+    const before = await app.workflow.getWorkflowRunById(runId);
+    const reviewPath = Object.keys(before!.steps!).find(path => path.endsWith('.review-development-quality'))!;
+    const checked = (before!.steps![reviewPath] as any).suspendPayload.findingsState;
+    assert.ok(checked.checks.length);
+    const callsBefore = [...calls];
+    await app.storage.close(); app = open();
+    current = await submit(decision('defer'));
+    assert.equal(current.gate?.key, 'approve-test-cases');
+    assert.deepEqual(calls, callsBefore);
+    const after = await app.workflow.getWorkflowRunById(runId);
+    const delivered = (after!.steps![reviewPath] as any).output;
+    assert.equal(delivered.delivery.sourceHash, checked.checkpointHash);
+    assert.deepEqual(delivered.delivery.checks, checked.checks);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -5,14 +5,42 @@ LiteLLM 和 pi 适配实验保留在 `practices/custom-exploration/`，与主线
 
 ## 当前入口与流程
 
+### 主流程
+
 日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案和测试确认，查看最终 MR 回执。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
 
-需求输入与澄清 → `product-team`（需求、产品稿、产品确认）→ `development-team`（项目范围、负责人规划、动态实施、确定性自检、独立代码审查与研发交付）→ `test-team`（测试与回归）→ `delivery-team`（向 `main` 提交 MR 并核验回执）。研发团队只使用 `development-lead-agent`、按任务动态创建的 `development-implementer-agent` 和 `development-reviewer-agent`；团队内部步骤只表达团队内职责和人工关口，不再作为主流程的平行团队节点。
+需求从工作台进入，依次经过产品、研发、测试和交付团队。同一版本通过质量确认后，交付团队向 `main` 提交 MR 并核验回执。
+
+```mermaid
+flowchart TB
+    Intake["产研工作台提交需求"] --> Align
+    subgraph Product["产品团队"]
+        Align["对齐需求"] --> Write["生成待审规格"]
+        Write --> Review["独立质量审查"]
+        Review --> Approve["人工审批与交接"]
+    end
+    Approve -->|批准当前版本| Dev["研发团队<br/>确认权限、审批方案、实施验证与独立代码评审"]
+    Dev -->|候选版本与研发证据| QA["测试团队<br/>确认用例、独立执行与人工质量确认"]
+    QA -->|同版本质量放行| Delivery["交付团队<br/>向 main 提交 MR 并核验回执"]
+    QA -->|代码缺陷返工| Dev
+```
+
+[完整产研流程图与可编辑源图](./docs/application/unified-workflow.md#workflow-执行链路图)
+
+### 主架构
+
+主 Workflow 负责跨团队编排。平台 Harness 依托 Mastra 管理执行、审批与暂停恢复，团队 Harness 负责专业执行与验收，业务工程 Harness 通过项目适配提供 Git 中版本化的 SDD 和保护检查。
+
+![Mastra 主架构：三层 Harness 与跨团队编排](./docs/assets/mastra-mainline-architecture.png)
+
+[Harness 架构说明与可编辑主图](./docs/application/harness-architecture.md#总体结构)
+
+### 运行与查阅
+
+研发团队由 `development-lead-agent`、按任务动态创建的 `development-implementer-agent` 和 `development-reviewer-agent` 组成。
 
 新工作台输入显式批准自主开发策略：团队可在候选内运行登记检查、携带失败证据连续排障，多角色缺陷联合修复并重跑下游。默认3轮返工、72次开发模型调用、24次检查套件执行，连续2次重复失败且无新证据时停止；新增业务决定、扩大授权或预算耗尽升级人工。旧输入保持原政策。原生 Workflow 与真实隔离检查回归已验证，真实模型完整业务交付尚未验收。详见[自主开发与排障](./docs/application/unified-workflow.md#批准范围内自主开发与排障)及[决策记录](./docs/decisions/2026-11-09-mastra-autonomous-development.md)。
 
-- [完整产研流程](./docs/application/unified-workflow.md)：阶段职责、暂停恢复、输入格式和终态。
-- [Harness 架构](./docs/application/harness-architecture.md)：平台、团队和业务工程三层 Harness，跨团队编排及代码归属。
 - [产研可视化框架](./docs/application/visual-framework.md)：以不同颜色展示主流程、Git 数据交接和 Nacos 资源传递。
 - [工作台输入与人工关口](./docs/application/guided-intake.md)：澄清、版本确认、后续表单与校验。
 - [产物归档与数据流转](./docs/application/artifact-dataflow.md)：项目/迭代/Run 关联、历史版本及下载；[产物查看页](http://127.0.0.1:4111/delivery-assets)只读。

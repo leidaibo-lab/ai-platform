@@ -1,3 +1,4 @@
+import { developmentSteps } from '../mastra/workflows/development-steps.js';
 import { repositoryRetrySchema, repositorySyncPauseSchema } from '../delivery/remote-handoff.js';
 /** 业务关口白名单：复用已有 Zod 契约，不接受客户端指定步骤或执行命令。 */
 import { z } from 'zod';
@@ -30,7 +31,7 @@ const definitions: Record<string, { title: string; description: string; schema: 
   'execute-rollback-externally': { title: '填写回滚执行回执', description: '在外部平台完成回滚后填写真实回执；无法恢复时明确标为需要人工处理。', schema: rollbackReceiptSchema },
 };
 export type GatePayload = Record<string, any>;
-const phaseNames: Record<string, string> = { 'analyze-blocker-questions': '待决问题整理', 'write-revised-product': '产品稿修订', 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
+const phaseNames: Record<string, string> = { ...Object.fromEntries(developmentSteps.map(step => [step.id, step.title])), 'analyze-blocker-questions': '待决问题整理', 'write-revised-product': '产品稿修订', 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
 const faultReasons: Record<string, string> = { 'model-timeout': '本次模型调用未在规定时间内完成响应', 'model-network': '本次模型请求的传输连接未完成', 'invalid-output': '模型返回的内容未通过结构或引用校验', 'model-error': '模型调用未成功' };
 /** 只依据已保存的白名单诊断说明单次调用，不把上游响应错误归因于用户网络或整个模型服务。 */
 export function describeRecoveryModelFailureReason(failure: z.infer<typeof modelCallDiagnosticSchema>['failure']) {
@@ -94,7 +95,10 @@ export function gateInitial(key: string, payload: GatePayload) {
 export function describeGate(path: string, payload: GatePayload) {
   const nativeKey = path.split('.').at(-1)!;
   const stageRecovery = payload.recoveryState && stateV2Schema.safeParse(payload.recoveryState).success;
-  const key = repositorySyncPauseSchema.safeParse(payload).success ? 'retry-repository-sync' : stageRecovery ? 'recover-development' : nativeKey;
+  const findings = stateV2Schema.safeParse(payload.findingsState).data;
+  const findingsKey = nativeKey === 'assess-readiness' && findings?.phase === 'resolve-readiness' ? 'resolve-readiness'
+    : nativeKey === 'review-development-quality' && findings?.phase === 'resolve-findings' ? 'resolve-findings' : undefined;
+  const key = repositorySyncPauseSchema.safeParse(payload).success ? 'retry-repository-sync' : stageRecovery ? 'recover-development' : findingsKey ?? nativeKey;
   const definition = definitions[key];
   if (!definition) return undefined;
   const schema = z.toJSONSchema(definition.schema, { unrepresentable: 'any' });
@@ -114,7 +118,7 @@ export function describeGate(path: string, payload: GatePayload) {
   if (key === 'review-test-results') initial.manualResults = (payload.quality?.approval?.cases ?? []).filter(/** 机器结果不能被人工填报覆盖。 */(item: GatePayload) => item.method === 'manual').map(/** 结果与证据保持空白，必须实际填报。 */(item: GatePayload) => ({ caseId: item.id, status: '', evidence: '' }));
   if (key === 'verify-release-health') initial.checks = (payload.requiredChecks ?? []).map(/** 检查清单是已批准事实，实际结果不预选。 */(item: GatePayload) => ({ id: item.id, status: '', evidence: '', observedAt: '' }));
   const recoveryInfo = key === 'recover-development' ? recoveryGuidance(payload) : undefined;
-  const { recoveryState: _privateState, ...publicEvidence } = payload;
+  const { recoveryState: _privateState, findingsState: _findingsState, ...publicEvidence } = payload;
   return { initial, key, title: recoveryInfo?.title ?? definition.title, description: recoveryInfo?.description ?? (key === 'submit-merge-request' ? payload.reason : definition.description), recoveryInfo, gateHash: developmentHash({ path, payload }), evidence: publicEvidence, fixed, schema };
 }
 /** 输入结构与所有绑定值在恢复前核对，拒绝过期和跨关口请求。 */
@@ -134,7 +138,7 @@ export function validateGate(path: string, payload: GatePayload, input: unknown,
     if (actual.size !== data.checks.length || actual.size !== payload.requiredChecks.length || payload.requiredChecks.some(/** 每个批准检查必须回填。 */(check: GatePayload) => !actual.has(check.id))) throw new Error('健康结果必须覆盖批准清单');
   }
   if (['approve-architecture', 'resolve-readiness', 'resolve-findings', 'recover-development'].includes(gate.key)) {
-    const state = stateV2Schema.parse(payload.recoveryState ?? savedState);
+    const state = stateV2Schema.parse(payload.recoveryState ?? payload.findingsState ?? savedState);
     if (gate.key === 'approve-architecture') { assertApprovalV2(state); if (data.hash !== approvalHashV2(state)) throw new Error('方案版本发生漂移'); }
     if (gate.key === 'resolve-readiness' || gate.key === 'resolve-findings') { if (data.hash !== findingsHashV2(state)) throw new Error('报告版本发生漂移'); applyFindingsReview(state, findingsReviewSchema.parse(data)); }
     if (gate.key === 'recover-development') applyRecoveryDecision(state, recoveryReviewSchema.parse(data));

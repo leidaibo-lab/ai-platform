@@ -1,12 +1,13 @@
 import { createInterruptibleAttempts } from '../mastra/platform/interruptible-attempts.js';
 import { z } from 'zod';
+import { intakeSchema } from './contracts.js';
 
 export const correctionRequestSchema = z.object({
   attempt: z.uuid(),
   reviewer: z.string().trim().min(1).max(100),
   feedback: z.string().trim().min(1).max(2000),
 }).strict();
-export const correctionPauseSchema = correctionRequestSchema.extend({ kind: z.literal('product-correction') });
+export const correctionPauseSchema = correctionRequestSchema.extend({ kind: z.literal('product-correction'), intake: intakeSchema.optional() });
 type Correction = z.infer<typeof correctionPauseSchema>;
 
 const attempts = createInterruptibleAttempts<Correction>((previous, next) =>

@@ -121,6 +121,15 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
         assert.ok(intake.clarify); assert.match(intake.clarify!.title, /后期业务缺口/);
         const clarified = await respondIntake(app.workflow, 'fixture', runId, { clarifyHash: intake.clarify!.hash }, config);
         assert.equal(clarified.gate?.key, 'confirm-blocker-answers', '后期业务缺口必须进入既有澄清入口');
+        if (scenario !== 'health-business-gap') {
+          const native = await app.workflow.getWorkflowRunById(runId);
+          const paused = Object.values(native!.steps!).find(/** QA 回流的原生澄清暂停点保存原发现引用。 */ step => !Array.isArray(step) && step.status === 'suspended') as any;
+          const finding = result.result.qualityHistory.at(-1).review.findings[0];
+          assert.equal(paused.payload.productReworkDecision.method, 'product-rework.v1');
+          assert.equal(paused.payload.productReworkDecision.sourceHash, result.result.development.input.source.hash);
+          assert.deepEqual(paused.payload.productReworkDecision.findingRefs, [{ id: finding.id, refs: finding.refs, evidence: finding.evidence }]);
+          assert.ok(clarified.gate!.evidence.plan.questions.every(/** 下游业务缺口不得降为可选。 */ (question: { required: boolean }) => question.required));
+        }
         if (scenario === 'stable-revision') {
           const gate = clarified.gate!;
           const revised = await respondIntake(app.workflow, 'fixture', runId, {

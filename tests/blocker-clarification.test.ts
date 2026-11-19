@@ -13,9 +13,9 @@ import { readIntake, respondIntake } from '../src/intake/service.js';
 const project = { id: 'blocker-cycle', files: { 'src/a.mjs': 'export const initial=0;', 'check.mjs': 'export const check=1;' }, writablePaths: ['src/a.mjs'], checkFiles: ['check.mjs'], roles: ['backend'] };
 const actor = { reviewer: 'test-human', comment: '合成明确确认' };
 /** 每例独占数据库，可重建相同应用模拟跨进程读取；只改变架构的合成阻塞轮次。 */
-function setup(blockerRounds = 1) {
+function setup(blockerRounds = 1, legacyDevelopment = false) {
   const directory = mkdtempSync(resolve(tmpdir(), 'blocker-clarification-'));
-  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const config = { ...(legacyDevelopment ? { legacyDevelopmentWorkflow: true as const } : {}), rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   let plans = 0;
   /** 阻塞仅来自已保存模型输出，其他步骤仍执行正式工具/版本校验。 */
   const generate: GeneratorV2 = async (...args) => { const entry = await generateV2(...args); if (args[2] !== 'architect') return entry; const plan = JSON.parse(entry.text); if (++plans <= blockerRounds) plan.blockers = ['合成业务待确认：首期范围', '工程上下文缺口：docs/decisions资料待宿主关联']; return { ...entry, text: JSON.stringify(plan) }; };
@@ -46,6 +46,19 @@ for (const legacy of [false, true]) test(legacy ? '旧blocked同Run接续，回�
     }
     assert.equal(doc.status, 'suspended'); assert.equal(doc.gate!.key, 'confirm-blocker-answers');
     assert.equal(doc.gate!.evidence.plan.questions.length, 1); assert.equal(doc.gate!.evidence.engineering.length, 1); assert.equal('answers' in doc.gate!.initial, false);
+    const clarification = await app.workflow.getWorkflowRunById(runId);
+    const clarificationStep = Object.values(clarification!.steps!).find(/** 读取原生暂停点保存的返工决定。 */ step => !Array.isArray(step) && step.status === 'suspended') as any;
+    assert.deepEqual(clarificationStep.payload.productReworkDecision, {
+      method: 'product-rework.v1', target: 'guided-requirements', sourceHash: originalHash,
+      reason: '下游已记录业务缺口，需要人工澄清后再修订已批准的产品稿。', findingRefs: [],
+    });
+    const { blockerHash } = await import('../src/intake/blocker-contracts.js');
+    const paused = clarificationStep.payload;
+    const { productReworkDecision, ...historical } = paused;
+    const { development, business, engineering, round, plan, references, referenceNote, history } = historical;
+    const { developmentHash } = await import('../src/development/contracts.js');
+    assert.equal(blockerHash(historical), developmentHash({ sourceHash: development.input.source.hash, planHash: development.planHash, readinessHash: development.readiness?.hash, business, engineering, round, plan, references, referenceNote, history }));
+    assert.notEqual(blockerHash(paused), blockerHash(historical));
     const gateHash = doc.gate!.gateHash; const body = fixture.answers(doc);
     await assert.rejects(respondIntake(app.workflow, 'fixture', runId, { ...body, data: { ...body.data, answers: [] } }, fixture.config), /必答/);
     await assert.rejects(respondIntake(app.workflow, 'fixture', runId, { ...body, data: { ...body.data, answers: [{ questionId: 'unknown', selected: [], custom: 'x' }] } }, fixture.config), /未知/);
@@ -101,7 +114,7 @@ test('历史架构同步失败复用同版本阻塞结果，拒绝篡改且不�
   const { validateLegacyArchitectureResult } = await import('../src/delivery/legacy-sync.js');
   const { describeRecovery } = await import('../src/intake/recovery.js');
   const { describeDevelopmentProgress } = await import('../src/intake/gates.js');
-  const f = setup(); const app = f.open(true);
+  const f = setup(1, true); const app = f.open(true);
   try {
     const { runId } = await f.start(app);
     const native = await app.workflow.getWorkflowRunById(runId);

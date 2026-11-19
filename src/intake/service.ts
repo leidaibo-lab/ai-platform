@@ -21,7 +21,7 @@ import { loadDevelopmentMethods } from '../development/v2/methods.js';
 import { validateIdentityV2 } from '../development/v2/gates.js';
 import type { createProductDevelopmentWorkflow } from '../mastra/workflows/product-development.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from '../mastra/workflows/delivery.js';
-import { describeRecovery } from './recovery.js';
+import { alignmentRetryInput, describeRecovery } from './recovery.js';
 import { describeGate, validateGate, describeDevelopmentProgress } from './gates.js';
 import { intakeSchema, validateAnswers } from './contracts.js';
 import { projectRunTimeline } from './run-timeline.js';
@@ -74,10 +74,11 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
   const state = initial && !Array.isArray(initial) ? deliverySchema.safeParse(initial.output) : undefined;
   const suspended = Object.entries(snapshot.steps ?? {}).filter(([, step]) => !Array.isArray(step) && step.status === 'suspended' && (step as any).suspendPayload !== undefined).sort(([left], [right]) => right.split('.').length - left.split('.').length)[0];
   const path = suspended?.[0];
-  const step = logicalStep(path);
+  const resolvedStep = logicalStep(path);
   const payload = suspended && !Array.isArray(suspended[1]) ? suspended[1].suspendPayload : undefined;
   const sync = repositorySyncPauseSchema.safeParse(payload);
   const intake = intakeSchema.safeParse(payload);
+  const step = resolvedStep === 'align-product-requirements' && intake.success ? 'guided-requirements' : resolvedStep;
   const review = pendingSchema.safeParse(payload);
   const correction = correctionPauseSchema.safeParse(payload);
   const productCorrection = correction.success ? { attempt: correction.data.attempt, status: 'saved' as const } : undefined;
@@ -126,7 +127,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
   const currentLifecycle = lifecycleSchema.safeParse(snapshot.status === 'suspended' && suspended && !Array.isArray(suspended[1]) ? suspended[1].payload : snapshot.result);
   const acceptanceEvidence = currentLifecycle.success ? projectAcceptanceEvidence(currentLifecycle.data) : undefined;
   const mergeRequest = currentLifecycle.success && snapshot.status === 'success' ? currentLifecycle.data.mergeRequest : undefined;
-  const directionStep = findStep(snapshot, 'product-team.product-direction.product-analysis') ?? findStep(snapshot, 'product-team.draft-product.product-analysis');
+  const directionStep = findStep(snapshot, 'product-team.align-product-requirements') ?? findStep(snapshot, 'product-team.product-direction.product-analysis') ?? findStep(snapshot, 'product-team.draft-product.product-analysis');
   const directionOutput = deliverySchema.safeParse(directionStep?.output);
   const directionDraft = directionOutput.success && directionOutput.data.productFlow !== undefined && !directionOutput.data.intake?.enabled
     ? directionOutput.data.productWork?.entries.find(entry => entry.role === 'analysis')?.content
@@ -174,6 +175,13 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     if (!input || typeof input !== 'object' || !('retryHash' in input) || input.retryHash !== current.retry.hash) throw new GateInputError('恢复版本已变化，请刷新');
     if ('additionalContextLevel' in input) throw new GateInputError('资料预算门槛已移除，请刷新后直接恢复');
     let checkpointInput: unknown;
+    if (current.retry.step === 'product-team.align-product-requirements') {
+      const snapshot = await workflow.getWorkflowRunById(runId);
+      const entry = snapshot?.steps?.[current.retry.step];
+      if (!entry || Array.isArray(entry) || entry.status !== 'failed') throw new GateInputError('需求对齐检查点已变化');
+      checkpointInput = alignmentRetryInput(deliverySchema.parse(entry.payload), entry);
+      if (!checkpointInput) throw new GateInputError('无法复核已提交的需求回答');
+    }
     if ('kind' in current.retry && current.retry.kind === 'development-initialization') {
       if (!config || config.mode !== mode) throw new GateInputError('恢复模式或服务配置已变化');
       const snapshot = await workflow.getWorkflowRunById(runId);
@@ -231,9 +239,10 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     resumeData = validateAnswers(current.intake, input);
     const snapshot = await workflow.getWorkflowRunById(runId);
     const checkpoint = Object.entries(snapshot?.steps ?? {}).find(/** 只恢复同一版本的原生需求确认关口。 */([path, entry]) =>
-      /^product-team\.(draft-product|product-direction)\.guided-requirements\.requirements-round\.confirm-requirements$/.test(path)
+      /^product-team\.(align-product-requirements|(draft-product|product-direction)\.guided-requirements\.requirements-round\.confirm-requirements)$/.test(path)
       && !Array.isArray(entry) && entry.status === 'suspended' && intakeSchema.safeParse(entry.suspendPayload).data?.hash === current.intake?.hash);
     if (!checkpoint) throw new GateInputError('需求确认暂停点已变化');
+    if (checkpoint[0] === 'product-team.align-product-requirements') resumeData = { intake: current.intake, response: resumeData };
     step = checkpoint[0].split('.');
   } else if (current.step === 'review-product' && current.product) {
     resumeData = validateReview(current.product, reviewSchema.parse(input));
@@ -253,7 +262,7 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     step = ['product-team', 'review-product'];
   } else if (current.gate) {
     const snapshot = await workflow.getWorkflowRunById(runId);
-    const entry = Object.entries(snapshot!.steps ?? {}).find(/** 重新读取实际暂停路径，客户端不可替换。 */([, value]) => !Array.isArray(value) && value.status === 'suspended');
+    const entry = Object.entries(snapshot!.steps ?? {}).find(/** 重新读取同一已公示关口的原生暂停载荷。 */([path, value]) => !Array.isArray(value) && value.status === 'suspended' && value.suspendPayload && describeGate(path, value.suspendPayload)?.gateHash === current.gate?.gateHash);
     if (!entry || Array.isArray(entry[1])) throw new Error('暂停点已变化');
     if (['confirm-blocker-answers', 'review-revised-product'].includes(current.gate.key)) {
       if (!config) throw new GateInputError('澄清提交缺少服务端配置');

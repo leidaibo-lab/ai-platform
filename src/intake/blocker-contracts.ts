@@ -5,6 +5,8 @@ import { planSchema, answerSchema, questionDecisionSchema } from './contracts.js
 import { stateV2Schema, inputV2Schema, type StateV2 } from '../development/v2/contracts.js';
 import { artifactSchema, deliverySchema } from '../mastra/workflows/delivery.js';
 import { developmentHash } from '../development/contracts.js';
+import { unresolvedV2 } from '../development/v2/gates.js';
+import { downstreamProductReworkSchema } from '../mastra/workflows/product-rework.js';
 export const blockerQuestionSchema = planSchema.shape.questions.element.extend({ blockerIds: z.array(z.string()).max(20) });
 export const blockerPlanSchema = planSchema.safeExtend({ questions: z.array(blockerQuestionSchema).max(16) });
 /** 新开发澄清必须解释开工影响；兼容历史卡片时不虚构依据。 */
@@ -23,6 +25,7 @@ export const blockerCycleSchema = z.object({ repositoryHandoff: remoteHandoffSch
   round: z.number().int().positive(), plan: blockerPlanSchema.optional(), answer: blockerAnswerSchema.optional(), draft: artifactSchema.optional(), review: revisedProductReviewSchema.optional(),
   references: z.record(z.string(), z.string()).default({}), referenceNote: z.string().default(''),
   business: z.array(z.object({ id: z.string(), text: z.string() })).default([]), engineering: z.array(z.string()).default([]),
+  productReworkDecision: downstreamProductReworkSchema.optional(),
   nextInput: inputV2Schema.optional(), stopped: z.boolean().default(false),
   history: z.array(z.object({ sourceHash: z.string(), plan: blockerPlanSchema, answer: blockerAnswerSchema, draft: artifactSchema, review: revisedProductReviewSchema })).default([]),
 });
@@ -33,9 +36,29 @@ export function splitBlockers(blockers: string[]) {
   blockers.forEach(/** 稳定标识绑定原始条目，模型不能自行删除业务问题。 */(text, index) => { if (!/^U\d+/.test(text) && /^工程上下文缺口/.test(text)) engineering.push(text); else business.push({ id: `blocker-${index + 1}`, text }); });
   return { business, engineering };
 }
-/** 架构及开工检查提出的业务缺口都应回到问题卡片，不遗漏就绪阶段发现。 */
+/** 读取当前版本的结构化业务发现，保留需求和 QA 用例等原始引用。 */
+export function businessGapFindings(state: StateV2) {
+  return [...(state.readiness?.assessment.findings ?? []), ...unresolvedV2(state)]
+    .filter(/** 只使用明确归属产品的发现。 */ finding => finding.category === 'business' || finding.route === 'product');
+}
+
+/** 将下游各阶段保存的业务缺口统一转成澄清输入。 */
 export function developmentBlockers(state: StateV2): string[] {
-  return [...new Set([...(state.plan?.blockers ?? []), ...(state.readiness?.assessment.findings.filter(/** 技术发现仍由开发侧处理，业务选择由用户确认。 */finding => finding.category === 'business').map(/** 保留原发现描述作为澄清依据。 */finding => `就绪检查业务待决：${finding.detail}`) ?? [])])];
+  const blockers = [...(state.plan?.blockers ?? [])];
+  for (const finding of businessGapFindings(state)) {
+    if (!blockers.includes(finding.detail) && !blockers.some(/** QA 和历史发布已将部分发现投影到阻塞清单。 */ blocker => blocker.endsWith(`业务待决：${finding.detail}`))) {
+      blockers.push(`业务待决：${finding.detail}`);
+    }
+  }
+  if (state.stopReason === 'business-decision') {
+    for (const entry of state.work.filter(/** 只读取本轮实现明确记录的业务阻塞。 */ item => item.round === state.round && ['frontend', 'backend', 'infrastructure'].includes(item.role))) {
+      for (const line of entry.text.split('\n')) {
+        const detail = /BUSINESS_BLOCKER:\s*(.+)/.exec(line)?.[1]?.trim();
+        if (detail) blockers.push(detail);
+      }
+    }
+  }
+  return [...new Set(blockers)];
 }
 /** 每个业务阻塞必须有可回答的必答卡片；建议不能直接变成确认结果。 */
 export function validateBlockerPlan(plan: z.infer<typeof blockerPlanSchema>, state: BlockerCycle): void {
@@ -49,7 +72,7 @@ export function validateBlockerPlan(plan: z.infer<typeof blockerPlanSchema>, sta
   if (covered.size !== ids.size) throw new Error('问题卡片遗漏业务阻塞');
 }
 /** 绑定当前产品、方案与问题；工程资料观察也参与版本，避免旧表单污染新稿。 */
-export function blockerHash(state: BlockerCycle): string { return developmentHash({ sourceHash: state.development.input.source.hash, planHash: state.development.planHash, readinessHash: state.development.readiness?.hash, business: state.business, engineering: state.engineering, round: state.round, plan: state.plan, references: state.references, referenceNote: state.referenceNote, history: state.history }); }
+export function blockerHash(state: BlockerCycle): string { return developmentHash({ sourceHash: state.development.input.source.hash, planHash: state.development.planHash, readinessHash: state.development.readiness?.hash, business: state.business, engineering: state.engineering, round: state.round, plan: state.plan, references: state.references, referenceNote: state.referenceNote, history: state.history, productReworkDecision: state.productReworkDecision }); }
 /** 服务端恢复前和原生节点内都校验，未知问题/选项及必答缺失不消耗暂停点。 */
 export function validateBlockerAnswers(state: BlockerCycle, input: unknown) {
   const answer = blockerAnswerSchema.parse(input);

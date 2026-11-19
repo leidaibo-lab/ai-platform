@@ -1,3 +1,4 @@
+import { describeDevelopmentStep, developmentSteps } from './development-steps.js';
 import { verifyProductHandoff } from '../../business-engineering/product-handoff.js';
 import { cipGit } from '../../business-engineering/hrm-cip.js';
 import { projectRepositoryRoot, assertProjectCorrelation, loadEngineeringProject } from '../../business-engineering/project.js';
@@ -61,7 +62,7 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
   const bind = <T extends Step<any, any, any, any, any, any>>(step: T): T => withRepositoryAssets(execution.bind(step), config);
   const scope = createStep({
     id: 'confirm-project-scope',
-    description: 'plan-development｜confirm-project-scope｜人工确认项目文件、可写范围、检查与任务角色授权',
+    description: describeDevelopmentStep(developmentSteps[0]),
     inputSchema: deliverySchema,
     outputSchema: inputV2Schema,
     suspendSchema: z.object({ productHash: z.string(), instruction: z.string(), projectFields: z.array(z.string()) }),
@@ -103,7 +104,7 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
     execute: async ({ inputData, getInitData }) => blockerCycleSchema.parse({ development: inputData, approvedProduct: getInitData(), round: 1, history: [] }),
   });
   const clarification = createBlockerClarificationWorkflow(agents, config, resolveExecution, generate, /** 阻塞回流使用原产品 Run 的资源和存储。 */async resources => resolveProductAgents(config, resources, options.storage));
-  const main = createWorkflow({ id: 'development-team', description: '研发团队｜plan-development → develop-and-check → review-development-quality；三类 Agent、确定性门禁与阻塞回流', inputSchema: deliverySchema, outputSchema: stateV2Schema })
+  const main = createWorkflow({ id: 'development-team', description: developmentSteps.map(step => step.title).join(' → '), inputSchema: deliverySchema, outputSchema: stateV2Schema })
     .then(withRepositoryAssets(scope, config))
     .then(development);
   const ready = options.legacyBlocked ? main : main.then(openClarification).branch([[/** 无论发现时点，业务阻塞都须回流产品澄清；澄清子流程会保留原候选与证据。 */async ({ inputData }) => inputData.development.outcome === 'clarification-required', clarification]]).map(async ({ inputData, getStepResult }) => inputData['resolve-development-blockers']?.development ?? getStepResult(openClarification).development, { id: 'continue-after-clarification' });
