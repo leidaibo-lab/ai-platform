@@ -25,7 +25,7 @@ function paused(result: any): { path: string[]; payload: any } {
 for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'health-failure', 'health-business-gap', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-business-gap', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
   test(`完整产研主链与跨Store恢复：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'mastra-unified-'));
-    const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+    const config: PracticeConfig = { ...(['health-failure', 'health-business-gap', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'release-plan-incomplete'].includes(scenario) ? { legacyDeployment: true } : {}), rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
     /** 重装相同Workflow与数据库，保持审批事实归原生Store。 */
     async function open() {
       const options = createStudioApplicationOptions(config);
@@ -98,7 +98,17 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
         assert.deepEqual(evidence.requirements[0]!.taskIds, ['fixture-task-1', 'fixture-task-2']);
         assert.equal(evidence.requirements[0]!.cases[0]!.result?.status, 'passed');
       }
-      if (scenario === 'success') { assert.equal(result.result.development.delegations.length, 2); assert.equal(result.result.quality.status, 'passed'); assert.ok(visited.includes('verify-release-health')); }
+      if (scenario === 'success') {
+        assert.equal(result.result.development.delegations.length, 2);
+        assert.equal(result.result.quality.status, 'passed');
+        assert.deepEqual(visited.slice(-2), ['approve-test-cases', 'review-test-results']);
+        assert.equal(result.result.mergeRequest, undefined);
+        const steps = (await app.workflow.getWorkflowRunById(runId))?.steps;
+        assert.equal(steps?.['deployment-team'], undefined);
+        const delivery = steps?.['delivery-team'];
+        assert.ok(delivery && !Array.isArray(delivery));
+        assert.equal(delivery.status, 'success');
+      }
       if (['qa-business-gap', 'health-business-gap', 'stable-revision'].includes(scenario)) {
         assert.equal(result.result.development.outcome, 'clarification-required');
         assert.equal(result.result.development.delivery, null);
@@ -175,7 +185,7 @@ for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-s
     const input = inputV2Schema.parse({ source: { kind: 'evaluation', runId: 'team-evaluation', content, hash: developmentHash(content), evidence: 'evaluation-input' }, project, maxReworks: 1 });
     seedDevelopment(directory, input);
     const execution = new DevelopmentExecution(resolve(directory, 'candidate'), project.writablePaths, project.checkFiles);
-    const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(parent, 'workflow.db')}` };
+    const config: PracticeConfig = { ...(['health-failure', 'health-business-gap', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'release-plan-incomplete'].includes(scenario) ? { legacyDeployment: true } : {}), rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(parent, 'workflow.db')}` };
     const children: string[] = [];
     let recovering = false;
     let arrivals = 0; let release!: () => void;

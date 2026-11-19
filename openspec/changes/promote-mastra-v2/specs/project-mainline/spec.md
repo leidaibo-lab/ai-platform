@@ -46,6 +46,12 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **AND** 对 408、504 或 524 SHALL 额外说明该请求超时
 - **AND** SHALL 保留检查点和重试入口，不暴露上游地址、请求正文、响应正文、认证信息或模型隐藏推理
 
+#### Scenario: Recovery displays a recorded output-validation failure
+
+- **WHEN** 研发阶段因输出校验失败而暂停，且原生快照保留了脱敏校验诊断
+- **THEN** 恢复关口 SHALL 展示校验原因，模型调用诊断中的 `unknown` 不得覆盖该原因
+- **AND** 恢复关口 SHALL 依据当前执行模式说明输出校验失败是否参与自动重试
+
 ### Requirement: Late business gaps re-enter controlled clarification
 
 测试或发布阶段发现业务未闭环时，主 Workflow SHALL 保留阶段证据、进入产品澄清和修订确认，
@@ -87,12 +93,144 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **THEN** 服务端 SHALL 校验来源回执和散列并以新的 Run 标识启动产品澄清
 - **AND** 新 Run SHALL 使用自己的能力命名 Run 分支提交后续确认的规格
 
-### Requirement: Product rework returns to same-Run clarification
+### Requirement: Product Harness routes same-Run corrections and rework
 
-产品人工确认提出返工时，系统 SHALL 保留来源稿、审阅意见和返工轮次，并在同一 Run 中回到需求澄清；该未确认稿不得被推送或进入研发。
+产品团队 Harness SHALL 对生成中的立即纠偏及待审产品稿的返工使用同一套版本化影响判断。团队 SHALL 从可重跑的产品节点中选择覆盖影响的最早节点，保留上游有效结论。判断不明或现有业务决定需要重新确认时 SHALL 回到需求澄清。修订稿 SHALL 经过独立产品检查和新的人工确认。
+真实模型的每次返工分类调用 SHALL 使用独立的 Mastra Memory 线程。
 
-#### Scenario: Reviewer asks for product clarification
+#### Scenario: Product reviewer requests rework
 
-- **WHEN** 当前产品稿的人工确认决定为 `rework`
-- **THEN** 系统 SHALL 从需求澄清节点重新开始并将反馈作为产品经理上下文
-- **AND** 重新生成的产品稿 SHALL 要求新的人工确认
+- **WHEN** 人工以 `rework` 提交当前待审版本和意见
+- **THEN** 系统 SHALL 保存来源稿、版本和意见，并在同一个 Run 按影响重做产品工作
+- **AND** 旧稿 SHALL 失去审批资格，且 SHALL NOT 进入研发或正式同步
+
+#### Scenario: User corrects product generation in progress
+
+- **WHEN** 用户提交与当前产品生成尝试匹配的立即纠偏
+- **THEN** 系统 SHALL 请求停止该尝试，在 Mastra 原生暂停检查点保存反馈，再按团队判断启动重做
+- **AND** 工作台 SHALL 区分停止中、已保存待重新执行、已随目标节点开始应用以及失败后的继续入口
+- **AND** 已结束或已更换的生成尝试 SHALL 拒绝旧提交并保留页面输入
+- **AND** 同一反馈 SHALL NOT 被重复执行，旧尝试结果 SHALL NOT 成为新交接物
+
+### Requirement: Confirmed requirements and product tasks become one versioned handoff
+
+新建 live Run 的待审产品稿 SHALL 同时包含独立的需求文档与产品规格。需求文档 SHALL 给出目标、范围、带稳定 `REQ-` ID 的业务规则与可观察验收场景。产品规格 SHALL 拆分可交付的任务，写明交付结果并引用需求文档中的 ID。系统 SHALL 校验任务 ID 唯一、引用有效且全部需求均有任务覆盖。
+
+#### Scenario: Product owner confirms the two documents
+
+- **WHEN** 产品负责人批准当前待审正文，或批准业务阻塞澄清后的修订正文
+- **THEN** 系统 SHALL 在同一正式 Run 分支提交 `product/<迭代标识>/requirements.md` 与 `product/<迭代标识>/product-spec.md`，两份文件内容分别取自批准正文
+- **AND** 用户最初提交的描述 SHALL 留在 Run 的原始需求中
+- **AND** 研发开工前 SHALL 按回执读取两份文件，核对分支、散列及其与同一批准正文的一致性，再将批准正文及其需求 ID 交给研发与测试
+
+#### Scenario: Product team opens the published handoff
+
+- **WHEN** 当前批准版本的正式规格已发布
+- **THEN** 工作台 SHALL 在同一区域展示审批人、审批版本与两份固定提交的文件入口
+- **AND** AI 方向初稿 SHALL 只在方向对齐阶段作为当前内容呈现，阶段产物仍归原生 Run
+
+### Requirement: Mainline delivery ends at a verified merge request
+
+默认产研 Workflow SHALL 在独立 QA 通过后进入交付团队。交付 SHALL 核对候选源码散列、QA 证据及正式规格，向登记仓库的 `main` 创建合并请求，并将编号、链接、源分支、候选提交和 QA 版本保存在 Mastra Store 后结束。交付 SHALL NOT 合并请求、直接写入 `main` 或主动触发 CI/CD 与部署。
+
+#### Scenario: Approved QA reaches repository delivery
+
+- **WHEN** 质量审阅通过且候选及正式规格与原生 Run 记录一致
+- **THEN** 交付 SHALL 仅将已授权的候选变更追加到对应 Run 分支，并核对合并请求的仓库、目标 `main`、源分支和提交
+- **AND** fixture SHALL 完成控制流验证且 SHALL NOT 写远端或产生真实 MR 回执
+
+#### Scenario: The remote request succeeds before the workflow records its receipt
+
+- **WHEN** 用户在交付失败暂停点重试相同交付版本
+- **THEN** 系统 SHALL 核对已存在的候选提交和合并请求并复用匹配的回执
+- **AND** 版本漂移、交付目标异常或远端操作失败 SHALL 停在交付节点，保留已通过的 QA 结果
+
+### Requirement: Registered Git projects supply versioned engineering constraints
+
+服务端 SHALL 为每个应用实例绑定一个业务仓库。显式登记的项目 SHALL 使用独立数据目录和固定 Git commit，从该版本读取产品、开发、测试 SDD 与候选文件、可写文件和保护检查。Run SHALL 保存项目标识和工程绑定，跨项目恢复及后继来源 SHALL 被拒绝。历史默认 HRM 保留现有仓库和执行档行为。
+
+#### Scenario: Registered project enters the normal delivery workflow
+
+- **WHEN** 用户创建 Run 并确认当前项目目录散列
+- **THEN** 产品、开发和测试 SHALL 消费各自的固定 SDD，研发 SHALL 使用已登记的候选源码与检查
+- **AND** 页面和 Agent SHALL NOT 提供宿主根路径、替换保护检查或扩大可写范围
+- **AND** Spec 正文 SHALL 作为版本化资料进入角色上下文，权限与批准 SHALL 由平台和团队原有门禁决定
+
+#### Scenario: A subsequent Run adopts a newer engineering revision
+
+- **WHEN** a source Run belongs to the same registered project and repository, and its confirmed Git receipts verify
+- **THEN** a subsequent Run SHALL use the currently registered engineering revision and preserve the source specification provenance
+- **AND** resuming an existing Run SHALL require its original engineering revision
+
+### Requirement: Workbench groups execution by responsible team
+
+工作台 SHALL 按产品、研发、测试、交付四个团队展示 Run 执行链路。首次需求澄清、下游业务缺口的人工澄清及修订稿审阅 SHALL 归入产品团队，MR 提交及重试 SHALL 归入交付团队。
+
+#### Scenario: Workbench follows actual Run progress and rework
+
+- **WHEN** Run 更新当前步骤、暂停关口或明确的返工证据
+- **THEN** 工作台 SHALL 根据服务端 Run 快照更新团队节点，仅在存在可确认的运行证据时展示对应的返工、回流或交付重试提示
+- **AND** 没有上述运行证据时 SHALL 隐藏整行提示
+- **AND** 待执行、等待确认、受阻及完成 SHALL 可区分，只有实际的交付完成结果才将四个团队全部标为完成
+- **AND** 产品交互和恢复入口 SHALL 继续提交给相应原生关口
+
+#### Scenario: Product details summarize three business phases
+
+- **WHEN** 用户打开产品团队详情
+- **THEN** 工作台 SHALL 按对齐方向、完善规格、审阅交接展示阶段状态，状态来自当前 Run 的执行证据
+- **AND** 原始节点和 Agent 活动 SHALL 默认折叠并可展开查看，当前人工操作与可恢复失败的重试入口 SHALL 可直接访问
+- **AND** 方向对齐期间展示的 AI 建议 SHALL 标记为初稿，当前审批状态以审阅交接的执行证据为准
+
+#### Scenario: Switching teams restores their saved deliverables
+
+- **WHEN** 用户在执行链上切换团队
+- **THEN** 工作台 SHALL 在所选团队展示其已保存成果，当前执行的实时输出与操作位于所属团队
+- **AND** 产品团队的审阅交接 SHALL 展示与人工批准绑定的版本。正式规格发布后 SHALL 以固定提交的文件作为正文入口，在仓库地址可确定时提供查看链接
+- **AND** 刷新 Run 后 SHALL 可从原生快照回读上述成果
+
+#### Scenario: Business documents present structured plain-text blocks
+
+- **WHEN** 工作台呈现需求与规格正文中的 `text` 围栏
+- **THEN** 可明确识别的状态流转、分组字段和顺序流程 SHALL 分别呈现为状态表、分组列表和步骤列表
+- **AND** 其余 `text` 围栏 SHALL 保留原有文字和换行，其他代码围栏 SHALL 继续按代码呈现
+- **AND** 阅读样式 SHALL 不修改已保存文档及其版本标识
+
+### Requirement: Product workflow focuses on direction, specification and handoff
+
+默认产品团队 Workflow SHALL 以对齐方向、完善规格和审阅交接推进。逐项澄清 SHALL 复用已收敛的方向结论进入规格写作。AI 主动补全 SHALL 先形成可观察的方向建议，再写作。方向判断 SHALL 覆盖目标、用户与场景、范围与非目标、业务决策及假设。独立产品审查 SHALL 保留为规格质量检查。研发交接 SHALL 绑定人工批准的产品版本。
+
+#### Scenario: Product roles use portable Markdown layouts
+
+- **WHEN** 产品经理使用包含版式规范的需求交接 Skill 撰写或修订产品文档
+- **THEN** 文档中的状态流转 SHALL 使用状态表，处理结果字段 SHALL 按业务阶段分组，顺序流程 SHALL 使用编号步骤
+- **AND** 独立产品审查 SHALL 检查适用段落的版式与业务语义，并将发现记录为审查意见
+- **AND** 非文档阶段 SHALL 继续使用各自的输出契约
+
+#### Scenario: Native workflow matches the product phases
+
+- **WHEN** 服务按默认配置装配产品团队 Workflow
+- **THEN** `product-team` SHALL 依次包含 `product-direction`（对齐方向）、`product-specification`（完善规格）和 `review-product`（审阅交接）三个直属节点
+- **AND** 待审版本固化 SHALL 随写作一起完成，独立审查 SHALL 保留原生检查点，人工审批 SHALL 保留原生暂停和恢复
+- **AND** 既有 Run SHALL 可使用创建时对应的流程图恢复，保留其原生步骤路径
+
+#### Scenario: Human decisions advance the product workflow
+
+- **WHEN** 用户提交关键回答并要求推进，且重新评估确认各业务维度明确且无必答缺口
+- **THEN** 默认产品流程 SHALL 直接进入完善规格，无需再次点击确认
+- **AND** 若仍存在必答缺口，系统 SHALL 在已版本化的人工关口展示该轮问题
+
+#### Scenario: Feedback reopens the appropriate product phase
+
+- **WHEN** 用户在生成中纠偏或退回产品稿
+- **THEN** 产品团队 SHALL 根据影响选择重做方向或规格，保留仍有效的人工决定与前序成果
+- **AND** 修订版本 SHALL 重新提交人工审阅
+
+### Requirement: HRM CIP engineering execution
+
+HRM 的 CIP 基线 SHALL 在确认开发范围时绑定 Git 提交。研发与 QA SHALL 在隔离环境中使用同一提交装配工程，对已批准源码变更运行固定检查。模型候选 SHALL 只包含受控的源码和规则视图。平台 SHALL 拒绝修改保护检查、切换已批准工程版本及交付不匹配的候选。
+
+#### Scenario: Resume an HRM Run at the engineering gate
+
+- **WHEN** 已获批的 HRM Run 在开发范围确认处选择 CIP 工程
+- **THEN** 服务端 SHALL 核对产品规格分支的工程基线，并用固定检查验证实际候选
+- **AND** 交付 SHALL 绑定该工程基线和同版本 QA 证据

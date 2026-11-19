@@ -231,3 +231,59 @@ test('候选归档读取实际正文，散列快照只用于版本校验', /** �
   const result = await scope.bind(step).execute({ inputData: state } as any) as any;
   assert.deepEqual(result.repositoryCandidate, files); assert.equal(result.repositoryCandidate['src/value.mjs'], body); assert.equal(closed, true);
 });
+
+test('QA 候选只写 Run 分支并复用 MR，源 SHA 漂移时拒绝交付', async () => {
+  const { publishReviewedCandidate } = await import('../src/delivery/remote-handoff.js');
+  const { openMergeRequest } = await import('../src/delivery/merge-request.js');
+  const f = repositories();
+  const previousPath = process.env.PATH;
+  try {
+    writeFileSync(join(f.root, 'candidate.mjs'), 'export const value = 1;\n');
+    f.git(['add', 'candidate.mjs']);
+    f.git(['commit', '-m', 'test(delivery): 准备候选基线']);
+    const baseline = f.git(['rev-parse', 'HEAD']);
+    f.git(['push', 'origin', 'main']);
+    const runId = 'a84353b9-e22c-4ea9-b412-c6f28800c567';
+    const spec = await publishFormalSpecification(f.root, runId, 'inventory', { 'specs/test-spec.md': '# 已批准测试\n' }, 'docs(spec): 保存测试规格', baseline);
+    assert.equal(f.git(['rev-parse', `${spec.commit}^`]), baseline);
+    const candidate = { 'candidate.mjs': 'export const value = 2;\n', 'README.md': 'baseline' };
+    /** 提交同一份 QA 候选及固定授权。 */
+    const publish = () => publishReviewedCandidate(f.root, spec, candidate, ['candidate.mjs'], ['specs/test-spec.md'], baseline);
+    await assert.rejects(() => publishReviewedCandidate(f.root, spec, { ...candidate, 'README.md': '越权变更' }, ['candidate.mjs'], ['specs/test-spec.md'], baseline), /受保护文件/);
+    await assert.rejects(() => publishReviewedCandidate(f.root, spec, { ...candidate, 'specs/test-spec.md': '覆盖已批准规格' }, ['candidate.mjs', 'specs/test-spec.md'], ['specs/test-spec.md'], baseline), /受保护文件/);
+    const commit = await publish();
+    assert.equal(await publish(), commit);
+    assert.equal(f.git(['rev-parse', `${commit}^`]), spec.commit);
+    assert.equal(f.git(['show', `${commit}:candidate.mjs`]), candidate['candidate.mjs'].trim());
+    assert.equal(f.git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0], baseline);
+    assert.equal(f.git(['rev-parse', 'HEAD']), baseline);
+
+    const repository = 'fixture/inventory';
+    const pull = { number: 42, state: 'open', head: { ref: spec.branch, sha: commit, repo: { full_name: repository } }, base: { ref: 'main', sha: baseline, repo: { full_name: repository } } };
+    // 替代 gh 只模拟远端已创建请求而客户端丢失 POST 响应。
+    const created = join(f.directory, 'created');
+    writeFileSync(join(f.directory, 'gh'), `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    POST) test ! -e '${created}' || exit 97; touch '${created}'; exit 1 ;;
+    repos/*/pulls/42) printf '%s' '${JSON.stringify(pull)}'; exit 0 ;;
+  esac
+done
+for arg in "$@"; do
+  case "$arg" in
+    GET) if test -e '${created}'; then printf '%s' '[{"number":42}]'; else printf '%s' '[]'; fi; exit 0 ;;
+  esac
+done
+printf '%s' '${JSON.stringify(pull)}'
+`, { mode: 0o700 });
+    process.env.PATH = `${f.directory}:${previousPath ?? ''}`;
+    const first = await openMergeRequest(repository, spec.branch, commit, 'a'.repeat(64), 'b'.repeat(64));
+    assert.equal(first.number, 42);
+    assert.deepEqual(await openMergeRequest(repository, spec.branch, commit, 'a'.repeat(64), 'b'.repeat(64)), first);
+    await assert.rejects(() => openMergeRequest(repository, spec.branch, baseline, 'a'.repeat(64), 'b'.repeat(64)), /交付版本不一致/);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    rmSync(f.directory, { recursive: true, force: true });
+  }
+});

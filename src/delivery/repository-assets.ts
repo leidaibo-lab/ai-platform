@@ -1,3 +1,4 @@
+import { assertProjectCorrelation } from '../business-engineering/project.js';
 import { projectAcceptanceEvidence } from './acceptance-evidence.js';
 import { withRunArchive } from './run-archive.js';
 import { z } from 'zod';
@@ -136,6 +137,10 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
   }
   /** 生成检查点先于网络副作用，原生 suspend/resume 继续拥有调度权。 */
   step.execute = async (context) => {
+    const input = context.inputData;
+    const state = Array.isArray(input) ? input[0]?.state : input?.state ?? input;
+    const correlation = state?.correlation ?? state?.input?.correlation ?? state?.development?.input?.correlation;
+    if (correlation) assertProjectCorrelation(config, correlation);
     const target = resolveRemoteSyncTarget(config, step.id);
     if (!target) return execute(context);
     const root = validateRepository(target.root, target.origin);
@@ -185,7 +190,7 @@ export function withRepositoryAssets<T extends Step<any, any, any, any, any, any
       }
     }
     // 历史架构缓存使用早期键格式；只接受已完成结果。暂停检查点必须回到原节点消费恢复决定，不能被缓存重放跳过。
-    if (config.mode === 'live' && step.id === 'architecture') {
+    if (config.mode === 'live' && !config.engineeringProject && step.id === 'architecture') {
       const legacyInput = stateV2Schema.parse(context.inputData);
       const legacyPath = legacyArchitectureCachePath(root, context.runId, legacyInput);
       if (existsSync(legacyPath)) {

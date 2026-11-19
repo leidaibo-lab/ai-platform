@@ -20,8 +20,8 @@
 - 模块名优先使用稳定英文代码概念，并补充中文职责，例如 `RunEventSink / 易失生命周期事件`。
 - 实线外框表示当前主职责域或独立运行边界；虚线外框表示观察旁路、准备链或逻辑分组，不暗示新的事实源。
 - 当前、受限切片和 TODO 必须显式区分。未来能力不能与当前运行态使用相同完成语气。
-- 六个架构区域是能力归属，不是请求步骤。平台控制面和治理区域不应被画成每次业务请求都同步经过。
-- SQLite Conversation Store 是当前 Session/Run 事实源；`RunEventSink` 和 ChainTrace 都不能画成可恢复业务事实源。
+- Mastra 主线以三层 Harness 表达能力归属，使用独立的业务编排框表达跨团队调用。
+- Mastra Store 持有主线 Run、审批、暂停和恢复事实。Git 持有工程规格和制品版本。SSE、时间线及档案展示执行投影。
 - 模型连通性测试链只用于 smoke test、CI 和排障，不进入业务主链架构图。
 
 ## 关联语义
@@ -38,14 +38,15 @@
 - 不使用渐变、装饰性阴影或大面积氛围背景。边框 2-3px，圆角不超过 8px。
 - 图标只用于快速识别模块，不替代模块名；保持同一线性图标语言。
 - 关键正文在常用分享尺寸下不得小于 11px；长说明换行，不与箭头或其他模块重叠。
-- 源文件使用 SVG，分享版本使用同名 PNG。资产统一放在 `docs/assets/`，SVG 是可编辑事实源。
+- 资产统一放在 `docs/assets/`。Mastra 主图使用可编辑 Draw.io 源图，附同名 SVG 与 PNG。三种格式共用布局和文案。
 - 新增或替换图后，必须在所属文档和 `docs/README.md` 中提供入口，并核对 PNG、SVG 的内容一致。
 
 ## 当前基准图
 
 当前风格基准为：
 
-- [AI 应用基础平台当前运行架构 PNG](./assets/ai-platform-current-runtime-v1.png)
-- [AI 应用基础平台当前运行架构 SVG](./assets/ai-platform-current-runtime-v1.svg)
+- [Mastra 主线三层 Harness PNG](./assets/mastra-mainline-architecture.png)
+- [Mastra 主线三层 Harness SVG](./assets/mastra-mainline-architecture.svg)
+- [Mastra 主线三层 Harness Draw.io](./assets/mastra-mainline-architecture.drawio)
 
 后续如果调整颜色、模块框、箭头或路径摘要，先更新本规范和基准图，再批量调整其他架构资产，避免同一项目出现多套视觉语言。

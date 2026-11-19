@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateHrmRepository } from '../delivery/asset-files.js';
+import { cipGit, cipModelFiles, cipProfile, isCipRevision } from '../business-engineering/hrm-cip.js';
 import { developmentHash } from '../development/contracts.js';
 const areas = [{ id: 'apps/web', title: '前端页面', role: 'frontend' }, { id: 'apps/api', title: '后端接口', role: 'backend' }, { id: 'packages/database', title: '数据库结构', role: 'infrastructure' }, { id: 'scripts', title: '工程脚本', role: 'infrastructure' }];
 /** 只列普通源码文件，排除隐藏配置、凭据、依赖、产物与业务资料。 */
@@ -11,8 +12,9 @@ export function readRepositoryCatalog(directory?: string) {
   const root = validateHrmRepository(directory);
   /** Git 仅提供版本元数据和文件名；不执行仓库脚本。 */
   function git(args: string[]) { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 1048576 }).trim(); }
+  const revision = cipGit(root, ['rev-parse', 'HEAD']).trim();
+  if (isCipRevision(root, revision)) return readCipCatalog(root, revision);
   const branch = git(['branch', '--show-current']) || '当前提交';
-  const revision = git(['rev-parse', 'HEAD']);
   const listed = git(['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'apps', 'packages', 'scripts', 'package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml', 'README.md', 'AGENTS.md']);
   const files: { path: string; area: string; bytes: number; hash: string }[] = [];
   for (const path of new Set(listed.split('\0').filter(Boolean))) {
@@ -60,4 +62,21 @@ export function readRepositoryCatalog(directory?: string) {
   if (!dockerReady) preparationIssues.push('Docker Desktop 尚未就绪，请启动后重新检查');
   const executionReady = preparationIssues.length === 0;
   return { available: true as const, ...catalog, engineeringAssessment, catalogHash: developmentHash({ ...catalog, engineeringAssessment, preparationIssues }), executionReady, preparationIssues, executionReason: executionReady ? '已接入独立 Docker 验证：类型检查、构建和临时页面/API/数据库连通检查。' : '可以先交给开发团队生成方案。以下工程准备项完成并重新确认项目后，才能批准实施。' };
+}
+
+/** 提供固定 Git 版本的模型目录及工作台检查标签。 */
+function readCipCatalog(root: string, revision: string) {
+  const files = Object.entries(cipModelFiles(root, revision)).map(([path, body]) => ({ path, area: areas.find(area => path.startsWith(`${area.id}/`))?.id ?? 'shared', bytes: Buffer.byteLength(body), hash: developmentHash(body) }));
+  const modules = [...areas, { id: 'shared', title: '公共契约与规则', role: 'infrastructure' }].map(area => ({ ...area, count: files.filter(file => file.area === area.id).length }));
+  let ready = false;
+  try { execFileSync('docker', ['--context', 'desktop-linux', 'info', '--format', '{{.ServerVersion}}'], { stdio: 'ignore', timeout: 3000 }); ready = true; } catch { /* 保留范围确认，不允许运行未隔离的检查。 */ }
+  const checks = [
+    { id: 'check', title: 'CIP 工程检查', command: 'pnpm audit:drift · lint · typecheck · test' },
+    { id: 'build', title: 'CIP 应用构建', command: 'pnpm build' },
+    { id: 'smoke', title: 'CIP 隔离运行验证', command: 'Prisma migrate · Postgres · Redis · API / Web' },
+  ].map(check => ({ ...check, ready, reason: '使用固定 Git 基线与隔离 Docker 候选' }));
+  const engineeringAssessment = { stackStatus: 'matched' as const, evidence: ['package.json:packageManager', 'apps/api/package.json', 'apps/web/package.json'], expectedProfile: cipProfile };
+  const preparationIssues = ready ? [] : ['Docker Desktop 尚未就绪，请启动后重新检查'];
+  const catalog = { id: 'hrm', title: 'HRM 人资管理系统', branch: '固定提交', revision, modules, files, checks, engineeringAssessment, preparationIssues };
+  return { available: true as const, ...catalog, catalogHash: developmentHash(catalog), executionReady: ready, executionReason: ready ? '使用 CIP 固定工程基线及隔离检查。' : preparationIssues[0]! };
 }

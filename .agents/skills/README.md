@@ -14,7 +14,7 @@
 | 范围 | 入口 | 用途 |
 | --- | --- | --- |
 | 公司公共治理 | `company-public/skill-governance/SKILL.md` | 新增、迁移和校验 Skill |
-| 产品需求交接 | [`product/requirements-handoff/SKILL.md`](../../nacos-resources/product/skills/product/requirements-handoff/SKILL.md) | 将真实业务诉求整理为可验收交接稿 |
+| 产品需求交接 | [`product/requirements-handoff/SKILL.md`](../../nacos-resources/product/skills/product/requirements-handoff/SKILL.md) | 将真实业务诉求整理为可验收交接稿，统一状态表、字段分组和编号步骤 |
 | 开发交接与 BMAD | `development/` | 需求到实现提案、上下文、就绪和只读评审 |
 | 文档决策 | `docs/architecture-decision/SKILL.md` | 架构与方案决策记录 |
 | 浏览器测试 | `testing/gstack-browser-qa/SKILL.md` | 浏览器 QA 证据 |

@@ -3,15 +3,16 @@ import { intakeSchema, intakeModeSchema } from '../../intake/contracts.js';
 import { z } from 'zod';
 import { revisionSourceSchema } from './revision-contract.js';
 import { maxProductReworks, productQualityReviewSchema, productReworkSchema, productWorkSchema } from './product-contract.js';
-import { correlationSchema } from '../../delivery/asset-identity.js';
+import { correlationSchema, formalSpecificationPathPattern, projectIdSchema } from '../../delivery/asset-identity.js';
 import { maxContextBudgetLevel } from '../../delivery/context-budget.js';
 import { nacosSnapshotSchema } from '../nacos-resources.js';
 
 /** 后继 Run 只继承经校验的规格正文与来源，不继承审批、预算、测试或发布事实。 */
 export const successorBaselineSchema = z.object({
   sourceRunId: z.string().uuid(),
+  projectId: projectIdSchema.optional(),
   changeBrief: z.string().trim().min(1).max(12000),
-  artifacts: z.array(z.object({ kind: z.enum(['product', 'development', 'testing']), branch: z.string(), commit: z.string().regex(/^[a-f0-9]{40,64}$/), path: z.string().regex(/^specs\/[a-z0-9-]+\.md$/), hash: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().min(1).max(100000) })).min(1).max(4),
+  artifacts: z.array(z.object({ kind: z.enum(['product', 'development', 'testing']), branch: z.string(), commit: z.string().regex(/^[a-f0-9]{40,64}$/), path: z.string().regex(formalSpecificationPathPattern), hash: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().min(1).max(100000) })).min(1).max(4),
 });
 export type SuccessorBaseline = z.infer<typeof successorBaselineSchema>;
 
@@ -29,9 +30,11 @@ export const reviewSchema = z.object({
 export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
+  productHandoffFormat: z.literal('paired-markdown.v1').optional(),
   requirementTracking: z.literal(true).optional(),
   nacosResources: nacosSnapshotSchema.optional(),
   intake: intakeSchema.optional(),
+  productFlow: z.enum(['three-stage', 'native-three-stage']).optional(),
   // 顶层保留入口策略，便于恢复和页面投影不依赖当前暂停点。
   intakeMode: intakeModeSchema.optional(),
   repositoryHandoff: remoteHandoffSchema.optional(),
@@ -45,6 +48,7 @@ export const deliverySchema = z.object({
   productWork: productWorkSchema.optional(),
   productQualityReview: productQualityReviewSchema.optional(),
   productRework: productReworkSchema.optional(),
+  productReworkHistory: z.array(productReworkSchema.omit({ sourceContent: true })).max(maxProductReworks - 1).optional(),
   contextBudgetLevel: z.number().int().min(0).max(maxContextBudgetLevel).optional(),
   artifacts: z.array(artifactSchema).max(4),
   reviews: z.array(reviewSchema).max(4),

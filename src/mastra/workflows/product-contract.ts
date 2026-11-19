@@ -42,7 +42,11 @@ export type ProductQualityReview = z.infer<typeof productQualityReviewSchema>;
 export const productReworkSchema = z.object({
   sourceRunId: z.string().min(1).max(200),
   sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
-  sourceContent: z.string().trim().min(1).max(100000),
+  sourceContent: z.string().trim().min(1).max(100000).optional(),
+  attempt: z.uuid().optional(),
+  target: z.enum(['guided-requirements', ...productManagerStages]).optional(),
+  reason: z.string().trim().min(1).max(500).optional(),
+  method: z.literal('product-rework.v1').optional(),
   reviewer: z.string().trim().min(1).max(100),
   feedback: z.string().trim().min(1).max(2000),
   round: z.number().int().min(1).max(maxProductReworks),

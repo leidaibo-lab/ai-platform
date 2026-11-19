@@ -1,4 +1,5 @@
-import { acceptanceRequirementsInstruction, readAcceptanceRequirements } from '../../development/v2/acceptance-requirements.js';
+import type { projectSpec } from '../../business-engineering/project.js';
+import { acceptanceRequirementsInstruction, readAcceptanceRequirements } from '../../business-engineering/acceptance-requirements.js';
 import { createHash } from 'node:crypto';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
@@ -6,12 +7,14 @@ import { z } from 'zod';
 import type { createAgents } from '../agents/index.js';
 import type { Delivery } from './delivery.js';
 import { deliverySchema } from './delivery.js';
-import { productQualityReviewSchema, productManagerStages } from './product-contract.js';
+import { maxProductReworks, productQualityReviewSchema, productManagerStages } from './product-contract.js';
 import { createIntakeWorkflow } from '../../intake/workflow.js';
 import { collectConfirmedDecisions } from '../../intake/contracts.js';
 import { generateProductContent } from '../../intake/product-generation.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
 import { nacosResourceIdentity, type NacosSnapshot } from '../nacos-resources.js';
+import { correctionPauseSchema, runInterruptibleProductAttempt } from '../../intake/product-interruption.js';
+import { productReworkFeedback } from './product-rework.js';
 import { publishLiveOutput } from '../../intake/live-output.js';
 
 type StepBinder = <T extends Step<any, any, any, any, any, any>>(step: T) => T;
@@ -24,14 +27,17 @@ const managerPhaseInstructions: Record<typeof productManagerStages[number], stri
   writing: '产品稿写作：汇总前序事实、确认结论和范围，生成完整可审阅产品稿。',
 };
 
-/** 创建产品团队内部的 draft-product：需求澄清、产品经理成稿和独立产品质量审查均在此边界内完成。 */
-export function createProductManagerWorkflow(
+/** 装配产品方向和规格阶段，历史图复用相同的业务执行逻辑。 */
+export function createProductManagerPhases(
   agents: ReturnType<typeof createAgents>,
   mode: Delivery['mode'],
   bind: StepBinder = (step) => step,
   repositoryRoot?: string,
   resolveAgents?: (resources: NacosSnapshot) => Promise<ReturnType<typeof createAgents>>,
+  engineeringSpec?: ReturnType<typeof projectSpec>,
+  graph: 'native' | 'nested' | 'legacy' = 'native',
 ) {
+  const legacy = graph === 'legacy';
   const manager = agents.productManagerAgent;
   const reviewer = agents.productReviewerAgent;
 
@@ -42,9 +48,14 @@ export function createProductManagerWorkflow(
       description: `product-manager-agent｜${managerPhaseInstructions[role]}`,
       inputSchema: deliverySchema,
       outputSchema: deliverySchema,
-      execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
+      suspendSchema: correctionPauseSchema,
+      execute: async ({ inputData, runId, abortSignal, suspend, [PUBSUB_SYMBOL]: pubsub }) => {
         if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式生成产品稿');
-        if (inputData.revision) return inputData;
+        if (inputData.revision) return graph === 'native' && role === 'writing' ? publishDraft(inputData) : inputData;
+        if (!legacy && role === 'analysis' && inputData.intake?.enabled && inputData.intake.ready) return inputData;
+        const phaseInstruction = !legacy && role === 'analysis'
+          ? '对齐方向：用简短结构梳理目标、用户与场景、本期范围、非目标和关键假设。明确区分用户已给出的事实与 AI 建议，不擅自选择需要人决定的业务规则。'
+          : managerPhaseInstructions[role];
         if (inputData.intake?.enabled && !inputData.intake.ready) throw new Error('需求尚未确认');
         const intakeMode = inputData.intake?.intakeMode ?? (inputData.intake?.enabled ? 'clarify' : 'autofill');
         const modeInstruction = intakeMode === 'autofill'
@@ -52,18 +63,22 @@ export function createProductManagerWorkflow(
           : '本次是“逐项澄清”模式。只使用用户已经明确确认的业务规则；不能把推荐或假设升级为事实，关键缺口应保留为待确认项。';
         if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
         const activeManager = inputData.nacosResources ? (await resolveAgents!(inputData.nacosResources)).productManagerAgent : manager;
-        const result = await generateProductContent(activeManager, JSON.stringify({
+        const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeManager, JSON.stringify({
           task: 'product-manager-phase',
           phase: role,
-          phaseInstruction: managerPhaseInstructions[role],
+          engineeringSpec,
+          phaseInstruction,
           brief: inputData.brief,
           confirmedIntake: inputData.intake,
           confirmedDecisions: inputData.intake ? collectConfirmedDecisions(inputData.intake) : [],
           successorBaseline: inputData.successorBaseline ? { sourceRunId: inputData.successorBaseline.sourceRunId, changeBrief: inputData.successorBaseline.changeBrief, artifacts: inputData.successorBaseline.artifacts.map(item => ({ kind: item.kind, path: item.path, commit: item.commit, content: item.content })) } : undefined,
           previousWork: inputData.productWork?.entries ?? [],
           rework: inputData.productRework,
+          priorFeedback: inputData.productReworkHistory?.map(({ round, feedback }) => ({ round, feedback })),
           instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' && inputData.requirementTracking ? acceptanceRequirementsInstruction : ''}`,
-        }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event));
+        }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event), signal));
+        if (attempt.correction) return suspend(attempt.correction);
+        const result = attempt.output;
         const content = z.string().trim().min(1).max(100000).parse(result.text);
         if (role === 'writing' && inputData.requirementTracking) readAcceptanceRequirements(content);
         const facts = projectToolFacts(result.toolResults);
@@ -79,25 +94,20 @@ export function createProductManagerWorkflow(
           modelSteps: result.steps.length,
           generation: result.generation,
         };
-        return { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] } };
+        const resultState = { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] } };
+        return graph === 'native' && role === 'writing' ? publishDraft(resultState) : resultState;
       },
     });
   }
 
-  /** 发布完整产品稿；发布只生成待审版本，不代表质量审查或人工批准。 */
-  const publish = createStep({
-    id: 'publish-product',
-    description: 'product-manager-agent｜发布待审产品稿',
-    inputSchema: deliverySchema,
-    outputSchema: deliverySchema,
-    execute: async ({ inputData }) => {
-      const content = inputData.revision?.content ?? inputData.productWork?.entries.at(-1)?.content;
-      if (!content) throw new Error('产品写作未产生可审阅正文');
-      if (inputData.requirementTracking) readAcceptanceRequirements(content);
-      const hash = createHash('sha256').update(JSON.stringify({ stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content, revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork, ...(inputData.nacosResources ? { resources: nacosResourceIdentity(inputData.nacosResources) } : {}) })).digest('hex');
-      return { ...inputData, artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };
-    },
-  });
+  /** 将写作结果固化为待审版本。 */
+  function publishDraft(inputData: Delivery): Delivery {
+    const content = inputData.revision?.content ?? inputData.productWork?.entries.at(-1)?.content;
+    if (!content) throw new Error('产品写作未产生可审阅正文');
+    if (inputData.requirementTracking) readAcceptanceRequirements(content);
+    const hash = createHash('sha256').update(JSON.stringify({ stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content, revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork, ...(inputData.nacosResources ? { resources: nacosResourceIdentity(inputData.nacosResources) } : {}) })).digest('hex');
+    return { ...inputData, artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };
+  }
 
   /** 独立产品审查只产生质量证据，不修改产品稿，也不替代人工审批。 */
   const qualityReview = createStep({
@@ -105,17 +115,22 @@ export function createProductManagerWorkflow(
     description: 'product-reviewer-agent｜独立闭环检查',
     inputSchema: deliverySchema,
     outputSchema: deliverySchema,
-    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => {
+    suspendSchema: correctionPauseSchema,
+    execute: async ({ inputData, runId, abortSignal, suspend, [PUBSUB_SYMBOL]: pubsub }) => {
       const artifact = inputData.artifacts.at(-1);
       if (!artifact || artifact.stage !== 'product') throw new Error('产品审查缺少待审产品稿');
       if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
       const activeReviewer = inputData.nacosResources ? (await resolveAgents!(inputData.nacosResources)).productReviewerAgent : reviewer;
-      const result = await generateProductContent(activeReviewer, JSON.stringify({
+      const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeReviewer, JSON.stringify({
         task: 'product-quality-review',
+        engineeringSpec,
         brief: inputData.brief,
         product: artifact.content,
+        corrections: productReworkFeedback(inputData),
         instruction: '独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。只输出审查发现与依据，不修改产品稿，不代替人工审批。',
-      }), 'reviewer', mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event));
+      }), 'reviewer', mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event), signal));
+      if (attempt.correction) return suspend(attempt.correction);
+      const result = attempt.output;
       const facts = projectToolFacts(result.toolResults);
       const review = productQualityReviewSchema.parse({
         version: 'product-quality-review.v1',
@@ -130,19 +145,23 @@ export function createProductManagerWorkflow(
     },
   });
 
-  /** draft-product 内部先运行可选需求澄清，再由同一产品经理 Agent 完成四段式成稿，最后交给独立审查 Agent。 */
-  return createWorkflow({
-    id: 'draft-product',
-    description: 'draft-product｜product-manager-agent：需求澄清、需求分析、范围与优先级、产品稿写作；product-reviewer-agent：独立闭环检查',
-    inputSchema: deliverySchema,
-    outputSchema: deliverySchema,
-  })
-    .then(createIntakeWorkflow(agents, mode, bind, resolveAgents))
-    .then(bind(managerPhase('analysis')))
-    .then(bind(managerPhase('clarification')))
-    .then(bind(managerPhase('scope-priority')))
-    .then(bind(managerPhase('writing')))
-    .then(bind(publish))
-    .then(bind(qualityReview))
-    .commit();
+  const intake = createIntakeWorkflow(agents, mode, bind, resolveAgents, engineeringSpec);
+  const analysis = bind(managerPhase('analysis'));
+  const writing = bind(managerPhase('writing'));
+  if (graph === 'native') {
+    const direction = createWorkflow({ id: 'product-direction', description: '对齐方向', inputSchema: deliverySchema, outputSchema: deliverySchema })
+      .then(intake).then(analysis).commit();
+    const specification = createWorkflow({ id: 'product-specification', description: '完善规格', inputSchema: deliverySchema, outputSchema: deliverySchema })
+      .then(writing).then(bind(qualityReview)).commit();
+    return { graph, direction, specification } as const;
+  }
+
+  const publish = createStep({ id: 'publish-product', description: '发布待审产品稿', inputSchema: deliverySchema, outputSchema: deliverySchema,
+    /** 历史图保留原发布检查点。 */
+    execute: async ({ inputData }) => publishDraft(inputData),
+  });
+  const direction = createWorkflow({ id: 'draft-product', description: '产品成稿与质量检查', inputSchema: deliverySchema, outputSchema: deliverySchema })
+    .then(intake).then(analysis);
+  const aligned = legacy ? direction.then(bind(managerPhase('clarification'))).then(bind(managerPhase('scope-priority'))) : direction;
+  return { graph, draft: aligned.then(writing).then(bind(publish)).then(qualityReview).commit() } as const;
 }

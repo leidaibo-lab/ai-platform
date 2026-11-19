@@ -111,17 +111,31 @@ const roleTitles: Record<string, string> = {
 const stepTitles: Record<string, string> = {
   'initialize-product-development': '初始化产研流程',
   'initialize-delivery-lifecycle': '初始化交付生命周期',
+  'product-team': '产品团队',
+  'product-direction': '对齐方向',
+  'product-specification': '完善规格',
   'product-analysis': '需求分析',
   'product-clarification': '需求澄清整理',
   'product-scope-priority': '范围与优先级',
   'product-writing': '产品稿写作',
   'review-product-quality': '产品质量审查',
   'guided-requirements': '需求澄清',
+  'analyze-requirements': '整理需求待决项',
+  'confirm-requirements': '确认本轮需求澄清',
   'review-product': '产品稿审阅',
+  'analyze-blocker-questions': '整理业务缺口',
+  'confirm-blocker-answers': '确认业务缺口澄清',
+  'write-revised-product': '修订产品稿',
+  'review-revised-product': '审阅修订产品稿',
   'development-team': '研发团队执行',
+  'test-team': '测试团队执行',
+  'prepare-test-plan': '准备测试计划',
+  'approve-test-cases': '确认测试用例',
+  'review-test-results': '确认测试结果',
   'testing-team': '测试团队执行',
   'deployment-team': '发布团队执行',
-  'delivery-team': '交付汇总',
+  'delivery-team': '交付团队',
+  'submit-merge-request': '向 main 提交 MR',
   'confirm-final-delivery': '确认最终交付',
 };
 
@@ -243,10 +257,10 @@ function collectFacts(snapshot: SnapshotLike): { work: WorkFact[]; files: string
 
 /** 根据已知步骤路径投影展示阶段，未知路径保持空值。 */
 function stageForStep(path: string): RunTimelineStage | null {
-  if (/guided-requirements|product-analysis|product-clarification|product-scope-priority/.test(path)) return 'requirements';
-  if (/product-writing|review-product/.test(path)) return 'product';
+  if (/product-direction|guided-requirements|product-analysis|product-clarification|product-scope-priority/.test(path)) return 'requirements';
+  if (/product-specification|product-writing|review-product/.test(path)) return 'product';
   if (/development-team/.test(path)) return 'development';
-  if (/testing-team|deployment-team|delivery-team|confirm-final-delivery/.test(path)) return 'testing';
+  if (/testing-team|deployment-team|delivery-team|submit-merge-request|confirm-final-delivery/.test(path)) return 'testing';
   return null;
 }
 

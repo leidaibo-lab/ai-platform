@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import type { EngineeringProject } from '../business-engineering/project.js';
 import type { RemoteSyncTarget } from '../delivery/remote-sync-settings.js';
 import type { NacosResourceConfig } from './nacos-resources.js';
 
@@ -14,10 +15,18 @@ export interface PracticeConfig {
   modelId: `openai/${string}`;
   /** 角色组覆盖；未提供或显式留空时回退默认模型，由装配层只读消费。 */
   roleModels?: Partial<Record<'product' | 'development', `openai/${string}`>>;
+  /** 恢复旧部署试点流程时使用原流程图。 */
+  legacyDeployment?: true;
+  /** 使用历史四段产品图恢复已有暂停点。 */
+  legacyProductWorkflow?: true;
+  /** 使用此前嵌套的三阶段产品图恢复已有 Run。 */
+  nestedProductWorkflow?: true;
   apiKey?: string;
   baseUrl?: string;
   /** Studio 显式绑定的业务仓库；旧 CLI/评测未设置时保持原材料边界。 */
   hrmRepositoryRoot?: string;
+  /** 服务端登记的固定版本业务工程。 */
+  engineeringProject?: EngineeringProject;
   /** 仅服务端环境登记的远端目标，页面只能引用其ID。 */
   remoteSyncTargets?: RemoteSyncTarget[];
   /** 仅服务端持有的 Nacos 配置与凭据；关闭时不访问网络。 */
@@ -39,7 +48,11 @@ export function readConfig(): PracticeConfig {
   const baseUrl = process.env.MASTRA_BASE_URL || undefined;
   if (baseUrl) z.url().parse(baseUrl);
   const nacosResources = readNacosConfig(process.env);
-  return { rootDir: root, mode, port, modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  const legacyDeployment = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEPLOYMENT) === 'true';
+  const legacyProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_PRODUCT_WORKFLOW) === 'true';
+  const nestedProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NESTED_PRODUCT_WORKFLOW) === 'true';
+  if (legacyProductWorkflow && nestedProductWorkflow) throw new Error('只能选择一种历史产品流程图');
+  return { rootDir: root, mode, port, ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), ...(legacyDeployment ? { legacyDeployment: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
 }
 
 /** 默认启用注册中心；只有明确关闭才允许本地兼容路径。 */

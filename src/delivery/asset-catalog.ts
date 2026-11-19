@@ -4,8 +4,9 @@ import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from 'node:path';
 import { z } from 'zod';
 import { correlationSchema, type AssetCorrelation } from './asset-identity.js';
-import { ensureAssetDirectory, safeAssetPath, validateHrmRepository } from './asset-files.js';
+import { ensureAssetDirectory, safeAssetPath, validateRepository } from './asset-files.js';
 
+const legacyProject = { id: 'hrm', origin: 'https://github.com/leidaibo-lab/hrm.git' };
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const assetManifestSchema = z.object({ schemaVersion: z.union([z.literal(1), z.literal(2)]), repository: z.string().url(), runId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), stage: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), mode: z.enum(['fixture', 'live']), event: z.enum(['pending', 'completed']), projectionHash: hashSchema, authority: z.literal('workflow-export'), correlation: correlationSchema.optional(), createdAt: z.iso.datetime().optional(), files: z.record(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/), hashSchema) });
 const runRecordSchema = z.object({ schemaVersion: z.literal(1), correlation: correlationSchema, createdAt: z.iso.datetime(), briefHash: hashSchema });
@@ -13,7 +14,7 @@ export type AssetManifest = z.infer<typeof assetManifestSchema>;
 /** 单个不可变阶段版本；path 为仓库相对清单路径，正文按需校验读取。 */
 export interface CatalogAsset { id: string; path: string; area: string; manifest: AssetManifest }
 /** 仓库投影目录；仅关联与文件版本，不承载流程状态或批准权。 */
-export interface AssetCatalog { schemaVersion: 1; projectId: 'hrm'; generatedAt: string; authority: 'repository-projection'; runs: z.infer<typeof runRecordSchema>[]; assets: CatalogAsset[] }
+export interface AssetCatalog { schemaVersion: 1; projectId: string; generatedAt: string; authority: 'repository-projection'; runs: z.infer<typeof runRecordSchema>[]; assets: CatalogAsset[] }
 
 /** 对原始字节求散列；不把业务批准散列当成文件完整性散列。 */
 export function assetHash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -26,13 +27,14 @@ export function writeImmutableFile(path: string, content: string): void {
 }
 
 /** 初始化时固定根 Run 归属；同 Run 的迭代漂移或原始输入漂移拒绝覆盖。 */
-export function registerAssetRun(directory: string, value: AssetCorrelation, brief: string): void {
+export function registerAssetRun(directory: string, value: AssetCorrelation, brief: string, projectIdentity = legacyProject): void {
   const correlation = correlationSchema.parse(value);
-  const root = validateHrmRepository(directory);
-  const project = ensureAssetDirectory(root, 'product/catalog/projects/hrm');
-  writeImmutableFile(join(project, 'project.json'), JSON.stringify({ schemaVersion: 1, projectId: 'hrm', repository: 'https://github.com/leidaibo-lab/hrm', authority: 'repository-projection' }, null, 2) + '\n');
-  const iteration = ensureAssetDirectory(root, `product/catalog/projects/hrm/iterations/${correlation.iterationId}`);
-  writeImmutableFile(join(iteration, 'iteration.json'), JSON.stringify({ schemaVersion: 1, projectId: 'hrm', iterationId: correlation.iterationId }, null, 2) + '\n');
+  const root = validateRepository(directory, projectIdentity.origin);
+  if (correlation.projectId !== projectIdentity.id) throw new Error('资产项目归属不一致');
+  const project = ensureAssetDirectory(root, `product/catalog/projects/${correlation.projectId}`);
+  writeImmutableFile(join(project, 'project.json'), JSON.stringify({ schemaVersion: 1, projectId: correlation.projectId, repository: projectIdentity.origin.replace(/\.git$/, ''), authority: 'repository-projection' }, null, 2) + '\n');
+  const iteration = ensureAssetDirectory(root, `product/catalog/projects/${correlation.projectId}/iterations/${correlation.iterationId}`);
+  writeImmutableFile(join(iteration, 'iteration.json'), JSON.stringify({ schemaVersion: 1, projectId: correlation.projectId, iterationId: correlation.iterationId }, null, 2) + '\n');
   const run = ensureAssetDirectory(root, `product/catalog/runs/${correlation.runId}`);
   const file = join(run, 'run.json');
   const previous = existsSync(file) ? runRecordSchema.parse(JSON.parse(readFileSync(safeAssetPath(root, `product/catalog/runs/${correlation.runId}/run.json`), 'utf8'))) : undefined;
@@ -61,8 +63,8 @@ function findManifests(root: string, relative: string, depth: number, budget: { 
 }
 
 /** 从三类产物完成标记构造统一清单，历史未关联版本保持未关联。 */
-export function readAssetCatalog(directory: string): AssetCatalog {
-  const root = validateHrmRepository(directory);
+export function readAssetCatalog(directory: string, projectIdentity = legacyProject): AssetCatalog {
+  const root = validateRepository(directory, projectIdentity.origin);
   const paths: string[] = [];
   const budget = { entries: 0 };
   for (const area of ['product', 'testSet', 'deploy']) findManifests(root, `${area}/runs`, 3, budget, paths);
@@ -80,7 +82,7 @@ export function readAssetCatalog(directory: string): AssetCatalog {
     for (const entry of readdirSync(safeAssetPath(root, 'product/catalog/runs'), { withFileTypes: true })) {
       if (runs.length >= 5000 || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error('Run 目录无效或超过预算');
       const record = runRecordSchema.parse(JSON.parse(readBoundedFile(safeAssetPath(root, `product/catalog/runs/${entry.name}/run.json`))));
-      if (entry.name !== record.correlation.runId) throw new Error('Run 目录关联不一致');
+      if (entry.name !== record.correlation.runId || record.correlation.projectId !== projectIdentity.id) throw new Error('Run 目录关联不一致');
       runs.push(record);
     }
   }
@@ -92,7 +94,7 @@ export function readAssetCatalog(directory: string): AssetCatalog {
     );
     if (!bound || JSON.stringify(bound.correlation) !== JSON.stringify(asset.manifest.correlation)) throw new Error('产物缺少匹配的 Run 关联');
   }
-  return { schemaVersion: 1, projectId: 'hrm', generatedAt: new Date().toISOString(), authority: 'repository-projection', runs, assets };
+  return { schemaVersion: 1, projectId: projectIdentity.id, generatedAt: new Date().toISOString(), authority: 'repository-projection', runs, assets };
 }
 
 /** 限定本地文本大小；目录、设备和大附件不直接送入浏览器。 */
@@ -103,9 +105,9 @@ function readBoundedFile(path: string): string {
 }
 
 /** 读取仅限清单登记文件，下载前验证内容散列；不支持任意文件路径参数。 */
-export function readCatalogFile(directory: string, asset: CatalogAsset, name: string): string {
+export function readCatalogFile(directory: string, asset: CatalogAsset, name: string, projectIdentity = legacyProject): string {
   if (!Object.hasOwn(asset.manifest.files, name)) throw new Error('文件未在清单登记');
-  const root = validateHrmRepository(directory);
+  const root = validateRepository(directory, projectIdentity.origin);
   const content = readBoundedFile(safeAssetPath(root, `${asset.path.slice(0, -'manifest.json'.length)}${name}`));
   if (assetHash(content) !== asset.manifest.files[name]) throw new Error('产物完整性校验失败');
   return content;

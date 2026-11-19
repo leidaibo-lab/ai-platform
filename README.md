@@ -5,14 +5,14 @@ LiteLLM 和 pi 适配实验保留在 `practices/custom-exploration/`，与主线
 
 ## 当前入口与流程
 
-日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案、测试与发布回执等人工确认。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
+日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案和测试确认，查看最终 MR 回执。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
 
-需求输入与澄清 → `product-team`（需求、产品稿、产品确认）→ `development-team`（项目范围、负责人规划、动态实施、确定性自检、独立代码审查与研发交付）→ `test-team`（测试与回归）→ `deployment-team`（部署与回滚）→ `delivery-team`（最终交付确认）。研发团队只使用 `development-lead-agent`、按任务动态创建的 `development-implementer-agent` 和 `development-reviewer-agent`；团队内部步骤只表达团队内职责和人工关口，不再作为主流程的平行团队节点。
+需求输入与澄清 → `product-team`（需求、产品稿、产品确认）→ `development-team`（项目范围、负责人规划、动态实施、确定性自检、独立代码审查与研发交付）→ `test-team`（测试与回归）→ `delivery-team`（向 `main` 提交 MR 并核验回执）。研发团队只使用 `development-lead-agent`、按任务动态创建的 `development-implementer-agent` 和 `development-reviewer-agent`；团队内部步骤只表达团队内职责和人工关口，不再作为主流程的平行团队节点。
 
 新工作台输入显式批准自主开发策略：团队可在候选内运行登记检查、携带失败证据连续排障，多角色缺陷联合修复并重跑下游。默认3轮返工、72次开发模型调用、24次检查套件执行，连续2次重复失败且无新证据时停止；新增业务决定、扩大授权或预算耗尽升级人工。旧输入保持原政策。原生 Workflow 与真实隔离检查回归已验证，真实模型完整业务交付尚未验收。详见[自主开发与排障](./docs/application/unified-workflow.md#批准范围内自主开发与排障)及[决策记录](./docs/decisions/2026-11-09-mastra-autonomous-development.md)。
 
 - [完整产研流程](./docs/application/unified-workflow.md)：阶段职责、暂停恢复、输入格式和终态。
-- [Harness 架构](./docs/application/harness-architecture.md)：平台与团队两类 Harness、四个职责区域、代码归属和渐进演进任务。
+- [Harness 架构](./docs/application/harness-architecture.md)：平台、团队和业务工程三层 Harness，跨团队编排及代码归属。
 - [产研可视化框架](./docs/application/visual-framework.md)：以不同颜色展示主流程、Git 数据交接和 Nacos 资源传递。
 - [工作台输入与人工关口](./docs/application/guided-intake.md)：澄清、版本确认、后续表单与校验。
 - [产物归档与数据流转](./docs/application/artifact-dataflow.md)：项目/迭代/Run 关联、历史版本及下载；[产物查看页](http://127.0.0.1:4111/delivery-assets)只读。
@@ -22,11 +22,11 @@ LiteLLM 和 pi 适配实验保留在 `practices/custom-exploration/`，与主线
 
 ## 运行档案
 
-新主流程自动将开始、归档阶段返回、暂停、失败和完成的观察记录保存到 HRM 的 product/catalog/runs/<RunId>/history/。Studio Workspace 中选择“HRM · 运行档案（状态投影，不可恢复）”查看。live 沿用产品阶段开关同步到 Run 交接分支；同步失败保留本地文件，可用 npm run run:archive -- sync <RunId> 补推。档案不迁移执行状态或填充另一台机器的 Recent runs。详见[运行档案说明](./docs/application/artifact-dataflow.md#2026-11-09项目运行档案)。
+新主流程自动将开始、阶段返回、暂停、失败和完成的观察记录保存到绑定业务仓库的 `product/catalog/runs/<RunId>/history/`。Studio Workspace 提供对应项目的运行档案。live 沿用产品阶段开关同步到 Run 交接分支；同步失败保留本地文件，可用 npm run run:archive -- sync <RunId> 补推。档案不迁移执行状态或填充另一台机器的 Recent runs。详见[运行档案说明](./docs/application/artifact-dataflow.md#2026-11-09项目运行档案)。
 
 ## 角色资料交接
 
-绑定仓库的 live 主流程在角色交付时自动提交并推送 `codex/workflow/<根RunId>`，成功回执绑定 commit 与文件散列。推送失败在工作台暂停，可仅重试同步而不重新生成；fixture 不推送真实远端。“项目仓库管理”登记并校验本机项目 checkout，“远端同步设置”再为产品、技术方案、开发与评审、测试、发布五个阶段分别启停同步并选择已登记仓库；默认全部使用 HRM。管理页不接受凭据，保存时服务端核对 Git 根目录与 HTTPS origin；`MASTRA_REMOTE_SYNC_TARGETS` 仍可作为首次启动的初始字典。设置只作用于后续进入的节点，不改写已保存的 Run、审批或交接回执。当前路由粒度是阶段；要按前端/后端等动态开发角色拆仓，需要先让角色任务形成独立交付节点与路由键，不能仅靠页面配置假装已经隔离。Agent 默认接收任务和资料目录，按需分段读取固定版本原文，并由 Mastra 原生观察记忆管理执行中的上下文。历史审批与恢复快照仍兼容保留。详见[远端交接说明](./docs/application/artifact-dataflow.md#2026-11-08远端交接与按需上下文)。
+绑定仓库的 live 主流程在角色交付时自动提交并推送 `codex/workflow/<根RunId>`，成功回执绑定 commit 与文件散列。推送失败在工作台暂停，可仅重试同步而不重新生成；fixture 不推送真实远端。“项目仓库管理”登记并校验本机项目 checkout，“远端同步设置”再为产品、技术方案、开发与评审、测试、发布五个阶段分别启停同步并选择已登记仓库；默认入口使用 HRM，显式登记项目的阶段同步使用其绑定仓库。管理页不接受凭据，保存时服务端核对 Git 根目录与 HTTPS origin；`MASTRA_REMOTE_SYNC_TARGETS` 仍可作为首次启动的初始字典。设置只作用于后续进入的节点，不改写已保存的 Run、审批或交接回执。当前路由粒度是阶段；要按前端/后端等动态开发角色拆仓，需要先让角色任务形成独立交付节点与路由键，不能仅靠页面配置假装已经隔离。Agent 默认接收任务和资料目录，按需分段读取固定版本原文，并由 Mastra 原生观察记忆管理执行中的上下文。历史审批与恢复快照仍兼容保留。详见[远端交接说明](./docs/application/artifact-dataflow.md#2026-11-08远端交接与按需上下文)。
 
 ## 原生上下文管理
 
@@ -83,7 +83,7 @@ HRM 项目由服务端自动关联当前仓库、分支和版本。用户确认�
 
 可在本目录运行 `npm run verify:hrm -- /Users/lei/code/hrm` 重新验证当前基线，要求 Docker Desktop 可用。结果保存到忽略的 `.data/hrm-verification-result.json`。2026-11-08 三项真实基线检查通过；这不代表招聘业务已实现或全部业务验收通过。候选代码尚未自动回写 HRM，Git 回库和 CI 制品绑定仍未接通。独立测试会重跑登记套件，人工用例需要实际结果和证据。
 
-部署由外部平台实际执行，工作台收集发布、健康检查与回滚回执，尚未接入自动 CI/CD。最终交付依赖同版本质量与发布证据；人工回执不等于机器独立验证。真实业务全链路、生产多实例和完整故障恢复尚未验收。
+默认流程在同版本 QA 放行后向 `main` 提交 MR。宿主通过已授权的 Git 和 GitHub CLI 会话推送候选到 Run 分支，核验 MR 回执后结束本轮。自主合并、CI/CD、部署和回滚属于后续规划。旧部署试点 Run 可使用 `MASTRA_LEGACY_DEPLOYMENT=true` 加载原图恢复。真实业务全链路和生产多实例尚未验收。
 
 HRM 的 `product/sources/` 为产品资料来源；阶段投影分别归档到 `product/`、`testSet/`、`deploy/`。归档文件只供查看，审批和恢复以 Mastra Store 为准。
 

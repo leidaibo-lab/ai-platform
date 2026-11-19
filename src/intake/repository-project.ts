@@ -1,6 +1,7 @@
 /** 从已授权仓库派生只读基线和项目权限上界，技术路径与实际团队由架构Agent决定。 */
 import { constants, openSync, readFileSync, closeSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { cipModelFiles, cipProfile, cipRoots, cipWritable } from '../business-engineering/hrm-cip.js';
 import { readRepositoryCatalog } from './repository-catalog.js';
 import { projectSchema, developmentHash } from '../development/contracts.js';
 export const hrmWritableRoots = ['apps/web/app', 'apps/api/src', 'packages/database/src', 'packages/database/prisma'];
@@ -8,6 +9,11 @@ export const hrmWritableRoots = ['apps/web/app', 'apps/api/src', 'packages/datab
 export function assembleRepositoryProject(root: string | undefined, expected: string) {
   const catalog = readRepositoryCatalog(root);
   if (!root || !catalog.available || catalog.catalogHash !== expected) throw new Error('仓库版本已变化，请刷新后重新确认');
+  if (catalog.engineeringAssessment.expectedProfile === cipProfile) {
+    const files = cipModelFiles(root, catalog.revision);
+    const writablePaths = Object.keys(files).filter(cipWritable);
+    return projectSchema.parse({ id: 'hrm', files, writablePaths, checkFiles: Object.keys(files).filter(path => !cipWritable(path)), roles: ['frontend', 'backend', 'infrastructure'], executionProfile: cipProfile, engineeringRevision: catalog.revision, planning: 'agent', writableRoots: cipRoots, engineeringAssessment: catalog.engineeringAssessment, ...(!catalog.executionReady ? { preparationIssues: catalog.preparationIssues } : {}) });
+  }
   const files: Record<string, string> = {};
   if (catalog.files.length > 200) throw new Error('仓库超过当前候选文件预算，请先拆分项目');
   for (const file of catalog.files) {

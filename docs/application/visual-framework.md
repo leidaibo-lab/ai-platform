@@ -1,96 +1,67 @@
 # 产研流程与资源流可视化框架
 
-平台与团队的职责分层见[Harness 架构](./harness-architecture.md)。该页表达已接受的架构方向与待解耦边界；本页继续描述当前运行流程和资源流，两者不可混作实现完成状态。
-
-本页用于查看 Mastra 主线的团队职责、Git 数据交接和 Nacos 资源接入。
+本页展示 Mastra 主线的跨团队调用、Git 版本交接与 Nacos 资源流。三层职责、源码入口和验证范围见[Harness 架构](./harness-architecture.md)。
 
 ## 当前主流程与建设方向
 
-![Mastra 主流程与建设方向](../assets/mastra-mainline-architecture.png)
+![Mastra 主线三层 Harness 架构](../assets/mastra-mainline-architecture.png)
 
 [可编辑 Draw.io 源图](../assets/mastra-mainline-architecture.drawio) · [SVG](../assets/mastra-mainline-architecture.svg) · [PNG](../assets/mastra-mainline-architecture.png)
 
-总图使用 Next AI Draw.io 绘制，以 `f51c6f4` 为核对基线。蓝色实线表示当前主流程和回流。橙色虚线框标出建议补齐的产研交接，以及 H1–H4、资源治理和发布系统接入等支撑能力。参见 [Harness 架构](./harness-architecture.md#演进任务与验收)与 [Nacos 接入待办](./nacos-integration-todo.md)。
+主图按 2026-11-19 工作区实现核对。工作台提交需求、纠偏和人工决定。主 Workflow 调用各团队，团队通过平台 Harness 执行，并从业务工程 Harness 加载版本化规格与检查。Live 正式规格按 `run/<主要能力>-<runId>` 分支交接，启用阶段同步时，阶段资料走 `codex/workflow/<根RunId>`。合成库存案例验证了工作台入口到交付终态。已授权真实仓库的 MR 交付仍待验收。
 
-- `9ac7668` 纳入正式规格交接及测试、发布业务缺口回流。Live 模式下，人工确认后将规格提交到同一 `run/<主要能力>-<runId>` 分支，下游按固定提交和散列读取。
-- `f51c6f4` 加入两条路径。产品人工返工回到同一 Run 的需求澄清。后继 Run 读取已确认并已推送的规格作为只读基线，独立审批。
+主图中，紫色实线标记 Nacos 已接入的产品角色，紫色虚线标记研发独立代码审查试点，向上的紫色箭头标明 SSE 状态投影。角色资源的发布版本来自 Nacos，当前 Run 的产品资源快照保存在 Mastra Store。
 
 ### 产研链路建设建议
 
-保留产品确认、研发授权、独立质量确认和发布审批。现有规格回执提供版本交接基础。优先选一条边界清晰的真实 HRM 需求，核对从批准版本到预发验证的证据，再用实际交付暴露的问题确定支撑能力的优先级。
+保留产品确认、研发授权和独立质量确认。先用真实 HRM 需求核对批准规格、QA 候选与 MR 提交的对应关系。以下合并、构建及预发验证属于后续建设。
 
 | 交接 | 建议建设与验收 |
 | --- | --- |
-| 需求 → 验收证据 | 稳定 ID、任务与用例关联、结果投影及修订影响已实现，隔离样例已覆盖。图中虚线保留真实 HRM 需求的验收待办。见[需求到验收证据](./unified-workflow.md#需求到验收证据)。 |
+| 需求 → 验收证据 | 稳定 ID、任务与用例关联、结果投影及修订影响已实现，隔离样例已覆盖。真实 HRM 需求的端到端验收待验证。见[需求到验收证据](./unified-workflow.md#需求到验收证据)。 |
 | 候选代码 → 合并与构建 | 采用受控 PR。对合并结果复验，记录构建提交与制品 digest，确保进入发布审批的制品能追溯到通过检查的源码。 |
 | 制品 → 预发验收 | 按批准的 digest 部署，在预发执行关键业务用例和回滚演练。核对实际运行版本与发布审批、机器回执一致。 |
 | 交付 → 上线后反馈 | 记录已发布版本的业务指标与线上问题。由负责人判断是否形成后继 Run，并关联来源规格。 |
 
-下文历史细节图保留 `2434eb5` 的阶段投影视角，其中 `codex/workflow/<根RunId>` 对应阶段产物副本。正式规格与后继 Run 以总图和[当前 OpenSpec](../../openspec/specs/project-mainline/spec.md)为准。
+正式规格、阶段产物副本和后继 Run 的契约见[当前 OpenSpec](../../openspec/specs/project-mainline/spec.md)。
 
 ## 阅读约定
 
 | 线路 | 含义 |
 | --- | --- |
-| 灰色实线 | 业务推进、人工关口及返工回流 |
-| 绿色虚线 | Git 资料读取、产物导出与远端交接 |
-| 紫色虚线 | Nacos 资源注册、冻结与角色使用 |
+| 蓝色实线 | 业务推进、人工关口及返工回流 |
+| 绿色虚线 | Git 资料、产物交接与 Store 检查点 |
+| 紫色线 | Nacos 资源或 SSE 观察，箭头旁标注用途与接入状态 |
 
-箭头文字同时说明含义，避免仅依赖颜色。主流程按责任团队分组；研发业务阻塞后的澄清归产品团队。为减少交叉线，主图展示数据入口与出口，后两图展开交接细节。所有执行、审批和恢复事实归 Mastra Store，Git 文件只是投影，Nacos 提供方法资源。
+箭头文字同时说明含义，避免仅依赖颜色。主流程按责任团队分组；研发业务阻塞后的澄清归产品团队。为减少交叉线，主图展示数据入口与出口，后两图展开交接细节。Mastra Store 持有执行、审批和恢复事实。Git 持有 SDD、源码基线与交付版本。Nacos 分发产品角色资源。
 
 ## 主流程与数据入口、出口
 
+默认主线为产品 → 研发 → 测试 → 交付。交付团队向 `main` 创建 MR 并记录回执。自主合并和 CI/CD 属于后续规划。
+
+各团队的阶段审阅、立即纠偏、测试返工与交付重试见 [Workflow 执行链路图](./unified-workflow.md#workflow-执行链路图)。
+
 ```mermaid
 flowchart TB
-    START["提交需求 / 初始化 Run"]
-
-    subgraph PRODUCT["产品团队"]
-        P["需求澄清、分析、范围与成稿<br/>独立产品审查、人工批准"]
-        C["业务阻塞澄清<br/>用户回答、产品修订、人工重新批准"]
-    end
-
-    subgraph DEV["研发团队"]
-        D["项目授权、方案规划、就绪审查"]
-        E["人工批准方案与团队<br/>实施、自检、独立代码审查"]
-    end
-
-    T["测试团队<br/>用例批准、独立执行、质量确认"]
-    L["部署团队<br/>发布审批、外部回执、健康检查"]
-    F["交付团队<br/>核对同版本证据"]
-    B["业务 Git 仓库<br/>业务资料、源码基线、登记检查"]
-    O["阶段产物导出<br/>产品稿、方案、候选源码副本<br/>测试证据、发布回执"]
-    R["Git 远端交付分支<br/>codex/workflow/根RunId"]
-    N["Nacos<br/>指定版本的产品 Prompt 与 Skill"]
-    S["本 Run 冻结的产品资源<br/>调用前复核原版本与权限"]
-
-    START --> P
-    P --> D
-    D --> E
-    E --> T
-    T --> L
-    L --> F
-    D -->|未实施的业务阻塞| C
-    C -->|新批准版本，重新规划| D
-    T -->|代码缺陷返工| E
-
-    B -.->|读取业务材料| P
-    B -.->|读取授权源码与检查| D
-    P -.->|导出| O
-    C -.->|导出| O
-    D -.->|方案与就绪证据| O
-    E -.->|导出| O
-    T -.->|导出| O
-    L -.->|导出| O
-    F -.->|导出| O
-    O -.->|live 且阶段同步启用时推送| R
-
-    N -.->|Run 初始化时读取并冻结| S
-    S -.->|产品经理与审查角色使用| P
-    S -.->|澄清复用原 Run 资源| C
-
-    linkStyle 0,1,2,3,4,5,6,7,8 stroke:#94a3b8,stroke-width:2px
-    linkStyle 9,10,11,12,13,14,15,16,17,18 stroke:#22c55e,stroke-width:2px
-    linkStyle 19,20,21 stroke:#a855f7,stroke-width:2px
+    UI["工作台：需求与人工决定"] --> P["产品团队：澄清、成稿、独立检查、人工批准"]
+    UI -->|生成中立即纠偏| CORRECT["平台 Harness：中止尝试并保存暂停点"]
+    P -->|待审稿退回修改| REWORK["产品团队：判断返工节点与保留范围"]
+    CORRECT -->|从原生检查点恢复| REWORK
+    REWORK -->|同 Run 重做，重新审阅| P
+    P -->|已批准产品版本| D["研发团队：项目授权、规划、实施、独立评审"]
+    D --> T["测试团队：批准用例、独立执行与回归"]
+    T --> F["交付团队：核对候选与 QA 证据，向 main 提交 MR"]
+    D -->|业务阻塞| C["业务澄清与修订稿人工批准"]
+    C -->|新批准版本| D
+    T -->|代码缺陷返工| D
+    G["业务工程 Git：固定 SDD、候选基线、保护检查"] -.->|项目适配装配| P
+    G -.->|项目适配装配| D
+    G -.->|项目适配装配| T
+    N["本 Run 冻结的产品 Prompt / Skill"] -.->|角色方法| P
+    CORRECT -.->|保存与恢复| S["Mastra Store：运行、审批、检查点"]
+    linkStyle 0,1,2,3,4,5,6,7,8,9,10 stroke:#255ac4,stroke-width:2px
+    linkStyle 11,12,13,15 stroke:#097868,stroke-width:2px
+    linkStyle 14 stroke:#7650a0,stroke-width:2px
 ```
 
 主图压缩了团队内部步骤。产品拒绝/退回、工程准备、模型故障、预算耗尽和发布回滚的完整边界见[完整产研流程](./unified-workflow.md)。业务阻塞回流是原 Run 的专用子流程，不是重新执行首次产品流程的全部节点。工程条件缺失走项目准备与重新确认，不应当作业务问题交给产品修订。
@@ -99,7 +70,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    B["已授权业务仓库 checkout<br/>源码基线、登记检查"]
+    B["绑定业务仓库<br/>固定 SDD、源码基线、登记检查"]
     C["隔离候选目录<br/>按批准路径实施、保留检查点"]
     T["对同版本候选执行<br/>开发检查与独立测试"]
     A["各团队已生成的阶段产物"]
@@ -108,7 +79,9 @@ flowchart TB
     R["已登记远端交付分支<br/>codex/workflow/根RunId"]
     H["核实 repositoryHandoff<br/>精确 commit、文件 hash"]
     M["后续角色只读材料目录<br/>固定版本正文按需读取"]
-    RETRY["同步失败：原生暂停<br/>重试已缓存产物，不重跑生成"]
+    RETRY["同步失败：原生暂停<br/>仅重试已缓存产物"]
+    SPEC["Live 已确认规格<br/>run/&lt;主要能力&gt;-&lt;runId&gt;"]
+    NEXT["后继 Run<br/>重新澄清、执行并审批"]
 
     B -.->|授权后建立快照| C
     C -.->|独立环境验证| T
@@ -122,13 +95,16 @@ flowchart TB
     LOCAL -.->|推送失败| RETRY
     RETRY -.->|仅补同步| R
 
-    linkStyle 0,1,2,3,4,5,6,7,8,9,10 stroke:#22c55e,stroke-width:2px
+    A -.->|按批准版本提交规格| SPEC
+    SPEC -.->|核验 commit 和文件散列| NEXT
+
+    linkStyle 0,1,2,3,4,5,6,7,8,9,10,11,12 stroke:#097868,stroke-width:2px
 ```
 
-- 业务材料来自 `product/sources/`，产品角色通过只读 Workspace 按需读取；源码和检查基线在项目授权时由服务端装配。
+- 默认 HRM 使用 `product/sources/` 的只读 Workspace。登记项目从固定 Git commit 加载产品、开发、测试 SDD、候选源码与保护检查。项目授权由服务端核对目录散列。
 - 阶段资料使用 `<area>/runs/<根RunId>/<stage>/<hash>/` 保存。产品与研发资料归 `product`，测试归 `testSet`，发布与最终交付归 `deploy`。
 - 候选代码通过 `candidate-files.json` 等资料形成交付副本，不自动合入业务源码主分支；实际开发修改发生在隔离候选目录。
-- 远端目标按阶段配置；图中的远端分支可以位于不同已登记目标仓库，不表示已支持动态团队按成员分仓。
+- HRM 兼容配置支持按阶段选择远端目标。显式登记项目的阶段同步使用绑定仓库。Live 正式规格沿同一能力命名 Run 分支追加。
 - fixture 不推送真实远端。同步成功回执用于固定版本交接；Agent 使用 `handoff_locate` / `handoff_read` 读取已登记材料，不获得任意 Git 操作权限。尚未交付的材料可使用本次调用固定快照。
 - Git 档案不是数据库备份。跨机恢复不能只拉取 main 或 Run 分支，还需满足原生 Store、候选目录、恢复缓存与执行身份要求。
 
@@ -177,6 +153,8 @@ Nacos 更新版本不会自动替换已有 Run 的资源。产品审批版本和
 
 | 图示职责 | 当前实现 |
 | --- | --- |
+| 业务工程装配 | [project.ts](../../src/business-engineering/project.ts)、[验收需求契约](../../src/business-engineering/acceptance-requirements.ts) |
+| 立即纠偏与产品返工 | [平台中止](../../src/mastra/platform/interruptible-attempts.ts)、[产品团队返工判断](../../src/mastra/workflows/product-rework.ts) |
 | 主链与初始化资源冻结 | [product-development.ts](../../src/mastra/workflows/product-development.ts) |
 | 产品团队、研发团队与业务阻塞回流 | [product-team.ts](../../src/mastra/workflows/product-team.ts)、[development-team.ts](../../src/mastra/workflows/development-team.ts)、[blocker-workflow.ts](../../src/intake/blocker-workflow.ts) |
 | 阶段导出与 Git 交接 | [repository-assets.ts](../../src/delivery/repository-assets.ts)、[remote-handoff.ts](../../src/delivery/remote-handoff.ts) |
@@ -185,3 +163,15 @@ Nacos 更新版本不会自动替换已有 Run 的资源。产品审批版本和
 | 角色资源与迁移范围 | [资源清单](./agent-resource-inventory.md)、[资源源资产](../../nacos-resources/product/README.md) |
 
 修改行为契约时先更新 OpenSpec，再同步实现和本页。新增或移动流程节点时保留责任团队归属；增加数据线路时说明读写内容、版本绑定与事实所有者。图中每条边按声明顺序从 0 编号，修改边后须同步 `linkStyle` 索引。维护时核对 Mermaid 渲染、相对链接和能力边界，不用预期能力替换已验证事实。
+
+
+## 仓库资源同步清单
+
+| 资源 | 更新内容 |
+| --- | --- |
+| [主图资产](../assets/mastra-mainline-architecture.drawio)、[SVG](../assets/mastra-mainline-architecture.svg)、[PNG](../assets/mastra-mainline-architecture.png) | 三层 Harness、跨团队编排、SSE、事实源及版本流共用一张主图 |
+| [架构页](./harness-architecture.md)、[绘图规范](../architecture-diagram-style.md) | 统一职责、代码映射、验证范围和主线绘图口径 |
+| [根 README](../../README.md)、[文档索引](../README.md)、[协作规则](../../AGENTS.md) | 主入口引用三层 Harness 与跨团队编排 |
+| [决策索引](../decisions/README.md)、[三层决策](../decisions/2026-11-19-three-layer-harness.md) | 新记录说明职责演进，历史决策保留当时依据和替代链接 |
+| [完整流程](./unified-workflow.md)、[工作台](./guided-intake.md)、[配置索引](../../config/README.md)、[产物数据流](./artifact-dataflow.md) | 对齐同 Run 纠偏与退回、固定 Git 版本装配、HRM 兼容与归档 |
+| [主线 OpenSpec](../../openspec/specs/project-mainline/spec.md) | 当前稳定契约已覆盖产品返工、工程绑定与后继 Run，作为图文校验依据 |

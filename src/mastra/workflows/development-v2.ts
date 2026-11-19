@@ -1,3 +1,4 @@
+import { projectRepositoryRoot } from '../../business-engineering/project.js';
 import { reworkState, stopAutonomy, runVerification, VerificationBudgetError } from '../../development/v2/autonomy.js';
 /** 版本化受限开发流水线；阶段状态由原生dountil/suspend保存，终态只由交付门写入。 */
 import { createStep, createWorkflow } from '@mastra/core/workflows';
@@ -17,7 +18,7 @@ import { assembleTeam, createTeamExecution } from '../../development/v2/team.js'
 import type { ExecutionPort } from '../../development/v2/execution-scope.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { publishFormalSpecification, type FormalSpecificationReceipt } from '../../delivery/remote-handoff.js';
-import { readAcceptanceRequirements } from '../../development/v2/acceptance-requirements.js';
+import { readAcceptanceRequirements } from '../../business-engineering/acceptance-requirements.js';
 import { createProductUnits } from '../../development/v2/product-units.js';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
 import { publishLiveOutput } from '../../intake/live-output.js';
@@ -169,7 +170,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       const approved = review.decision === 'approve';
       let formalSpecification = inputData.formalSpecification;
       if (approved && config.mode === 'live') {
-        const root = config.hrmRepositoryRoot;
+        const root = projectRepositoryRoot(config);
         const capability = inputData.input.correlation?.iterationId;
         const product = inputData.input.formalSpecifications?.find(item => item.kind === 'product');
         if (!root || !capability || !product) throw new Error('开发规格确认缺少已推送的产品规格或受控仓库绑定');

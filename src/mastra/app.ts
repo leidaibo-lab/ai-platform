@@ -1,3 +1,4 @@
+import { loadEngineeringProject, projectRepositoryRoot } from '../business-engineering/project.js';
 import { createIntakeRoutes } from '../intake/routes.js';
 import { createAssetRoutes } from '../delivery/asset-routes.js';
 import { Mastra } from '@mastra/core';
@@ -7,17 +8,16 @@ import { ConsoleLogger } from '@mastra/core/logger';
 import { LibSQLStore } from '@mastra/libsql';
 import type { PracticeConfig } from './config.js';
 import { createAgents } from './agents/index.js';
-import { createRecruitmentWorkspace } from './project-workspaces.js';
-import { validateHrmRepository } from '../delivery/repository-assets.js';
-import { join } from 'node:path';
+import { productWorkspace } from './project-workspaces.js';
 import { createProductDevelopmentWorkflow } from './workflows/product-development.js';
 
 /** Studio 装配原生 Store、团队 Workflow 与项目资源，公开当前完整产研业务流程。
- * ADR: docs/decisions/2026-11-18-platform-team-harness.md
+ * ADR: docs/decisions/2026-11-19-three-layer-harness.md
  */
 export function createStudioApplicationOptions(config: PracticeConfig) {
-  const repository = config.hrmRepositoryRoot ? validateHrmRepository(config.hrmRepositoryRoot) : undefined;
-  const agents = createAgents(config, repository ? { workspace: createRecruitmentWorkspace(config.rootDir, join(repository, 'product/sources')) } : {});
+  const repository = projectRepositoryRoot(config);
+  if (config.engineeringProject) loadEngineeringProject(config.engineeringProject);
+  const agents = createAgents(config, { workspace: productWorkspace(config) });
   const storage = new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl });
   const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config, undefined, { storage });
   return {

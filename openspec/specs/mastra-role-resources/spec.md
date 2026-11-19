@@ -53,6 +53,20 @@
 - **THEN** 系统 SHALL 进入 `guided-requirements`，逐轮展示高影响问题并等待用户回答
 - **AND** 推荐、假设和未提交草稿 SHALL NOT 被视为已确认业务规则
 
+#### Scenario: Browser resumes the current clarification draft
+
+- **WHEN** 用户填写逐项澄清后刷新同一标签页，或在该标签页切换 Run 后返回
+- **THEN** 工作台 SHALL 仅对匹配 Run 和方案 hash 的草稿恢复回答、补充说明和确认人
+- **AND** 工作台 SHALL 展示浏览器草稿的保存状态，正式回答仍以用户提交及 Workflow 快照为准
+- **AND** Workflow 推进到新方案或产品稿后，旧草稿 SHALL 不再回填
+
+#### Scenario: Browser explains the result of submitting clarification answers
+
+- **WHEN** 用户提交当前轮回答并请求检查业务缺口
+- **THEN** 工作台 SHALL 在操作前说明根据检查结果继续澄清或生成产品稿
+- **AND** 返回澄清时 SHALL 提示继续处理当前轮，返回产品稿时 SHALL 提示审阅
+- **AND** 需要先继续讨论方案的用户 SHALL 可以显式提交回答并继续澄清
+
 #### Scenario: Autofill mode generates a reviewable product draft
 
 - **WHEN** 用户选择 `intakeMode=autofill`

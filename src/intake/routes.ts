@@ -1,3 +1,4 @@
+import { assertProjectCorrelation, loadEngineeringProject, projectRepositoryRoot } from '../business-engineering/project.js';
 import { autonomyPolicySchema } from '../development/v2/contracts.js';
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
 import type { PracticeConfig } from '../mastra/config.js';
@@ -7,11 +8,11 @@ import { readRepositoryCatalog } from './repository-catalog.js';
 import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
-import { GateInputError, readIntake, respondIntake } from './service.js';
+import { correctIntake, GateInputError, readIntake, respondIntake } from './service.js';
 import { projectLiveOutputEvent, projectWorkflowActivity } from './run-timeline.js';
 import { intakeModeSchema } from './contracts.js';
 import { deliverySchema } from '../mastra/workflows/delivery.js';
-import { buildSuccessorBaseline } from './successor-run.js';
+import { buildSuccessorBaseline, successorSource } from './successor-run.js';
 import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
 import type { WorkflowStreamEvent } from '@mastra/core/workflows';
 const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned'), intakeMode: intakeModeSchema.default('clarify') });
@@ -19,6 +20,17 @@ const successorRequestSchema = z.object({ runId: z.string().uuid(), artifactKind
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
 export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
   const busy = new Set<string>();
+  /** 新项目的 Run 只使用启动时登记的 Git 版本。 */
+  function engineering() { return config?.engineeringProject ? loadEngineeringProject(config.engineeringProject) : undefined; }
+  /** 项目恢复、后继创建和纠偏统一核对原生初始化关联。 */
+  async function verifyRunProject(runId: string) {
+    if (!config) return;
+    const source = await workflow.getWorkflowRunById(runId);
+    const step = source?.steps?.['initialize-product-development'];
+    const parsed = deliverySchema.safeParse(step && !Array.isArray(step) ? step.output : undefined);
+    try { assertProjectCorrelation(config, parsed.data?.correlation); }
+    catch { throw new GateInputError('当前 Run 需要使用创建时绑定的业务工程版本'); }
+  }
   /** 校验本机写来源；标签不等于认证身份。 */
   function origin(c: ContextWithMastra) {
     const value = c.req.header('origin');
@@ -65,7 +77,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       // 只读固定配置仓库，不允许客户端切换宿主路径或读取文件内容。
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { return c.json(readRepositoryCatalog(repositoryRoot)); }
+        try { return c.json(engineering()?.catalog ?? readRepositoryCatalog(repositoryRoot)); }
         catch { return c.json({ available: false, reason: '已关联仓库暂不可读，请检查仓库路径及授权。' }, 409); }
       },
     }),
@@ -78,14 +90,15 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
           origin(c); const input = startSchema.parse(await c.req.json()); id = input.runId;
           if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
           if (await workflow.getWorkflowRunById(id)) {
-            const existing = await readIntake(workflow, id);
+            await verifyRunProject(id);
+            const existing = await readIntake(workflow, id, config);
             if (existing.brief !== input.brief) throw new Error('同一标识不能更换需求');
             if (existing.intakeMode && existing.intakeMode !== input.intakeMode) throw new Error('同一标识不能更换需求处理方式');
             return c.json(existing);
           }
           const run = await workflow.createRun({ runId: id });
           await run.start({ inputData: { brief: input.brief, iterationId: input.iterationId, intakeMode: input.intakeMode, guidedIntake: input.intakeMode === 'clarify' } });
-          return c.json(await readIntake(workflow, id));
+          return c.json(await readIntake(workflow, id, config));
         } catch (error) { return failure(c, error); }
         finally { if (id && acquired) busy.delete(id); }
       },
@@ -96,7 +109,9 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         c.header('Cache-Control', 'no-store');
         let id: string | undefined; let acquired = false;
         try {
-          origin(c); if (!config?.hrmRepositoryRoot) throw new Error('后继 Run 缺少受控项目仓库');
+          origin(c);
+          const root = config && projectRepositoryRoot(config);
+          if (!root) throw new Error('后继 Run 缺少受控项目仓库');
           const sourceRunId = z.string().uuid().parse(c.req.param('sourceRunId'));
           const request = successorRequestSchema.parse(await c.req.json()); id = request.runId;
           if (id === sourceRunId) throw new Error('后继 Run 必须使用新的 Run 标识');
@@ -104,13 +119,14 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
           if (await workflow.getWorkflowRunById(id)) throw new Error('该 Run 标识已经存在');
           const source = await workflow.getWorkflowRunById(sourceRunId);
           if (!source || source.status !== 'success') throw new Error('只能基于已结束 Run 创建后继 Run');
-          const candidates = Object.entries(source.steps ?? {}).filter(([, value]) => !Array.isArray(value)).map(([, value]) => deliverySchema.safeParse((value as any).output)).filter(item => item.success).map(item => item.data);
-          const delivery = candidates.find(item => item.formalSpecifications?.length) ?? candidates.at(0);
+          const product = source.steps?.['product-team'];
+          const delivery = successorSource(source.result, product && !Array.isArray(product) ? product.output : undefined);
+          if (config) assertProjectCorrelation(config, delivery?.correlation, { allowEarlierRevision: true });
           if (!delivery?.correlation || !delivery.formalSpecifications?.length) throw new Error('来源 Run 不包含已确认并推送的正式规格');
-          const baseline = buildSuccessorBaseline(config.hrmRepositoryRoot, sourceRunId, delivery, request.artifactKinds, request.changeBrief);
+          const baseline = buildSuccessorBaseline(root, sourceRunId, delivery, request.artifactKinds, request.changeBrief);
           const run = await workflow.createRun({ runId: id });
           await run.start({ inputData: { brief: request.changeBrief, iterationId: request.iterationId ?? delivery.correlation.iterationId, intakeMode: request.intakeMode, guidedIntake: request.intakeMode === 'clarify', successorBaseline: baseline } });
-          return c.json(await readIntake(workflow, id));
+          return c.json(await readIntake(workflow, id, config));
         } catch (error) { return failure(c, error); }
         finally { if (id && acquired) busy.delete(id); }
       },
@@ -122,7 +138,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         try {
           const result = await workflow.listWorkflowRuns({ page: 0, perPage: 30 });
           const runs = [];
-          for (const run of result.runs) runs.push(await readIntake(workflow, run.runId));
+          for (const run of result.runs) runs.push(await readIntake(workflow, run.runId, config));
           return c.json({ runs });
         } catch (error) { return failure(c, error); }
       },
@@ -131,7 +147,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       // 每次刷新以原生快照为准。
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { return c.json(await readIntake(workflow, c.req.param('runId'))); }
+        try { return c.json(await readIntake(workflow, c.req.param('runId'), config)); }
         catch (error) { return failure(c, error); }
       },
     }),
@@ -186,6 +202,14 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' } });
       },
     }),
+    registerApiRoute('/intake-api/runs/:runId/correct-product', { method: 'POST',
+      /** 运行中纠偏通过独立入口通知正在执行的模型步骤。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { origin(c); await verifyRunProject(c.req.param('runId')); return c.json(await correctIntake(workflow, mode, c.req.param('runId'), await c.req.json(), config)); }
+        catch (error) { return failure(c, error); }
+      },
+    }),
     registerApiRoute('/intake-api/runs/:runId/respond', { method: 'POST',
       // 写锁覆盖校验与恢复；失败保留浏览器输入，由用户主动回读。
       handler: async c => {
@@ -193,12 +217,18 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         const id = c.req.param('runId'); let acquired = false;
         try {
           origin(c); if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
+          await verifyRunProject(id);
           let input = await c.req.json();
+          if (config?.engineeringProject && input.data?.project) throw new GateInputError('业务工程范围必须通过当前项目目录确认');
           if (input.data?.project?.executionProfile && !input.repositoryScope) throw new GateInputError('全栈项目必须通过已关联仓库确认，不能从页面传入源码或执行档');
           if (input.repositoryScope) {
             const selection = z.object({ catalogHash: z.string().length(64), maxReworks: z.number().int().min(0).max(3).optional(), autonomy: autonomyPolicySchema.optional(), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) }).parse(input.repositoryScope);
             let project;
-            try { project = assembleRepositoryProject(repositoryRoot, selection.catalogHash); }
+            try {
+              const registered = engineering();
+              if (registered && registered.catalog.catalogHash !== selection.catalogHash) throw new Error('项目目录版本已变化，请刷新后重新确认');
+              project = registered?.candidate ?? assembleRepositoryProject(repositoryRoot, selection.catalogHash);
+            }
             catch (error) { throw new GateInputError(error instanceof Error ? error.message : '仓库配置不可用'); }
             input = { gateHash: input.gateHash, data: { project, reviewer: selection.reviewer, comment: selection.comment, maxReworks: selection.maxReworks ?? 1, autonomy: selection.autonomy } };
           }

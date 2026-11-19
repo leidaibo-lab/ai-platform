@@ -6,7 +6,8 @@
 
 - [Mastra 主流程架构图](./application/visual-framework.md#当前主流程与建设方向)汇总当前运行路径、Harness 职责及待建设方向，提供可编辑源图。
 - [产研可视化框架](./application/visual-framework.md)：主流程总览、Git 数据流、Nacos 资源流及事实源边界。
-- [完整产研流程](./application/unified-workflow.md)：产品、研发、测试、部署和交付团队的主流程与人工关口。
+- 产品、研发、测试与 MR 交付的阶段审阅、纠偏和返工路径见 [Workflow 执行链路图](./application/unified-workflow.md#workflow-执行链路图)。
+- 研发与 QA 的业务缺口如何进入产品团队返工判断见 [产品返工目标链路](./application/unified-workflow.md#产品返工目标链路)。
 - [产研角色资源清单与绑定](./application/agent-resource-inventory.md)：产品 Prompt、Skill 的当前来源、目标绑定与迁移缺口，以及宿主执行边界。
 - [Nacos live 流程验证与待处理问题](./application/nacos-live-run-findings.md)：真实资源接入、故障恢复、审批事实与未完成的交付证据。
 - [产品 Nacos 资源候选](../nacos-resources/product/README.md)：跨电脑共享的角色 Prompt、资源声明与 Skill 包准备方法。
@@ -19,7 +20,7 @@
 
 ## 约束、决策与评测
 
-- [Harness 架构](./application/harness-architecture.md)：平台机制、团队专业闭环、业务编排与项目适配的职责图、现有差距和演进任务。
+- [Harness 架构](./application/harness-architecture.md)：三层 Harness、跨团队编排、代码归属和演进任务。
 - [架构与方案决策](./decisions/README.md)：接受、替代与历史决策索引。
 - [v2.0 迁移方案](./v2-migration-plan.md)：完整远端基线、目录迁移和验证状态。
 - [根主线协作规则](../AGENTS.md)：运行边界、配置和安全约束。

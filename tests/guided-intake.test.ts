@@ -56,6 +56,10 @@ test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修�
     }
     current = await respondIntake(workflow, 'fixture', run.runId, { ...answer, hash: current.intake!.hash, action: 'finalize', answers: [] });
     assert.equal(current.step, 'review-product'); assert.ok(current.product);
+    const productSnapshot = await workflow.getWorkflowRunById(run.runId);
+    const writing = productSnapshot?.steps?.['product-team.product-specification.product-writing'];
+    assert.ok(writing && !Array.isArray(writing) && writing.status === 'success');
+    assert.deepEqual((writing.output as { productWork: { entries: { role: string }[] } }).productWork.entries.map(entry => entry.role), ['writing']);
     const review = { role: 'product', artifactHash: current.product.artifact.hash, decision: 'approve', reviewer: 'test-human', comment: '合成批准' };
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { ...review, artifactHash: '0'.repeat(64) }));
     current = await respondIntake(workflow, 'fixture', run.runId, review);
@@ -75,11 +79,35 @@ test('AI主动补全模式：跳过逐项澄清，直接生成待审产品稿', 
     const result = await run.start({ inputData: { brief: '合成招聘需求', iterationId: 'autofill-test', intakeMode: 'autofill' } });
     assert.equal(result.status, 'suspended');
     const current = await readIntake(workflow, run.runId);
+    const team = workflow.steps['product-team'] as { steps: Record<string, unknown> };
+    assert.deepEqual(Object.keys(team.steps), ['product-direction', 'product-specification', 'review-product']);
     assert.equal(current.intakeMode, 'autofill', JSON.stringify(current));
     assert.equal(current.step, 'review-product', JSON.stringify(current));
     assert.ok(current.product);
     assert.equal(current.intake, undefined);
   } finally { void mastra; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('历史嵌套三阶段图从原暂停点恢复', /** 重新装配历史图后使用原 Run 的澄清关口。 */async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'nested-product-intake-'));
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, nestedProductWorkflow: true, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  let app = createStudioApplicationOptions(config);
+  new Mastra(app);
+  try {
+    const run = await app.workflows.productDevelopmentWorkflow.createRun();
+    const started = await run.start({ inputData: { brief: '合成历史澄清', iterationId: 'nested-product', guidedIntake: true } });
+    assert.equal(started.status, 'suspended');
+    await app.storage.close();
+    app = createStudioApplicationOptions(config);
+    new Mastra(app);
+    const workflow = app.workflows.productDevelopmentWorkflow;
+    const current = await readIntake(workflow, run.runId);
+    assert.ok(current.intake?.hash);
+    const next = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake.hash, action: 'finalize', reviewer: 'test-human', supplement: '', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }] });
+    assert.equal(next.step, 'review-product');
+    const snapshot = await workflow.getWorkflowRunById(run.runId);
+    assert.ok(snapshot?.steps?.['product-team.draft-product.publish-product']);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('产品返工回到同 Run 澄清，保留审阅反馈且新稿必须重新确认', /** 未确认产品稿不得进入开发或复用旧审批。 */async () => {
@@ -93,14 +121,93 @@ test('产品返工回到同 Run 澄清，保留审阅反馈且新稿必须重新
     current = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: oldHash, decision: 'rework', reviewer: 'test-human', comment: '请补齐异常处理与验收边界' });
     assert.equal(current.status, 'suspended'); assert.equal(current.step, 'guided-requirements'); assert.ok(current.intake);
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    const rework = (snapshot!.steps!['product-team.draft-product.guided-requirements'] as any).payload.productRework;
+    const rework = (snapshot!.steps!['product-team.product-direction.guided-requirements'] as any).payload.productRework;
     assert.equal(rework.sourceHash, oldHash); assert.equal(rework.feedback, '请补齐异常处理与验收边界');
     assert.equal((snapshot!.steps!['development-team'] as any)?.status, undefined);
     current = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake!.hash, action: 'finalize', reviewer: 'test-human', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }], supplement: '' });
-    current = await respondIntake(workflow, 'fixture', run.runId, { hash: current.intake!.hash, action: 'finalize', reviewer: 'test-human', answers: [], supplement: '' });
     assert.equal(current.step, 'review-product'); assert.notEqual(current.product!.artifact.hash, oldHash);
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: oldHash, decision: 'approve', reviewer: 'test-human', comment: '旧批准' }));
   } finally { void mastra; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('产品 Harness 按审阅意见从写作重做并保留上游结论', async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'product-writing-rework-'));
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const app = createStudioApplicationOptions(config);
+  new Mastra(app);
+  const workflow = app.workflows.productDevelopmentWorkflow;
+  try {
+    const run = await workflow.createRun();
+    await run.start({ inputData: { brief: '合成产品写作需求', iterationId: 'writing-rework', intakeMode: 'autofill' } });
+    const original = await readIntake(workflow, run.runId);
+    const oldHash = original.product!.artifact.hash;
+    const snapshot = await workflow.getWorkflowRunById(run.runId);
+    const originalScope = snapshot?.steps?.['product-team.product-direction.product-analysis'];
+    const revised = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: oldHash, decision: 'rework', reviewer: 'test-human', comment: '术语：统一候选人称谓' });
+    assert.equal(revised.runId, run.runId);
+    assert.equal(revised.step, 'review-product');
+    assert.equal(revised.appliedCorrection?.target, 'writing');
+    assert.notEqual(revised.product!.artifact.hash, oldHash);
+    const next = await workflow.getWorkflowRunById(run.runId);
+    const savedScope = next?.steps?.['product-team.product-direction.product-analysis'] as typeof originalScope;
+    assert.equal((savedScope as any).startedAt, (originalScope as any).startedAt);
+    assert.deepEqual((savedScope as any).output.productWork, (originalScope as any).output.productWork);
+    const development = next?.steps?.['development-team'];
+    assert.equal(development && !Array.isArray(development) ? development.status : undefined, undefined);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复执行', async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'product-active-correction-'));
+  const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const app = createStudioApplicationOptions(config);
+  new Mastra(app);
+  const workflow = app.workflows.productDevelopmentWorkflow;
+  const router = new Hono();
+  for (const route of app.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
+  const manager = app.agents.productManagerAgent;
+  const generate = manager.generate.bind(manager);
+  let enterWriting!: () => void;
+  const writing = new Promise<void>(resolve => { enterWriting = resolve; });
+  let stopped = false;
+  let held = false;
+  manager.generate = new Proxy(generate, {
+    /** 首次写作保留在模型调用中，直到真实请求发出中止信号。 */
+    async apply(target, receiver, args) {
+      if (!held && String(args[0]).includes('"phase":"writing"')) {
+        held = true;
+        const signal: AbortSignal = args[1].abortSignal;
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => { stopped = true; reject(signal.reason); }, { once: true });
+          enterWriting();
+        });
+      }
+      return Reflect.apply(target, receiver, args);
+    },
+  });
+  try {
+    const run = await workflow.createRun();
+    const initial = run.start({ inputData: { brief: '合成生成中纠偏需求', iterationId: 'active-correction', intakeMode: 'autofill' } });
+    await Promise.race([writing, initial.then(() => assert.fail('应先进入待中止写作'))]);
+    const running = await readIntake(workflow, run.runId);
+    assert.ok(running.directionDraft, '写作完成前已能回读方向建议');
+    const attempt = running.activeProductAttempt!.attempt;
+    /** 通过真实路由提交纠偏。 */
+    function post(input: { attempt: string; feedback?: string; reviewer?: string }) {
+      return router.request(`/intake-api/runs/${run.runId}/correct-product`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+    }
+    assert.equal((await post({ attempt: randomUUID(), feedback: '范围：只做人工初筛', reviewer: 'test-human' })).status, 409);
+    const response = await post({ attempt, feedback: '范围：只做人工初筛', reviewer: 'test-human' });
+    const revised = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(revised));
+    assert.equal((await initial).status, 'suspended');
+    assert.equal(stopped, true);
+    assert.equal(revised.runId, run.runId);
+    assert.equal(revised.step, 'review-product');
+    assert.deepEqual(revised.appliedCorrection, { attempt, target: 'analysis', round: 1 });
+    const duplicate = await (await post({ attempt })).json();
+    assert.equal(duplicate.product.artifact.hash, revised.product.artifact.hash);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 import { Hono, type Handler } from 'hono';
@@ -122,9 +229,7 @@ test('需求 HTTP：同源、固定标识创建、坏答案与完整稿版本门
     const again = await (await post('/intake-api/runs', input)).json(); assert.equal(again.intake.hash, current.intake.hash);
     assert.equal((await post(`/intake-api/runs/${input.runId}/respond`, { hash: current.intake.hash, action: 'finalize', reviewer: 'test', answers: [], supplement: '' })).status, 409);
     const read = await router.request(`/intake-api/runs/${input.runId}`); assert.equal(read.headers.get('cache-control'), 'no-store'); assert.equal((await read.json()).intake.hash, current.intake.hash);
-    let draft = await (await post(`/intake-api/runs/${input.runId}/respond`, { hash: current.intake.hash, action: 'finalize', reviewer: 'test', answers: [{ questionId: 'scope', selected: [], custom: '仅人工初筛和邀约记录' }], supplement: '' })).json();
-    assert.equal(draft.step, 'guided-requirements');
-    draft = await (await post(`/intake-api/runs/${input.runId}/respond`, { hash: draft.intake.hash, action: 'finalize', reviewer: 'test', answers: [], supplement: '' })).json();
+    const draft = await (await post(`/intake-api/runs/${input.runId}/respond`, { hash: current.intake.hash, action: 'finalize', reviewer: 'test', answers: [{ questionId: 'scope', selected: [], custom: '仅人工初筛和邀约记录' }], supplement: '' })).json();
     assert.equal(draft.step, 'review-product');
     const decision = { role: 'product', artifactHash: draft.product.artifact.hash, decision: 'reject', reviewer: 'test', comment: '合成终止' };
     assert.equal((await post(`/intake-api/runs/${input.runId}/respond`, { ...decision, artifactHash: '0'.repeat(64) })).status, 409);
@@ -164,7 +269,7 @@ test('澄清约束：坏表单、单多选、文本、重复问题与继续澄�
 
 for (const scenario of ['success', 'rollback']) test(`业务前端接口连续推进：${scenario}，非法输入保留暂停点`, /** 合成项目通过 HTTP handler 串联真实检查与人工回执。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-all-gates-'));
-  const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
+  const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, legacyDeployment: true, legacyProductWorkflow: true, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   new Mastra(app); const router = new Hono();
   for (const route of app.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
   const runId = randomUUID(); const actor = { reviewer: 'test-human', comment: '仅合成测试，不代表真实业务授权' };
@@ -176,7 +281,14 @@ for (const scenario of ['success', 'rollback']) test(`业务前端接口连续�
     current = await (await post({ hash: current.intake.hash, action: 'finalize', reviewer: actor.reviewer, supplement: '', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }] })).json();
     assert.equal(current.step, 'guided-requirements');
     current = await (await post({ hash: current.intake.hash, action: 'finalize', reviewer: actor.reviewer, supplement: '', answers: [] })).json();
-    current = await (await post({ ...actor, role: 'product', artifactHash: current.product.artifact.hash, decision: 'approve' })).json();
+    const approvedArtifact = current.product.artifact;
+    assert.equal(current.approvedProduct, undefined);
+    current = await (await post({ ...actor, role: 'product', artifactHash: approvedArtifact.hash, decision: 'approve' })).json();
+    assert.equal(current.product, undefined);
+    const productResult = { content: approvedArtifact.content, hash: approvedArtifact.hash, reviewer: actor.reviewer };
+    assert.deepEqual(current.approvedProduct, productResult);
+    assert.deepEqual(current.specifications, [], 'fixture 没有推送回执');
+    assert.deepEqual((await readIntake(app.workflows.productDevelopmentWorkflow, runId)).approvedProduct, productResult);
     const visited: string[] = [];
     while (current.gate && visited.length < 12) {
       const g = current.gate; const p = g.evidence; visited.push(g.key);
@@ -226,17 +338,17 @@ for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${fai
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('产品写作 Time travel：前序三角色不重跑、旧令牌拒绝、恢复后重新待审', /** 使用原生嵌套快照与真实业务服务，不对用户 Run 提交决定。 */async () => {
+test('产品写作 Time travel：方向判断不重跑、旧令牌拒绝、恢复后重新待审', /** 使用原生嵌套快照与真实业务服务，不对用户 Run 提交决定。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'product-writing-retry-'));
   const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   const calls: Record<string, number> = {};
   const manager = app.agents.productManagerAgent; const originalManager = manager.generate.bind(manager) as any; let managerCalls = 0;
-  manager.generate = (/** 产品经理 Agent 第四次调用对应产品稿写作，首次失败后只恢复当前阶段。 */async (...args: any[]) => { managerCalls++; if (managerCalls === 4) { calls.writing = (calls.writing ?? 0) + 1; throw new Error('synthetic upstream failure'); } if (managerCalls > 4) calls.writing = (calls.writing ?? 0) + 1; return originalManager(...args); }) as any;
+  manager.generate = (/** 产品经理 Agent 第二次调用对应产品稿写作，首次失败后只恢复当前阶段。 */async (...args: any[]) => { managerCalls++; if (managerCalls === 2) { calls.writing = (calls.writing ?? 0) + 1; throw new Error('synthetic upstream failure'); } if (managerCalls > 2) calls.writing = (calls.writing ?? 0) + 1; return originalManager(...args); }) as any;
   new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成产品写作故障', iterationId: 'writing-recovery' } });
     const before = await readIntake(workflow, run.runId);
-    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.draft-product.product-writing'); assert.equal(before.retry?.preserved.length, 3);
+    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.product-specification.product-writing'); assert.equal(before.retry?.preserved.length, 1);
     assert.equal(before.retry?.reason, '模型执行未完成，未取得明确故障来源');
     const attemptDetails = before.retry && 'attemptDetails' in before.retry ? before.retry.attemptDetails : undefined;
     assert.equal(attemptDetails?.length, 1);
@@ -249,8 +361,8 @@ test('产品写作 Time travel：前序三角色不重跑、旧令牌拒绝、�
     assert.deepEqual(calls, { writing: 2 });
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: before.retry!.hash }));
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    const writing = snapshot!.steps!['product-team.draft-product.product-writing'] as any;
-    assert.equal(writing.output.productWork.entries.length, 4); assert.equal(writing.output.reviews.length, 0);
+    const writing = snapshot!.steps!['product-team.product-specification.product-writing'] as any;
+    assert.equal(writing.output.productWork.entries.length, 2); assert.equal(writing.output.reviews.length, 0);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -260,7 +372,7 @@ test('历史产品预算失败无需升档恢复且不重跑前序角色', /** �
   const counts: Record<string, number> = {};
   const writing = app.agents.productManagerAgent; const original = writing.generate.bind(writing) as any;
   let managerCalls = 0;
-  writing.generate = (/** 产品经理 Agent 第四次调用对应产品稿写作，首次命中固定预算故障后继续当前阶段。 */async (...args: any[]) => { managerCalls++; if (managerCalls === 4) { counts.writing = (counts.writing ?? 0) + 1; throw new ContextBudgetError('read', 50000, 48000); } if (managerCalls > 4) counts.writing = (counts.writing ?? 0) + 1; return original(...args); }) as any;
+  writing.generate = (/** 产品经理 Agent 第二次调用对应产品稿写作，首次命中固定预算故障后继续当前阶段。 */async (...args: any[]) => { managerCalls++; if (managerCalls === 2) { counts.writing = (counts.writing ?? 0) + 1; throw new ContextBudgetError('read', 50000, 48000); } if (managerCalls > 2) counts.writing = (counts.writing ?? 0) + 1; return original(...args); }) as any;
   new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成产品预算恢复', iterationId: 'budget-recovery' } });
@@ -271,7 +383,7 @@ test('历史产品预算失败无需升档恢复且不重跑前序角色', /** �
     assert.equal(after.status, 'suspended'); assert.equal(after.step, 'review-product'); assert.ok(after.product);
     assert.deepEqual(counts, { writing: 2 });
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    assert.equal((snapshot!.steps!['product-team.draft-product.product-writing'] as any).output.contextBudgetLevel, 0);
+    assert.equal((snapshot!.steps!['product-team.product-specification.product-writing'] as any).output.contextBudgetLevel, 0);
     assert.equal((snapshot!.steps!['product-team.review-product'] as any).status, 'suspended');
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -308,16 +420,16 @@ test('产品质量审查失败后从原检查点恢复并保留产品稿', async
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成审查故障', iterationId: 'quality-recovery' } });
     const before = await readIntake(workflow, run.runId);
-    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.draft-product.review-product-quality');
+    assert.equal(before.status, 'failed'); assert.equal(before.retry?.step, 'product-team.product-specification.review-product-quality');
     const snapshot = await workflow.getWorkflowRunById(run.runId);
-    const saved = (snapshot!.steps!['product-team.draft-product.publish-product'] as any).output.artifacts.at(-1);
-    const alteredSteps = { ...snapshot!.steps, 'product-team.draft-product.publish-product': { ...(snapshot!.steps!['product-team.draft-product.publish-product'] as any), output: { ...(snapshot!.steps!['product-team.draft-product.publish-product'] as any).output, brief: '不一致的产品输入' } } };
+    const saved = (snapshot!.steps!['product-team.product-specification.product-writing'] as any).output.artifacts.at(-1);
+    const alteredSteps = { ...snapshot!.steps, 'product-team.product-specification.product-writing': { ...(snapshot!.steps!['product-team.product-specification.product-writing'] as any), output: { ...(snapshot!.steps!['product-team.product-specification.product-writing'] as any).output, brief: '不一致的产品输入' } } };
     assert.equal(describeRecovery(run.runId, 'failed', alteredSteps), undefined);
     assert.equal(describeRecovery(run.runId, 'failed', { ...snapshot!.steps, 'product-team.review-product': { status: 'success' } }), undefined);
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: '0'.repeat(64) }));
     const after = await respondIntake(workflow, 'fixture', run.runId, { retryHash: before.retry!.hash });
     assert.equal(after.status, 'suspended'); assert.equal(after.step, 'review-product'); assert.equal(after.product?.artifact.hash, saved.hash);
-    assert.equal(managerCalls, 4); assert.equal(reviewerCalls, 2);
+    assert.equal(managerCalls, 2); assert.equal(reviewerCalls, 2);
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: before.retry!.hash }));
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });

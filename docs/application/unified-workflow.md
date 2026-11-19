@@ -1,26 +1,37 @@
 # 完整产研流程
 
-架构归属见[Harness 架构](./harness-architecture.md)：本页的 `product-development` 是平台承载的产研业务编排，各团队拥有专业闭环，共用平台执行治理机制并加载项目适配。当前代码尚未完成全部机制与策略解耦，具体差距和后续任务以架构页为准。
+架构归属见[Harness 架构](./harness-architecture.md)：本页的 `product-development` 是平台承载的产研业务编排，团队 Harness 承担专业闭环，平台 Harness 提供执行治理，业务工程 Harness 经项目 Adapter 提供 Git 规格、候选与检查。
 
 主流程、Git 数据流和 Nacos 资源流的分色视图见[产研可视化框架](./visual-framework.md)。该视图按责任团队归属组织，研发阻塞后的产品澄清仍位于产品团队。
 
-当前 Studio 业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）。主流程按团队职责组织为五个嵌套 Workflow：`product-team`、`development-team`、`test-team`、`deployment-team`、`delivery-team`。新 Run 只使用这套团队边界；团队内部步骤仍用于暂停、恢复、审计和责任定位，但不再作为主流程中的平行团队节点。
+当前 Studio 业务主入口为 `productDevelopmentWorkflow`（内部 ID 为 `product-development`）。默认主流程由四个团队 Workflow 组成，依次为 `product-team`、`development-team`、`test-team` 和 `delivery-team`。团队内部步骤用于暂停、恢复、审计和责任定位。
 
-日常操作按 [README](./README.md#启动)启动后端与前端，打开[产研工作台](http://127.0.0.1:4112/)；所有人工关口可在工作台完成。以下 Studio 图和 Resume JSON 供技术调试及契约查阅。
+## Workflow 执行链路图
 
-启动后端 `npm run dev`，打开 `http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph`。首次输入 `{ "iterationId": "recruitment-001", "brief": "你的需求" }`；迭代未指定时默认 `unassigned`。图中的 Workflow 可展开查看产品、开发、测试与部署子步骤。主链保持一个 Run，各角色在自己的子流程内扩展。
+![同一 Run 内的产品、研发、测试与 MR 交付执行链路](../assets/mastra-workflow-execution.png)
+
+[Draw.io 可编辑源图](../assets/mastra-workflow-execution.drawio) · [SVG](../assets/mastra-workflow-execution.svg) · [PNG](../assets/mastra-workflow-execution.png)
+
+### 产品返工目标链路
+
+目标设计中，研发和 QA 发现业务缺口时，将已批准的产品版本、缺口证据及受影响的需求或用例交给产品团队，与立即纠偏、审阅退回共用返工判断。产品团队选择重做起点，缺少业务决定或已有规则冲突时发起人工澄清。修订稿获批后，主 Workflow 根据版本影响编排研发与 QA 返工，重新取得失效的放行证据。
+
+![产品返工目标链路](../assets/mastra-workflow-target.png)
+
+[Draw.io 可编辑源图](../assets/mastra-workflow-target.drawio) · [SVG](../assets/mastra-workflow-target.svg) · [PNG](../assets/mastra-workflow-target.png)
+
+### 工作台与 Studio
+
+日常操作按 [README](../../README.md#启动)启动后端与前端，打开[产研工作台](http://127.0.0.1:4112/)；所有人工关口可在工作台完成。以下 Studio 图和 Resume JSON 供技术调试及契约查阅。
+
+启动后端 `npm run dev`，打开 `http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph`。首次输入 `{ "iterationId": "recruitment-001", "brief": "你的需求" }`；迭代未指定时默认 `unassigned`。图中的 Workflow 可展开查看产品、开发、测试与交付子步骤。主链保持一个 Run，各角色在自己的子流程内扩展。
 
 ```text
 原始需求
   → product-team
-       ├─ draft-product：产品成稿与质量检查
-       │    ├─ guided-requirements：需求澄清（可选）
-       │    │    └─ product-manager-agent
-       │    ├─ 需求分析 → product-manager-agent
-       │    ├─ 范围与优先级 → product-manager-agent
-       │    ├─ 产品稿写作 → product-manager-agent
-       │    └─ 独立闭环检查 → product-reviewer-agent
-       └─ review-product：产品负责人人工审批
+       ├─ product-direction：对齐方向，逐项澄清或生成方向建议
+       ├─ product-specification：完善规格，固化待审稿并执行独立产品审查
+       └─ review-product：审阅交接，人工批准当前版本
   → route-product-team-result：仅批准版本进入下游
   → development-team
        ├─ plan-development
@@ -46,20 +57,15 @@
        execute-tests：隔离环境重跑登记套件
        execute-browser-qa：QA Agent 加载固定方法并执行批准浏览器用例
        review-test-results：补充人工用例结果，确认质量
-       通过 → deployment
+       通过 → delivery-team
        缺陷 → route-test-defects → 原开发团队修复/自检/评审 → 重新测试
-  → deployment-team
-       → deployment-and-rollback-cycle：部署审批、外部回执、健康检查和回滚
-       prepare-release-plan：部署方案
-       approve-release-scope：确认环境、制品、健康检查与回滚范围
-       execute-release-externally：等待外部 CI/CD 实际执行回执
-       verify-release-health：收集批准清单的全部健康结果
-       失败 → execute-rollback-externally：等待外部回滚回执
   → delivery-team
-       → confirm-final-delivery：汇总同版本证据，确认最终交付
+       submit-merge-request：核对同版本 QA、候选与正式规格，提交指向 main 的 MR
 ```
 
-产品、项目范围和方案在同一个原生 Run 中暂停与恢复。产品退回修改保存 `rework-requested` 终态，带反馈重新发起需求。开发模型故障保留失败任务和已合并的成功任务，连续故障后原阶段暂停，可多轮人工继续；不承诺强杀或跨实例的原子恢复。
+逐项澄清中，用户选择提交并推进后，Workflow 重新评估业务缺口。已收敛时直接写作，尚有缺口时暂停等候业务决定。已有 Run 可按对应的历史图配置恢复，见[产品团队 Workflow](./product-workflow.md#恢复历史-run)。
+
+产品、项目范围和方案在同一个原生 Run 中暂停与恢复。产品待审稿退回和生成中的立即纠偏共用团队返工策略。团队按影响选择最早重做节点，新稿在同一 Run 重新审阅。开发模型故障保留失败任务和已合并的成功任务，连续故障后原阶段暂停，可多轮人工继续；不承诺强杀或跨实例的原子恢复。
 
 开发阶段使用原生条件分支：只有当前阶段执行，未执行节点不会因空返回而完成。可恢复模型故障在原阶段暂停，页面解释阶段、原因和具体重试动作；历史 `recover-development` 暂停点保留兼容。连续自动尝试或调用额度耗尽会暂停等待恢复/追加额度，用户选择停止则保存阻塞终态；开发未交付时不启动测试/发布。图中 `state-after-*` 为状态传递节点，其完成不代表相邻业务阶段已完成。[状态决策](../../docs/decisions/2026-11-08-mastra-stage-state-flow.md)。
 
@@ -153,7 +159,15 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 
 返工需要具体 `findings`，结构沿用开发评审的 `id/category/severity/route/detail/refs/evidence`，引用必须属于当前需求/任务/文件证据，责任角色必须已登记。缺陷通过原开发继续入口修复，沿用累计返工和调用预算；修复后重新自检、评审和独立测试。`qualityHistory` 与 `developmentHistory` 保存旧测试及交付记录。业务、完整性问题或预算耗尽停止流程，不自动放行。
 
-## deployment-team：发布审批与外部回执
+## delivery-team · MR 交付
+
+独立 QA 放行后，交付团队从隔离候选读取通过测试的源码，逐文件核对散列，并验证 Run 分支上的产品、开发和测试规格。交付只将批准任务范围内的变更追加到 Run 分支。目标仓库由项目登记确定，目标分支固定为 `main`。登记项目的 Run 分支以其固定 Git commit 为工程基线。
+
+live 交付沿用已授权的 Git 远端，并使用宿主配置的 GitHub CLI 会话创建或读取 PR。GitHub 的 PR 在工作台称为 MR。Mastra Store 保存 MR 编号、链接、源分支、候选 SHA 与 QA 散列，结论为 `delivery-confirmed`。fixture 结论为 `fixture-completed`，仅验证控制流。远端调用失败停在 `submit-merge-request`，工作台使用当前版本重试并核对已存在的提交与 MR。
+
+## 历史试点部署流程
+
+已有部署暂停点可通过 `MASTRA_LEGACY_DEPLOYMENT=true` 使用旧试点图恢复。默认实例走 MR 交付。自主合并、CI/CD 和部署属于后续规划。
 
 部署当前采用原生暂停和人工回填，没有远程执行 Adapter。`deployment-team` 内部 `deployment-and-rollback-cycle` 负责部署方案、审批、外部执行回执、健康检查和回滚。部署角色生成方案后，`approve-release-scope` 的 Resume 包含 `hash`（暂停信息中的 `packageHash`）、`decision: "approve" | "stop"`、`reviewer`、`comment` 和 `scope`：
 
@@ -177,7 +191,7 @@ Zod schema 约束跨模块数据，步骤返回新状态；补丁映射按文件
 
 时间使用 ISO UTC，例如 `2026-11-07T08:00:00Z`。所有外部回执的 authority 为 `local-human-report`，本地操作者标签不等于认证身份。最终确认必须有同版本测试通过、发布成功和全部健康通过记录；失败则等待回滚并产生明确终态。
 
-终态 `delivery-confirmed` 表示基于已收集证据确认交付，不表示远程机器独立验证；fixture 模式仅产生 `fixture-completed`。其他终态包括 `blocked/rework-exhausted/rejected/rolled-back/manual-attention`。产品审批前的拒绝/退回仍保留原产品状态结构。新图使用新 Run；旧 Run 不承诺跨版本透明续跑；仅对未实施的业务阻塞提供经过版本和源码校验的固定澄清入口，见[工作台契约](./guided-intake.md)。
+终态 `delivery-confirmed` 表示基于已收集证据确认交付，不表示远程机器独立验证；fixture 模式仅产生 `fixture-completed`。其他终态包括 `blocked/rework-exhausted/rejected/rolled-back/manual-attention`。产品拒绝结束本轮，产品退回进入同 Run 返工并等待新稿确认。新图使用新 Run；旧 Run 不承诺跨版本透明续跑；仅对未实施的业务阻塞提供经过版本和源码校验的固定澄清入口，见[工作台契约](./guided-intake.md)。
 
 采用锁定版本的原生 Workflow 嵌套与 `foreach concurrency`，未采用 Agent network 自由路由或自建通用调度引擎；团队职责边界见[团队边界决策](../../docs/decisions/2026-11-14-mastra-workflow-team-boundaries.md)，开发团队内部调度见[统一团队选型](../../docs/decisions/2026-11-07-mastra-unified-development-team.md)。
 
@@ -210,15 +224,15 @@ Studio 使用同级 `/Users/lei/code/hrm` checkout，或由进程变量 `MASTRA_
 
 ## Agent 资源归属核对
 
-当前资源、生产消费关系、版本绑定及配置权威入口见[资源衔接清单](./config/workflow-resources.json)与[边界说明](./config/README.md)。清单是审计快照，尚未被运行时加载。当前运行事实基本归原生Store，Agent间最小输入契约和统一资源配置仍有缺口，不能宣称完全解耦。
+当前资源、生产消费关系、版本绑定及配置权威入口见[资源衔接清单](../../config/workflow-resources.json)与[边界说明](../../config/README.md)。清单是审计快照，尚未被运行时加载。当前运行事实基本归原生Store，Agent间最小输入契约和统一资源配置仍有缺口，不能宣称完全解耦。
 
 
-资源接入的具体定义已形成：[配置/冻结/最小输入契约](./config/runtime-resource-contract.md)与[JSON示例](./config/workflow.runtime.example.json)。本轮仅定义新版本与迁移规则，当前Workflow仍按现有实现运行；不能把配置示例或审计清单当作已生效能力。
+资源接入的具体定义已形成：[配置/冻结/最小输入契约](../../config/runtime-resource-contract.md)与[JSON示例](../../config/workflow.runtime.example.json)。本轮仅定义新版本与迁移规则，当前Workflow仍按现有实现运行；不能把配置示例或审计清单当作已生效能力。
 
 
 ## 原生评测面板
 
-研发团队的独立节点评测与独立评审专项见[开发独立节点评测](./evaluations/native/development-nodes/README.md)及[独立评审与缺陷返工专项](./evaluations/native/review-rework/README.md)。专项评测不代表动态团队、业务审批或发布路径已验收。
+研发团队的独立节点评测与独立评审专项见[开发独立节点评测](../../evaluations/native/development-nodes/README.md)及[独立评审与缺陷返工专项](../../evaluations/native/review-rework/README.md)。专项评测不代表动态团队、业务审批或发布路径已验收。
 
 前端需求澄清、完整稿及全部后续人工关口见[工作台契约](./guided-intake.md)；直接使用 Studio 原始输入默认跳过澄清。
 

@@ -3,13 +3,14 @@ import { repositoryRetrySchema, repositorySyncPauseSchema } from '../delivery/re
 import { z } from 'zod';
 import { blockerAnswerSchema, revisedProductReviewSchema, blockerCycleSchema, validateBlockerAnswers } from './blocker-contracts.js';
 import { modelCallDiagnosticSchema, describeModelCall } from '../development/v2/model-diagnostic.js';
+import { outputDiagnosticSchema } from '../development/v2/output-diagnostic.js';
 import { applyRecoveryDecision } from '../development/v2/recovery-policy.js';
 import { stageFailureDetailsSchema } from '../development/v2/stage-failure.js';
 import { developmentHash, projectSchema, recoveryReviewSchema } from '../development/contracts.js';
 import { autonomyPolicySchema, stateV2Schema, approvalHashV2, recoveryHashV2, findingsHashV2, approvalV2Schema, findingsReviewSchema } from '../development/v2/contracts.js';
 import { applyFindingsReview, assertApprovalV2 } from '../development/v2/gates.js';
 import { validateCases, validateQualityReview } from '../delivery/testing.js';
-import { lifecycleSchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
+import { lifecycleSchema, mergeRequestRetrySchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
 export const scopeFormSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 const definitions: Record<string, { title: string; description: string; schema: z.ZodType }> = {
   'retry-repository-sync': { title: '重试角色资料远端同步', description: '已保存角色产物；仅重试提交和推送，成功后继续原流程，不重新调用模型或替代审批。', schema: repositoryRetrySchema },
@@ -22,6 +23,7 @@ const definitions: Record<string, { title: string; description: string; schema: 
   'recover-development': { title: '决定是否接续开发', description: '阅读失败阶段和原因，选择从已保存检查点重试或停止。', schema: recoveryReviewSchema },
   'approve-test-cases': { title: '确认测试用例', description: '逐项确认需求、预期结果与执行方式；浏览器用例须核对候选入口、资源、交互与文本断言。', schema: planApprovalSchema },
   'review-test-results': { title: '确认测试结果', description: '查看登记检查与浏览器执行证据，补齐人工用例结果，再决定通过、返工或停止。', schema: qualityReviewSchema },
+  'submit-merge-request': { title: '重试提交 MR', description: '从当前 QA 版本重试交付。', schema: mergeRequestRetrySchema },
   'approve-release-scope': { title: '确认发布范围', description: '确认环境、真实制品、健康检查和回滚引用。此步骤保存发布授权，不会代替外部平台执行。', schema: releaseApprovalSchema },
   'execute-release-externally': { title: '填写发布执行回执', description: '请在外部平台执行已批准的发布，再填写真实任务引用和执行结果。不要填入密钥。', schema: deploymentReceiptSchema },
   'verify-release-health': { title: '确认发布后健康检查', description: '按批准清单填写实际观测结果和证据；失败会进入回滚处理。', schema: healthReceiptSchema },
@@ -36,6 +38,14 @@ export function describeRecoveryModelFailureReason(failure: z.infer<typeof model
   const finishReasons: Partial<Record<typeof failure.source, string>> = { 'tool-step-limit': '资料读取达到工具步骤上限，尚未生成最终结果', 'output-length': '模型输出被长度上限截断', 'content-filter': '模型输出被安全规则阻断', 'model-finish': '模型提前结束，结果未完成', 'mastra-total': 'Agent 总执行时限触发', 'mastra-step': '单次模型步骤时限触发', 'mastra-first-chunk': '等待首段内容超时', 'transport-connect': '模型请求连接建立超时', 'transport-headers': '模型请求等待响应头超时', 'transport-timeout': '模型请求传输超时', aborted: '模型请求已中断（未确认时限来源）', unknown: '未记录明确的失败来源' };
   return finishReasons[failure.source];
 }
+/** 用宿主白名单诊断解释输出校验失败。 */
+function describeRecoveryOutputFailure(fault: GatePayload) {
+  if (fault.kind !== 'invalid-output') return undefined;
+  const diagnostic = outputDiagnosticSchema.safeParse(fault.diagnostic);
+  return diagnostic.success && diagnostic.data.code === 'path-ownership-invalid'
+    ? '方案的任务文件超出项目授权范围，或同一文件被分配给多个任务'
+    : faultReasons['invalid-output'];
+}
 /** 从持久化故障分类生成用户指引；不暴露模型原始错误、源码或内部恢复状态。 */
 function recoveryGuidance(payload: GatePayload) {
   const phase = phaseNames[payload.phase] ?? '开发阶段';
@@ -43,11 +53,23 @@ function recoveryGuidance(payload: GatePayload) {
   const exhausted = payload.kind === 'call-budget' || (payload.recoveryState && payload.recoveryState.calls >= payload.recoveryState.maxCalls);
   const contextNext = '资料预算门槛已移除；直接重试当前阶段，执行上下文由 Mastra 原生观察记忆管理，已完成任务不重做。';
   const modelCall = modelCallDiagnosticSchema.safeParse(payload.modelCall);
-  const reason = contextPause ? '历史资料预算限制中断了执行' : payload.kind === 'call-budget' ? '自动调用额度已用完，请确认追加额度后继续' : (modelCall.success ? describeRecoveryModelFailureReason(modelCall.data.failure) : undefined) ?? faultReasons[payload.kind] ?? '该阶段执行未完成';
+  const history: GatePayload[] = payload.recoveryState?.faults ?? [];
+  const phaseFaults = history.filter(fault => fault.phase === payload.phase);
+  // 兼容暂停载荷中没有 diagnostic、但保留完整故障历史的快照。
+  const lastFault = phaseFaults.at(-1);
+  const outputReason = describeRecoveryOutputFailure({ ...payload, diagnostic: payload.diagnostic ?? lastFault?.diagnostic });
+  const reason = contextPause ? '历史资料预算限制中断了执行' : payload.kind === 'call-budget' ? '自动调用额度已用完，请确认追加额度后继续' : outputReason ?? (modelCall.success ? describeRecoveryModelFailureReason(modelCall.data.failure) : undefined) ?? faultReasons[payload.kind] ?? '该阶段执行未完成';
   const after: Record<string, string> = { 'prepare-context': '分析完成后继续生成技术方案，方案仍需确认后才实施。', architecture: '方案生成后仍需确认，才会开始实施。', 'assess-readiness': '检查完成后继续展示待决问题或方案批准。', implement: '只重新派发未完成任务，已成功任务不重做；实现完成后进入开发自检。', 'development-self-check': '重新执行自检分析和固定检查，通过后进入独立代码评审。', 'review-code': '只重新执行评审，不重做已完成的实现；评审问题仍按流程处理。' };
-  const history = payload.recoveryState?.faults ?? [];
-  const attemptDetails = history.filter(/** 只展示当前阶段最近的脱敏记录。 */(fault: GatePayload) => fault.phase === payload.phase && modelCallDiagnosticSchema.safeParse(fault.modelCall).success).slice(-8).map(/** 原生记录已保存实际尝试次序。 */(fault: GatePayload) => describeModelCall(modelCallDiagnosticSchema.parse(fault.modelCall), fault.attempt));
-  if (!attemptDetails.length && modelCall.success) attemptDetails.push(describeModelCall(modelCall.data));
+  const attemptDetails = phaseFaults.slice(-8).flatMap(/** 每次尝试优先展示该次的校验结论。 */fault => {
+    const output = describeRecoveryOutputFailure(fault);
+    if (output) return [`第${fault.attempt}次尝试：${output}。`];
+    const call = modelCallDiagnosticSchema.safeParse(fault.modelCall);
+    return call.success ? [describeModelCall(call.data, fault.attempt)] : [];
+  });
+  if (!attemptDetails.length && modelCall.success && !outputReason) attemptDetails.push(describeModelCall(modelCall.data));
+  const retryLimit = payload.recoveryState?.input?.autonomy
+    ? '超时、临时连接故障或输出校验失败每轮最多自动尝试 5 次。'
+    : '仅超时或临时连接故障每轮最多自动尝试 5 次。输出校验失败后暂停。';
   return { title: `${phase}未完成`, phase, reason, attemptDetails,
     description: `${reason}，流程已暂停，等待你决定是否重试。`,
     preserved: '已确认的产品需求、项目配置和成功任务检查点已保留，无需重新填写。',
@@ -56,7 +78,7 @@ function recoveryGuidance(payload: GatePayload) {
     next: contextPause ? contextNext + (exhausted ? ' 同时需要追加模型调用额度。' : '') : payload.kind === 'call-budget' ? `确认后按下方填写数量追加角色调用额度，继续${phase}；累计消费和已完成任务保留，不扩大文件权限或跳过审批。` : `建议先重试${phase}。${after[payload.phase] ?? '重新调用该阶段所需的模型，成功后才继续。'}`,
     additionalCalls: exhausted ? 72 : undefined, retryLabel: payload.kind === 'call-budget' ? '补充调用额度并继续' : `重试${phase}`, stopLabel: '停止本轮流程',
     stopImpact: '停止后保留已有记录，本轮不再自动推进。',
-    limit: '仅超时或临时连接故障每轮最多自动尝试5次；工具步数耗尽、输出校验等失败直接暂停。你可以从保存的检查点继续。' };
+    limit: `${retryLimit} 你可以从保存的检查点继续。` };
 }
 /** 服务端生成只读绑定值，不让用户手工抄写版本与发布标识。 */
 export function gateInitial(key: string, payload: GatePayload) {
@@ -93,7 +115,7 @@ export function describeGate(path: string, payload: GatePayload) {
   if (key === 'verify-release-health') initial.checks = (payload.requiredChecks ?? []).map(/** 检查清单是已批准事实，实际结果不预选。 */(item: GatePayload) => ({ id: item.id, status: '', evidence: '', observedAt: '' }));
   const recoveryInfo = key === 'recover-development' ? recoveryGuidance(payload) : undefined;
   const { recoveryState: _privateState, ...publicEvidence } = payload;
-  return { initial, key, title: recoveryInfo?.title ?? definition.title, description: recoveryInfo?.description ?? definition.description, recoveryInfo, gateHash: developmentHash({ path, payload }), evidence: publicEvidence, fixed, schema };
+  return { initial, key, title: recoveryInfo?.title ?? definition.title, description: recoveryInfo?.description ?? (key === 'submit-merge-request' ? payload.reason : definition.description), recoveryInfo, gateHash: developmentHash({ path, payload }), evidence: publicEvidence, fixed, schema };
 }
 /** 输入结构与所有绑定值在恢复前核对，拒绝过期和跨关口请求。 */
 export function validateGate(path: string, payload: GatePayload, input: unknown, savedState?: unknown) {

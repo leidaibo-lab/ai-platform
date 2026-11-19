@@ -25,7 +25,7 @@ ENV API_INTERNAL_URL=http://api:3001
 RUN --network=none pnpm build
 `;
 /** 用实际进程退出、时长和有界日志形成证据，命令从宿主常量生成。 */
-async function command(id: string, args: string[], cwd: string, timeoutMs: number): Promise<DevelopmentCheckResult> {
+export async function dockerCheck(id: string, args: string[], cwd: string, timeoutMs: number): Promise<DevelopmentCheckResult> {
   const start = Date.now(); let stdout = ''; let stderr = ''; let truncated = false; let timedOut = false;
   return new Promise(/** 每个固定命令独立预算和结果。 */resolve => {
     const child = spawn('docker', ['--context', 'desktop-linux', ...args], { cwd, env: { PATH: process.env.PATH, HOME: process.env.HOME, DOCKER_CONFIG: process.env.DOCKER_CONFIG, NEXT_TELEMETRY_DISABLED: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -58,12 +58,12 @@ export async function verifyHrm(files: Record<string, string>): Promise<Developm
       web: { ...base, command: ['pnpm', '--filter', '@hrm/web', 'start'], depends_on: { api: { condition: 'service_healthy' } }, mem_limit: '768m', healthcheck: { test: ['CMD', 'node', '--input-type=module', '-e', "const r=await fetch('http://127.0.0.1:3000');process.exit(r.ok?0:1)"], interval: '2s', timeout: '5s', retries: 30 } },
       smoke: { ...base, command: ['node', 'scripts/smoke.mjs'], environment: { HRM_BASE_URL: 'http://web:3000' }, depends_on: { web: { condition: 'service_healthy' } }, mem_limit: '256m' },
     }, networks: { verification: { internal: true } } }));
-    const check = await command('project:check', ['build', '--progress=plain', '--no-cache-filter', 'checked', '--target', 'checked', '-f', 'Verification.Dockerfile', '-t', `mastra-hrm-checked:${digest}`, '.'], directory, 600000); results.push(check); if (check.exitCode !== 0) return results;
-    const build = await command('project:build', ['build', '--progress=plain', '--no-cache-filter', 'verified', '--target', 'verified', '-f', 'Verification.Dockerfile', '-t', image, '.'], directory, 600000); results.push(build); if (build.exitCode !== 0) return results;
-    results.push(await command('project:smoke', ['compose', '-p', project, '-f', composePath, 'run', '--rm', 'smoke'], directory, 180000));
+    const check = await dockerCheck('project:check', ['build', '--progress=plain', '--no-cache-filter', 'checked', '--target', 'checked', '-f', 'Verification.Dockerfile', '-t', `mastra-hrm-checked:${digest}`, '.'], directory, 600000); results.push(check); if (check.exitCode !== 0) return results;
+    const build = await dockerCheck('project:build', ['build', '--progress=plain', '--no-cache-filter', 'verified', '--target', 'verified', '-f', 'Verification.Dockerfile', '-t', image, '.'], directory, 600000); results.push(build); if (build.exitCode !== 0) return results;
+    results.push(await dockerCheck('project:smoke', ['compose', '-p', project, '-f', composePath, 'run', '--rm', 'smoke'], directory, 180000));
     return results;
   } finally {
-    await command('cleanup', ['compose', '-p', project, '-f', composePath, 'down', '--volumes', '--remove-orphans', '--timeout', '5'], directory, 45000);
+    await dockerCheck('cleanup', ['compose', '-p', project, '-f', composePath, 'down', '--volumes', '--remove-orphans', '--timeout', '5'], directory, 45000);
     rmSync(directory, { recursive: true, force: true });
   }
 }

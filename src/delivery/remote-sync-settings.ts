@@ -19,6 +19,10 @@ export type RemoteSyncSettings = z.infer<typeof remoteSyncSettingsSchema>;
 function defaultTargets(config: PracticeConfig): RemoteSyncTarget[] {
   const configured = config.remoteSyncTargets?.map(/** 环境登记值先做结构校验。 */item => remoteSyncTargetSchema.parse(item)) ?? [];
   if (configured.length) return configured;
+  if (config.engineeringProject) {
+    const { id, label, root, origin } = config.engineeringProject;
+    return [{ id, label, root, origin }];
+  }
   return config.hrmRepositoryRoot ? [{ id: 'hrm', label: 'HRM 项目仓库', root: config.hrmRepositoryRoot, origin: 'https://github.com/leidaibo-lab/hrm.git' }] : [];
 }
 
@@ -45,6 +49,8 @@ export function readRemoteSyncTargets(config: PracticeConfig): RemoteSyncTarget[
 export function writeRemoteSyncTargets(config: PracticeConfig, value: unknown): RemoteSyncTarget[] {
   const targets = uniqueTargets(targetDictionarySchema.parse(value).targets);
   for (const target of targets) validateRepository(target.root, target.origin);
+  const project = config.engineeringProject;
+  if (project && !targets.some(/** 主项目的登记不可从页面改变。 */target => target.id === project.id && target.root === project.root && target.origin === project.origin)) throw new Error('不能替换已绑定的业务工程项目');
   const active = readRemoteSyncSettings(config);
   const ids = new Set(targets.map(/** 用新字典检查现有阶段绑定。 */target => target.id));
   for (const phase of syncPhaseSchema.options) if (active.phases[phase].enabled && !ids.has(active.phases[phase].targetId)) throw new Error('仍有阶段使用该仓库；请先调整阶段同步设置');
@@ -95,7 +101,12 @@ export function readRemoteSyncSettings(config: PracticeConfig): RemoteSyncSettin
 export function writeRemoteSyncSettings(config: PracticeConfig, value: unknown): RemoteSyncSettings {
   const settings = remoteSyncSettingsSchema.parse(value);
   const ids = new Set(remoteSyncTargets(config).map(/** 目标来源固定在服务端配置。 */target => target.id));
-  for (const phase of syncPhaseSchema.options) if (settings.phases[phase].enabled && !ids.has(settings.phases[phase].targetId)) throw new Error('只能选择已授权仓库');
+  for (const phase of syncPhaseSchema.options) {
+    const choice = settings.phases[phase];
+    if (!choice.enabled) continue;
+    if (!ids.has(choice.targetId)) throw new Error('只能选择已授权仓库');
+    if (config.engineeringProject && choice.targetId !== config.engineeringProject.id) throw new Error('工程项目的阶段同步须使用项目绑定仓库');
+  }
   const file = settingsPath(config); mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   if (existsSync(file) && (lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile())) throw new Error('远端同步设置文件必须是普通文件');
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -108,5 +119,8 @@ export function writeRemoteSyncSettings(config: PracticeConfig, value: unknown):
 export function resolveRemoteSyncTarget(config: PracticeConfig, stepId: string): RemoteSyncTarget | undefined {
   const phase = syncPhaseForStep(stepId); if (!phase) return undefined;
   const choice = readRemoteSyncSettings(config).phases[phase];
-  return choice.enabled ? remoteSyncTargets(config).find(/** 目标ID已在读取时校验。 */target => target.id === choice.targetId) : undefined;
+  const target = choice.enabled ? remoteSyncTargets(config).find(/** 目标ID已在读取时校验。 */item => item.id === choice.targetId) : undefined;
+  const project = config.engineeringProject;
+  if (target && project && (target.id !== project.id || target.root !== project.root || target.origin !== project.origin)) throw new Error('工程项目的阶段同步须使用项目绑定仓库');
+  return target;
 }

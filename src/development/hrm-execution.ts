@@ -1,7 +1,9 @@
 /** Docker验证扩展复用原生文件I/O与步骤生命周期，新增文件只在批准源码根内。 */
 import { DevelopmentExecution } from '../development-execution.js';
 import type { DevelopmentInput } from './contracts.js';
-import { safePathSchema } from './contracts.js';
+import { cipProfile } from '../business-engineering/hrm-cip.js';
+import { verifyCip } from './cip-verification.js';
+import { canWriteProjectPath } from './contracts.js';
 import { verifyHrm } from './hrm-verification.js';
 import { lstatSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -9,13 +11,12 @@ import { dirname, join } from 'node:path';
 class HrmExecution extends DevelopmentExecution {
   private stopped = false;
   /** 保留项目级权限上界，实际模型仅获得批准任务paths。 */
-  constructor(root: string, private readonly project: DevelopmentInput['project']) { super(root, project.writablePaths, project.checkFiles); }
+  constructor(root: string, private readonly project: DevelopmentInput['project'], private readonly repository?: string) { super(root, project.writablePaths, project.checkFiles); }
   /** 允许架构Agent声明的新增文件，但绝不允许修改检查、锁文件及范围外文件。 */
   override async writeFile(path: string, content: string) {
     if (this.stopped) throw new Error('HRM候选环境已关闭');
     if (this.project.preparationIssues?.length) throw new Error('工程准备未完成，当前候选仅允许只读规划');
-    safePathSchema.parse(path);
-    if (this.project.checkFiles.includes(path) || !this.project.writableRoots?.some(/** 写入上界由项目授权指定，不来自模型。 */root => path.startsWith(`${root}/`)) || Buffer.byteLength(content) > 100000) throw new Error('写入超出HRM源码范围');
+    if (!canWriteProjectPath(this.project, path) || Buffer.byteLength(content) > 100000) throw new Error('写入超出HRM源码范围');
     let cursor = this.root;
     for (const part of path.split('/')) { cursor = join(cursor, part); if (lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('HRM候选路径包含链接'); }
     mkdirSync(dirname(cursor), { recursive: true }); writeFileSync(cursor, content);
@@ -27,10 +28,14 @@ class HrmExecution extends DevelopmentExecution {
     if (this.project.preparationIssues?.length) throw new Error('工程准备未完成，不能运行项目验证');
     const before = await this.snapshot(); const files: Record<string, string> = {};
     for (const path of Object.keys(before)) files[path] = await this.readFile(path);
+    if (this.project.executionProfile === cipProfile) {
+      if (!this.repository || !this.project.engineeringRevision) throw new Error('CIP 缺少已批准工程版本');
+      return verifyCip(this.repository, this.project, files);
+    }
     return verifyHrm(files);
   }
 }
 /** CLI/fixture沿用原执行器；HRM全栈档才进入固定Docker验证。 */
-export function createDevelopmentExecution(root: string, project: DevelopmentInput['project']): DevelopmentExecution {
-  return project.executionProfile === 'hrm-pnpm-docker-v1' ? new HrmExecution(root, project) : new DevelopmentExecution(root, project.writablePaths, project.checkFiles);
+export function createDevelopmentExecution(root: string, project: DevelopmentInput['project'], repository?: string): DevelopmentExecution {
+  return project.executionProfile ? new HrmExecution(root, project, repository) : new DevelopmentExecution(root, project.writablePaths, project.checkFiles);
 }

@@ -1,3 +1,5 @@
+import { cipGit } from '../../business-engineering/hrm-cip.js';
+import { projectRepositoryRoot, assertProjectCorrelation, loadEngineeringProject } from '../../business-engineering/project.js';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
 import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -28,6 +30,7 @@ export function executionResolver(config: PracticeConfig, options: { requireExis
   const parent = resolve(dirname(fileURLToPath(config.databaseUrl)), 'development-runs');
   /** 目录名仅由宿主 Run 标识派生，恢复不覆盖现有源码或输入。 */
   return (input: InputV2): DevelopmentExecution => {
+    assertProjectCorrelation(config, input.correlation);
     mkdirSync(parent, { recursive: true, mode: 0o700 });
     if (lstatSync(parent).isSymbolicLink()) throw new Error('运行根目录不能是符号链接');
     const base = resolve(parent, developmentHash(input.source.runId));
@@ -46,14 +49,14 @@ export function executionResolver(config: PracticeConfig, options: { requireExis
       const saved = inputV2Schema.parse(JSON.parse(readFileSync(inputFile, 'utf8')));
       if (developmentHash(saved) !== developmentHash(input)) throw new Error('运行项目输入与保存版本不一致');
     }
-    return createDevelopmentExecution(resolve(directory, 'candidate'), input.project);
+    return createDevelopmentExecution(resolve(directory, 'candidate'), input.project, projectRepositoryRoot(config));
   };
 }
 
 /** 研发团队的唯一边界：负责人规划、动态实施、确定性门禁、独立审查、阻塞澄清和研发交付均在此子 Workflow 内完成。 */
 export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; storage?: MastraCompositeStore } = {}) {
   const resolveExecution = executionResolver(config);
-  const execution = createExecutionScope(resolveExecution, config.mode === 'live' && !!config.hrmRepositoryRoot);
+  const execution = createExecutionScope(resolveExecution, config.mode === 'live' && !!projectRepositoryRoot(config));
   const bind = <T extends Step<any, any, any, any, any, any>>(step: T): T => withRepositoryAssets(execution.bind(step), config);
   const scope = createStep({
     id: 'confirm-project-scope',
@@ -71,10 +74,17 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
       if (config.mode === 'live') {
         const formal = inputData.formalSpecifications?.find(item => item.kind === 'product');
         if (!formal || !formal.paths.includes('specs/requirements.md') || !formal.paths.includes('specs/product-spec.md')) throw new Error('开发缺少已推送的需求文档或产品规格');
-        const remoteProduct = readHandoffFile(config.hrmRepositoryRoot!, formal.handoff, 'specs/product-spec.md');
+        const remoteProduct = readHandoffFile(projectRepositoryRoot(config)!, formal.handoff, 'specs/product-spec.md');
         if (remoteProduct !== `${product.content.endsWith('\n') ? product.content : `${product.content}\n`}`) throw new Error('已推送产品规格与当前人工批准版本不一致');
       }
+      assertProjectCorrelation(config, inputData.correlation);
       if (!resumeData) return suspend({ productHash: product.hash, instruction: '确认已关联仓库、当前代码版本与整体权限。技术文件拆分和实际团队由研发团队提出，方案批准后才实施。', projectFields: ['id', 'files', 'writablePaths', 'checkFiles', 'roles'] });
+      if (config.engineeringProject && developmentHash(resumeData.project) !== developmentHash(loadEngineeringProject(config.engineeringProject).candidate)) throw new Error('已确认项目与登记的候选或保护检查不一致');
+      if (config.mode === 'live' && resumeData.project.engineeringRevision) {
+        const formal = inputData.formalSpecifications!.find(item => item.kind === 'product')!;
+        const revision = resumeData.project.engineeringRevision;
+        if (cipGit(projectRepositoryRoot(config)!, ['merge-base', revision, formal.handoff.commit]).trim() !== revision) throw new Error('开发范围必须使用产品规格分支的工程基线');
+      }
       return inputV2Schema.parse({ ...(inputData.requirementTracking ? { requirementTracking: inputData.requirementTracking } : {}), repositoryHandoff: inputData.repositoryHandoff, formalSpecifications: inputData.formalSpecifications, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
     },
   });

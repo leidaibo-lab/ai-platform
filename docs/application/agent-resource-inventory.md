@@ -70,7 +70,7 @@
 
 ## Skill 包准备与验证
 
-执行 `npx tsx scripts/prepare-nacos-product-skills.ts <尚不存在的输出目录> 1.0.0` 可准备 113 个独立 ZIP 和 `manifest.json`。工具检查上游来源锁和许可证、限制文件布局、拒绝符号链接，并记录原文件与 ZIP 的 SHA-256；输出状态明确为待审核、未发布。版本为调用者指定的迁移候选版本，不能视为已有注册中心版本或审批结论。目录必须不存在，以避免覆盖已有审查材料。
+执行 `npx tsx scripts/prepare-nacos-product-skills.ts <尚不存在的输出目录> 1.1.0` 可准备 113 个独立 ZIP 和 `manifest.json`。工具检查上游来源锁和许可证、限制文件布局、拒绝符号链接，并记录原文件与 ZIP 的 SHA-256；输出状态明确为待审核、未发布。版本为调用者指定的迁移候选版本，不能视为已有注册中心版本或审批结论。目录必须不存在，以避免覆盖已有审查材料。
 
 `tests/nacos-product-suite.test.ts` 用本地 HTTP 模拟 Nacos，将全部 113 个真实 Skill 包经现有 Adapter 冻结并按原版本复核，比较参考资料清单，再装配到锁定版本的 Mastra 两个产品 Agent。该测试不证明真实 Nacos 上已发布、人工审批完成或产品角色的真实模型质量；另有测试覆盖审查角色只加载绑定子集。
 

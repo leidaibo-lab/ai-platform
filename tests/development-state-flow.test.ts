@@ -56,7 +56,7 @@ test('超过300非空行的批准原文可进入开发上下文且保留原文�
 test('结构化输出故障持久化后可恢复，历史字段顺序兼容且篡改仍被拒绝', /** 真实暂停、Store 重开和原阶段重试同时覆盖诊断字段与模型调用证据。 */async () => {
   let fail = true; const calls: string[] = [];
   /** 仅第一次就绪审查返回无效结构，其余保留真实 fixture 工具路径。 */
-  const generate: GeneratorV2 = async (...args) => { calls.push(args[2]); if (args[2] === 'readiness' && fail) throw new SyntaxError('synthetic invalid output'); return generateV2(...args); };
+  const generate: GeneratorV2 = async (...args) => { calls.push(args[2]); if (args[2] === 'readiness' && fail) throw new SyntaxError('方案文件责任越界或重复'); return generateV2(...args); };
   const setup = fixture(generate); let app = setup.open();
   try {
     const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
@@ -66,6 +66,11 @@ test('结构化输出故障持久化后可恢复，历史字段顺序兼容且�
     const state = stateV2Schema.parse(paused.suspendPayload.recoveryState);
     assert.equal(state.recovery?.kind, 'invalid-output');
     assert.ok(state.faults.at(-1)?.diagnostic && state.faults.at(-1)?.modelCall);
+    const { diagnostic: _diagnostic, ...historicPayload } = paused.suspendPayload;
+    const recovery = describeGate('assess-readiness', historicPayload)!.recoveryInfo!;
+    assert.match(recovery.reason, /同一文件被分配给多个任务/);
+    assert.match(recovery.attemptDetails[0]!, /超出项目授权范围/);
+    assert.match(recovery.limit, /输出校验失败后暂停/);
     assert.equal(matchesRecoveryHashV2(state, state.recovery!.hash), true);
     const last = state.faults.at(-1)!;
     const { diagnostic, modelCall, checkpointHash, partialSourceHash, restored, ...prefix } = last;
@@ -107,7 +112,7 @@ for (const legacy of [false, true]) test(legacy ? '历史恢复节点在新条�
       assert.deepEqual(calls, ['context', ...Array(5).fill('architect')]);
     }
     const gate = describeGate(path, paused.suspendPayload)!;
-    assert.match(gate.title, /技术方案生成未完成/); assert.equal(gate.key, 'recover-development'); assert.match(gate.recoveryInfo!.reason, /规定时间/);
+    assert.match(gate.title, /技术方案生成未完成/); assert.equal(gate.key, 'recover-development'); assert.equal(gate.recoveryInfo!.reason, '单次模型步骤时限触发');
     assert.equal('recoveryState' in gate.evidence, false); assert.doesNotMatch(JSON.stringify(gate), /synthetic-secret/);
     assert.throws(/** 旧版本不能消耗原生暂停点。 */() => validateGate(path, paused.suspendPayload, { gateHash: gate.gateHash, data: { hash: '0'.repeat(64), decision: 'retry', reviewer: 'test', comment: '合成重试' } }, paused.payload));
     await app.execution.close(); await app.storage.close(); app = setup.open(); failing = false;

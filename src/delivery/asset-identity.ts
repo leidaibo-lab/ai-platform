@@ -2,5 +2,7 @@
 import { z } from 'zod';
 
 export const assetIdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/);
-export const correlationSchema = z.object({ projectId: z.literal('hrm'), iterationId: assetIdSchema, runId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), workflowId: z.literal('productDevelopmentWorkflow') });
+export const formalSpecificationPathPattern = /^(?:specs\/[a-z0-9-]+\.(?:md|json)|product\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}\/(?:requirements|product-spec)\.md)$/;
+export const projectIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,39}$/);
+export const correlationSchema = z.object({ projectId: projectIdSchema, engineeringBinding: z.string().regex(/^[a-f0-9]{64}$/).optional(), engineeringRevision: z.string().regex(/^[a-f0-9]{40}$/).optional(), iterationId: assetIdSchema, runId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), workflowId: z.literal('productDevelopmentWorkflow') });
 export type AssetCorrelation = z.infer<typeof correlationSchema>;

@@ -14,7 +14,7 @@ export const WRITING_MODEL_SETTINGS = { maxRetries: 0, maxOutputTokens: 16000, t
 export type ProductStreamEvent = LiveOutputEvent;
 type ProductGenerationAgent = Pick<ReturnType<typeof createAgents>['productManagerAgent'], 'generate' | 'stream'>;
 /** 产品团队统一验证原生结束事实；只读临时故障最多两次，单节点共享30分钟截止时间。 */
-export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, onProgress?: (event: ProductStreamEvent) => Promise<void>) {
+export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, onProgress?: (event: ProductStreamEvent) => Promise<void>, abortSignal?: AbortSignal) {
   let input: Record<string, unknown>;
   try { input = JSON.parse(prompt); } catch { input = { task: 'product', instruction: prompt }; }
   const attempts: ProductAttempt[] = []; const invocationStarted = performance.now(); const startedAt = new Date().toISOString(); const deadline = invocationStarted + WRITING_MODEL_SETTINGS.timeout.totalMs;
@@ -27,7 +27,8 @@ export async function generateProductContent(agent: ProductGenerationAgent, prom
     try {
       context = createTaskContext(input, mode === 'live', remote, budgetLevel);
       const remaining = Math.max(1, Math.floor(deadline - performance.now()));
-      const options = { ...context.options, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
+      abortSignal?.throwIfAborted();
+      const options = { ...context.options, abortSignal, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
       let result;
       if (mode === 'live' && onProgress) {
         const stream = await agent.stream(context.prompt, options);
@@ -40,6 +41,7 @@ export async function generateProductContent(agent: ProductGenerationAgent, prom
       } else {
         result = role === 'writing' && mode === 'live' ? await (await agent.stream(context.prompt, options)).getFullOutput() : await agent.generate(context.prompt, options);
       }
+      abortSignal?.throwIfAborted();
       if (result.error) throw result.error;
       finishReason = safeFinishReason(result.finishReason); steps = result.steps.length;
       // Mastra text 汇总了所有步骤；只把最终步骤正文当交付，避免发布前置“我将检查”的计划。
@@ -50,10 +52,11 @@ export async function generateProductContent(agent: ProductGenerationAgent, prom
       const endedAt = new Date().toISOString();
       return { ...result, text, toolFacts: projectToolFacts(result.toolResults), generation: { version: 'product-generation.v1' as const, finishReason: 'stop' as const, attempts: attempt, durationMs: Math.max(0, Math.round(performance.now() - invocationStarted)), startedAt, endedAt, failures: attempts } };
     } catch (error) {
+      abortSignal?.throwIfAborted();
       const detail: ProductAttempt = { attempt, durationMs: Math.max(0, Math.round(performance.now() - started)), recordedAt: new Date().toISOString(), kind: kind ?? classifyProductError(error), finishReason, steps, textChars, budget: error instanceof ContextBudgetError ? error.budget : undefined, failure: diagnoseModelFailure(error) };
       attempts.push(detail);
       if (mode !== 'live' || attempt === 2 || !canRetryProductAttempt(detail) || deadline - performance.now() <= 1000) throw new ProductGenerationFailure(attempts);
-      await delay(1000);
+      await delay(1000, undefined, { signal: abortSignal });
     }
   }
   throw new ProductGenerationFailure(attempts);

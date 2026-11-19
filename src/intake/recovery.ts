@@ -6,6 +6,11 @@ import { inputV2Schema, stateV2Schema } from '../development/v2/contracts.js';
 import { developmentHash } from '../development/contracts.js';
 import { describeProductFailure, isPlanOnlyProductOutput } from './product-failure.js';
 const titles: Record<string, string> = { 'draft-product.guided-requirements.requirements-round.analyze-requirements': '需求分析', 'draft-product.product-analysis': '需求分析', 'draft-product.product-clarification': '需求澄清整理', 'draft-product.product-scope-priority': '范围与优先级', 'draft-product.product-writing': '产品稿写作', 'draft-product.publish-product': '产品稿发布' };
+/** 使用相同白名单识别两种原生布局下的产品执行节点。 */
+function productRecoveryTitleKey(path: string) {
+  const canonical = path.replace(/^product-team\.(product-direction|product-specification)\./, 'product-team.draft-product.');
+  return Object.keys(titles).find(suffix => canonical === suffix || canonical === `product-team.${suffix}`);
+}
 /** 从团队嵌套快照中取得当前版本的叶节点；只匹配新团队 Workflow 的完整后缀。 */
 function findStep(steps: Record<string, any>, suffix: string) {
   return Object.entries(steps)
@@ -31,21 +36,24 @@ export function describeRecovery(runId: string, status: string, steps: Record<st
   if (development) return development;
   const qualityReview = describeProductQualityRecovery(runId, steps);
   if (qualityReview) return qualityReview;
-  const failed = Object.entries(steps).find(/** 排除容器失败，选择明确登记的业务叶节点；draft-product 只是新的产品容器。 */([name, value]) => Object.keys(titles).some((suffix) => (name === suffix || name.endsWith(`.${suffix}`)) && !Array.isArray(value) && value.status === 'failed'));
+  const failed = Object.entries(steps).find(/** 只恢复白名单内的产品叶节点。 */([path, value]) => productRecoveryTitleKey(path) && !Array.isArray(value) && value.status === 'failed');
   if (!failed) return undefined;
   const [path, entry] = failed;
-  const titleKey = Object.keys(titles).find((suffix) => path === suffix || path.endsWith(`.${suffix}`))!;
+  const titleKey = productRecoveryTitleKey(path)!;
   const parsed = deliverySchema.safeParse(entry.payload);
   if (!parsed.success || parsed.data.artifacts.length || parsed.data.reviews.length) return undefined;
   const state = parsed.data;
   const entries = state.productWork?.entries ?? [];
-  const roleIndex = titleKey === 'draft-product.publish-product' ? 4 : titleKey === 'draft-product.guided-requirements.requirements-round.analyze-requirements' ? 0 : productManagerStages.findIndex(/** 本次只重做失败角色及后续，之前产物必须顺序完整。 */role => titleKey === `draft-product.product-${role}`);
-  if (path.startsWith('product-team.draft-product.') && (roleIndex < 0 || entries.length !== roleIndex || entries.some(/** 防止缺少前序或混入重复角色的快照直接恢复。 */(value, index) => value.role !== productManagerStages[index]))) return undefined;
+  const simplified = state.productFlow !== undefined;
+  const roles = simplified ? (state.intake?.enabled ? ['writing'] : ['analysis', 'writing']) : productManagerStages;
+  const roleIndex = titleKey === 'draft-product.publish-product' ? roles.length
+    : titleKey.endsWith('.analyze-requirements') ? 0 : roles.findIndex(role => titleKey === `draft-product.product-${role}`);
+  if (path.startsWith('product-team.') && (roleIndex < 0 || entries.length !== roleIndex || entries.some((value, index) => value.role !== roles[index]))) return undefined;
   const preserved = entries.map(/** 前序产物保持只读；旧快照中的计划句不计为完成交付。 */value => ({ label: titles[`draft-product.product-${value.role}`], role: value.role, complete: !(value.role === 'scope-priority' && isPlanOnlyProductOutput(value.content)) }));
   const failure = describeProductFailure(entry.error, state.contextBudgetLevel ?? 0);
   return {
     hash: developmentHash({ runId, step: path, state, endedAt: entry.endedAt, error: entry.error?.name, details: entry.error?.details }),
-    step: path, title: titles[titleKey], savedAnswers: state.intake?.history.length ?? 0, preserved,
+    step: path, title: titles[titleKey], savedAnswers: state.intake?.history.length ?? 0, preserved: simplified && state.intake?.ready && state.intake.plan ? [{ label: '已收敛的产品方向', role: 'direction', complete: true }, ...preserved] : preserved,
     reason: failure?.reason ?? ([408, 504, 524].includes(entry.error?.statusCode) ? '模型服务响应超时' : entry.error?.name === 'AI_APICallError' ? '上游模型调用未成功' : entry.error?.name === 'SyntaxError' || entry.error?.name === 'ZodError' ? '模型输出未通过格式校验' : '此步骤执行未完成'),
     attemptDetails: failure?.details, next: failure?.next, additionalContextLevel: failure?.additionalContextLevel, retryBlocked: failure?.retryBlocked,
     message: `可以从“${titles[titleKey]}”的已保存输入继续，无需重填已确认信息。`,
@@ -71,11 +79,13 @@ function describeInitializationRecovery(runId: string, steps: Record<string, any
 
 /** 只重试已生成产品稿的质量审查，核对原生发布结果和后续审批边界。 */
 function describeProductQualityRecovery(runId: string, steps: Record<string, any>) {
-  const path = findPath(steps, 'draft-product.review-product-quality');
+  const nativePath = findPath(steps, 'product-team.product-specification.review-product-quality');
+  const path = nativePath ?? findPath(steps, 'draft-product.review-product-quality');
   const entry = path ? steps[path] : undefined;
   if (!path || !entry || Array.isArray(entry) || entry.status !== 'failed') return undefined;
   const input = deliverySchema.safeParse(entry.payload);
-  const published = deliverySchema.safeParse(findStep(steps, 'draft-product.publish-product')?.output);
+  const publishedStep = findStep(steps, nativePath ? 'product-team.product-specification.product-writing' : 'draft-product.publish-product');
+  const published = deliverySchema.safeParse(publishedStep?.status === 'success' ? publishedStep.output : undefined);
   if (!input.success || !published.success || developmentHash(input.data) !== developmentHash(published.data)) return undefined;
   const state = input.data;
   const artifact = state.artifacts.at(-1);

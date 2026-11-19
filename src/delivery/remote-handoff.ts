@@ -8,6 +8,7 @@ import { existsSync, lstatSync, linkSync, unlinkSync, mkdirSync, readFileSync, w
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
+import { assetIdSchema, formalSpecificationPathPattern } from './asset-identity.js';
 
 const uuidSchema = '[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}';
 export const remoteHandoffSchema = z.object({ version: z.literal('remote-handoff.v1'), branch: z.string().regex(new RegExp(`^(?:codex/workflow/[a-zA-Z0-9_-]{1,200}|run/[a-z0-9-]{2,48}-${uuidSchema})$`)), commit: z.string().regex(/^[a-f0-9]{40,64}$/), files: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)) });
@@ -19,7 +20,7 @@ export type RemoteHandoff = z.infer<typeof remoteHandoffSchema>;
 export const formalSpecificationReceiptSchema = z.object({
   kind: z.enum(['requirements', 'product', 'development', 'testing']),
   handoff: remoteHandoffSchema,
-  paths: z.array(z.string().regex(/^specs\/[a-z0-9-]+\.(?:md|json)$/)).min(1).max(4),
+  paths: z.array(z.string().regex(formalSpecificationPathPattern)).min(1).max(4),
   upstreamCommits: z.array(z.string().regex(/^[a-f0-9]{40,64}$/)).max(3),
 });
 export type FormalSpecificationReceipt = z.infer<typeof formalSpecificationReceiptSchema>;
@@ -89,7 +90,7 @@ export function writeHandoffCache(path: string, value: string): void {
 }
 
 /** 以独立提交发布本次明确选择的资产；重试相同输入复用提交，push 后核实远端回执。 */
-export async function publishHandoff(root: string, runId: string, files: Record<string, string>, options: { branch?: string; message?: string } = {}): Promise<RemoteHandoff> {
+export async function publishHandoff(root: string, runId: string, files: Record<string, string>, options: { branch?: string; message?: string; baseCommit?: string } = {}): Promise<RemoteHandoff> {
   if (!/^[a-zA-Z0-9_-]{1,200}$/.test(runId) || !Object.keys(files).length) throw new Error('非法远端交付');
   const hashes: Record<string, string> = {};
   for (const [path, text] of Object.entries(files)) {
@@ -102,14 +103,15 @@ export async function publishHandoff(root: string, runId: string, files: Record<
   remoteHandoffSchema.shape.branch.parse(branch);
   const cache = handoffCache(root);
   const message = options.message ?? 'docs(workflow): 保存角色交付资料\n';
-  const key = contentHash(JSON.stringify({ branch, files: hashes, message }));
+  const baseCommit = options.baseCommit && z.string().regex(/^[a-f0-9]{40}$/).parse(options.baseCommit);
+  const key = contentHash(JSON.stringify({ branch, files: hashes, message, baseCommit }));
   const receiptPath = join(cache, `${key}.json`);
   let receipt: RemoteHandoff;
   if (existsSync(receiptPath)) receipt = remoteHandoffSchema.parse(JSON.parse(readHandoffCache(receiptPath)));
   else {
     const ref = `refs/heads/${branch}`;
     const remote = (await networkGit(root, ['ls-remote', '--refs', 'origin', ref])).split(/\s/)[0];
-    let parent = git(root, ['rev-parse', 'HEAD']);
+    let parent = git(root, ['rev-parse', baseCommit ?? 'HEAD']);
     if (remote) { await networkGit(root, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref]); parent = remote; }
     const temporary = mkdtempSync(join(tmpdir(), 'workflow-index-'));
     try {
@@ -144,10 +146,57 @@ export async function publishHandoff(root: string, runId: string, files: Record<
   return receipt;
 }
 
+/** 从测试规格提交构建已放行候选。只更新同一 Run 分支，重试核对远端树。 */
+export async function publishReviewedCandidate(root: string, specification: RemoteHandoff, candidate: Record<string, string>, writable: readonly string[], specPaths: readonly string[], baseline?: string) {
+  const { branch, commit: parent } = remoteHandoffSchema.parse(specification);
+  if (!branch.startsWith('run/')) throw new Error('交付要求正式 Run 分支');
+  const origin = git(root, ['remote', 'get-url', '--all', 'origin']);
+  if (origin.includes('\n') || git(root, ['remote', 'get-url', '--push', '--all', 'origin']) !== origin) throw new Error('交付远端地址不一致');
+  const ref = `refs/heads/${branch}`;
+  const main = 'refs/heads/main';
+  await networkGit(root, ['fetch', '--no-tags', 'origin', main, ref]);
+  const refs = await networkGit(root, ['ls-remote', '--refs', 'origin', main, ref]);
+  const heads = new Map(refs.split('\n').map(/** 按完整 ref 读取远端提交。 */line => { const [sha, name] = line.split('\t'); return [name, sha] as const; }));
+  const mainCommit = heads.get(main);
+  const remote = heads.get(ref);
+  if (!mainCommit || !remote) throw new Error('交付分支或 main 不存在');
+  const mergeBase = git(root, ['merge-base', mainCommit, parent]);
+  if (baseline && mergeBase !== baseline) throw new Error('候选工程基线与交付分支不一致');
+  const allowed = new Set([...writable.filter(path => Object.hasOwn(candidate, path)), ...specPaths]);
+  const temporary = mkdtempSync(join(tmpdir(), 'workflow-mr-index-'));
+  try {
+    const index = join(temporary, 'index');
+    git(root, ['read-tree', parent], undefined, index);
+    for (const [path, body] of Object.entries(candidate)) {
+      if (!/^[a-zA-Z0-9_./()\[\]-]+$/.test(path) || path.split('/').some(part => !part || part.startsWith('.'))) throw new Error('候选文件路径无效');
+      const entry = git(root, ['ls-tree', parent, '--', `:(literal)${path}`]);
+      const match = /^(100644|100755) blob ([a-f0-9]+)\t/.exec(entry);
+      if (entry && !match) throw new Error('交付候选必须为普通文件');
+      const blob = git(root, ['hash-object', '-w', '--stdin'], body);
+      if (match?.[2] === blob) continue;
+      if (!writable.includes(path) || specPaths.includes(path)) throw new Error('候选与 Git 基线的受保护文件不一致');
+      git(root, ['update-index', '--add', '--cacheinfo', match?.[1] ?? '100644', blob, path], undefined, index);
+    }
+    const tree = git(root, ['write-tree'], undefined, index);
+    const changed = git(root, ['diff', '--name-only', '--no-renames', '-z', mergeBase, tree]).split('\0').filter(Boolean);
+    if (!changed.length || changed.some(path => !allowed.has(path))) throw new Error('交付差异超出该 Run 的授权范围');
+    if (remote !== parent) {
+      if (git(root, ['rev-list', '--parents', '-n', '1', remote]) !== `${remote} ${parent}` || git(root, ['rev-parse', `${remote}^{tree}`]) !== tree) throw new Error('交付分支已发生漂移');
+      return remote;
+    }
+    if (tree === git(root, ['rev-parse', `${parent}^{tree}`])) return parent;
+    const commit = git(root, ['-c', 'user.name=Workflow', '-c', 'user.email=workflow@local.invalid', 'commit-tree', tree, '-p', parent], 'feat(delivery): 提交通过 QA 的候选源码\n');
+    await networkGit(root, ['push', '--porcelain', '--no-follow-tags', '--recurse-submodules=no', `--force-with-lease=${ref}:${parent}`, 'origin', `${commit}:${ref}`]);
+    if ((await networkGit(root, ['ls-remote', '--refs', 'origin', ref])).split(/\s/)[0] !== commit) throw new Error('交付分支已发生漂移');
+    return commit;
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
+}
+
 /** 人工确认后发布正式规格；能力和提交标题均由宿主固定，不接受页面传值。 */
-export async function publishFormalSpecification(root: string, runId: string, capability: string, files: Record<string, string>, message: string): Promise<RemoteHandoff> {
-  if (!Object.keys(files).every(path => /^specs\/[a-z0-9-]+\.(?:md|json)$/.test(path))) throw new Error('正式规格只能写入受控 specs 路径');
-  return publishHandoff(root, runId, files, { branch: formalRunBranch(capability, runId), message: `${message}\n` });
+export async function publishFormalSpecification(root: string, runId: string, capability: string, files: Record<string, string>, message: string, baseCommit?: string): Promise<RemoteHandoff> {
+  const iteration = assetIdSchema.parse(capability);
+  if (!Object.keys(files).every(/** 产品路径必须与宿主登记的迭代标识匹配。 */path => formalSpecificationPathPattern.test(path) && (path.startsWith('specs/') || path.startsWith(`product/${iteration}/`)))) throw new Error('正式规格只能写入当前需求的受控路径');
+  return publishHandoff(root, runId, files, { branch: formalRunBranch(capability, runId), message: `${message}\n`, baseCommit });
 }
 
 /** 只读取回执登记的固定 commit 文件，并核对 SHA256，拒绝任意 Git 表达式。 */

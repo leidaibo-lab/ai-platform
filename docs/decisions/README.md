@@ -2,7 +2,11 @@
 
 本目录保存平台能力的方案发现、验证和选择证据。记录用于回答“为什么这样选”和“为什么没有使用其他方案”，不能只描述最终实现。
 
-[划分平台与团队 Harness 职责](./2026-11-18-platform-team-harness.md)：接受；以两类 Harness、四个职责区域约束后续开发；本轮完成架构与协作规则，通用机制抽取和项目解耦另按 H1–H4 验证。
+[MR 交付边界](./2026-11-19-merge-request-delivery.md)已接受。默认 Workflow 在创建并核对 MR 后结束。
+
+[三层 Harness 与跨团队编排](./2026-11-19-three-layer-harness.md)已接受。对应主架构图、代码入口和验证范围。
+
+[划分平台与团队 Harness 职责](./2026-11-18-platform-team-harness.md)是旧版职责决策，已由三层设计替代。
 
 [在 Mastra 主线适配 Nacos AI 资源](./2026-11-17-nacos-mastra-resources.md)：提议；已有默认启用的产品阶段 Prompt/Skill 验证切片，正式接入与生产验收待完成；MCP 和 A2A 延后。
 
@@ -46,9 +50,9 @@
 
 开发执行切片：[采用 Mastra 原生工作流与受限代码执行](./2026-11-06-mastra-development-execution.md)，接受；独立于旧提案链，能力结论以实测和人评为准。
 
-最近一次审计：[2026-10-12 架构与方案决策存量审计](../audits/2026-10-12-architecture-decisions.md)。审计建议不改变历史接受状态；修复前应检查最新演进关系与稳定契约。
+最近一次审计：[2026-10-12 架构与方案决策存量审计](../../practices/custom-exploration/docs/audits/2026-10-12-architecture-decisions.md)。审计建议不改变历史接受状态；修复前应检查最新演进关系与稳定契约。
 
-修复结果：[验证与证据登记](../audits/2026-10-12-decision-repair-evidence.md)。新增决策按增强模板区分实施计划、验收计划和实际结果；旧记录的真实/生产门禁未完成时保留未勾选状态。
+修复结果：[验证与证据登记](../../practices/custom-exploration/docs/audits/2026-10-12-decision-repair-evidence.md)。新增决策按增强模板区分实施计划、验收计划和实际结果；旧记录的真实/生产门禁未完成时保留未勾选状态。
 
 1. 从 [`TEMPLATE.md`](./TEMPLATE.md) 复制一份新记录。
 2. 文件名使用 `YYYY-MM-DD-<简短英文主题>.md`。
@@ -100,7 +104,7 @@
 | 2026-07-29 | [C1 ChainTrace 优先级与 OpenTelemetry 实施路径](./2026-07-29-c1-chaintrace-priority-and-otel-path.md) | 已替代 | OTel PoC 与后端决策路径已执行；“运行态验收优先于后续建设”的门禁由延期记录替代 |
 | 2026-07-29 | [存量能力选型审计](./2026-07-29-existing-capability-selection-audit.md) | 接受 | 保留模型主链和业务事实；封装记忆与有限重试；迁移到 OTel；停止自研工具循环、协议、工作流引擎和 Trace 后端 |
 
-没有单独决策证据的存量实现仍按照 [`方案选型与复用治理`](../solution-selection-governance.md) 审计，不能因为本次总审计存在就自动视为已经通过选型。后续 PoC、迁移和重要依赖引入继续建立独立记录。
+没有单独决策证据的存量实现仍按照 [`方案选型与复用治理`](../../practices/custom-exploration/docs/solution-selection-governance.md) 审计，不能因为本次总审计存在就自动视为已经通过选型。后续 PoC、迁移和重要依赖引入继续建立独立记录。
 
 [适配 gstack 方法与真实浏览器 QA](./2026-11-09-mastra-gstack-browser-qa.md)：接受；保留 Mastra/BMAD，固定方法来源、Playwright 执行与版本绑定证据，首版支持静态候选。
 # 恢复决策

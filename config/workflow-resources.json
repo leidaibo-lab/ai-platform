@@ -139,6 +139,7 @@
         "development-self-check",
         "reviewer",
         "testing",
+        "submit-merge-request",
         "deployment"
       ],
       "versionBinding": "checkpointHash + delivery.sourceHash",
@@ -168,10 +169,23 @@
         "review-test-results"
       ],
       "consumers": [
+        "submit-merge-request",
         "deployment",
         "confirm-final-delivery"
       ],
       "versionBinding": "qualityHash + quality.sourceHash",
+      "authority": "workflow-evidence"
+    },
+    {
+      "id": "merge-request-receipt",
+      "owner": "delivery-team",
+      "contract": "src/delivery/contracts.ts#mergeRequestReceiptSchema",
+      "producer": "submit-merge-request",
+      "gates": [],
+      "consumers": [
+        "intake-workbench"
+      ],
+      "versionBinding": "branch + commit + sourceHash + reportHash",
       "authority": "workflow-evidence"
     },
     {
@@ -275,7 +289,7 @@
       "evidence": [
         "src/delivery/deployment.ts"
       ],
-      "detail": "发布/健康/回滚由本地人工回填；不等于认证身份或CI机器证明。"
+      "detail": "历史部署图的发布、健康和回滚由人工回填。默认图核验 GitHub MR 回执后结束。"
     }
   ],
   "nextRuntimeDesign": {

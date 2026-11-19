@@ -1,3 +1,4 @@
+import { projectRepositoryRoot } from '../../business-engineering/project.js';
 import { stopAutonomy, reworkState } from './autonomy.js';
 /** 原生 foreach 执行一个依赖波次；每任务独占候选，屏障后校验并合并补丁。
  * ADR: docs/decisions/2026-11-07-mastra-unified-development-team.md
@@ -49,7 +50,7 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
   let execution: DevelopmentExecution | undefined;
   try {
     seedDevelopment(directory, { ...job.state.input, project: { ...job.state.input.project, files: job.files, writablePaths: task.paths } });
-    execution = createDevelopmentExecution(resolve(directory, 'candidate'), { ...job.state.input.project, writablePaths: task.paths });
+    execution = createDevelopmentExecution(resolve(directory, 'candidate'), { ...job.state.input.project, writablePaths: task.paths }, projectRepositoryRoot(config));
     const branch = execution;
     let activeExecution: ExecutionPort = branch;
     let calls = 0; let delegates = 0; let queue: Promise<unknown> = Promise.resolve();

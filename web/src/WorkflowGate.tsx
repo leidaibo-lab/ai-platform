@@ -45,7 +45,7 @@ function Evidence({ value, name = '确认材料' }: { value: any; name?: string 
 }
 /** 独立关口组件在 gateHash 变化时重建，旧草稿不会混入新审批。 */
 export function WorkflowGateForm({ gate, busy, submit }: { gate: WorkflowGate; busy: boolean; submit: (data: unknown) => Promise<void> }) {
-  if (gate.key === 'retry-repository-sync') return <RepositorySyncGate gate={gate} busy={busy} submit={submit} />;
+  if (gate.key === 'submit-merge-request' || gate.key === 'retry-repository-sync') return <RepositorySyncGate gate={gate} busy={busy} submit={submit} />;
   if (gate.key === 'confirm-blocker-answers') return <BlockerClarification gate={gate} busy={busy} submit={submit} />;
   if (gate.key === 'review-revised-product') return <RevisedProductReview gate={gate} busy={busy} submit={submit} />;
   return gate.recoveryInfo ? <DevelopmentRecovery gate={gate} busy={busy} submit={submit} /> : <GenericWorkflowGateForm gate={gate} busy={busy} submit={submit} />;
@@ -53,6 +53,7 @@ export function WorkflowGateForm({ gate, busy, submit }: { gate: WorkflowGate; b
 /** 同步是已完成角色产物的技术重试，不展示批准或发布决定表单。 */
 function RepositorySyncGate({ gate, busy, submit }: { gate: WorkflowGate; busy: boolean; submit: (data: unknown) => Promise<void> }) {
   const [error, setError] = useState('');
+  const mergeRequest = gate.key === 'submit-merge-request';
   /** 版本由服务端绑定；错误保留在当前同步关口，不自动重复提交。 */
   async function retry() {
     setError('');
@@ -60,11 +61,11 @@ function RepositorySyncGate({ gate, busy, submit }: { gate: WorkflowGate; busy: 
     catch (reason) { setError(reason instanceof Error ? reason.message : '同步尚未完成，请稍后重试'); }
   }
   return <section className="intake-card">
-    <div className="intake-eyebrow">角色资料已保存 · 等待同步</div>
+    <div className="intake-eyebrow">{mergeRequest ? 'QA 已通过 · 等待 MR 交付' : '角色资料已保存 · 等待同步'}</div>
     <h1>{gate.title}</h1><p>{gate.description}</p>
-    <p>同步成功后继续原流程；需要你确认的产品、方案或发布关口仍会单独展示。</p>
+    <p>{mergeRequest ? '交付成功后将显示 MR 链接，本轮流程结束。' : '同步成功后继续原流程，需要确认的关口仍会单独展示。'}</p>
     {error && <p role="alert">{error}</p>}
-    <button className="primary" type="button" disabled={busy} onClick={/** 只提交当前同步版本。 */() => void retry()}>{busy ? '正在同步资料…' : '重试远端同步'}</button>
+    <button className="primary" type="button" disabled={busy} onClick={/** 只提交当前同步版本。 */() => void retry()}>{mergeRequest ? (busy ? '正在提交 MR…' : '重试提交 MR') : (busy ? '正在同步资料…' : '重试远端同步')}</button>
   </section>;
 }
 /** 其余人工关口沿用 schema 表单，故障恢复使用专门业务指引。 */

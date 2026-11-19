@@ -13,19 +13,25 @@
 - Mastra Store 持有 Workflow 执行、审批和恢复事实；文件或业务仓库投影不得成为第二事实源。
 - 未经授权不得推送远端、部署或删除数据。
 
+## Codex 工具等待
+
+- 长时间运行的测试、构建和检查应保留可检查的日志与退出结果。等待已有会话时，优先使用一次有界长等待（例如 `write_stdin` 的 `yield_time_ms: 60000`）。达到任务预设的总等待期限时，检查并报告实际状态。
+- 同一工具、同一目标连续得到相同状态且无新进展时，最多连续等待两次。随后检查日志增量、进程状态或退出结果。确认任务仍在运行且尚未到期限时，可按剩余时间继续有界等待。仅调整调用参数不算新进展。
+- 新日志、新分页内容、状态变化或明确的交互提示允许继续使用同一工具。查证后仍无法判断任务状态时，报告最后可确认的结果与待验证项，不能将等待超时视作命令失败或验证通过。
+
 ## Harness 架构约束
 
-- 遵循[两类 Harness、四个职责区域](docs/application/harness-architecture.md)及其[接受决策](docs/decisions/2026-11-18-platform-team-harness.md)。业务编排负责跨团队协作，团队 Harness 负责专业执行与验收闭环，平台 Harness 提供通用执行治理，项目适配提供具体仓库、环境和检查。
+- 遵循[三层 Harness 与跨团队编排](docs/application/harness-architecture.md)及其[接受决策](docs/decisions/2026-11-19-three-layer-harness.md)。平台 Harness 提供通用执行治理，团队 Harness 负责专业执行与验收闭环，业务工程 Harness 维护 Git 中版本化的 SDD 与保护检查。项目适配装配仓库、环境和检查，业务编排负责跨团队协作。
 - 新增能力先明确职责归属；团队复用 Mastra 原生运行事实和受控执行 Port，不自建审批/恢复引擎。通用机制不得固化 HRM 路径、命令或团队专业策略。
 - 团队方法和检查应版本化；实现 Agent 不得修改受保护检查、降低验收标准或自行扩权。行为变化先更新 OpenSpec。
-- 当前归属不等于代码已解耦；后续抽取按架构文档 H1–H4 任务和实际复用需求推进，不机械创建四套目录或通用框架。
+- 当前归属不等于代码已解耦；后续抽取按架构文档 H1–H4 任务和实际复用需求推进，以使用方和已验证的职责边界决定模块拆分。
 
 ## 主线入口
 
 - 应用：`src/mastra/`、`src/`、`config/`
 - 工作台：`web/`
 - 维护、回归与评测：`scripts/`、`tests/`、`evaluations/`
-- 产品 Skill：`nacos-resources/product/skills/`
+- 产品 Skill：`nacos-resources/product/skills/`。产品稿版式与独立审查口径见 `product/requirements-handoff`。
 - Mastra 操作文档：`docs/application/`
 - 稳定契约：`openspec/specs/mastra-role-resources/`、`openspec/specs/project-mainline/`
 - 当前迁移变更：`openspec/changes/promote-mastra-v2/`

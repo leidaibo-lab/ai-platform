@@ -1,3 +1,4 @@
+import { engineeringBinding, projectTarget } from '../business-engineering/project.js';
 /** 生命周期 Observer/文件 Adapter；Mastra Store 继续拥有审批与恢复事实。
  * ADR: docs/decisions/2026-11-09-mastra-run-archive.md
  */
@@ -8,8 +9,8 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { Step, WorkflowOptions } from '@mastra/core/workflows';
 import type { PracticeConfig } from '../mastra/config.js';
-import { assetIdSchema, correlationSchema } from './asset-identity.js';
-import { ensureAssetDirectory, safeAssetPath, validateHrmRepository, validateRepository } from './asset-files.js';
+import { assetIdSchema, correlationSchema, projectIdSchema } from './asset-identity.js';
+import { ensureAssetDirectory, safeAssetPath, validateRepository } from './asset-files.js';
 import { registerAssetRun, writeImmutableFile, readAssetCatalog } from './asset-catalog.js';
 import { publishHandoff, remoteHandoffSchema } from './remote-handoff.js';
 import { resolveRemoteSyncTarget } from './remote-sync-settings.js';
@@ -20,7 +21,7 @@ const reasonSchema = z.enum(['repository-sync', 'human-or-recovery-gate', 'model
 /** 显式公开字段；null 表示未采集，不从正文或异常猜测。 */
 export const runArchiveSchema = z.object({
   schemaVersion: z.literal('run-archive.v1'), authority: z.literal('mastra-store-projection'),
-  projectId: z.literal('hrm'), iterationId: assetIdSchema.nullable(), runId: identifier,
+  projectId: projectIdSchema, iterationId: assetIdSchema.nullable(), runId: identifier,
   workflowId: z.literal('productDevelopmentWorkflow'), workflowDefinitionId: z.literal('product-development'),
   workflowVersion: z.literal('product-development.archive.v1'), mode: z.enum(['fixture', 'live']),
   scope: z.enum(['run', 'step']), stage: identifier.nullable(), status: statusSchema, observedAt: z.iso.datetime(),
@@ -66,11 +67,12 @@ function codeIdentity(root: string): RunArchive['code'] {
 /** 补推本地不可变历史；沿用隔离 index 的 Git Adapter，不改工作树。 */
 export async function syncRunArchive(config: PracticeConfig, runId: string, publish: typeof publishHandoff = publishHandoff): Promise<'synced' | 'disabled' | 'missing'> {
   identifier.parse(runId);
-  if (!config.hrmRepositoryRoot || config.mode !== 'live') return 'disabled';
+  const project = projectTarget(config);
+  if (!project || config.mode !== 'live') return 'disabled';
   const target = resolveRemoteSyncTarget(config, 'initialize-product-development');
   if (!target) return 'disabled';
   validateRepository(target.root, target.origin);
-  const root = validateHrmRepository(config.hrmRepositoryRoot);
+  const root = validateRepository(project.root, project.origin);
   const relative = `product/catalog/runs/${runId}`;
   if (!existsSync(join(root, relative, 'history'))) return 'missing';
   const files: Record<string, string> = {};
@@ -83,7 +85,7 @@ export async function syncRunArchive(config: PracticeConfig, runId: string, publ
     const path = `${relative}/history/${entry.name}`;
     const content = readFileSync(safeAssetPath(root, path), 'utf8');
     const record = runArchiveSchema.parse(JSON.parse(content));
-    if (record.runId !== runId) throw new Error('运行档案归属冲突');
+    if (record.runId !== runId || record.projectId !== project.id) throw new Error('运行档案归属冲突');
     bytes += Buffer.byteLength(content);
     if (bytes > 16 * 1024 * 1024) throw new Error('运行档案超过字节预算');
     files[path] = content;
@@ -94,20 +96,21 @@ export async function syncRunArchive(config: PracticeConfig, runId: string, publ
 
 /** 先本地落盘再同步；调用方负责隔离归档失败和业务结果。 */
 export async function recordRunArchive(config: PracticeConfig, observation: ArchiveObservation, publish: typeof publishHandoff = publishHandoff): Promise<void> {
-  if (!config.hrmRepositoryRoot) return;
-  const root = validateHrmRepository(config.hrmRepositoryRoot);
+  const project = projectTarget(config);
+  if (!project) return;
+  const root = validateRepository(project.root, project.origin);
   const metadata = businessMetadata(observation.value);
   const runId = metadata.runId ?? observation.runId;
   identifier.parse(runId);
   const relative = `product/catalog/runs/${runId}`;
   const binding = existsSync(join(root, relative, 'run.json')) ? z.object({ correlation: correlationSchema }).parse(JSON.parse(readFileSync(safeAssetPath(root, `${relative}/run.json`), 'utf8'))) : undefined;
-  if (!binding || binding.correlation.runId !== runId) throw new Error('运行档案缺少根 Run 关联');
+  if (!binding || binding.correlation.runId !== runId || binding.correlation.projectId !== project.id) throw new Error('运行档案缺少根 Run 关联');
   const iterationId = metadata.iterationId ?? observation.iterationId ?? binding?.correlation.iterationId ?? null;
   if (binding && iterationId !== binding.correlation.iterationId) throw new Error('运行档案迭代归属冲突');
   const status = observation.status;
-  const artifactPaths = readAssetCatalog(root).assets.filter(/** 只关联本根 Run 的已完成清单。 */asset => asset.manifest.runId === runId).map(/** 只记录路径，不复制交付正文。 */asset => asset.path);
+  const artifactPaths = readAssetCatalog(root, project).assets.filter(/** 只关联本根 Run 的已完成清单。 */asset => asset.manifest.runId === runId).map(/** 只记录路径，不复制交付正文。 */asset => asset.path);
   const record = runArchiveSchema.parse({
-    schemaVersion: 'run-archive.v1', authority: 'mastra-store-projection', projectId: 'hrm', iterationId, runId,
+    schemaVersion: 'run-archive.v1', authority: 'mastra-store-projection', projectId: project.id, iterationId, runId,
     workflowId: 'productDevelopmentWorkflow', workflowDefinitionId: 'product-development', workflowVersion: 'product-development.archive.v1', mode: config.mode,
     scope: observation.scope, stage: observation.stage ?? null, status, reason: observation.reason ?? null, observedAt: new Date().toISOString(), code: codeIdentity(config.rootDir), artifacts: metadata.artifacts, artifactPaths,
     recovery: { source: 'Mastra Store', portable: false, condition: status === 'suspended' ? 'wait-for-human-or-sync' : ['failed', 'tripwire'].includes(status) ? 'inspect-native-failure' : ['success', 'bailed', 'canceled'].includes(status) ? 'none' : 'inspect-native-state' },
@@ -129,10 +132,12 @@ export function runArchiveLifecycle(config: PracticeConfig): WorkflowOptions {
   return {
     /** 首次执行前登记业务创建；失败不能充当执行门禁。 */
     onStart: async info => {
-      if (!config.hrmRepositoryRoot) return;
+      const project = projectTarget(config);
+      if (!project) return;
       try {
         const input = z.object({ brief: z.string(), iterationId: assetIdSchema.default('unassigned') }).parse(info.getInitData());
-        registerAssetRun(config.hrmRepositoryRoot, { projectId: 'hrm', iterationId: input.iterationId, runId: info.runId, workflowId: 'productDevelopmentWorkflow' }, input.brief);
+        const engineering = config.engineeringProject;
+        registerAssetRun(project.root, { projectId: project.id, ...(engineering ? { engineeringBinding: engineeringBinding(engineering), engineeringRevision: engineering.revision } : {}), iterationId: input.iterationId, runId: info.runId, workflowId: 'productDevelopmentWorkflow' }, input.brief, project);
         await observe(config, { runId: info.runId, scope: 'run', status: 'running', iterationId: input.iterationId });
       } catch { console.warn('[run-archive] 初始运行档案未保存；原生状态不变。'); }
     },

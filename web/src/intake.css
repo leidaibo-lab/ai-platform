@@ -302,3 +302,73 @@
 .intake-shell .markdown [data-streamdown="table"] th,[data-streamdown="table-fullscreen"] th{background:#edf5f0;color:#365c48;font-weight:650;white-space:nowrap}.intake-shell .markdown [data-streamdown="table"] tr:last-child td,[data-streamdown="table-fullscreen"] tr:last-child td{border-bottom:0}
 [data-streamdown="table-fullscreen"]{position:fixed;inset:0;z-index:1000;padding:20px;background:#f5f8f6;color:#344740}[data-streamdown="table-fullscreen"] [data-streamdown="table-wrapper"]{display:flex;flex-direction:column;gap:12px;height:100%}[data-streamdown="table-fullscreen"] [data-streamdown="table-wrapper"]>div:has(>table){flex:1}
 @media(max-width:600px){.intake-shell .markdown{font-size:13px}.intake-shell .markdown [data-streamdown="table-wrapper"]{padding:7px}.intake-shell .markdown [data-streamdown="table"] th,.intake-shell .markdown [data-streamdown="table"] td{padding:8px 10px}}
+
+/* 团队状态由 Run 快照投影。SVG 连接线与可聚焦的团队按钮共享同一条执行链。 */
+.workflow-team-chain {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr) 28px) minmax(0, 1fr);
+  padding: 0;
+  margin: 18px 0 12px;
+  list-style: none;
+  align-items: center;
+}
+.workflow-team-link { display: contents; }
+.workflow-team-node {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid #dfe9e4;
+  border-radius: 10px;
+  background: #fff;
+  color: #425c51;
+  text-align: left;
+  cursor: pointer;
+}
+.workflow-team-node.current { border-color: #43876a; background: #eaf6ef; color: #24583f; }
+.workflow-team-node.done { border-color: #a7c9b6; }
+.workflow-team-node.failed, .workflow-team-node.stopped { border-color: #d89883; background: #fff7f3; color: #863d2a; }
+.workflow-team-node:focus-visible, .workflow-team-node[aria-pressed='true'] { outline: 2px solid #43876a; outline-offset: 2px; }
+.workflow-team-title { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px; }
+.workflow-team-title svg { flex: none; }
+.workflow-team-steps { font-size: 12px; line-height: 1.45; }
+.workflow-team-status { margin-top: auto; font-size: 12px; font-weight: 600; }
+.workflow-flow-arrow { width: 28px; height: 16px; color: #95a79e; }
+.workflow-flow-arrow.active { color: #417d60; }
+.workflow-return-paths { display: flex; flex-wrap: wrap; gap: 7px 16px; }
+.workflow-return-paths > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #586e63; }
+.workflow-return-paths > span.active { color: #694492; font-weight: 700; }
+.workflow-flow-arrow.returning.active { color: #694492; }
+.workflow-team-activity { margin-top: 14px; padding-top: 12px; border-top: 1px solid #dfe9e4; }
+.workflow-team-activity-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.workflow-team-activity-head h3 { margin: 0; font-size: 14px; }
+.workflow-team-events { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(165px, 100%), 1fr)); gap: 0 8px; }
+.workflow-team-records { margin-top: 12px; }
+.workflow-team-records > summary { cursor: pointer; color: #52655e; font-size: 12px; }
+@container (max-width: 620px) {
+  .workflow-team-chain { grid-template-columns: minmax(0, 1fr); }
+  .workflow-team-chain .workflow-flow-arrow { justify-self: center; transform: rotate(90deg); margin: 7px 0; }
+}
+.workflow-team-overview { container-type: inline-size; }
+
+.intake-shell .markdown .business-text {
+  margin: 14px 0 20px;
+  border: 1px solid #dfeae3;
+  border-radius: 10px;
+  background: #f7faf8;
+  overflow-wrap: anywhere;
+}
+.intake-shell .markdown .business-transitions { overflow-x: auto; }
+.intake-shell .markdown .business-transitions table { display: table; width: 100%; margin: 0; border-collapse: collapse; }
+.intake-shell .markdown .business-transitions th,
+.intake-shell .markdown .business-transitions td { padding: 8px 12px; text-align: left; vertical-align: top; }
+.intake-shell .markdown .business-transitions th { background: #edf5f0; color: #305341; }
+.intake-shell .markdown .business-transitions tr + tr td { border-top: 1px solid #e3ebe6; }
+.intake-shell .markdown .business-transitions td:last-child { font-weight: 600; color: #305341; }
+.intake-shell .markdown .business-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px 24px; padding: 12px 16px; }
+.intake-shell .markdown .business-fields ul { margin: 4px 0 0; list-style: disc; }
+.intake-shell .markdown .business-steps { list-style: decimal; margin: 0; padding: 10px 16px 10px 38px; }
+.intake-shell .markdown .business-steps li::marker { font-weight: 600; color: #35664d; }
+.intake-shell .markdown .business-plain { white-space: pre-wrap; padding: 10px 14px; }

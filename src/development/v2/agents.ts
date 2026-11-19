@@ -1,3 +1,4 @@
+import { projectRepositoryRoot, projectSpec } from '../../business-engineering/project.js';
 import { createNativeMemory } from '../../mastra/context-memory.js';
 import { LibSQLStore } from '@mastra/libsql';
 import { createTaskContext } from '../../delivery/task-context.js';
@@ -121,7 +122,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
   const storage = config.mode === 'live' ? new LibSQLStore({ id: 'development-context-memory', url: config.databaseUrl }) : undefined;
   try {
     const agent = createAgentV2(config, execution, role, state, paths, methods, runtime, storage);
-    const taskContext = createTaskContext({ repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, currentProductApproval: developmentProductApproval(state.input, state.phase), source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从候选工具读原文，避免文件在project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
+    const taskContext = createTaskContext({ engineeringSpec: projectSpec(config, 'development'), repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, currentProductApproval: developmentProductApproval(state.input, state.phase), source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从候选工具读原文，避免文件在project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
       requirements: state.requirements.map(
         /** 需求与验收只消费批准原文锚点。 */
         (item) => item.id,
@@ -140,7 +141,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
     ), ...state.verificationRefs, ...(state.plan?.tasks.map(
       // 给评审提供当前任务集合。
       (task) => `task:${task.id}`,
-    ) ?? [])], context: state.context, plan: state.plan, checks: state.checks, verificationHistory: state.verificationHistory, repairHistory: state.repairHistory, priorReports: state.codeReviews, round: state.round, taskPaths: paths, extra: role === 'context' ? { candidateFiles: Object.keys(state.input.project.files), note: '候选原文通过readFile读取；重复归档无需通读' } : extra }, config.mode === 'live', config.hrmRepositoryRoot ? { root: config.hrmRepositoryRoot, receipt: state.repositoryHandoff ?? state.input.repositoryHandoff } : undefined, state.contextBudgetLevel ?? 0);
+    ) ?? [])], context: state.context, plan: state.plan, checks: state.checks, verificationHistory: state.verificationHistory, repairHistory: state.repairHistory, priorReports: state.codeReviews, round: state.round, taskPaths: paths, extra: role === 'context' ? { candidateFiles: Object.keys(state.input.project.files), note: '候选原文通过readFile读取；重复归档无需通读' } : extra }, config.mode === 'live', projectRepositoryRoot(config) ? { root: projectRepositoryRoot(config)!, receipt: state.repositoryHandoff ?? state.input.repositoryHandoff } : undefined, state.contextBudgetLevel ?? 0);
     const prompt = taskContext.prompt;
     const schema = role === 'context' ? contextOutputSchema(state) : role === 'architect' ? planV2Schema : role === 'readiness' || role === 'reviewer' ? assessmentOutputSchema(state) : null;
     const timeout = developmentTimeoutPolicy(role);

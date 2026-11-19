@@ -1,23 +1,25 @@
 /** 开发阶段独立版本契约；流程状态归 Mastra Store，不与旧提案交接混用。 */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { cipProfile, cipRoots, cipWritable, engineeringRevisionSchema } from '../business-engineering/hrm-cip.js';
 import { resolveModelId, type PracticeConfig } from '../mastra/config.js';
 
 export const developmentRoleSchema = z.enum(['architect', 'frontend', 'backend', 'infrastructure', 'self-check']);
 export type DevelopmentRole = z.infer<typeof developmentRoleSchema>;
-export const safePathSchema = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_./-]+$/).refine(
+export const safePathSchema = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_./()\[\]-]+$/).refine(
   // 路径必须相对且不包含空段、隐藏文件或父级跳转。
   (path) => !path.split('/').some((part) => !part || part.startsWith('.')),
   '只接受普通相对路径',
 );
 export const projectSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
-  executionProfile: z.literal('hrm-pnpm-docker-v1').optional(),
+  executionProfile: z.enum(['hrm-pnpm-docker-v1', cipProfile]).optional(),
+  engineeringRevision: engineeringRevisionSchema.optional(),
   planning: z.literal('agent').optional(),
   /** 服务端检查得到的工程缺口随输入冻结；存在时仅可规划，不能批准或实施。 */
   preparationIssues: z.array(z.string().min(1)).min(1).max(20).optional(),
-  engineeringAssessment: z.object({ stackStatus: z.enum(['matched', 'unknown', 'mismatch', 'ambiguous']), evidence: z.array(z.string().min(1)).max(20), expectedProfile: z.literal('hrm-pnpm-docker-v1') }).optional(),
-  writableRoots: z.array(safePathSchema).max(4).optional(),
+  engineeringAssessment: z.object({ stackStatus: z.enum(['matched', 'unknown', 'mismatch', 'ambiguous']), evidence: z.array(z.string().min(1)).max(20), expectedProfile: z.enum(['hrm-pnpm-docker-v1', cipProfile]) }).optional(),
+  writableRoots: z.array(safePathSchema).max(5).optional(),
   files: z.record(safePathSchema, z.string().max(100000)),
   writablePaths: z.array(safePathSchema).max(40),
   checkFiles: z.array(safePathSchema).min(1).max(200),
@@ -26,8 +28,9 @@ export const projectSchema = z.object({
   // 公开检查必须已存在且不在写入白名单内；角色和文件集合不能含重复项。
   (project, ctx) => {
     if ((!project.writablePaths.length || project.preparationIssues) && project.planning !== 'agent') ctx.addIssue({ code: 'custom', message: '空源码或工程准备缺口仅适用于已登记项目规划' });
-    if (project.planning === 'agent' && project.executionProfile !== 'hrm-pnpm-docker-v1') ctx.addIssue({ code: 'custom', message: '自动技术规划需要已登记项目执行档' });
-    if (project.executionProfile && (project.planning !== 'agent' || !project.writableRoots?.length || project.writableRoots.some(/** 全栈档不能把脚本或配置目录变成源码授权根。 */root => !['apps/web/app', 'apps/api/src', 'packages/database/src', 'packages/database/prisma'].includes(root)))) ctx.addIssue({ code: 'custom', message: 'HRM源码授权根不合法' });
+    if (project.planning === 'agent' && !project.executionProfile) ctx.addIssue({ code: 'custom', message: '自动技术规划需要已登记项目执行档' });
+    if (project.executionProfile && (project.planning !== 'agent' || !project.writableRoots?.length || project.writableRoots.some(/** 全栈档不能把脚本或配置目录变成源码授权根。 */root => !(project.executionProfile === cipProfile ? cipRoots : ['apps/web/app', 'apps/api/src', 'packages/database/src', 'packages/database/prisma']).includes(root)))) ctx.addIssue({ code: 'custom', message: 'HRM源码授权根不合法' });
+    if (project.executionProfile === cipProfile && (!project.engineeringRevision || project.writablePaths.some(path => !cipWritable(path)))) ctx.addIssue({ code: 'custom', message: 'CIP 需要固定版本和受控源码' });
     for (const path of project.checkFiles) {
       if (!(path in project.files) || project.writablePaths.includes(path)) ctx.addIssue({ code: 'custom', message: '检查文件缺失或可写' });
     }
@@ -118,11 +121,18 @@ export function validateArchitecture(plan: Architecture, input: DevelopmentInput
   for (const task of plan.tasks) {
     if (!input.project.roles.includes(task.role)) throw new SyntaxError('方案使用未注册实现角色');
     for (const path of task.paths) {
-      if (!(input.project.writablePaths.includes(path) || (input.project.planning === 'agent' && input.project.executionProfile === 'hrm-pnpm-docker-v1' && input.project.writableRoots?.some(/** 仅在已授权源码根内新增计划文件。 */root => path.startsWith(`${root}/`)) && !input.project.checkFiles.includes(path))) || owned.has(path)) throw new SyntaxError('方案文件责任越界或重复');
+      if (!canWriteProjectPath(input.project, path) || owned.has(path)) throw new SyntaxError('方案文件责任越界或重复');
       owned.add(path);
     }
     for (const dependency of task.dependsOn) if (!ids.has(dependency) || !completed.has(dependency)) throw new SyntaxError('任务须按拓扑顺序排列，依赖不能缺失或成环');
     completed.add(task.id);
   }
   if (!plan.blockers.length && input.project.planning !== 'agent' && owned.size !== input.project.writablePaths.length) throw new SyntaxError('方案遗漏文件责任');
+}
+
+/** 研发规划、候选写入和交付共用同一源码上界。 */
+export function canWriteProjectPath(project: DevelopmentInput['project'], path: string) {
+  if (!safePathSchema.safeParse(path).success || project.checkFiles.includes(path)) return false;
+  if (project.executionProfile === cipProfile && !cipWritable(path)) return false;
+  return project.writablePaths.includes(path) || !!(project.executionProfile && project.planning === 'agent' && project.writableRoots?.some(root => path.startsWith(`${root}/`)));
 }

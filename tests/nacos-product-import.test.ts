@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 test('本机注册可重复执行，同版本不同内容不覆盖', /** 通过真实进程和 HTTP 验证发布器边界。 */async () => {
   const directory = mkdtempSync(join(tmpdir(), 'nacos-import-'));
   const exportPath = join(directory, 'export');
-  execFileSync(process.execPath, ['--import', 'tsx', 'scripts/prepare-nacos-product-skills.ts', exportPath, '1.0.0']);
+  execFileSync(process.execPath, ['--import', 'tsx', 'scripts/prepare-nacos-product-skills.ts', exportPath, '1.1.0']);
   const manifest = JSON.parse(readFileSync(join(exportPath, 'manifest.json'), 'utf8'));
   manifest.skills = manifest.skills.slice(0, 1);
   writeFileSync(join(exportPath, 'manifest.json'), JSON.stringify(manifest));
@@ -25,11 +25,11 @@ test('本机注册可重复执行，同版本不同内容不覆盖', /** 通过�
     const form = new URLSearchParams(body.toString());
     response.setHeader('content-type', 'application/json');
     if (url.pathname.endsWith('/login')) { response.end(JSON.stringify({ accessToken: 'fixture' })); return; }
-    if (url.pathname.endsWith('/client/ai/prompt')) { const name = url.searchParams.get('promptKey')!; const entry = prompts.get(name); if (!entry?.online) { response.writeHead(404).end(); return; } response.end(JSON.stringify({ code: 0, data: { promptKey: name, version: '1.0.0', template: entry.template } })); return; }
+    if (url.pathname.endsWith('/client/ai/prompt')) { const name = url.searchParams.get('promptKey')!; const entry = prompts.get(name); if (!entry?.online) { response.writeHead(404).end(); return; } response.end(JSON.stringify({ code: 0, data: { promptKey: name, version: '1.1.0', template: entry.template } })); return; }
     if (url.pathname.endsWith('/admin/ai/prompt/version')) { response.end(JSON.stringify({ code: 0, data: { status: 'reviewed' } })); return; }
     if (url.pathname.endsWith('/admin/ai/prompt/publish')) { prompts.get(form.get('promptKey')!)!.online = true; writes++; response.end(JSON.stringify({ code: 0 })); return; }
     if (url.pathname.endsWith('/admin/ai/prompt')) { prompts.set(form.get('promptKey')!, { template: form.get('template')!, online: false }); writes++; response.end(JSON.stringify({ code: 0 })); return; }
-    if (url.pathname.endsWith('/client/ai/skills')) { const archive = skills.get(url.searchParams.get('name')!); if (!archive) { response.writeHead(404).end(); return; } response.setHeader('x-nacos-skill-resolved-version', '1.0.0'); response.end(archive); return; }
+    if (url.pathname.endsWith('/client/ai/skills')) { const archive = skills.get(url.searchParams.get('name')!); if (!archive) { response.writeHead(404).end(); return; } response.setHeader('x-nacos-skill-resolved-version', '1.1.0'); response.end(archive); return; }
     if (url.pathname.endsWith('/admin/ai/skills/upload')) {
       const multipart = await new Request('http://localhost/', { method: 'POST', headers: { 'content-type': request.headers['content-type']! }, body }).formData();
       const file = multipart.get('file') as File;

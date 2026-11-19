@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1140" viewBox="0 0 1440 1140" role="img" aria-labelledby="title desc">
+<title id="title">Mastra Workflow · 产研执行链路</title>
+<desc id="desc">目标设计。研发和 QA 将业务缺口及影响证据提交给产品团队，和立即纠偏、审阅退回共用返工判断。需要新的业务决定时，产品团队发起人工澄清。</desc>
+<defs>
+<marker id="arrow255ac4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#255ac4"/></marker>
+<marker id="arrow7650a0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#7650a0"/></marker>
+<marker id="arrow097868" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#097868"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="white"/>
+<text x="48" y="53" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="32" font-weight="700" dominant-baseline="middle">Mastra Workflow  ·  产研执行链路</text>
+<text x="48" y="94" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="17" font-weight="400" dominant-baseline="middle">目标设计  /  产品团队统一判断返工起点  /  同一个 Run 在核验 MR 回执后结束</text>
+<rect x="48" y="125" width="1344" height="62" rx="7" fill="#f5f8fc" stroke="#c5d2e0" stroke-width="2"/>
+<text x="69" y="157" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="700" dominant-baseline="middle">产研工作台 / Intake API</text>
+<text x="367" y="157" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="17" font-weight="400" dominant-baseline="middle">提交需求  ·  查看 SSE 与阶段证据  ·  补充、纠偏与审阅  ·  查看 MR 回执</text>
+<rect x="48" y="226" width="1344" height="770" rx="7" fill="#fbfcff" stroke="#d2ddea" stroke-width="2"/>
+<text x="76" y="248" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="17" font-weight="700" dominant-baseline="middle">单个 Run 内的团队编排</text>
+<text x="1012" y="248" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="17" font-weight="700" dominant-baseline="middle">返工与跨团队回流</text>
+<polyline points="224,187 224,226" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="241" y="207" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">启动 Run / 提交人工决定</text>
+<polyline points="1165,226 1165,187" fill="none" stroke="#7650a0" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow7650a0)"/>
+<text x="1181" y="207" fill="#7650a0" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">SSE / 状态投影</text>
+<rect x="76" y="270" width="806" height="148" rx="7" fill="#eef4ff" stroke="#9db8e9" stroke-width="2"/>
+<text x="97" y="300" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="700" dominant-baseline="middle">01  产品团队</text>
+<text x="285" y="300" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">product-team</text>
+<text x="97" y="334" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">逐项澄清或 AI 主动补全 → 分析 → 澄清整理 → 范围与优先级</text>
+<text x="97" y="358" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">产品稿写作 → 独立闭环检查 → 提交本版产品稿</text>
+<rect x="97" y="380" width="764" height="27" rx="7" fill="#fff7e9" stroke="#ecd2a3" stroke-width="2"/>
+<text x="109" y="394" fill="#956218" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="700" dominant-baseline="middle">人工关口   逐项澄清按轮确认  ·  产品稿批准 / 退回 / 拒绝</text>
+<rect x="76" y="460" width="806" height="148" rx="7" fill="#eef4ff" stroke="#9db8e9" stroke-width="2"/>
+<text x="97" y="490" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="700" dominant-baseline="middle">02  研发团队</text>
+<text x="285" y="490" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">development-team</text>
+<text x="97" y="524" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">确认工程范围 → 技术方案与组队 → 就绪审查 → 批准开工</text>
+<text x="97" y="548" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">受限实施 → 固定检查 → 独立代码评审 → 研发交付</text>
+<rect x="97" y="570" width="764" height="27" rx="7" fill="#fff7e9" stroke="#ecd2a3" stroke-width="2"/>
+<text x="109" y="584" fill="#956218" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="700" dominant-baseline="middle">人工关口   项目范围确认  ·  方案、团队与权限批准</text>
+<rect x="76" y="650" width="806" height="148" rx="7" fill="#eef4ff" stroke="#9db8e9" stroke-width="2"/>
+<text x="97" y="680" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="700" dominant-baseline="middle">03  测试团队</text>
+<text x="285" y="680" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">test-team</text>
+<text x="97" y="714" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">准备测试计划 → 确认用例 → 独立执行登记检查及已批准浏览器用例</text>
+<text x="97" y="738" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">汇总测试证据 → 补充人工用例结果 → 独立质量确认</text>
+<rect x="97" y="760" width="764" height="27" rx="7" fill="#fff7e9" stroke="#ecd2a3" stroke-width="2"/>
+<text x="109" y="774" fill="#956218" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="700" dominant-baseline="middle">人工关口   批准用例  ·  质量放行 / 缺陷返工 / 停止</text>
+<rect x="76" y="840" width="806" height="130" rx="7" fill="#eaf7f3" stroke="#91c8b7" stroke-width="2"/>
+<text x="97" y="869" fill="#097868" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="700" dominant-baseline="middle">04  交付团队</text>
+<text x="285" y="869" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">delivery-team / submit-merge-request</text>
+<text x="97" y="903" fill="#172b43" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="400" dominant-baseline="middle">核对同版本 QA 证据、候选和规格 → 推送 Run 分支 → 提交指向 main 的 MR</text>
+<text x="97" y="939" fill="#097868" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="17" font-weight="700" dominant-baseline="middle">核验 MR 源分支与提交 SHA → Mastra Store 记录回执 → 本轮结束</text>
+<polyline points="163,418 163,460" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="181" y="439" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">产品稿批准后交接</text>
+<polyline points="163,608 163,650" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="181" y="629" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">研发候选与证据交接</text>
+<polyline points="163,798 163,840" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="181" y="819" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">同版本 QA 放行</text>
+<rect x="1012" y="270" width="354" height="178" rx="7" fill="#f7f1fb" stroke="#c2a7d7" stroke-width="2"/>
+<text x="1028" y="293" fill="#7650a0" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="700" dominant-baseline="middle">产品团队统一判断返工起点</text>
+<text x="1028" y="325" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">接收立即纠偏、审阅退回和下游反馈</text>
+<text x="1028" y="354" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">按影响选择重做起点，保留有效前置产物</text>
+<text x="1028" y="383" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">缺少业务决定或已有规则冲突时，发起人工澄清</text>
+<text x="1028" y="412" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">开始重跑时应用反馈，修订稿重新人工审阅</text>
+<polyline points="882,307 1012,307" fill="none" stroke="#7650a0" stroke-width="2" marker-end="url(#arrow7650a0)"/>
+<text x="895" y="293" fill="#7650a0" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">纠偏 / 退回</text>
+<polyline points="1012,392 882,392" fill="none" stroke="#7650a0" stroke-width="2" marker-end="url(#arrow7650a0)"/>
+<text x="895" y="376" fill="#7650a0" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">同 Run 重跑</text>
+<rect x="1012" y="479" width="354" height="100" rx="7" fill="#fff7e9" stroke="#ecd2a3" stroke-width="2"/>
+<text x="1028" y="503" fill="#956218" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="700" dominant-baseline="middle">研发 / QA 发现业务缺口</text>
+<text x="1028" y="531" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">提交证据给产品团队</text>
+<text x="1028" y="557" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">附已批准版本、缺口证据及受影响需求或用例</text>
+<polyline points="882,505 1012,505" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="895" y="492" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="13" font-weight="400" dominant-baseline="middle">研发发现</text>
+<polyline points="1189,479 1189,448" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="1202" y="464" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="13" font-weight="400" dominant-baseline="middle">进入返工判断</text>
+<polyline points="1012,421 983,421 983,551 882,551" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="895" y="537" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="13" font-weight="400" dominant-baseline="middle">按影响返工</text>
+<polyline points="882,681 965,681 965,618 1189,618 1189,579" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="1020" y="604" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">QA 发现业务缺口</text>
+<rect x="1012" y="700" width="354" height="91" rx="7" fill="#eef4ff" stroke="#9db8e9" stroke-width="2"/>
+<text x="1028" y="724" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="700" dominant-baseline="middle">代码缺陷 → 原研发团队</text>
+<text x="1028" y="752" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">按责任与依赖修复，重做自检和独立评审</text>
+<text x="1028" y="775" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">修复后重跑测试与质量确认</text>
+<polyline points="882,731 1012,731" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="895" y="717" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">缺陷返工</text>
+<polyline points="1012,769 882,769" fill="none" stroke="#255ac4" stroke-width="2" marker-end="url(#arrow255ac4)"/>
+<text x="895" y="755" fill="#255ac4" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">修复后回归</text>
+<rect x="1012" y="858" width="354" height="88" rx="7" fill="#edf7f4" stroke="#91c8b7" stroke-width="2"/>
+<text x="1028" y="882" fill="#097868" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="700" dominant-baseline="middle">MR 提交失败 → 原节点重试</text>
+<text x="1028" y="911" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">保留 QA 结果，重试时核对并复用</text>
+<text x="1028" y="930" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="14" font-weight="400" dominant-baseline="middle">已经存在且版本匹配的提交与 MR</text>
+<polyline points="882,882 1012,882" fill="none" stroke="#097868" stroke-width="2" marker-end="url(#arrow097868)"/>
+<text x="895" y="869" fill="#097868" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="13" font-weight="400" dominant-baseline="middle">远端故障</text>
+<polyline points="1012,924 882,924" fill="none" stroke="#097868" stroke-width="2" marker-end="url(#arrow097868)"/>
+<text x="895" y="911" fill="#097868" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="13" font-weight="400" dominant-baseline="middle">重试提交</text>
+<rect x="48" y="1015" width="655" height="54" rx="7" fill="#edf7f4" stroke="#91c8b7" stroke-width="2"/>
+<rect x="721" y="1015" width="671" height="54" rx="7" fill="#f5f8fc" stroke="#c5d2e0" stroke-width="2"/>
+<text x="69" y="1042" fill="#097868" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="700" dominant-baseline="middle">Mastra Store  ·  Run、人工决定、暂停检查点与交付回执</text>
+<text x="742" y="1042" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="700" dominant-baseline="middle">Git / GitHub  ·  正式规格、Run 分支候选与实际 MR</text>
+<text x="48" y="1095" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">跨团队回流  ·  修订稿批准后，主 Workflow 按版本影响编排研发与 QA 返工，已失效的放行证据需重新取得。</text>
+<text x="48" y="1120" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">本阶段交付边界  ·  提交指向 main 的 MR 并核验回执。自主合并、CI/CD、部署与回滚属于后续建设。</text>
+</svg>

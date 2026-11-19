@@ -1,4 +1,4 @@
-import { requirementImpactSchema } from './acceptance-requirements.js';
+import { requirementImpactSchema } from '../../business-engineering/acceptance-requirements.js';
 import { contextBudgetFailureSchema } from '../../delivery/context-budget.js';
 import { formalSpecificationReceiptSchema, remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 /** v2 独立契约：不可变证据快照由原生 Workflow 持有，不迁移 v1 状态。 */
@@ -10,7 +10,7 @@ import { architectureSchema, commandEvidenceSchema, developmentInputSchema, deve
 
 /** 新Run显式选择自主政策；缺省不改变历史批准/恢复散列。 */
 export const autonomyPolicySchema = z.object({ version: z.literal('autonomy.v1'), maxCheckRuns: z.number().int().min(2).max(96).default(24), maxNoProgress: z.number().int().min(1).max(5).default(2) });
-export const inputV2Schema = developmentInputSchema.extend({ requirementTracking: z.literal(true).optional(), requirementImpact: requirementImpactSchema.optional(), autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+export const inputV2Schema = developmentInputSchema.extend({ productHandoffFormat: z.literal('paired-markdown.v1').optional(), requirementTracking: z.literal(true).optional(), requirementImpact: requirementImpactSchema.optional(), autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -138,7 +138,7 @@ export function matchesRecoveryHashV2(state: StateV2, expected: string): boolean
 
 /** 固定检查清单由输入派生，模型不能添加命令或降低验证范围。 */
 export function registeredChecks(input: InputV2): string[] {
-  if (input.project.executionProfile === 'hrm-pnpm-docker-v1') return ['project:check', 'project:build', 'project:smoke'];
+  if (input.project.executionProfile) return ['project:check', 'project:build', 'project:smoke'];
   return [...Object.keys(input.project.files).filter(
     // 与受限执行 Adapter 的实际 Node 语法检查选择保持一致。
     (path) => path.startsWith('src/') && path.endsWith('.mjs'),

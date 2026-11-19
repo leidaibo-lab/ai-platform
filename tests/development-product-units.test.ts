@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createProductUnits } from '../src/development/v2/product-units.js';
 import { developmentHash } from '../src/development/contracts.js';
-import { compareAcceptanceRequirements, readAcceptanceRequirements } from '../src/development/v2/acceptance-requirements.js';
+import { compareAcceptanceRequirements, readAcceptanceRequirements } from '../src/business-engineering/acceptance-requirements.js';
 
 
 test('长产品稿按原文连续单元定位，保留全部非空行且不以300行阻断', () => {
