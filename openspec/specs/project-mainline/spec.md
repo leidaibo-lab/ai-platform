@@ -70,6 +70,12 @@ Mastra Store 中的执行、审批、恢复或交付事实。
 - **AND** 受限或无法读取的文件 SHALL NOT 被报告为确认缺失
 - **AND** 未完成独立验证时 SHALL NOT 批准实施
 
+#### Scenario: Project confirmation uses standard execution budgets
+
+- **WHEN** 用户在工作台确认开发项目和代码版本
+- **THEN** 工作台 SHALL 直接绑定 `autonomy.v1` 的标准预算（3 轮返工、72 次累计开发模型调用、24 次登记检查、连续 2 次无进展），项目确认页省略预算表单
+- **AND** 实施方案批准包 SHALL 保留执行预算供审阅
+
 ### Requirement: Late business gaps return through product clarification
 
 测试或发布阶段发现属于业务规则、验收口径或产品责任的未闭环项时，系统 SHALL 保留该阶段已
