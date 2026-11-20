@@ -40,6 +40,12 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **THEN** 页面 SHALL 从原生 Workflow 快照和受控事件读取公开元数据
 - **AND** SHALL NOT 接收模型隐藏推理、密钥、工具结果正文或任意文件内容
 
+#### Scenario: Compact progress highlights the current step
+
+- **WHEN** 工作台的流程进度面板能够从当前 Run 定位到具体执行节点
+- **THEN** 面板 SHALL 在对应节点标题旁显示当前节点图标和无障碍标识
+- **AND** 用户 SHALL 能通过团队标题直接展开或收起节点列表，浮层保持打开
+
 ### Requirement: All model-backed team roles provide safe live output
 
 产品、研发、测试和发布团队中实际调用模型的角色 SHALL 通过同一 Workflow watch 与工作台 SSE

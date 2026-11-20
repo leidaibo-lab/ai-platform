@@ -9,14 +9,14 @@ export const platformRepairEventSchema = z.strictObject({
   faultId: z.uuid(),
   checkpoint: z.hash('sha256'),
 });
-export const platformRepairResumeSchema = platformRepairEventSchema.extend({ requestId: z.uuid(), proof: z.hash('sha256') });
+export const platformRepairResumeSchema = platformRepairEventSchema.extend({ proof: z.hash('sha256') });
 export const platformRepairPauseSchema = z.object({
   faultId: z.uuid(),
   checkpoint: z.hash('sha256'),
   dependency: z.enum(['model-service', 'registered-checks']),
   recoveryState: stateV2Schema,
 });
-type RepairRequest = Omit<z.infer<typeof platformRepairResumeSchema>, 'proof'>;
+type RepairEvent = z.infer<typeof platformRepairEventSchema>;
 
 /** 仅已识别、可复验且仍有额度的依赖故障等待平台。 */
 export function platformRepairPause(state: StateV2): z.infer<typeof platformRepairPauseSchema> | undefined {
@@ -35,8 +35,8 @@ export function platformRepairPause(state: StateV2): z.infer<typeof platformRepa
 }
 
 /** 生成原生恢复证明。故障标识和完整检查点绑定单个暂停实例。 */
-export function platformRepairProof(secret: string, event: RepairRequest) {
-  return createHmac('sha256', secret).update(JSON.stringify(['platform-repair.v1', event.eventId, event.faultId, event.checkpoint, event.requestId])).digest('hex');
+export function platformRepairProof(secret: string, event: RepairEvent) {
+  return createHmac('sha256', secret).update(JSON.stringify(['platform-repair.v1', event.eventId, event.faultId, event.checkpoint])).digest('hex');
 }
 
 /** 等长编码后比较，避免通过响应时差判断配置值。 */
@@ -53,9 +53,9 @@ export function acceptPlatformRepair(state: StateV2, resume: z.infer<typeof plat
     || !matchesPlatformSecret(resume.proof, platformRepairProof(secret, resume))) throw new Error('平台修复事件与当前暂停版本不匹配');
   const policy = state.technicalRecovery!;
   if (policy.platformResumes?.some(receipt => receipt.eventId === resume.eventId)) throw new Error('平台修复事件已处理');
-  const { eventId, faultId, checkpoint, requestId } = resume;
+  const { eventId, faultId, checkpoint } = resume;
   return {
     ...state, outcome: 'in-progress',
-    technicalRecovery: { ...policy, blocked: undefined, pendingFaultId: faultId, platformResumes: [...(policy.platformResumes ?? []), { eventId, faultId, checkpoint, requestId }] },
+    technicalRecovery: { ...policy, blocked: undefined, pendingFaultId: faultId, platformResumes: [...(policy.platformResumes ?? []), { eventId, faultId, checkpoint }] },
   };
 }

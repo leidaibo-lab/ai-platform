@@ -77,7 +77,7 @@ Workflow SHALL 为 Run 绑定可配置的故障接续上限及策略版本，并
 #### Scenario: A repair event is delivered more than once
 
 - **WHEN** 已处理的事件或同一暂停版本的重复通知到达任一实例
-- **THEN** 服务 SHALL 通过 Mastra 原生状态与恢复所有权回读结果，重复通知无需重新执行，只有写入原生回执的请求 SHALL 返回首次受理
+- **THEN** 服务 SHALL 通过 Mastra 原生状态与恢复所有权回读结果，重复通知无需重新执行
 - **AND** 过期暂停、来源认证失败、检查点漂移以及已耗尽的预算 SHALL 拒绝接续
 - **AND** 原阶段有外部写入时 SHALL 通过该适配器的幂等操作与现状回查核对结果。提交状态未知时 SHALL 保留待处理证据
 

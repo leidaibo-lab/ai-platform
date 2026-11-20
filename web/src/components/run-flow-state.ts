@@ -88,16 +88,17 @@ export function projectDevelopmentStages(document: RunFlowDocument, flow: Return
   const evidence = relevantNodes(document).filter(node => nodeTeam(node) === 'development' && node.status !== 'pending');
   const current = developmentStage(document.retry?.step ?? (document.gate?.key === 'recover-development' ? flow.node?.id : document.gate?.key) ?? flow.node?.id ?? document.step);
   return developmentSteps.map(({ id, title, description }, index) => {
+    const isCurrent = flow.active === 'development' && index === current;
     const sameStage = evidence.filter(node => developmentStage(node.id) === index);
     const native = sameStage.find(node => node.id.replace(/#\d+$/, '').split('.').at(-1) === id);
     let status: TimelineNode['status'] = (native ?? sameStage[0])?.status ?? 'pending';
-    if (flow.active === 'development' && index === current) {
+    if (isCurrent) {
       if (flow.states.development === 'failed') status = 'failed';
       else if (document.status === 'suspended') status = 'suspended';
       else if (document.status === 'waiting') status = 'waiting';
       else if (document.status === 'running') status = 'running';
     }
-    return { title, description, status };
+    return { title, description, status, isCurrent };
   });
 }
 

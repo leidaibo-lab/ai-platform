@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TimelineNode } from '../web/src/components/run-timeline-types.js';
-import { nodeTeam, projectProductPhases, projectRunFlow, type RunFlowDocument } from '../web/src/components/run-flow-state.js';
+import { nodeTeam, projectDevelopmentStages, projectProductPhases, projectRunFlow, type RunFlowDocument } from '../web/src/components/run-flow-state.js';
 
 /** 构造与服务端快照一致的步骤事实。 */
 function step(id: string, stage: TimelineNode['stage'], status: TimelineNode['status']): TimelineNode {
@@ -12,6 +12,19 @@ function step(id: string, stage: TimelineNode['stage'], status: TimelineNode['st
 function timeline(...nodes: TimelineNode[]) {
   return { nodes, startedAt: null, endedAt: null, durationMs: null, tools: [], files: [] };
 }
+
+test('生成开发方案暂停恢复时只标记方案节点，评审仍待执行', () => {
+  const document: RunFlowDocument = {
+    runId: '1', status: 'suspended', gate: { key: 'recover-development', title: '决定是否接续开发' },
+    timeline: timeline(
+      step('development-team.confirm-project-scope', 'development', 'completed'),
+      step('development-team.development-execution.plan-development', 'development', 'suspended'),
+    ),
+  };
+  const stages = projectDevelopmentStages(document, projectRunFlow(document));
+  assert.deepEqual(stages.filter(stage => stage.isCurrent).map(stage => stage.title), ['生成开发方案']);
+  assert.deepEqual(stages.map(stage => stage.status), ['completed', 'suspended', 'pending', 'pending', 'pending', 'pending']);
+});
 
 test('产品团队包含初次需求澄清与后期业务澄清和修订稿审阅', () => {
   const initial = step('product-team.draft-product.guided-requirements', 'requirements', 'suspended');

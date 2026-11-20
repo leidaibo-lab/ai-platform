@@ -51,7 +51,7 @@ export const repairRecordSchema = z.object({
 });
 export const technicalRecoverySchema = technicalBudgetSchema.extend({
   pendingFaultId: z.uuid().optional(),
-  platformResumes: z.array(z.object({ faultId: z.uuid(), checkpoint: hash, eventId: z.uuid(), requestId: z.uuid().optional() })).optional(),
+  platformResumes: z.array(z.object({ faultId: z.uuid(), checkpoint: hash, eventId: z.uuid() })).optional(),
   attempts: z.array(z.object({
     faultId: z.uuid(),
     action: z.enum(['backoff', 'correct-output', 'rerun-checks', 'platform-repair']),

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { registerApiRoute, type ContextWithMastra } from '@mastra/core/server';
 import { z } from 'zod';
 import { developmentHash } from '../development/contracts.js';
@@ -80,14 +79,12 @@ export async function notifyPlatformRepair(
   runId: string, input: z.infer<typeof platformRepairEventSchema>, secret: string,
   verify: (state: StateV2) => Promise<void>,
 ) {
-  const request = { ...input, requestId: randomUUID() };
-  /** 回读同一暂停版本的原生回执，区分本次受理与重复请求。 */
+  /** 对当前 Run 的快照回读同一故障或重复事件。 */
   function receipt(snapshot: Snapshot) {
     const records = observedDevelopmentStates(snapshot).flatMap(state => state.technicalRecovery?.platformResumes ?? []);
     const sameEvent = records.find(item => item.eventId === input.eventId);
     if (sameEvent && (sameEvent.faultId !== input.faultId || sameEvent.checkpoint !== input.checkpoint)) return 'stale' as const;
-    const samePause = records.find(item => item.faultId === input.faultId && item.checkpoint === input.checkpoint);
-    if (samePause) return samePause.requestId === request.requestId ? 'accepted' as const : 'duplicate' as const;
+    return records.some(item => item.faultId === input.faultId && item.checkpoint === input.checkpoint) ? 'duplicate' as const : undefined;
   }
   const snapshot = await workflow.getWorkflowRunById(runId);
   if (!snapshot) return 'missing';
@@ -99,12 +96,16 @@ export async function notifyPlatformRepair(
   await verify(pause.recoveryState);
   try {
     const run = await workflow.createRun({ runId });
-    await run.resume({ step: pause.path.split('.'), resumeData: { ...request, proof: platformRepairProof(secret, request) } });
+    await run.resume({ step: pause.path.split('.'), resumeData: { ...input, proof: platformRepairProof(secret, input) } });
   } catch {
-    // 并发认领失败时以 Mastra 中已经写入的回执为准。
+    // 多实例由 Mastra 获取原生执行所有权。失败和竞争都按实际状态回读。
+    const current = await workflow.getWorkflowRunById(runId);
+    if (current && receipt(current)) return receipt(current)!;
+    if (current?.status === 'running') return 'processing';
+    return 'stale';
   }
   const current = await workflow.getWorkflowRunById(runId);
-  return (current && receipt(current)) ?? (current?.status === 'running' ? 'processing' : 'stale');
+  return current && receipt(current) === 'duplicate' ? 'accepted' : current?.status === 'running' ? 'processing' : 'stale';
 }
 
 /** 平台机器接口与工作台人工决定入口独立授权。 */

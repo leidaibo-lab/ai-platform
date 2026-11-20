@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { Check, CircleCheck, Clock3, Code2, GitPullRequest, Sparkles } from 'lucide-react';
+import { Check, CircleCheck, Clock3, Code2, GitPullRequest, MapPin, Sparkles } from 'lucide-react';
 import type { TimelineNode } from './RunActivityFeed';
 import { nodeTeam, productPhases, projectDevelopmentStages, projectProductPhases, projectRunFlow, teamForPath, teams, type RunFlowDocument, type Team, type TeamState } from './run-flow-state';
 
@@ -39,7 +39,7 @@ function TeamActivity({ title, status, description, attempt, canRecover, recover
 }
 
 /** 展示团队执行链，允许查看历史节点并定位当前团队的操作。 */
-export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryDisabled = false, compact = false }: { document: RunFlowDocument; selected: Team; onSelect: (team: Team) => void; onRecover?: () => void; recoveryDisabled?: boolean; compact?: boolean }) {
+export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryDisabled = false, compact = false }: { document: RunFlowDocument; selected: Team; onSelect?: (team: Team) => void; onRecover?: () => void; recoveryDisabled?: boolean; compact?: boolean }) {
   const flow = projectRunFlow(document);
   const [showDetails, setShowDetails] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -68,14 +68,29 @@ export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryD
     : flow.qaRepair ? 'QA 代码缺陷 → 研发修复后回归' : undefined;
 
   if (compact) return <section aria-label="流程进度">
-    {teams.map(team => {
+    {teams.map(/** 每个团队可展开查看节点状态。 */team => {
       const current = flow.active === team;
-      const steps = team === 'product' ? projectProductPhases(document, flow).map(item => ({ title: item.phase, status: item.status, description: item.description }))
+      const teamState = flow.states[team];
+      const steps = team === 'product' ? projectProductPhases(document, flow).map(/** 产品阶段复用当前阶段投影。 */item => ({
+        title: item.phase, status: item.status, description: item.description, isCurrent: item.phase === flow.productPhase,
+      }))
         : team === 'development' ? projectDevelopmentStages(document, flow)
-          : (document.timeline?.nodes ?? []).filter(node => node.kind === 'step' && nodeTeam(node) === team);
-      return <details key={team} open={current || undefined}><summary>{teamDetails[team].label} <small>{teamStates[flow.states[team]]}</small></summary>
-        {steps.map((step, index) => <details key={`${step.title}-${index}`}><summary>{step.title} <small>{activityLabels[step.status]}</small></summary>{'description' in step && <p>{String(step.description ?? '')}</p>}</details>)}
-        {!steps.length && <small>暂无节点记录</small>}<button type="button" onClick={() => onSelect(team)}>定位{current ? '当前阶段' : '该阶段'}</button>
+          : (document.timeline?.nodes ?? [])
+            .filter(/** 测试和交付直接展示原生步骤。 */node => node.kind === 'step' && nodeTeam(node) === team)
+            .map(/** 保留原生步骤标识，区分同名步骤的重试。 */node => ({ ...node, isCurrent: node.id === flow.node?.id }));
+      return <details key={team} open={current || undefined}>
+        <summary>{teamDetails[team].label} <small>{teamStates[teamState]}</small></summary>
+        {steps.map(/** 只在当前团队仍有待处理节点时显示定位图标。 */(step, index) => {
+          const isCurrent = current && (teamState === 'current' || teamState === 'failed') && step.isCurrent;
+          return <details key={`${step.title}-${index}`}>
+            <summary aria-current={isCurrent ? 'step' : undefined}>
+              {isCurrent && <span className="workbench-current-step" title="当前节点"><MapPin size={14} aria-hidden="true" /></span>}
+              {step.title} <small>{activityLabels[step.status]}</small>
+            </summary>
+            {'description' in step && <p>{String(step.description ?? '')}</p>}
+          </details>;
+        })}
+        {!steps.length && <small>暂无节点记录</small>}
       </details>;
     })}
     {returnHint && <small>{returnHint}</small>}
@@ -94,7 +109,7 @@ export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryD
         const { label, steps, icon: Icon } = teamDetails[team];
         const state = flow.states[team];
         return <li key={team} className="workflow-team-link">
-          <button type="button" className={`workflow-team-node ${state}`} aria-current={flow.active === team ? 'step' : undefined} aria-pressed={selected === team} onClick={/** 切换团队页并收起上一个团队的原始记录。 */() => { onSelect(team); setShowDetails(false); }}>
+          <button type="button" className={`workflow-team-node ${state}`} aria-current={flow.active === team ? 'step' : undefined} aria-pressed={selected === team} onClick={/** 切换团队页并收起上一个团队的原始记录。 */() => { onSelect?.(team); setShowDetails(false); }}>
             <span className="workflow-team-title">{state === 'done' ? <Check size={17} aria-hidden="true" /> : <Icon size={17} aria-hidden="true" />}{label}</span>
             <span className="workflow-team-steps">{steps}</span>
             <span className="workflow-team-status">{team === flow.active ? flow.status : teamStates[state]}</span>

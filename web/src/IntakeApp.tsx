@@ -404,7 +404,7 @@ export function IntakeApp() {
           {document && ['development','testing','delivery'].includes(activeTeam) && <button ref={changesTrigger} type="button" aria-expanded={changesOpen} onClick={() => { setMaterial(undefined); setFlowOpen(false); if (changesOpen) closeChanges(); else setChangesRun(id); }}>代码变更</button>}
           {document && <button type="button" aria-expanded={flowOpen} aria-controls="workbench-flow" onClick={() => setFlowOpen(value => !value)}><GitBranch size={14} />流程</button>}
         </div>
-        {flowOpen && document && <div className="workbench-flow" id="workbench-flow"><RunFlowMini compact key={document.runId} document={document} selected={selectedTeam} onSelect={team => { selectTeam(team); setFlowOpen(false); }} /></div>}
+        {flowOpen && document && <div className="workbench-flow" id="workbench-flow"><RunFlowMini compact key={document.runId} document={document} selected={selectedTeam} /></div>}
       </header>}
       <div className={`workbench-content${!id ? ' workbench-welcome' : ''}`} ref={content}>
       {error && <div role="alert" className="intake-error">{error}</div>}
