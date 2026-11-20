@@ -1,3 +1,4 @@
+import { architectureDocumentFormat, architectureDocumentSchema, validateArchitectureDocument } from './architecture-document.js';
 import { requirementImpactSchema } from '../../business-engineering/acceptance-requirements.js';
 import { contextBudgetFailureSchema } from '../../delivery/context-budget.js';
 import { formalSpecificationReceiptSchema, remoteHandoffSchema } from '../../delivery/remote-handoff.js';
@@ -10,7 +11,7 @@ import { architectureSchema, commandEvidenceSchema, developmentInputSchema, deve
 
 /** 新Run显式选择自主政策；缺省不改变历史批准/恢复散列。 */
 export const autonomyPolicySchema = z.object({ version: z.literal('autonomy.v1'), maxCheckRuns: z.number().int().min(2).max(96).default(24), maxNoProgress: z.number().int().min(1).max(5).default(2) });
-export const inputV2Schema = developmentInputSchema.extend({ productHandoffFormat: z.literal('paired-markdown.v1').optional(), requirementTracking: z.literal(true).optional(), requirementImpact: requirementImpactSchema.optional(), autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+export const inputV2Schema = developmentInputSchema.extend({ architectureDocumentFormat: z.literal(architectureDocumentFormat).optional(), productHandoffFormat: z.literal('paired-markdown.v1').optional(), requirementTracking: z.literal(true).optional(), requirementImpact: requirementImpactSchema.optional(), autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -18,7 +19,7 @@ export const taskPackageSchema = architectureSchema.shape.tasks.element.extend({
   requirementRefs: z.array(z.string()).min(1), acceptanceRefs: z.array(z.string()).min(1),
   contextRefs: z.array(z.string()).min(1), constraints: z.array(z.string().min(1)).min(1), verificationRefs: z.array(z.string()).min(1),
 });
-export const planV2Schema = architectureSchema.extend({ tasks: z.array(taskPackageSchema).max(30) });
+export const planV2Schema = architectureSchema.extend({ tasks: z.array(taskPackageSchema).max(30), document: architectureDocumentSchema.optional() });
 export const contextDraftSchema = z.object({ rules: z.array(z.object({ text: z.string().min(1), refs: z.array(z.string()).min(1) })).min(1), unknowns: z.array(z.string().min(1)) });
 export const findingSchema = z.object({ id: z.string().min(1), severity: z.enum(['blocking', 'high', 'medium', 'low']),
   category: z.enum(['business', 'architecture', 'implementation', 'verification', 'integrity']),
@@ -89,6 +90,8 @@ export function evidenceRefs(state: StateV2): Set<string> {
 /** 对任务和可追溯引用做宿主硬校验；语义是否完整交给独立评估。 */
 export function validatePlanV2(plan: z.infer<typeof planV2Schema>, state: StateV2): void {
   validateArchitecture(plan, state.input);
+  if (state.input.architectureDocumentFormat && !plan.blockers.length && !plan.document) throw new SyntaxError('开发方案缺少待审架构文档');
+  if (plan.document) validateArchitectureDocument(plan.document);
   const requirements = new Set(state.requirements.map(
     // 按批准原文生成的稳定锚点约束模型引用。
     (item) => item.id,

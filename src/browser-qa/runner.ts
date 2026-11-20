@@ -7,7 +7,7 @@ import { chromium, type Browser } from 'playwright';
 import { browserCaseSchema, browserReceiptSchema, type BrowserRequest, type BrowserReceipt } from './contracts.js';
 const contentTypes: Record<string, string> = { html: 'text/html', css: 'text/css', js: 'text/javascript', svg: 'image/svg+xml', json: 'application/json' };
 /** 真实执行固定动作与文本断言；不可执行或证据不足时返回blocked。 */
-export async function runBrowserCase(input: BrowserRequest): Promise<BrowserReceipt> {
+export async function runBrowserCase(input: BrowserRequest, headed = false): Promise<BrowserReceipt> {
   const started = Date.now();
   const receipt: BrowserReceipt = { version: 'browser-receipt.v1', caseId: input.caseId, caseHash: input.caseHash, sourceHash: input.sourceHash, methodHash: input.methodHash, status: 'blocked', reason: '', startedAt: new Date().toISOString(), durationMs: 0, steps: [], consoleErrors: [], blockedRequests: 0, screenshot: null };
   const spec = browserCaseSchema.parse(input.browser);
@@ -34,7 +34,7 @@ export async function runBrowserCase(input: BrowserRequest): Promise<BrowserRece
     const origin = 'http://127.0.0.1:' + address.port;
     const env: Record<string, string> = {};
     for (const key of ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'DISPLAY', 'XAUTHORITY']) if (process.env[key]) env[key] = process.env[key]!;
-    browser = await chromium.launch({ channel: 'chromium', headless: true, timeout: 10000, env });
+    browser = await chromium.launch({ channel: 'chromium', headless: !headed, timeout: 10000, env });
     const context = await browser.newContext({ serviceWorkers: 'block', acceptDownloads: false, viewport: { width: 1280, height: 800 } });
     timer = setTimeout(/** 总预算到期终止页面操作，不遗留后台测试。 */() => { expired = true; void context.close().catch(/** 关闭错误不覆盖原始失败。 */() => {}); }, 20000);
     await context.route('**/*', /** 仅允许本次服务和批准资产；防止任意外联。 */async route => {

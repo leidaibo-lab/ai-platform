@@ -47,8 +47,8 @@ export interface RunActivityEvent {
   occurredAt: string;
 }
 
-/** 只提取已批准角色的公开流式文本和工具状态，不转发参数或结果。 */
-export function projectLiveOutputEvent(value: unknown): LiveOutputEvent | undefined {
+/** 提取公开流式输出及执行端提供的节点和任务标识，不转发原始事件。 */
+export function projectLiveOutputFrame(value: unknown): { output: LiveOutputEvent; stepId?: string; taskKey?: string } | undefined {
   let current: unknown = value;
   for (let depth = 0; depth < 8; depth++) {
     if (!current || typeof current !== 'object') return undefined;
@@ -57,14 +57,23 @@ export function projectLiveOutputEvent(value: unknown): LiveOutputEvent | undefi
       const data = record.data as Record<string, unknown> | undefined;
       const attempt = data?.attempt;
       if (!data || typeof data.role !== 'string' || !['analysis', 'clarification', 'scope-priority', 'writing', 'reviewer', 'context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'testing', 'operations'].includes(data.role) || typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt < 1 || attempt > 2) return undefined;
-      if (data.type === 'text' && typeof data.text === 'string' && data.text.length <= 16384) return { type: 'text', text: data.text, role: data.role, attempt };
-      if (data.type === 'tool' && typeof data.name === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(data.name) && (data.state === 'started' || data.state === 'completed' || data.state === 'failed')) return { type: 'tool', name: data.name, state: data.state, role: data.role, attempt };
-      return undefined;
+      let output: LiveOutputEvent | undefined;
+      if (data.type === 'text' && typeof data.text === 'string' && data.text.length <= 16384) output = { type: 'text', text: data.text, role: data.role, attempt };
+      if (data.type === 'tool' && typeof data.name === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(data.name) && (data.state === 'started' || data.state === 'completed' || data.state === 'failed')) output = { type: 'tool', name: data.name, state: data.state, role: data.role, attempt };
+      if (!output) return undefined;
+      const stepId = typeof record.stepId === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(record.stepId) ? record.stepId : undefined;
+      const taskKey = typeof record.taskKey === 'string' && /^[a-f0-9]{16}$/.test(record.taskKey) ? record.taskKey : undefined;
+      return { output, stepId, taskKey };
     }
     const payload = record.payload as Record<string, unknown> | undefined;
     current = payload?.output;
   }
   return undefined;
+}
+
+/** 保持现有流投影调用方的输出契约。 */
+export function projectLiveOutputEvent(value: unknown): LiveOutputEvent | undefined {
+  return projectLiveOutputFrame(value)?.output;
 }
 
 /** 兼容既有产品流调用者；当前投影已覆盖完整团队角色。 */

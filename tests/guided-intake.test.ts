@@ -193,12 +193,29 @@ test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复�
     const running = await readIntake(workflow, run.runId);
     assert.ok(running.directionDraft, '写作完成前已能回读方向建议');
     const attempt = running.activeProductAttempt!.attempt;
-    /** 通过真实路由提交纠偏。 */
-    function post(input: { attempt: string; feedback?: string; reviewer?: string }) {
-      return router.request(`/intake-api/runs/${run.runId}/correct-product`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+    const origin = 'http://127.0.0.1:4112';
+    /** 通过真实路由提交纠偏，浏览器只发送当前尝试与反馈。 */
+    function post(input: unknown, cookie = '') {
+      return router.request(`/intake-api/runs/${run.runId}/correct-product`, { method: 'POST', headers: { 'Content-Type': 'application/json', origin, cookie }, body: JSON.stringify(input) });
     }
-    assert.equal((await post({ attempt: randomUUID(), feedback: '范围：只做人工初筛', reviewer: 'test-human' })).status, 409);
-    const response = await post({ attempt, feedback: '范围：只做人工初筛', reviewer: 'test-human' });
+    const feedback = '范围：只做人工初筛';
+    assert.equal((await post({ attempt, feedback })).status, 401);
+    assert.equal((await post({ attempt })).status, 401);
+    const credentials = { username: 'test-human', password: 'fixture-local-account-password' };
+    /** 创建或登录隔离测试账号。 */
+    function login(input = credentials, source = origin) {
+      return router.request('/intake-api/account', { method: 'POST', headers: { 'Content-Type': 'application/json', origin: source }, body: JSON.stringify(input) });
+    }
+    assert.equal((await login(credentials, 'https://untrusted.example')).status, 403);
+    const setup = await login();
+    assert.equal(setup.status, 200);
+    assert.match(setup.headers.get('set-cookie')!, /HttpOnly; SameSite=Strict/);
+    const cookie = setup.headers.get('set-cookie')!.split(';')[0];
+    const account = await router.request('/intake-api/account', { headers: { cookie } });
+    assert.equal((await account.json()).username, 'test-human');
+    assert.equal((await post({ attempt, feedback, reviewer: 'someone-else' }, cookie)).status, 409);
+    assert.equal((await post({ attempt: randomUUID(), feedback }, cookie)).status, 409);
+    const response = await post({ attempt, feedback }, cookie);
     const revised = await response.json();
     assert.equal(response.status, 200, JSON.stringify(revised));
     assert.equal((await initial).status, 'suspended');
@@ -206,8 +223,17 @@ test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复�
     assert.equal(revised.runId, run.runId);
     assert.equal(revised.step, 'review-product');
     assert.deepEqual(revised.appliedCorrection, { attempt, target: 'analysis', round: 1 });
-    const duplicate = await (await post({ attempt })).json();
+    const duplicate = await (await post({ attempt }, cookie)).json();
     assert.equal(duplicate.product.artifact.hash, revised.product.artifact.hash);
+    const snapshot = await workflow.getWorkflowRunById(run.runId);
+    assert.ok(Object.values(snapshot?.steps ?? {}).some(/** 确认原生步骤保存会话身份。 */step => {
+      const data = JSON.stringify(step);
+      return data.includes('"reviewer":"test-human"') && data.includes(feedback);
+    }));
+    assert.equal((await router.request('/intake-api/account/logout', { method: 'POST', headers: { origin, cookie } })).status, 200);
+    assert.equal((await post({ attempt }, cookie)).status, 401);
+    assert.equal((await login({ ...credentials, password: 'incorrect-fixture-password' })).status, 401);
+    assert.equal((await login()).status, 200);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

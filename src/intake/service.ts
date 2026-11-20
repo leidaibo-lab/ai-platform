@@ -1,3 +1,4 @@
+import { readProductDocuments } from '../business-engineering/product-documents.js';
 import { successorSource } from './successor-run.js';
 import { waitForWorkflowToSettle } from '../mastra/platform/workflow-recovery.js';
 import { correctionPauseSchema, correctionRequestSchema, interruptProductAttempt, productCorrectionCapability } from './product-interruption.js';
@@ -66,6 +67,12 @@ function specificationUrl(config: PracticeConfig | undefined, correlation: Deliv
   url.hash = '';
   return { href: url.href, fixedVersion: url.pathname !== repository };
 }
+/** 只拆分真实双文档，历史单稿仍以原正文展示。 */
+function projectProductDocuments(content: string | undefined) {
+  if (!content) return undefined;
+  try { return readProductDocuments(content); }
+  catch { return undefined; }
+}
 /** 从已保存快照读取当前人工关口，不接收客户端替代正文或步骤。 */
 export async function readIntake(workflow: IntakeWorkflow, runId: string, config?: PracticeConfig) {
   const snapshot = await workflow.getWorkflowRunById(runId);
@@ -132,7 +139,9 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
   const directionDraft = directionOutput.success && directionOutput.data.productFlow !== undefined && !directionOutput.data.intake?.enabled
     ? directionOutput.data.productWork?.entries.find(entry => entry.role === 'analysis')?.content
     : undefined;
-  return { acceptanceEvidence, mergeRequest, directionDraft, approvedProduct, specifications, productCorrection, activeProductAttempt, appliedCorrection, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, successor, successorBaseline, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: delivery?.mode ?? (sync.success ? sync.data.mode : undefined), intakeMode, brief: delivery?.brief ?? '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: step === 'review-product' && review.success ? review.data : undefined };
+  const pendingProduct = step === 'review-product' && review.success ? review.data : undefined;
+  const productDocuments = projectProductDocuments(pendingProduct?.artifact.content ?? approvedProduct?.content);
+  return { productDocuments, projectId: delivery?.correlation?.projectId, acceptanceEvidence, mergeRequest, directionDraft, approvedProduct, specifications, productCorrection, activeProductAttempt, appliedCorrection, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, successor, successorBaseline, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: delivery?.mode ?? (sync.success ? sync.data.mode : undefined), intakeMode, brief: delivery?.brief ?? '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: pendingProduct };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
@@ -150,7 +159,7 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     if (!config || !input || typeof input !== 'object' || !('reconfigureHash' in input) || input.reconfigureHash !== current.reconfigure.hash) throw new GateInputError('项目重新交接入口已变化，请刷新');
     const snapshot = await workflow.getWorkflowRunById(runId);
     const state = stateV2Schema.parse((snapshot!.result as any).development);
-    validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+    validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hashFor(state.input));
     const reviewed = findStep(snapshot, 'review-product');
     const approved = reviewed && !Array.isArray(reviewed) ? deliverySchema.parse(reviewed.output) : undefined;
     if (!approved || !approved.reviews.some(/** 只能重用本次仍与开发输入一致的真实产品批准。 */review => review.role === 'product' && review.decision === 'approve' && review.artifactHash === state.input.source.hash) || !approved.artifacts.some(/** 产品正文与散列同时核对，不能重放其他版本。 */artifact => artifact.stage === 'product' && artifact.hash === state.input.source.hash && artifact.content === state.input.source.content)) throw new GateInputError('已批准产品版本不匹配，不能重新交接');
@@ -164,7 +173,7 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     if (!config || !input || typeof input !== 'object' || !('clarifyHash' in input) || input.clarifyHash !== current.clarify.hash) throw new GateInputError('澄清入口版本已变化，请刷新');
     const snapshot = await workflow.getWorkflowRunById(runId);
     const state = stateV2Schema.parse((snapshot!.result as any).development);
-    validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+    validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hashFor(state.input));
     const execution = executionResolver(config)(state.input);
     try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('源码检查点已变化，请先核对'); } finally { await execution.close(); }
     const run = await workflow.createRun({ runId });
@@ -213,7 +222,7 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
       if (!entry || Array.isArray(entry)) throw new GateInputError('架构检查点已变化');
       const state = stateV2Schema.parse(entry.payload);
       checkpointInput = state;
-      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hashFor(state.input));
       const execution = executionResolver(config)(state.input);
       try { if (state.checkpointHash !== developmentHash(await execution.snapshot())) throw new GateInputError('源码检查点已变化，请先核对'); }
       finally { await execution.close(); }
@@ -223,7 +232,7 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
       const snapshot = await workflow.getWorkflowRunById(runId); const entry = snapshot?.steps?.[current.retry.step];
       if (!entry || Array.isArray(entry)) throw new GateInputError('澄清检查点已变化');
       const state = blockerCycleSchema.parse(entry.payload).development;
-      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hashFor(state.input));
       const execution = executionResolver(config)(state.input);
       try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('澄清期间源码检查点已变化'); } finally { await execution.close(); }
     }
@@ -267,7 +276,7 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     if (['confirm-blocker-answers', 'review-revised-product'].includes(current.gate.key)) {
       if (!config) throw new GateInputError('澄清提交缺少服务端配置');
       const state = blockerCycleSchema.parse(entry[1].payload).development;
-      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hash);
+      validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hashFor(state.input));
       const execution = executionResolver(config)(state.input);
       try { if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new GateInputError('澄清期间源码检查点已变化'); } finally { await execution.close(); }
     }

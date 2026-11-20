@@ -49,8 +49,8 @@
 
 | 角色/阶段 | 当前 Prompt 和 Skill 来源 | 迁移说明 |
 | --- | --- | --- |
-| 研发负责人：上下文、架构 | `src/development/v2/agents.ts`；分别绑定 `development-bmad-context`、`development-bmad-task-handoff` | 本地锁定；需保留来源锁、`methodBundleHash`、审批与恢复身份 |
-| 研发审查：就绪、代码审查 | 同文件；分别绑定 `development-bmad-readiness`、`development-bmad-code-review` | 本地锁定；同上 |
+| 研发负责人：上下文、架构 | `src/development/v2/agents.ts`；分别绑定 `development-bmad-context`、`development-bmad-task-handoff`。新 Live Run 的架构阶段另加载 `development-architecture-document` | 本地锁定；需保留来源锁、`methodBundleHash`、审批与恢复身份 |
+| 研发审查：就绪、代码审查 | 同文件；分别绑定 `development-bmad-readiness`、`development-bmad-code-review`。新 Live Run 的就绪审查另加载架构文档口径 | 本地锁定；同上 |
 | 前端、后端、基础设施实施 | `src/development/agents.ts`、`src/development/v2/agents.ts`；当前不单独绑定 Skill | Prompt 可迁移；文件、命令、委派权限由宿主限定 |
 | 独立测试、部署 | `src/mastra/agents/index.ts`，任务指令在 `src/delivery/testing.ts`、`src/delivery/deployment.ts` | Prompt 待迁移；当前没有单独 Skill；测试执行和发布回执有宿主门禁 |
 | 浏览器 QA | `src/browser-qa/agent.ts`；`testing-gstack-browser-qa` 和 `src/browser-qa/method.ts` 来源锁 | Prompt/Skill 待迁移；保留候选版本、来源锁及浏览器权限 |
@@ -70,7 +70,7 @@
 
 ## Skill 包准备与验证
 
-执行 `npx tsx scripts/prepare-nacos-product-skills.ts <尚不存在的输出目录> 1.1.0` 可准备 113 个独立 ZIP 和 `manifest.json`。工具检查上游来源锁和许可证、限制文件布局、拒绝符号链接，并记录原文件与 ZIP 的 SHA-256；输出状态明确为待审核、未发布。版本为调用者指定的迁移候选版本，不能视为已有注册中心版本或审批结论。目录必须不存在，以避免覆盖已有审查材料。
+执行 `npx tsx scripts/prepare-nacos-product-skills.ts <尚不存在的输出目录> 1.2.0` 可准备 113 个独立 ZIP 和 `manifest.json`。工具检查上游来源锁和许可证、限制文件布局、拒绝符号链接，并记录原文件与 ZIP 的 SHA-256；输出状态明确为待审核、未发布。版本为调用者指定的迁移候选版本，不能视为已有注册中心版本或审批结论。目录必须不存在，以避免覆盖已有审查材料。
 
 `tests/nacos-product-suite.test.ts` 用本地 HTTP 模拟 Nacos，将全部 113 个真实 Skill 包经现有 Adapter 冻结并按原版本复核，比较参考资料清单，再装配到锁定版本的 Mastra 两个产品 Agent。该测试不证明真实 Nacos 上已发布、人工审批完成或产品角色的真实模型质量；另有测试覆盖审查角色只加载绑定子集。
 

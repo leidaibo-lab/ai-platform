@@ -1,14 +1,14 @@
 {
   "schemaVersion": "nacos-product-bundle.v1",
   "status": "candidate-not-published",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "prompts": [
-    { "name": "product-manager", "version": "1.1.0", "path": "prompts/product-manager.md", "role": "product-manager" },
-    { "name": "product-reviewer", "version": "1.1.0", "path": "prompts/product-reviewer.md", "role": "product-reviewer" }
+    { "name": "product-manager", "version": "1.2.0", "path": "prompts/product-manager.md", "role": "product-manager" },
+    { "name": "product-reviewer", "version": "1.2.0", "path": "prompts/product-reviewer.md", "role": "product-reviewer" }
   ],
   "skillSources": [
-    { "directory": "nacos-resources/product/skills/product-pm", "namePrefix": "product-pm-", "version": "1.1.0" },
-    { "directory": "nacos-resources/product/skills/product/requirements-handoff", "name": "product-requirements-handoff", "version": "1.1.0" }
+    { "directory": "nacos-resources/product/skills/product-pm", "namePrefix": "product-pm-", "version": "1.2.0" },
+    { "directory": "nacos-resources/product/skills/product/requirements-handoff", "name": "product-requirements-handoff", "version": "1.2.0" }
   ],
   "sourceLock": "nacos-resources/product/skills/upstream-lock.json",
   "reviewerSkills": ["product-requirements-handoff", "product-pm-test-scenarios", "product-pm-strategy-red-team", "product-pm-pre-mortem"]

@@ -13,11 +13,13 @@
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.166",
+    "@streamdown/mermaid": "1.0.4",
     "ai": "7.0.162",
     "clsx": "2.1.1",
     "diff": "9.0.0",
     "lucide-react": "0.577.0",
     "react": "19.3.1",
+    "react-diff-viewer-continued": "4.4.0",
     "react-dom": "19.3.1",
     "streamdown": "2.7.1",
     "tailwind-merge": "3.5.0"

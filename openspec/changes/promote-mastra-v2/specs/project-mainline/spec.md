@@ -130,15 +130,28 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 
 #### Scenario: User corrects product generation in progress
 
-- **WHEN** 用户提交与当前产品生成尝试匹配的立即纠偏
+- **WHEN** 已登录用户从工作台底部输入框提交与当前产品生成尝试匹配的立即纠偏
 - **THEN** 系统 SHALL 请求停止该尝试，在 Mastra 原生暂停检查点保存反馈，再按团队判断启动重做
 - **AND** 工作台 SHALL 区分停止中、已保存待重新执行、已随目标节点开始应用以及失败后的继续入口
+- **AND** 工作台 SHALL 始终使用通用输入框和发送动作，由当前节点决定如何处理输入。输入框及其周围 SHALL NOT 显示节点用途说明。可纠偏时，即使生成请求仍在等待，当前节点也 SHALL 接收纠偏。纠偏草稿遇到尝试结束或更换 SHALL 保留，且 SHALL NOT 自动改送到其他尝试或人工关口
 - **AND** 已结束或已更换的生成尝试 SHALL 拒绝旧提交并保留页面输入
 - **AND** 同一反馈 SHALL NOT 被重复执行，旧尝试结果 SHALL NOT 成为新交接物
 
+#### Scenario: Workbench user opens the account menu
+
+- **WHEN** 用户悬停在工作台左侧栏底部的账号入口，或通过点击、键盘展开入口
+- **THEN** 工作台 SHALL 显示包含账号操作和远端同步设置的悬浮菜单
+
+#### Scenario: Local account session authenticates correction requests
+
+- **WHEN** 本机工作台首次设置账号，或已有账号登录
+- **THEN** 服务端 SHALL 按当前数据目录保存本机账号的密码派生值，并签发有时限的 HttpOnly 会话
+- **AND** 纠偏与继续纠偏 SHALL 要求有效会话，提交人 SHALL 由会话账号取得，请求正文 SHALL NOT 指定提交人
+- **AND** 退出 SHALL 立即撤销当前会话。账号用于纠偏身份记录，其他人工关口仍按原规则处理
+
 ### Requirement: Confirmed requirements and product tasks become one versioned handoff
 
-新建 live Run 的待审产品稿 SHALL 同时包含独立的需求文档与产品规格。需求文档 SHALL 给出目标、范围、带稳定 `REQ-` ID 的业务规则与可观察验收场景。产品规格 SHALL 拆分可交付的任务，写明交付结果并引用需求文档中的 ID。系统 SHALL 校验任务 ID 唯一、引用有效且全部需求均有任务覆盖。
+新建 live Run 的待审产品稿 SHALL 同时包含独立的需求文档与产品规格。需求文档 SHALL 给出目标、范围、带稳定 `REQ-` ID 的业务规则与可观察验收场景。产品规格 SHALL 按可独立复核的业务结果拆分任务，写明可观察的交付结果并引用需求文档中的 ID。系统 SHALL 校验任务 ID 唯一、引用有效且全部需求均有任务覆盖。
 
 #### Scenario: Product owner confirms the two documents
 
@@ -162,6 +175,11 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **WHEN** 质量审阅通过且候选及正式规格与原生 Run 记录一致
 - **THEN** 交付 SHALL 仅将已授权的候选变更追加到对应 Run 分支，并核对合并请求的仓库、目标 `main`、源分支和提交
 - **AND** fixture SHALL 完成控制流验证且 SHALL NOT 写远端或产生真实 MR 回执
+
+#### Scenario: A reviewer checks out the delivered candidate locally
+
+- **WHEN** 工作台读取到已核验的 MR 回执
+- **THEN** 交付页 SHALL 展示该回执的源分支和完整候选提交号，并提供可复制的 Git 命令，从交付仓库拉取源分支、以固定提交创建独立 worktree
 
 #### Scenario: The remote request succeeds before the workflow records its receipt
 
@@ -226,6 +244,16 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **AND** 其余 `text` 围栏 SHALL 保留原有文字和换行，其他代码围栏 SHALL 继续按代码呈现
 - **AND** 阅读样式 SHALL 不修改已保存文档及其版本标识
 
+### Requirement: Workbench displays saved candidate changes
+
+研发工作台 SHALL 提供默认收起的代码变更入口。用户打开后，工作台 SHALL 在右侧展示相对该轮开发输入基线的候选差异，文件可独立折叠并纵向浏览。
+
+#### Scenario: A reviewer opens the candidate changes
+
+- **WHEN** 用户打开研发页的代码变更栏
+- **THEN** 服务端 SHALL 只展示当前 Run 已保存检查点中属于已批准任务范围的变更，核对候选散列，并标明对比版本
+- **AND** 无可用检查点、候选不一致或正文超出展示上限时，工作台 SHALL 明确显示对应状态
+
 ### Requirement: Product workflow focuses on direction, specification and handoff
 
 默认产品团队 Workflow SHALL 以对齐需求、生成待审规格、独立质量审查、人工审批与交接推进。逐项澄清 SHALL 复用已收敛的方向结论进入规格写作。AI 主动补全 SHALL 先形成可观察的方向建议，再写作。方向判断 SHALL 覆盖目标、用户与场景、范围与非目标、业务决策及假设。独立产品审查 SHALL 保留为规格质量检查。研发交接 SHALL 绑定人工批准的产品版本。
@@ -266,3 +294,62 @@ HRM 的 CIP 基线 SHALL 在确认开发范围时绑定 Git 提交。研发与 Q
 - **WHEN** 已获批的 HRM Run 在开发范围确认处选择 CIP 工程
 - **THEN** 服务端 SHALL 核对产品规格分支的工程基线，并用固定检查验证实际候选
 - **AND** 交付 SHALL 绑定该工程基线和同版本 QA 证据
+
+
+### Requirement: Development approval includes a readable architecture document
+
+新建 live 主线 Run SHALL 在原有开工关口展示可阅读的开发架构正文、影响范围、架构图和关键业务数据流图，并与结构化任务、就绪评估和批准版本共同绑定。运行事实与人工决定仍由 Mastra Store 持有。
+
+#### Scenario: A new implementation plan is ready for human review
+
+- **WHEN** 研发负责人依据批准需求与受控工程基线生成无阻塞开发方案
+- **THEN** 方案 SHALL 包含目标与边界、影响范围、设计与接口数据变更、两类带方向和语义的图、实施与验证、风险及回滚说明
+- **AND** 独立就绪审查 SHALL 核对文档与需求、任务、接口和实际仓库依据之间的一致性，宿主 SHALL 拒绝缺失章节或非法图引用
+- **AND** 工作台 SHALL 在批准前展示正文和图，且正文或图变化 SHALL 使旧批准失效
+
+#### Scenario: The human approves the current development package
+
+- **WHEN** 新建 live Run 的当前方案通过人工批准
+- **THEN** 系统 SHALL 将可阅读的架构文档与结构化开发规格写入同一正式 Run 分支的同一次提交，并将两条路径记录在正式回执中
+- **AND** 已保存的历史 Run SHALL 按原格式、方法版本及原生暂停点恢复
+
+
+### Requirement: Browser QA supports local headed debugging
+
+已批准的浏览器用例 SHALL 默认使用无窗口 Chromium。后端启动时显式开启 `MASTRA_BROWSER_QA_HEADED` 后，执行器 SHALL 在后端桌面会话中打开独立 Chromium 窗口执行用例。
+
+#### Scenario: An operator observes an approved browser case
+
+- **WHEN** 后端以 `MASTRA_BROWSER_QA_HEADED=true` 启动并执行已批准的浏览器用例
+- **THEN** 浏览器 SHALL 在用例结束或失败后关闭，并按既有质量关口展示实际结果和已保存的截图
+- **AND** 启动失败 SHALL 记录为 `blocked`，展示模式 SHALL 仅由后端配置决定
+
+### Requirement: Project workbench keeps review and input in one workspace
+
+工作台 SHALL 将当前实例的需求按服务端已绑定项目展示。新建需求 SHALL 使用位于主栏底部的通用输入区，提交原始描述并生成列表显示标题。当前实例的项目绑定和已有 Run 权限 SHALL 继续由服务端校验。
+
+#### Scenario: Review the current decision without leaving the requirement
+
+- **WHEN** 用户打开需求或进入一个人工关口
+- **THEN** 工作台 SHALL 在主栏先展示可折叠的真实执行记录，再展示当前人工操作
+- **AND** 运行中的阶段状态 SHALL 在执行记录中展示。重复阶段名称和等待提示的卡片 SHALL NOT 另行显示。失败诊断与恢复入口 SHALL 保留
+- **AND** 流程导航 SHALL 按需打开，正文、候选差异和验收证据 SHALL 在按需展开的材料栏中展示
+- **AND** 审批材料与提交 SHALL 继续使用同一快照版本标识
+
+#### Scenario: Write in the shared composer
+
+- **WHEN** 用户新建需求或补充当前需求
+- **THEN** 输入 SHALL 保持在主栏底部，并以明确的提交操作区分需求创建、表单草稿和本机记录
+- **AND** 没有服务端附件接收能力时 SHALL 明示图片仅供本机草稿预览，不随需求进入流程
+#### Scenario: Transcribe a workbench draft through Mastra
+
+- **WHEN** 用户主动开启麦克风并结束录音
+- **THEN** 工作台 SHALL 将有大小和格式限制的音频送到同源 Mastra 转写入口，将返回文字追加到可编辑草稿，等待用户提交
+- **AND** 平台应用层 SHALL 通过 Mastra Voice 和服务端凭据调用语音提供方，录音与转写中间结果不进入 Run 或 Store
+- **AND** 样例模式 SHALL 使用确定性结果，不请求外部语音服务。未配置或转写失败时 SHALL 保留现有草稿并显示可理解的提示
+
+#### Scenario: Switch execution nodes during a live connection
+
+- **WHEN** 受控实时输出关联到一个节点及角色轮次
+- **THEN** 页面 SHALL 保留当前页面会话中已收到的其他节点输出，状态和审批继续以服务端快照为准
+- **AND** 节点及并行任务的标识 SHALL 由执行端提供，同角色并行任务的输出独立展示

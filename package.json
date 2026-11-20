@@ -31,6 +31,7 @@
     "@mastra/core": "1.81.0",
     "@mastra/libsql": "1.28.0",
     "@mastra/memory": "1.41.0",
+    "@mastra/voice-openai": "0.13.4",
     "ai": "7.0.162",
     "playwright": "1.65.0",
     "yauzl": "3.2.1",

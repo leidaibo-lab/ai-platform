@@ -373,3 +373,150 @@
 .intake-shell .markdown .business-steps { list-style: decimal; margin: 0; padding: 10px 16px 10px 38px; }
 .intake-shell .markdown .business-steps li::marker { font-weight: 600; color: #35664d; }
 .intake-shell .markdown .business-plain { white-space: pre-wrap; padding: 10px 14px; }
+
+.delivery-checkout-command{overflow-wrap:anywhere;white-space:pre-wrap}
+
+.intake-workbench.intake-with-changes{grid-template-columns:180px minmax(0,1fr) minmax(450px,45vw)}
+.intake-with-changes .requirement-workspace{display:flex;flex-direction:column}
+.intake-with-changes .requirement-workspace>*{width:100%}
+.intake-with-changes .requirement-panel{position:static}
+.intake-with-changes .intake-main>header{flex-wrap:wrap}
+.candidate-changes-panel{position:sticky;top:0;z-index:12;height:100dvh;min-width:0;box-sizing:border-box;display:flex;flex-direction:column;background:#fff;color:#26392f;border-left:1px solid #dce6e0}
+.candidate-changes-header,.candidate-changes-toolbar,.candidate-changes-version{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid #e7eeea}
+.candidate-changes-header,.candidate-changes-toolbar{justify-content:space-between}
+.candidate-changes-header h2{font-size:18px;margin:0}
+.candidate-changes-toolbar [role=group]{display:flex;gap:4px}
+.candidate-changes-toolbar button[aria-pressed=true]{background:#e8f3ec;border-color:#8cae9a;color:#235b45}
+.candidate-changes-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 12px 20px}
+.candidate-changes-version{padding-inline:0;font-size:12px;color:#506b5d}
+.candidate-change-file{margin-top:10px;border:1px solid #dfe9e3;border-radius:8px;overflow:hidden}
+.candidate-change-file summary{padding:10px;cursor:pointer;overflow-wrap:anywhere;background:#f5f8f6}
+.candidate-change-file summary span,.candidate-change-file summary code{margin-inline-end:8px}
+.candidate-change-file summary span,.candidate-change-file summary small{font-size:12px;color:#506b5d}
+.candidate-change-file>p{padding-inline:10px}
+.candidate-diff-content{overflow:auto;font-size:12px}
+@media(max-width:1000px){.intake-workbench.intake-with-changes{grid-template-columns:180px minmax(0,1fr)}.candidate-changes-panel{position:fixed;inset:0 0 0 auto;width:min(100%,680px);z-index:25;box-shadow:-10px 0 35px #15362420}}
+
+/* 工作台的栏宽与滚动边界保持独立，输入区始终位于主栏底部。 */
+.intake-workbench.project-workbench{
+  color-scheme:light;
+  --workspace-line:#e9dfda;
+  --workspace-surface:#faf5f1;
+  --workspace-ink:#302720;
+  --workspace-muted:#6c5d55;
+  --brand-action:#cd3815;
+  --brand-hover:#ab2d11;
+  --brand-tint:#ffebe2;
+  --brand-focus:#d74b29;
+  display:grid;grid-template-columns:185px minmax(0,1fr);grid-template-rows:42px minmax(0,1fr);align-items:stretch;height:100dvh;min-height:0;background:#fffcfa;color:var(--workspace-ink);font-size:14px}
+.project-workbench.workbench-inspecting{grid-template-columns:185px minmax(0,1fr) minmax(350px,35vw)}
+.project-workbench .workbench-bar{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--workspace-line);background:#fff}
+.project-workbench .intake-brand{display:inline-flex;align-items:center;gap:8px;color:var(--workspace-ink);font-size:15px}
+.intake-brand-logo{display:block;width:27px;height:27px;border-radius:7px;flex:none}
+.workbench-bar .workbench-tools{margin-left:auto}
+.project-workbench>.intake-sidebar{position:static;height:auto;min-height:0;gap:4px;padding:8px;background:var(--workspace-surface);overflow:auto}
+.workbench-nav-row{display:flex;align-items:center;gap:5px;min-height:28px;padding:0 4px}.workbench-nav-row span,.workbench-nav-runs span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.workbench-nav-row strong{margin-right:auto}.workbench-nav-row svg,.workbench-nav-runs svg{flex:none}
+.project-workbench .workbench-project-group{position:relative}.project-workbench .intake-sidebar summary{padding-right:26px;cursor:pointer}.workbench-chevron{transform:rotate(-90deg)}[open]>.workbench-nav-row .workbench-chevron{transform:none}
+.project-workbench .workbench-row-action{padding:3px;opacity:0;display:grid;place-items:center}.workbench-project-add{position:absolute;right:1px;top:2px}
+.workbench-nav-row:hover .workbench-row-action,.project-workbench .workbench-project-group:has(summary:hover,>.workbench-project-add:hover)>.workbench-project-add,.project-workbench .workbench-row-action:focus-visible{opacity:1}
+@media(hover:none){.project-workbench .workbench-row-action{opacity:1}}
+.workbench-nav-runs{display:grid;gap:2px;border-left:1px solid var(--workspace-line);margin-left:10px;padding-left:4px;min-width:0}
+.project-workbench .intake-sidebar .workbench-nav-runs button{display:flex;justify-content:space-between;align-items:center;gap:5px;padding:4px 5px;min-width:0;background:transparent;border-color:transparent;font-size:13px}
+.project-workbench .intake-sidebar .workbench-nav-runs button[aria-current]{background:var(--brand-tint);color:var(--brand-hover);opacity:1;font-weight:650}.workbench-pending{padding:4px 5px;overflow-wrap:anywhere}
+.intake-workbench.project-workbench>.intake-main{position:relative;display:flex;flex-direction:column;gap:8px;overflow:visible;padding:10px 12px;min-height:0}
+.project-workbench .intake-main>.workbench-context{position:relative;display:flex;flex-wrap:wrap;gap:5px;flex:none;border:0;padding:0;margin:0}.workbench-context>details{flex:1;min-width:min(170px,100%);overflow-wrap:anywhere}.workbench-context>details p{white-space:pre-wrap}
+.workbench-tools{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.project-workbench .workbench-tools button,.project-workbench .workbench-materials header button,.project-workbench .workbench-flow button{display:inline-flex;align-items:center;gap:4px;padding:4px 6px;font-size:12px}
+.workbench-flow{position:absolute;z-index:22;top:100%;right:0;width:min(100%,300px);max-height:330px;overflow:auto;background:#fff;border:1px solid var(--workspace-line);border-radius:9px;box-shadow:0 8px 25px #16362626;padding:7px}.workbench-flow details{padding:4px 6px}.workbench-flow summary{cursor:pointer}.workbench-flow small{color:var(--workspace-muted)}
+.workbench-content{min-height:0;overflow:auto;flex:1;display:grid;align-content:start;gap:8px;padding:1px 2px;overflow-wrap:anywhere}.workbench-content.workbench-welcome{align-content:safe center}.workbench-intro{text-align:center;justify-self:center;padding:10px 0}.workbench-intro h1{font-size:clamp(18px,2vw,26px);margin:0}.workbench-intro p{color:var(--workspace-muted)}.workbench-intro details label{display:block;margin:6px 0}.workbench-feedback{display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border:1px solid var(--workspace-line);border-radius:6px;margin:0}.workbench-feedback button{padding:2px 4px}
+.project-workbench .intake-card{padding:10px 12px;margin:0}.project-workbench .intake-card h1,.project-workbench .intake-card h2{font-size:17px;margin:3px 0}.project-workbench .requirement-workspace{display:flex;flex-direction:column;gap:8px}.project-workbench .requirement-panel{position:static;width:auto}.project-workbench .requirement-panel~*{width:auto}.workbench-records h2{font-size:15px;margin:0 0 4px}.workbench-records details,.workbench-local-notes{border-top:1px solid var(--workspace-line);padding:4px 0}.workbench-records details details{margin-left:12px}.workbench-local-notes p{white-space:pre-wrap}
+.workbench-composer{flex:none;display:grid;gap:5px;padding:8px 10px;background:#fff;border:1px solid var(--workspace-line);border-radius:12px}.workbench-composer:focus-within{border-color:var(--brand-focus);box-shadow:0 0 0 2px var(--brand-tint)}.workbench-composer textarea{box-sizing:border-box;width:100%;border:0;background:transparent;padding:3px 0;resize:none;max-height:min(145px,19dvh);outline:none;font:inherit;color:inherit}.workbench-composer-actions{display:flex;gap:5px}.project-workbench .workbench-composer-actions button{padding:4px;width:30px;height:30px;display:grid;place-items:center}.workbench-mic{margin-left:auto}.project-workbench .workbench-composer-actions .workbench-send{border-radius:50%}.workbench-previews{display:flex;flex-wrap:wrap;gap:5px}.workbench-previews figure{margin:0;position:relative}.workbench-previews img{width:60px;height:44px;object-fit:cover;border-radius:4px}.project-workbench .workbench-previews button{position:absolute;top:0;right:0;padding:1px;display:grid}
+.workbench-wave{display:flex;align-items:center;gap:2px;height:16px}.workbench-wave i{width:2px;height:12px;border-radius:2px;background:currentColor;animation:workbench-wave .75s infinite alternate ease-in-out}.workbench-wave i:nth-child(2n){animation-delay:-.4s}.workbench-wave i:nth-child(3n){animation-delay:-.6s}.workbench-mic[aria-pressed=true]{color:#80551a;background:#fff0d9}@keyframes workbench-wave{from{transform:scaleY(.3)}to{transform:scaleY(1)}}@media(prefers-reduced-motion:reduce){.workbench-wave i{animation:none}.workbench-wave i:nth-child(2n){transform:scaleY(.55)}}
+.workbench-materials,.project-workbench>.candidate-changes-panel{display:flex;flex-direction:column;min-width:0;min-height:0;height:auto;background:#fff;border-left:1px solid var(--workspace-line)}.workbench-materials header{display:flex;justify-content:space-between;align-items:start;padding:7px;border-bottom:1px solid var(--workspace-line);gap:4px}.workbench-material-body{overflow:auto;min-height:0;padding:10px 12px;overflow-wrap:anywhere}
+@media(max-width:960px){.project-workbench.workbench-inspecting{grid-template-columns:185px minmax(0,1fr)}.project-workbench>.candidate-changes-panel,.project-workbench>.workbench-materials{position:fixed;inset:42px 0 0 auto;z-index:25;width:min(100%,570px);box-shadow:-7px 0 24px #16362622}}
+@media(max-width:600px){.intake-workbench.project-workbench,.intake-workbench.project-workbench.workbench-inspecting{grid-template-columns:minmax(0,1fr);grid-template-rows:42px auto minmax(0,1fr)}.intake-workbench.project-workbench>.intake-sidebar{max-height:23dvh;padding:4px 8px;border-bottom:1px solid var(--workspace-line)}.project-workbench .intake-sidebar button.workbench-row-action{display:grid}.intake-workbench.project-workbench>.intake-main{padding:6px 8px}}
+
+/* 品牌色用于主要操作和活跃选项，状态色沿用各组件的语义。 */
+body:has(.project-workbench){margin:0}
+.project-workbench .workbench-context{color:var(--workspace-muted)}
+.intake-shell.project-workbench .primary{
+  color:#fff;
+  background:var(--brand-action);
+  border-color:var(--brand-action);
+}
+.intake-shell.project-workbench .primary:hover:not(:disabled){
+  background:var(--brand-hover);
+  border-color:var(--brand-hover);
+}
+.project-workbench :is(button,a):focus-visible{outline-color:var(--brand-focus)}
+.project-workbench .intake-card :is(input,textarea,select):focus{outline-color:var(--brand-focus)}
+.project-workbench :is(.workbench-tools,.candidate-changes-toolbar) button[aria-pressed=true]{
+  color:var(--brand-hover);
+  background:var(--brand-tint);
+  border-color:var(--brand-focus);
+}
+
+.workbench-account{width:min(390px,calc(100vw - 32px));margin:auto;color:var(--workspace-ink,#242424)}
+.workbench-account::backdrop{background:rgb(32 24 18 / 35%)}
+.workbench-account form{display:grid;gap:8px;margin-bottom:12px}
+
+.project-workbench > .intake-sidebar {
+  overflow: visible;
+}
+.workbench-sidebar-nav {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.workbench-user {
+  position: relative;
+  flex: none;
+  padding-top: 6px;
+  border-top: 1px solid var(--workspace-line);
+}
+.project-workbench .workbench-user button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  font-size: 13px;
+}
+.project-workbench .workbench-user button svg {
+  flex: none;
+}
+.project-workbench .workbench-user-trigger span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workbench-user-menu {
+  position: absolute;
+  z-index: 26;
+  bottom: 100%;
+  left: 0;
+  box-sizing: border-box;
+  width: max(100%, 154px);
+  padding: 4px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 8px 24px #16362622;
+}
+.project-workbench .intake-sidebar .workbench-user-menu button {
+  display: flex;
+  border-color: transparent;
+}
+.project-workbench .workbench-user-menu button:hover:enabled {
+  background: var(--brand-tint);
+}
+@media (max-width: 600px) {
+  .workbench-user {
+    align-self: flex-start;
+    min-width: 122px;
+  }
+  .workbench-user-menu {
+    top: 100%;
+    bottom: auto;
+  }
+}

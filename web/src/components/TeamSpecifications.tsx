@@ -11,6 +11,7 @@ const owners: Record<Specification['kind'], Team> = { requirements: 'product', p
 const fileTitles: Record<string, string> = {
   'requirements.md': '需求文档',
   'product-spec.md': '产品规格',
+  'development-architecture.md': '开发架构文档',
   'development-spec.md': '技术规格',
   'test-spec.md': '测试规格',
 };

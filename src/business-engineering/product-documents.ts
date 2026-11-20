@@ -3,7 +3,7 @@ import { acceptanceRequirementsInstruction, readAcceptanceRequirements } from '.
 
 export const productDocumentsInstruction = `${acceptanceRequirementsInstruction}
 输出同一待审 Markdown 的两份正文，只使用两个一级标题，依次为“# 需求文档”和“# 产品规格”。需求文档写目标、范围和业务规则，按能力保留 Requirement / Scenario（WHEN、THEN）等可观察场景。所有 REQ 条目只在需求文档中声明，放在对应业务规则附近。输入已含可用的 Requirement / Scenario 时，保留其已确认规则与场景，补齐规则已有依据的可观察边界。归档模板中的 TBD Purpose 应改为明确业务目标。
-产品规格只拆分可单独交付的任务，说明交付结果并引用需求 ID。每个任务独立占一行，格式为“- TASK-大写英文或数字标识: 任务及预期交付结果 | 需求: REQ-标识, REQ-标识”。任务 ID 唯一，每项需求至少被一个任务覆盖。产品任务不给出实现文件或技术选型，不复制需求正文。输出不要用代码围栏包裹。`;
+产品规格按可独立复核的业务结果拆分任务，写出作用对象、关键条件和可观察的交付结果，并引用需求 ID。技能使用记录放入审查意见或执行记录。每个任务独立占一行，格式为“- TASK-大写英文或数字标识: 任务及预期交付结果 | 需求: REQ-标识, REQ-标识”。任务 ID 唯一，每项需求至少被一个任务覆盖。产品任务不给出实现文件或技术选型，不复制需求正文。输出不要用代码围栏包裹。`;
 
 /** 使用未经缩写的迭代标识归集文档，避免不同需求路径因分支名归一化而重合。 */
 export function productPaths(iterationId: string) {

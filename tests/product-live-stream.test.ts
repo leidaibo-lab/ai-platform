@@ -5,11 +5,13 @@ import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
 import { LibSQLStore } from '@mastra/libsql';
 import { z } from 'zod';
+import { publishLiveOutput } from '../src/intake/live-output.js';
 import { generateProductContent } from '../src/intake/product-generation.js';
-import { projectLiveOutputEvent, projectProductStreamEvent } from '../src/intake/run-timeline.js';
+import { projectLiveOutputEvent, projectLiveOutputFrame, projectProductStreamEvent } from '../src/intake/run-timeline.js';
 
 test('模型文本和工具事件经原生 Workflow watch 投影，隐藏参数不进入事件', async () => {
   const events: unknown[] = [];
+  const sources: unknown[] = [];
   const agent = { stream: async () => ({
     fullStream: (async function* () {
       yield { type: 'text-delta', payload: { text: '模型输出片段' } };
@@ -20,7 +22,7 @@ test('模型文本和工具事件经原生 Workflow watch 投影，隐藏参数�
     getFullOutput: async () => ({ finishReason: 'stop', steps: [{ text: '最终合成结果' }], toolResults: [] }),
   }) } as any;
   const step = createStep({ id: 'test-product-stream', inputSchema: z.object({}), outputSchema: z.object({ text: z.string() }), execute: async ({ runId, [PUBSUB_SYMBOL]: pubsub }) => {
-    const result = await generateProductContent(agent, '{}', 'analysis', 'live', undefined, 0, event => pubsub.publish(`workflow.events.v2.${runId}`, { type: 'watch', runId, data: { type: 'product-live-output.v1', data: event } }));
+    const result = await generateProductContent(agent, '{}', 'analysis', 'live', undefined, 0, event => publishLiveOutput(pubsub, runId, event, 'test-product-stream', '0123456789abcdef'));
     return { text: result.text };
   } });
   const child = createWorkflow({ id: 'test-product-child', inputSchema: z.object({}), outputSchema: z.object({ text: z.string() }) }).then(step).commit();
@@ -29,12 +31,13 @@ test('模型文本和工具事件经原生 Workflow watch 投影，隐藏参数�
   new Mastra({ workflows: { workflow }, storage, logger: false });
   try {
     const run = await workflow.createRun();
-    const unwatch = await run.watchAsync(event => { const projected = projectProductStreamEvent(event); if (projected) events.push(projected); });
+    const unwatch = await run.watchAsync(event => { const frame = projectLiveOutputFrame(event); if (frame) { events.push(frame.output); sources.push([frame.stepId, frame.taskKey]); } });
     const result = await run.start({ inputData: {} });
     await new Promise(resolve => setTimeout(resolve, 100));
     unwatch();
     assert.equal(result.status, 'success');
     assert.deepEqual(events, [{ type: 'text', text: '模型输出片段', role: 'analysis', attempt: 1 }, { type: 'tool', name: 'readFile', state: 'started', role: 'analysis', attempt: 1 }, { type: 'tool', name: 'readFile', state: 'completed', role: 'analysis', attempt: 1 }]);
+    assert.deepEqual(sources, Array.from({ length: 3 }, () => ['test-product-stream', '0123456789abcdef']));
     assert.doesNotMatch(JSON.stringify(events), /hidden-/);
   } finally { await storage.close(); }
 });

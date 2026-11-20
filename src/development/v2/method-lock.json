@@ -21,5 +21,7 @@
   "bmad-code-review/references/edge-case-hunter.md": "5f4572d57340b4c0d155f33454d644a44af101cd7fd02a01591be68a4ebb8b7f",
   "bmad-code-review/references/source-lock.json": "eaa6f7df002c1ef4d990317449419c782c8ada75c039a3ce3d7c1383582b3608",
   "bmad-code-review/references/upstream.md": "337ac3ad2cd8cabb34f4e47c8778cfd703f919753573dd9d708b7218fd5de684",
-  "bmad-code-review/references/verification-gap.md": "06f6184d7d94c808970d0146cdc4585dfd66b94a7b7ab2988277fb6fc4208508"
+  "bmad-code-review/references/verification-gap.md": "06f6184d7d94c808970d0146cdc4585dfd66b94a7b7ab2988277fb6fc4208508",
+  "architecture-document/SKILL.md": "95de912332d510444bbe5b4ebad86c01ed6edeb677ead968e26c289f86be62a5",
+  "architecture-document/references/document-layout.md": "e51e9821451f4fc173f34752c48f5f42e051d96a5d2db6914f490b5e3edec0d8"
 }

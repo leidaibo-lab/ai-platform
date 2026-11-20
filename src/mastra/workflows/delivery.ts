@@ -1,3 +1,4 @@
+import { architectureDocumentFormat } from '../../development/v2/architecture-document.js';
 import { formalSpecificationReceiptSchema, remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 import { intakeSchema, intakeModeSchema } from '../../intake/contracts.js';
 import { z } from 'zod';
@@ -12,7 +13,7 @@ export const successorBaselineSchema = z.object({
   sourceRunId: z.string().uuid(),
   projectId: projectIdSchema.optional(),
   changeBrief: z.string().trim().min(1).max(12000),
-  artifacts: z.array(z.object({ kind: z.enum(['product', 'development', 'testing']), branch: z.string(), commit: z.string().regex(/^[a-f0-9]{40,64}$/), path: z.string().regex(formalSpecificationPathPattern), hash: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().min(1).max(100000) })).min(1).max(4),
+  artifacts: z.array(z.object({ kind: z.enum(['product', 'development', 'testing']), branch: z.string(), commit: z.string().regex(/^[a-f0-9]{40,64}$/), path: z.string().regex(formalSpecificationPathPattern), hash: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().min(1).max(100000) })).min(1).max(5),
 });
 export type SuccessorBaseline = z.infer<typeof successorBaselineSchema>;
 
@@ -30,6 +31,7 @@ export const reviewSchema = z.object({
 export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
+  architectureDocumentFormat: z.literal(architectureDocumentFormat).optional(),
   productHandoffFormat: z.literal('paired-markdown.v1').optional(),
   requirementTracking: z.literal(true).optional(),
   nacosResources: nacosSnapshotSchema.optional(),

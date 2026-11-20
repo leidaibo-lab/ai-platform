@@ -1,3 +1,4 @@
+import { architectureDocumentPath, architectureMarkdown } from '../../development/v2/architecture-document.js';
 import { describeDevelopmentStep, developmentSteps } from './development-steps.js';
 import { projectRepositoryRoot } from '../../business-engineering/project.js';
 import { reworkState, stopAutonomy, runVerification, VerificationBudgetError } from '../../development/v2/autonomy.js';
@@ -44,7 +45,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   }
   /** 所有节点共用身份/源码检查，不让后续正常变更与初始baseline永久比较。 */
   async function guard(state: StateV2): Promise<void> {
-    validateIdentityV2(state, config, methods.hash);
+    validateIdentityV2(state, config, methods.hashFor(state.input));
     if (state.checkpointHash !== developmentHash(await execution.snapshot())) throw new Error('v2源码检查点漂移');
   }
   /** 非当前阶段节点只传递快照，恢复从持久化phase继续。 */
@@ -63,7 +64,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         ? readAcceptanceRequirements(inputData.source.content)
         : createProductUnits(inputData.source.content);
       if (inputData.requirementImpact && inputData.requirementImpact.productHash !== inputData.source.hash) throw new Error('需求修订影响与当前产品版本不匹配');
-      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hash, phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
+      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hashFor(inputData), phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
     },
   });
   const context = createStep({ id: 'prepare-context', description: 'plan-development｜prepare-context｜development-lead-agent 核实工程上下文', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
@@ -89,10 +90,10 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
           (path) => `file:${path}`,
         )]);
         for (const rule of draft.rules) for (const ref of rule.refs) if (!refs.has(ref)) throw new SyntaxError('上下文引用未知来源');
-      }, undefined, event => publishLiveOutput(pubsub, runId, event));
+      }, undefined, event => publishLiveOutput(pubsub, runId, event, 'prepare-context'));
     if (!called.entry) return called.state;
     const draft = contextDraftSchema.parse(parseDevelopmentJson(called.entry.text));
-    return { ...called.state, context: { ...draft, files, productHash: inputData.input.source.hash, baselineHash: inputData.checkpointHash, methodBundleHash: methods.hash }, phase: 'architecture' as const, work: [...called.state.work, called.entry] };
+    return { ...called.state, context: { ...draft, files, productHash: inputData.input.source.hash, baselineHash: inputData.checkpointHash, methodBundleHash: methods.hashFor(inputData.input) }, phase: 'architecture' as const, work: [...called.state.work, called.entry] };
   }
   const architecture = createStep({ id: 'architecture', description: 'plan-development｜architecture｜development-lead-agent 产出技术方案与任务包', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 任务包严格按manifest和原文索引校验；计划变更清空旧批准。
@@ -104,7 +105,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     await guard(inputData);
     const called = await invokeV2(config, execution, 'architect', inputData, [], { priorGates: inputData.gates, priorReports: inputData.codeReviews }, methods, generate,
       // 结构错误保留故障，不能跳到人工批准。
-      (text) => { parsePlan(text, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event));
+      (text) => { parsePlan(text, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event, 'architecture'));
     if (!called.entry) return called.state;
     const plan = parsePlan(called.entry.text, inputData);
     const preparationIssues = inputData.input.project.preparationIssues;
@@ -142,7 +143,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     validatePlanV2(inputData.plan!, inputData);
     const called = await invokeV2(config, execution, 'readiness', inputData, [], null, methods, generate,
       // 判定、发现和覆盖都必须结构一致。
-      (text) => validateAssessment(assessmentSchema.parse(parseDevelopmentJson(text)), inputData), undefined, event => publishLiveOutput(pubsub, runId, event));
+      (text) => validateAssessment(assessmentSchema.parse(parseDevelopmentJson(text)), inputData), undefined, event => publishLiveOutput(pubsub, runId, event, 'assess-readiness'));
     if (!called.entry) return called.state;
     const report = reportV2(assessmentSchema.parse(parseDevelopmentJson(called.entry.text)), called.state);
     const state = { ...called.state, readiness: report, work: [...called.state.work, called.entry] };
@@ -176,12 +177,12 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     return { ...state, approvalHash: approvalHashV2(state) };
   }
   const approve = createStep({ id: 'approve-architecture', description: describeDevelopmentStep(developmentSteps[3]), inputSchema: stateV2Schema, outputSchema: stateV2Schema,
-    suspendSchema: z.object({ hash: z.string(), plan: planV2Schema, readiness: assessmentSchema, contextHash: z.string(), methodBundleHash: z.string(), team: stateV2Schema.shape.team, executionBudget: z.object({ maxReworks: z.number(), maxCalls: z.number(), autonomy: inputV2Schema.shape.autonomy }).optional() }), resumeSchema: approvalV2Schema,
+    suspendSchema: z.object({ hash: z.string(), plan: planV2Schema, architectureMarkdown: z.string().optional(), readiness: assessmentSchema, contextHash: z.string(), methodBundleHash: z.string(), team: stateV2Schema.shape.team, executionBudget: z.object({ maxReworks: z.number(), maxCalls: z.number(), autonomy: inputV2Schema.shape.autonomy }).optional() }), resumeSchema: approvalV2Schema,
     // 正式运行在原生暂停点等待对整个包的人工确认。
     execute: async ({ inputData, resumeData, suspend, runId }) => {
       if (!active(inputData, 'approve-architecture')) return inputData;
       await guard(inputData); assertApprovalV2(inputData);
-      if (!resumeData && !evaluationPolicy) return suspend({ hash: inputData.approvalHash!, plan: inputData.plan!, readiness: inputData.readiness!.assessment, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hash, team: inputData.team, executionBudget: { maxReworks: inputData.input.maxReworks, maxCalls: inputData.maxCalls, autonomy: inputData.input.autonomy } });
+      if (!resumeData && !evaluationPolicy) return suspend({ hash: inputData.approvalHash!, plan: inputData.plan!, ...(inputData.plan!.document ? { architectureMarkdown: architectureMarkdown(inputData.plan!.document) } : {}), readiness: inputData.readiness!.assessment, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hashFor(inputData.input), team: inputData.team, executionBudget: { maxReworks: inputData.input.maxReworks, maxCalls: inputData.maxCalls, autonomy: inputData.input.autonomy } });
       const review = resumeData ?? { hash: inputData.approvalHash!, decision: 'approve' as const, reviewer: 'evaluation-organizer-policy', comment: '仅隔离fixture自动执行，不代表业务批准', resolutions: [] };
       if (review.hash !== inputData.approvalHash) throw new Error('v2批准包版本不匹配');
       if (review.resolutions.length) throw new Error('方案批准不能处理交付评审发现');
@@ -192,8 +193,12 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         const capability = inputData.input.correlation?.iterationId;
         const product = inputData.input.formalSpecifications?.find(item => item.kind === 'product');
         if (!root || !capability || !product) throw new Error('开发规格确认缺少已推送的产品规格或受控仓库绑定');
-        const handoff = await publishFormalSpecification(root, inputData.input.correlation?.runId ?? runId, capability, { 'specs/development-spec.md': `${JSON.stringify({ plan: inputData.plan, readiness: inputData.readiness, sourceHash: inputData.input.source.hash }, null, 2)}\n` }, 'docs(spec): 提交已确认开发规格');
-        formalSpecification = { kind: 'development', handoff, paths: ['specs/development-spec.md'], upstreamCommits: [product.handoff.commit] } satisfies FormalSpecificationReceipt;
+        const files = {
+          'specs/development-spec.md': `${JSON.stringify({ plan: inputData.plan, readiness: inputData.readiness, sourceHash: inputData.input.source.hash }, null, 2)}\n`,
+          ...(inputData.plan?.document ? { [architectureDocumentPath]: architectureMarkdown(inputData.plan.document) } : {}),
+        };
+        const handoff = await publishFormalSpecification(root, inputData.input.correlation?.runId ?? runId, capability, files, 'docs(spec): 提交已确认开发规格');
+        formalSpecification = { kind: 'development', handoff, paths: Object.keys(files), upstreamCommits: [product.handoff.commit] } satisfies FormalSpecificationReceipt;
       }
       return { ...inputData, formalSpecification, approvedHash: approved ? review.hash : null, reviews: [...inputData.reviews, { ...review, authority: resumeData ? 'local-human-label' as const : 'evaluation-policy' as const }], phase: 'implement' as const, route: 'all' as const, outcome: approved ? 'in-progress' as const : 'rejected' as const };
     },
@@ -207,7 +212,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       let state = inputData;
       for (const task of inputData.plan!.tasks) {
         if (state.completedTasks.includes(task.id)) continue;
-        const called = await invokeV2(config, execution, task.role, state, task.paths, { ...task, findings: unresolvedV2(state) }, methods, generate, undefined, undefined, event => publishLiveOutput(pubsub, runId, event));
+        const called = await invokeV2(config, execution, task.role, state, task.paths, { ...task, findings: unresolvedV2(state) }, methods, generate, undefined, undefined, event => publishLiveOutput(pubsub, runId, event, 'implement', developmentHash(task.id).slice(0, 16)));
         if (!called.entry) return called.state;
         state = { ...called.state, work: [...called.state.work, called.entry], completedTasks: [...called.state.completedTasks, task.id] };
         if (state.input.autonomy && called.entry.text.includes('BUSINESS_BLOCKER:')) return stopAutonomy(state, 'business-decision');
@@ -251,7 +256,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       (path) => contents[path] !== inputData.input.project.files[path],
     ) }, methods, generate,
       // 报告解析错误必须保存故障，不使用空数组默认通过。
-      (text) => { const assessment = assessmentSchema.parse(parseDevelopmentJson(text)); validateAssessment(assessment, inputData); validateReviewResolutions(assessment, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event));
+      (text) => { const assessment = assessmentSchema.parse(parseDevelopmentJson(text)); validateAssessment(assessment, inputData); validateReviewResolutions(assessment, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event, 'review-code'));
     if (!called.entry) return called.state;
     const report = reportV2(assessmentSchema.parse(parseDevelopmentJson(called.entry.text)), called.state);
     const resolutions = [...inputData.resolutions];
@@ -309,7 +314,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement');
     }
     // 非PASS原报告只能在全部原发现已有明确处理后进入此处；原报告保留。
-    return { ...inputData, outcome: 'development-delivered' as const, gates: [...inputData.gates, { decision: 'deliver' as const, reasons: [], sourceHash: inputData.checkpointHash, reportHash: latest.hash }], delivery: { version: 'development-delivery.v2' as const, productHash: inputData.input.source.hash, planHash: inputData.planHash!, approvalHash: inputData.approvalHash!, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hash, readinessHash: inputData.readiness!.hash, reviewHash: latest.hash, sourceHash: inputData.checkpointHash, files: await execution.snapshot(), checks: inputData.checks, resolutions: inputData.resolutions, limitations: ['受限研发交付；固定Node语法和登记smoke，不等于独立业务验收', '只读模型评审不证明完整业务质量；fixture仅验证原生控制流', '无生产部署、跨库原子交接和跨实例启动幂等'] } };
+    return { ...inputData, outcome: 'development-delivered' as const, gates: [...inputData.gates, { decision: 'deliver' as const, reasons: [], sourceHash: inputData.checkpointHash, reportHash: latest.hash }], delivery: { version: 'development-delivery.v2' as const, productHash: inputData.input.source.hash, planHash: inputData.planHash!, approvalHash: inputData.approvalHash!, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hashFor(inputData.input), readinessHash: inputData.readiness!.hash, reviewHash: latest.hash, sourceHash: inputData.checkpointHash, files: await execution.snapshot(), checks: inputData.checks, resolutions: inputData.resolutions, limitations: ['受限研发交付；固定Node语法和登记smoke，不等于独立业务验收', '只读模型评审不证明完整业务质量；fixture仅验证原生控制流', '无生产部署、跨库原子交接和跨实例启动幂等'] } };
   }
   const resolveFindings = createStep({ id: 'resolve-findings', description: 'review-development-quality｜resolve-findings｜人工裁决评审发现或进入有界返工', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     suspendSchema: z.object({ hash: z.string(), reports: z.unknown() }), resumeSchema: findingsReviewSchema,

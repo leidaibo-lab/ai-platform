@@ -53,8 +53,8 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
   async function guard(state: z.infer<typeof blockerCycleSchema>, allowModelRebase = false) {
     const current = developmentExecutionIdentity(config);
     const prior = state.development.executionIdentity;
-    const canRebase = allowModelRebase && state.development.mode === config.mode && state.development.methodBundleHash === methods.hash && prior.mode === current.mode && prior.endpointHash === current.endpointHash && prior.modelId !== current.modelId && state.development.outcome === 'clarification-required' && state.development.completedTasks.length === 0 && !state.development.approvedHash && !state.development.delivery;
-    if (!canRebase) validateIdentityV2(state.development, config, methods.hash);
+    const canRebase = allowModelRebase && state.development.mode === config.mode && state.development.methodBundleHash === methods.hashFor(state.development.input) && prior.mode === current.mode && prior.endpointHash === current.endpointHash && prior.modelId !== current.modelId && state.development.outcome === 'clarification-required' && state.development.completedTasks.length === 0 && !state.development.approvedHash && !state.development.delivery;
+    if (!canRebase) validateIdentityV2(state.development, config, methods.hashFor(state.development.input));
     const execution = resolveExecution(state.development.input);
     try { if (developmentHash(await execution.snapshot()) !== state.development.checkpointHash) throw new Error('澄清期间源码检查点发生变化'); }
     finally { await execution.close(); }

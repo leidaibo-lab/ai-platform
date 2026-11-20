@@ -24,6 +24,16 @@
 
 研发授权前按固定回执校验两份文件及其批准版本，研发任务和测试用例继续引用需求 ID。开发、测试规格仍在同一 Run 分支追加。产品团队页面发布后集中展示审批版本、批准人与正式文件入口。AI 方向初稿只在对齐方向阶段展示，原始输入仍可从「原始需求」查看。
 
+## 产品需求与 OpenSpec
+
+适合将已确认、跨迭代仍需遵守的产品行为写入业务仓库的 OpenSpec。需求文档保留业务背景、目标、范围和页面上下文。OpenSpec 用 `Requirement` 和 `Scenario` 固化权限、状态流转、校验和拒绝后的数据结果。产品规格用 `TASK-` 拆分本轮交付，通过 `REQ-` 关联同一业务规则。业务仓库采用 OpenSpec 后，以关联的规格章节为规则来源，需求文档引用该章节。
+
+对已有 OpenSpec 的业务仓库，建议把本轮行为变化写入 `openspec/changes/<变更标识>/specs/<能力>/spec.md`，以 `ADDED`、`MODIFIED` 或 `REMOVED` 声明变化，关联批准稿的需求 ID。评审和验证后，按业务仓库流程归档到 `openspec/specs/<能力>/spec.md`。Mastra Store 保存审批事实，业务 Git 记录规格及变更。当前 Workflow 交付仍采用上述双文档路径，OpenSpec 的导出、校验和归档由业务仓库接入。
+
+以 HRM 招聘为例，`REQ-SKIP-ACTUAL-START` 可以对应「已实际开始的面试不得跳轮」。场景写明面试已实际开始、尚未完成且没有评价，提交跳轮后拒绝，保留原轮次状态且不激活下一轮。研发和测试共同引用这一场景。
+
+产品任务的写作和审查口径见[产品文档版式](../../nacos-resources/product/skills/product/requirements-handoff/references/document-layout.md#产品规格任务)。
+
 ## 恢复历史 Run
 
 在 `product-team.product-direction` 和 `product-team.product-specification` 下运行的三阶段 Run 使用 `MASTRA_NATIVE_THREE_STAGE_PRODUCT_WORKFLOW=true` 恢复。此前在 `product-team.draft-product` 下运行的三阶段 Run 使用 `MASTRA_NESTED_PRODUCT_WORKFLOW=true` 恢复。更早的四段产品经理图含 `product-clarification` 和 `product-scope-priority`，使用 `MASTRA_LEGACY_PRODUCT_WORKFLOW=true` 恢复。每个恢复实例启动时选择对应的历史流程图。默认实例装配四步流程。

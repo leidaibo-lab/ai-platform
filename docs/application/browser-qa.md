@@ -43,6 +43,12 @@ npx playwright install chromium --no-shell
 
 每轮最多3个用例，每用例最多30个附属资源、12次动作、12条断言。浏览器启动10秒，启动后页面上下文总预算20秒，定位1.5秒、导航5秒；Agent 总预算120秒、16步，每个批准 ID 最多执行一次。仅放行本次回环服务和显式资产的 GET/HEAD；限制外联、WebSocket、Service Worker、弹窗和下载。浏览器不继承模型密钥；该进程隔离不等于生产 Sandbox，仅用于本地可信候选与合成数据。
 
+## 本地可见窗口调试
+
+日常执行默认使用无窗口 Chromium。需要观察点击和输入时，在有桌面会话的机器上用 `MASTRA_BROWSER_QA_HEADED=true npm run dev` 启动后端。窗口会出现在运行后端的机器上，并在该用例结束或失败后关闭。窗口启动失败时，用例记录为 `blocked`。
+
+工作台的「确认测试结果」展示用例状态、操作步骤与已保存的截图。
+
 ## 输入输出与质量门
 
 `BrowserCase` 是批准且不可由模型扩张的输入。`browser-receipt.v1` 包含 caseId、caseHash、sourceHash、methodHash、开始时间、耗时、步骤观察、控制台错误、阻断请求数、状态和截图。状态为 passed/failed/blocked：断言不符或页面错误为 failed；浏览器缺失、动作未完成、超时、方法未加载或未执行为 blocked。只有工具实际结果决定状态，Agent 的自然语言报告不能替代证据。

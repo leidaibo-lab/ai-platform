@@ -1,3 +1,5 @@
+import { createWorkbenchAccount } from './workbench-account.js';
+import { readCandidateChanges } from './candidate-changes.js';
 import { assertProjectCorrelation, loadEngineeringProject, projectRepositoryRoot } from '../business-engineering/project.js';
 import { autonomyPolicySchema } from '../development/v2/contracts.js';
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
@@ -9,7 +11,7 @@ import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
 import { correctIntake, GateInputError, readIntake, respondIntake } from './service.js';
-import { projectLiveOutputEvent, projectWorkflowActivity } from './run-timeline.js';
+import { projectLiveOutputFrame, projectWorkflowActivity } from './run-timeline.js';
 import { intakeModeSchema } from './contracts.js';
 import { deliverySchema } from '../mastra/workflows/delivery.js';
 import { buildSuccessorBaseline, successorSource } from './successor-run.js';
@@ -19,6 +21,7 @@ const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim(
 const successorRequestSchema = z.object({ runId: z.string().uuid(), artifactKinds: z.array(z.enum(['product', 'development', 'testing'])).min(1).max(3), changeBrief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.optional(), intakeMode: intakeModeSchema.default('clarify') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
 export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
+  const account = createWorkbenchAccount(config?.databaseUrl ?? 'file::memory:');
   const busy = new Set<string>();
   /** 新项目的 Run 只使用启动时登记的 Git 版本。 */
   function engineering() { return config?.engineeringProject ? loadEngineeringProject(config.engineeringProject) : undefined; }
@@ -41,6 +44,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
     return c.json({ error: error instanceof GateInputError ? error.message : error instanceof z.ZodError ? '有内容未填完整或不符合要求，请检查必填、文件范围和列表中的每一项' : '操作未完成，请刷新确认版本、必答项及流程状态；不要自动重试批准。' }, 409);
   }
   return [
+    ...account.routes,
     registerApiRoute('/intake-api/remote-sync-targets', { method: 'GET',
       /** 仓库字典页仅在本机展示已登记目标及其本地checkout，阶段页继续隐藏路径。 */
       handler: async c => {
@@ -151,6 +155,20 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         catch (error) { return failure(c, error); }
       },
     }),
+    registerApiRoute('/intake-api/runs/:runId/candidate-changes', { method: 'GET',
+      /** 按需投影已保存候选，避免把源码放入 Run 摘要。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try {
+          if (!config) return c.json({ status: 'unavailable' });
+          const runId = c.req.param('runId');
+          await verifyRunProject(runId);
+          return c.json(await readCandidateChanges(workflow, runId, config));
+        } catch {
+          return c.json({ status: 'unavailable' });
+        }
+      },
+    }),
     registerApiRoute('/intake-api/runs/:runId/events', { method: 'GET',
       // 复用 Mastra 原生 Workflow.watch；活动摘要只做即时提示，详情仍由快照接口权威返回。
       handler: async c => {
@@ -177,12 +195,12 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
             /** 将原生 Workflow 事件压缩为可公开的节点变化摘要。 */
             function observe(event: WorkflowStreamEvent) {
               if (event.runId && event.runId !== runId) return;
-              const liveOutput = projectLiveOutputEvent(event);
-              if (liveOutput) { send({ type: 'live-output', runId, output: liveOutput }); return; }
-              if (event.type === 'workflow-step-output') return;
+              const liveOutput = projectLiveOutputFrame(event);
               const payload = 'payload' in event && event.payload && typeof event.payload === 'object' ? event.payload as Record<string, unknown> : {};
               const eventId = 'id' in event && typeof event.id === 'string' ? event.id : null;
               const stepId = eventId ?? (typeof payload.id === 'string' ? payload.id : null);
+              if (liveOutput) { send({ type: 'live-output', runId, stepId: liveOutput.stepId ?? stepId, taskKey: liveOutput.taskKey, output: liveOutput.output }); return; }
+              if (event.type === 'workflow-step-output') return;
               const status = typeof payload.status === 'string' ? payload.status : typeof payload.workflowStatus === 'string' ? payload.workflowStatus : null;
               const occurredAt = new Date().toISOString();
               send({ type: 'workflow-event', runId, eventType: event.type, stepId, status, occurredAt, activity: projectWorkflowActivity(event.type, stepId, status, occurredAt) });
@@ -206,7 +224,14 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       /** 运行中纠偏通过独立入口通知正在执行的模型步骤。 */
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { origin(c); await verifyRunProject(c.req.param('runId')); return c.json(await correctIntake(workflow, mode, c.req.param('runId'), await c.req.json(), config)); }
+        try {
+          origin(c);
+          const reviewer = account.current(c);
+          if (!reviewer) return c.json({ error: '请登录后提交纠偏。' }, 401);
+          const input = z.object({ attempt: z.uuid(), feedback: z.string().trim().min(1).max(2000).optional() }).strict().parse(await c.req.json());
+          await verifyRunProject(c.req.param('runId'));
+          return c.json(await correctIntake(workflow, mode, c.req.param('runId'), input.feedback ? { ...input, reviewer } : { attempt: input.attempt }, config));
+        }
         catch (error) { return failure(c, error); }
       },
     }),

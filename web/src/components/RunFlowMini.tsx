@@ -39,7 +39,7 @@ function TeamActivity({ title, status, description, attempt, canRecover, recover
 }
 
 /** 展示团队执行链，允许查看历史节点并定位当前团队的操作。 */
-export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryDisabled = false }: { document: RunFlowDocument; selected: Team; onSelect: (team: Team) => void; onRecover?: () => void; recoveryDisabled?: boolean }) {
+export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryDisabled = false, compact = false }: { document: RunFlowDocument; selected: Team; onSelect: (team: Team) => void; onRecover?: () => void; recoveryDisabled?: boolean; compact?: boolean }) {
   const flow = projectRunFlow(document);
   const [showDetails, setShowDetails] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -66,6 +66,20 @@ export function RunFlowMini({ document, selected, onSelect, onRecover, recoveryD
     : flow.businessReturn ? '研发 / QA 业务缺口 → 产品团队'
     : flow.correction ? '纠偏 / 审阅退回 → 产品返工判断'
     : flow.qaRepair ? 'QA 代码缺陷 → 研发修复后回归' : undefined;
+
+  if (compact) return <section aria-label="流程进度">
+    {teams.map(team => {
+      const current = flow.active === team;
+      const steps = team === 'product' ? projectProductPhases(document, flow).map(item => ({ title: item.phase, status: item.status, description: item.description }))
+        : team === 'development' ? projectDevelopmentStages(document, flow)
+          : (document.timeline?.nodes ?? []).filter(node => node.kind === 'step' && nodeTeam(node) === team);
+      return <details key={team} open={current || undefined}><summary>{teamDetails[team].label} <small>{teamStates[flow.states[team]]}</small></summary>
+        {steps.map((step, index) => <details key={`${step.title}-${index}`}><summary>{step.title} <small>{activityLabels[step.status]}</small></summary>{'description' in step && <p>{String(step.description ?? '')}</p>}</details>)}
+        {!steps.length && <small>暂无节点记录</small>}<button type="button" onClick={() => onSelect(team)}>定位{current ? '当前阶段' : '该阶段'}</button>
+      </details>;
+    })}
+    {returnHint && <small>{returnHint}</small>}
+  </section>;
 
   return <section className="workflow-overview workflow-team-overview" aria-label="Workflow 团队执行链">
     <div className="workflow-overview-head">

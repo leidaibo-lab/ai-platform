@@ -28,7 +28,7 @@ export async function executeBrowserAgent(config: PracticeConfig, requests: Brow
         const request = requests.find(/** 精确匹配批准集合。 */item => item.caseId === caseId);
         if (!request || attempted.has(caseId) || request.methodHash !== method.hash) throw new Error('未知、重复或方法漂移的浏览器用例');
         attempted.add(caseId);
-        const receipt = await runBrowserCase(request); receipts.set(caseId, receipt);
+        const receipt = await runBrowserCase(request, config.browserQaHeaded); receipts.set(caseId, receipt);
         return { ...receipt, screenshot: receipt.screenshot ? { sha256: receipt.screenshot.sha256 } : null };
       },
     }),

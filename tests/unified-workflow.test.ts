@@ -1,3 +1,6 @@
+import { readCandidateChanges } from '../src/intake/candidate-changes.js';
+import { approvalHashV2, validatePlanV2 } from '../src/development/v2/contracts.js';
+import { assertApprovalV2 } from '../src/development/v2/gates.js';
 import { validateQualityReview } from '../src/delivery/testing.js';
 /** 新版完整主链原生持久化回归；所有审批及发布回执均为合成测试数据。 */
 import assert from 'node:assert/strict';
@@ -29,7 +32,7 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
     /** 重装相同Workflow与数据库，保持审批事实归原生Store。 */
     async function open() {
       const options = createStudioApplicationOptions(config);
-      if (scenario.startsWith('stable-')) options.workflows.productDevelopmentWorkflow = createProductDevelopmentWorkflow(options.agents as any, config, undefined, { fixtureRequirementTracking: true });
+      if (scenario.startsWith('stable-')) options.workflows.productDevelopmentWorkflow = createProductDevelopmentWorkflow(options.agents as any, config, undefined, { fixtureRequirementTracking: true, fixtureArchitectureDocument: true });
       if (scenario === 'qa-fixed') {
         /** 只注入合成评审修复结论；源码修改、自检和QA重跑均真实执行。 */
         const generate: GeneratorV2 = async (...args) => {
@@ -63,7 +66,17 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
         }
         if (id === 'review-product') data = { ...actor, role: 'product', artifactHash: scenario === 'stale-product' ? '0'.repeat(64) : p.artifact.hash, decision: scenario === 'reject-product' ? 'reject' : 'approve' };
         else if (id === 'confirm-project-scope') data = { ...actor, project: scenario.startsWith('browser-') ? { ...project, files: { ...project.files, 'page.html': '<!doctype html><p id="result">候选页面</p>' } } : project, maxReworks: 1 };
-        else if (id === 'approve-architecture') { assert.equal(p.team.members.length, 2); data = { ...actor, hash: p.hash, decision: 'approve' }; }
+        else if (id === 'approve-architecture') {
+          if (scenario === 'success') assert.equal((await readCandidateChanges(app.workflow, runId, config)).status, 'pending');
+          assert.equal(p.team.members.length, 2);
+          if (scenario.startsWith('stable-')) {
+            assert.ok(p.plan.document.impact);
+            assert.equal(p.architectureMarkdown.match(/```mermaid/g)?.length, 2);
+            const gate = (await readIntake(app.workflow, runId)).gate!;
+            assert.equal(gate.evidence.architectureMarkdown, p.architectureMarkdown);
+          } else assert.equal(p.architectureMarkdown, undefined);
+          data = { ...actor, hash: p.hash, decision: 'approve' };
+        }
         else if (id === 'approve-test-cases') data = { ...actor, hash: p.plan.hash, decision: 'approve', cases: [{ id: 'automatic', requirementRefs: p.requirements.map(/** 保留所有批准原文引用。 */(r: any) => r.id), expected: '两个模块返回1', method: 'registered-check', checkRefs: p.registeredChecks }] };
         else if (id === 'review-test-results') { assert.ok(p.quality.checks.length); const firstReview = visited.filter(/** 只在首轮质量门注入缺陷。 */step => step === id).length === 1; const qaBusiness = ['qa-business-gap', 'stable-revision'].includes(scenario) && firstReview; const qaRework = ['qa-rework', 'qa-fixed'].includes(scenario) && firstReview; data = { ...actor, hash: p.hash, decision: qaBusiness || qaRework ? 'rework' : 'pass', manualResults: [], findings: qaBusiness ? [{id: 'qa-business-1', severity: 'blocking', category: 'business', route: 'product', detail: '验收口径缺少人工确认', refs: [p.quality.approval.cases[0].requirementRefs[0]], evidence: '合成 QA 业务缺口'}] : qaRework ? [{id: 'qa-1', severity: 'medium', category: 'implementation', route: 'backend', detail: '合成缺陷用于验证修复路由', refs: ['task:fixture-task-2'], evidence: '合成质量门故障注入'}] : [] }; }
         else if (id === 'confirm-blocker-answers') data = { hash: p.hash, reviewer: 'fixture', answers: p.plan.questions.filter(/** 所有必答业务阻塞都必须有显式选择。 */(question: any) => question.required).map((question: any) => ({ questionId: question.id, selected: [question.options[0].id], custom: '' })), supplement: '合成确认 QA 或发布阶段发现的业务口径' };
@@ -73,6 +86,16 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
         else if (id === 'verify-release-health') { const releaseBusiness = scenario === 'health-business-gap' && visited.filter(/** 仅首个发布健康确认触发业务澄清。 */step => step === id).length === 1; data = { releaseHash: p.releaseHash, deploymentReceiptHash: p.deploymentReceiptHash, operator: 'fixture', checks: [{ id: scenario === 'missing-health' ? 'unknown' : 'ready', status: scenario === 'health-failure' || releaseBusiness ? 'failed' : 'passed', evidence: '合成健康结果', observedAt: '2026-11-07T00:00:00Z' }], findings: releaseBusiness ? [{ id: 'release-business-1', severity: 'blocking', category: 'business', route: 'product', detail: '健康门发现业务验收口径未确认', refs: ['product:L1'], evidence: '合成发布健康业务缺口' }] : [] }; }
         else if (id === 'execute-rollback-externally') data = { releaseHash: p.releaseHash, rollbackArtifactRef: p.rollbackArtifactRef, status: 'rolled-back', jobRef: 'synthetic://rollback', operator: 'fixture', notes: '模拟回滚' };
         else assert.fail(`未预期暂停点 ${id}`);
+        if (scenario === 'success' && id === 'approve-test-cases') {
+          const changes = await readCandidateChanges(app.workflow, runId, config);
+          assert.equal(changes.status, 'ready');
+          if (changes.status === 'ready') {
+            assert.equal(changes.sourceHash, p.plan.sourceHash);
+            assert.deepEqual(changes.files.map(file => file.path), ['src/a.mjs', 'src/b.mjs']);
+            assert.equal(changes.files[0]?.before, project.files['src/a.mjs']);
+            assert.match(changes.files[0]?.after ?? '', /fixtureValue/);
+          }
+        }
         if (scenario.startsWith('browser-') && id === 'approve-test-cases') data.cases.push({ id: 'browser', requirementRefs: p.requirements.map(/** 浏览器用例仍引用批准需求。 */(r: any) => r.id), expected: '页面显示候选内容', method: 'browser', checkRefs: [], browser: { entry: 'page.html', assets: [], actions: [], assertions: [{ selector: '#result', text: scenario === 'browser-failure' ? '不存在' : '候选页面' }] } });
         if (scenario.startsWith('browser-') && id === 'review-test-results') {
           assert.equal(p.quality.browser.receipts[0].status, scenario === 'browser-failure' ? 'failed' : 'passed');
@@ -93,6 +116,15 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
       assert.equal(result.result.outcome, scenario === 'browser-failure' || ['qa-business-gap', 'health-business-gap', 'stable-revision'].includes(scenario) ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
       if (['qa-rework', 'qa-fixed'].includes(scenario)) { assert.equal(result.result.qualityHistory.length, 1); assert.equal(result.result.development.round, 1); }
       if (scenario === 'stable-requirements') {
+        const completed = result.result.development;
+        const plan = completed.plan;
+        assert.equal(completed.approvedHash, approvalHashV2(completed));
+        assert.throws(() => validatePlanV2({ ...plan, document: undefined }, completed), /缺少待审架构文档/);
+        const { dataFlow, ...document } = plan.document;
+        const broken = { ...plan, document: { ...document, dataFlow: { ...dataFlow, edges: [{ ...dataFlow.edges[0], to: 'unknown' }] } } };
+        assert.throws(() => validatePlanV2(broken, completed), /未知节点/);
+        const changed = { ...plan, document: { ...plan.document, impact: '扩展了影响范围' } };
+        assert.throws(() => assertApprovalV2({ ...completed, plan: changed }), /批准绑定无效/);
         const evidence = (await readIntake(app.workflow, runId)).acceptanceEvidence!;
         assert.equal(evidence.productHash, result.result.development.input.source.hash);
         assert.equal(evidence.planHash, result.result.development.planHash);

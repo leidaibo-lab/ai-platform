@@ -52,9 +52,16 @@ test('原生Agent实际加载Skill、读取原文并调用真实浏览器工具'
   assert.throws(/** 人工不能覆盖机器用例回执。 */() => validateQualityReview(state, { hash: 'a'.repeat(64), reviewer: 'human', comment: 'test', decision: 'pass', manualResults: [{ caseId: input.caseId, status: 'passed', evidence: '自述' }], findings: [] }), /人工测试结果/);
 });
 test('浏览器缺失时明确阻塞，不能跳过为通过', /** 故障注入验证环境缺失语义。 */async context => {
-  context.mock.method(chromium, 'launch', /** 模拟运行环境没有可执行浏览器。 */async () => { throw new Error('missing executable'); });
-  const result = await runBrowserCase(request());
+  const launch = context.mock.method(chromium, 'launch', /** 模拟运行环境没有可执行浏览器。 */async () => { throw new Error('missing executable'); });
+  const input = request();
+  const result = await runBrowserCase(input);
   assert.equal(result.status, 'blocked'); assert.equal(result.screenshot, null);
+  assert.equal(launch.mock.calls[0]?.arguments[0]?.headless, true);
+  const headed = await executeBrowserAgent({ ...config, browserQaHeaded: true }, [input]);
+  assert.equal(headed.receipts[0]?.status, 'blocked');
+  assert.equal(headed.receipts[0]?.screenshot, null);
+  assert.equal(launch.mock.calls[1]?.arguments[0]?.headless, false);
+  assert.equal(launch.mock.calls.length, 2);
 });
 test('旧质量证据hash保持兼容，可选浏览器字段不补写旧记录', /** 与旧摘要构造逐字段比较。 */() => {
   const quality = qualityStateSchema.parse({ status: 'pending', plan: null, approval: null, checks: [], results: [], sourceHash: null, reportHash: null, review: null });

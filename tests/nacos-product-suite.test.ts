@@ -12,7 +12,7 @@ import { createAgents } from '../src/mastra/agents/index.js';
 test('113 项真实产品 Skill 包可全部通过版本读取、快照和原生 Agent 装配', /** 本地 HTTP 只模拟注册中心协议，不代表远端发布或质量审批。 */async () => {
   const directory = mkdtempSync(join(tmpdir(), 'nacos-product-suite-'));
   const destination = join(directory, 'export');
-  execFileSync(process.execPath, ['--import', 'tsx', 'scripts/prepare-nacos-product-skills.ts', destination, '1.1.0'], { cwd: resolve('.') });
+  execFileSync(process.execPath, ['--import', 'tsx', 'scripts/prepare-nacos-product-skills.ts', destination, '1.2.0'], { cwd: resolve('.') });
   const manifest = JSON.parse(readFileSync(join(destination, 'manifest.json'), 'utf8')) as {
     prompts: { name: string; version: string; source: string }[];
     reviewerSkills: string[];
@@ -59,6 +59,7 @@ test('113 项真实产品 Skill 包可全部通过版本读取、快照和原生
     assert.ok(reviewerSkills.some(/** 审查角色必须能发现与产品经理共用的版式 Skill。 */skill => skill.name === 'product-requirements-handoff'));
     const layout = frozenSkills.find(skill => skill.name === 'product-requirements-handoff')?.references['document-layout.md'];
     assert.match(layout ?? '', /状态流转用表格[\s\S]*处理结果按业务阶段分组[\s\S]*顺序流程用编号列表/);
+    assert.match(layout ?? '', /产品规格任务[\s\S]*TASK-SKIP-ACTUAL-START[\s\S]*REQ-SKIP-ACTUAL-START/);
   } finally {
     await new Promise<void>(/** 关闭隔离服务。 */done => server.close(() => done()));
     rmSync(directory, { recursive: true, force: true });

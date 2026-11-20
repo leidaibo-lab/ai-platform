@@ -44,11 +44,11 @@ function Evidence({ value, name = '确认材料' }: { value: any; name?: string 
   return <p>{labels[name] ?? name}：{String(value)}</p>;
 }
 /** 独立关口组件在 gateHash 变化时重建，旧草稿不会混入新审批。 */
-export function WorkflowGateForm({ gate, busy, submit }: { gate: WorkflowGate; busy: boolean; submit: (data: unknown) => Promise<void> }) {
+export function WorkflowGateForm({ gate, busy, submit, onInspect }: { gate: WorkflowGate; busy: boolean; submit: (data: unknown) => Promise<void>; onInspect?: (trigger: HTMLElement) => void }) {
   if (gate.key === 'submit-merge-request' || gate.key === 'retry-repository-sync') return <RepositorySyncGate gate={gate} busy={busy} submit={submit} />;
   if (gate.key === 'confirm-blocker-answers') return <BlockerClarification gate={gate} busy={busy} submit={submit} />;
   if (gate.key === 'review-revised-product') return <RevisedProductReview gate={gate} busy={busy} submit={submit} />;
-  return gate.recoveryInfo ? <DevelopmentRecovery gate={gate} busy={busy} submit={submit} /> : <GenericWorkflowGateForm gate={gate} busy={busy} submit={submit} />;
+  return gate.recoveryInfo ? <DevelopmentRecovery gate={gate} busy={busy} submit={submit} /> : <GenericWorkflowGateForm gate={gate} busy={busy} submit={submit} onInspect={onInspect} />;
 }
 /** 同步是已完成角色产物的技术重试，不展示批准或发布决定表单。 */
 function RepositorySyncGate({ gate, busy, submit }: { gate: WorkflowGate; busy: boolean; submit: (data: unknown) => Promise<void> }) {
@@ -69,14 +69,32 @@ function RepositorySyncGate({ gate, busy, submit }: { gate: WorkflowGate; busy: 
   </section>;
 }
 /** 其余人工关口沿用 schema 表单，故障恢复使用专门业务指引。 */
-function GenericWorkflowGateForm({ gate, busy, submit }: { gate: WorkflowGate; busy: boolean; submit: (data: unknown) => Promise<void> }) {
+function GenericWorkflowGateForm({ gate, busy, submit, onInspect }: { gate: WorkflowGate; busy: boolean; submit: (data: unknown) => Promise<void>; onInspect?: (trigger: HTMLElement) => void }) {
   const [data, setData] = useState<Record<string, any>>({ ...empty(gate.schema), ...gate.initial, ...gate.fixed });
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState('');
   /** 提交前展示业务后果，批准按钮与普通表单编辑区分。 */
   function preview(event: React.FormEvent) { event.preventDefault(); setError(''); setConfirm(true); }
-  return <section className="intake-card"><div className="intake-eyebrow">当前待办 · 请审阅后决定</div><h1>{gate.title}</h1><p>{gate.description}</p><details open><summary>查看本次确认依据</summary><div className="gate-evidence"><Evidence value={gate.evidence} /></div></details>
+  return <section className="intake-card"><div className="intake-eyebrow">当前待办 · 请审阅后决定</div><h1>{gate.title}</h1><p>{gate.description}</p>
+    {gate.key === 'approve-architecture' && <div className="workbench-gate-summary">
+      {typeof gate.evidence.plan?.summary === 'string' && <p>{gate.evidence.plan.summary}</p>}
+      {gate.evidence.readiness?.verdict === 'PASS' && <p>独立就绪审查通过{Array.isArray(gate.evidence.plan?.tasks) ? ` · ${gate.evidence.plan.tasks.length} 项任务` : ''}</p>}
+      {Array.isArray(gate.evidence.plan?.risks) && gate.evidence.plan.risks.length > 0 && <details><summary>方案风险（{gate.evidence.plan.risks.length} 项）</summary><ul>{gate.evidence.plan.risks.map((risk: string, index: number) => <li key={index}>{risk}</li>)}</ul></details>}
+    </div>}
+    {gate.key === 'approve-test-cases' && Array.isArray(gate.evidence.requirements) && <p>待核对 {gate.evidence.requirements.length} 条需求的用例覆盖。</p>}
+    {gate.key === 'review-test-results' && Array.isArray(gate.evidence.quality?.results) && <p>已登记 {gate.evidence.quality.results.length} 条执行结果，请核对证据并补齐人工结果。</p>}
+    {onInspect ? <div className="intake-actions"><button type="button" onClick={event => onInspect(event.currentTarget)}>查看{gate.key === 'approve-architecture' ? '架构方案' : gate.key === 'approve-test-cases' ? '测试用例' : '测试结果'}</button><code title={gate.gateHash}>{gate.gateHash.slice(0, 12)}</code></div> : <WorkflowGateEvidence gate={gate} />}
     <form onSubmit={preview}><fieldset disabled={busy}><legend>填写本次决定</legend>{Object.entries(gate.schema.properties ?? {}).filter(/** 版本绑定值由服务端控制，不要求手工输入。 */([key]) => !(key in gate.fixed) && key !== 'resolutions').map(/** 按当前关口显示输入。 */([key, schema]) => <Field key={key} name={key} schema={schema} value={data[key]} change={/** 修改后必须重新预览确认。 */next => { setData({ ...data, [key]: next }); setConfirm(false); }} />)}</fieldset>
     {error && <p role="alert">{error}</p>}{confirm ? <div className="intake-assumptions" role="status"><strong>确认提交“{gate.title}”的决定？</strong><p>{gate.description}</p><p>处理决定：{choices[data.decision ?? data.status] ?? (data.decision ?? data.status ?? '确认本次范围')} · 确认人：{data.reviewer ?? data.operator}</p>{data.project && <p>项目：{data.project.id} · 文件 {Object.keys(data.project.files).length} 份<br />允许修改：{data.project.writablePaths.join('、')}<br />固定检查：{data.project.checkFiles.join('、')}</p>}{data.scope && <p>目标环境：{data.scope.environment} · 制品：{data.scope.artifactRef}<br />回滚制品：{data.scope.rollbackArtifactRef}</p>}<button className="primary" type="button" disabled={busy} onClick={/** 只提交当前材料版本，网络失败不自动重发。 */() => void submit({ gateHash: gate.gateHash, data }).then(/** 成功后由父页面读取下一关口。 */() => setConfirm(false)).catch(/** 失败保留全部输入与明确错误。 */reason => { setError(reason.message); setConfirm(false); })}>确认提交并继续</button><button type="button" disabled={busy} onClick={/** 取消不恢复 Workflow。 */() => setConfirm(false)}>返回检查</button></div> : <button className="primary" type="submit" disabled={busy}>检查并提交本次决定 →</button>}</form>
   </section>;
+}
+
+/** 展示绑定同一关口版本的只读材料。 */
+export function WorkflowGateEvidence({ gate }: { gate: WorkflowGate }) {
+  const { architectureMarkdown, ...evidence } = gate.evidence;
+  const planEvidence = architectureMarkdown && evidence.plan ? { ...evidence, plan: Object.fromEntries(Object.entries(evidence.plan).filter(([key]) => key !== 'document')) } : evidence;
+  return <>
+    {gate.key === 'approve-architecture' && typeof architectureMarkdown === 'string' && <article aria-label="开发架构文档"><Markdown architectureDiagrams>{architectureMarkdown}</Markdown></article>}
+    <details open><summary>查看本次确认依据</summary><div className="gate-evidence"><Evidence value={planEvidence} /></div></details>
+  </>;
 }

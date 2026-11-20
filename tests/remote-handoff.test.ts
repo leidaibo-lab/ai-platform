@@ -1,3 +1,4 @@
+import { architectureDocumentPath } from '../src/development/v2/architecture-document.js';
 /** 真实 Git 对象与本地 bare 远端回归，不向业务远端推送合成资料。 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -202,16 +203,20 @@ test('新 Run 的产品双文档在本地远端发布、核验、修订并作为
     assert.equal(f.git(['rev-parse', `${revisedReceipt.handoff.commit}^`]), receipt.handoff.commit);
     verifyProductHandoff(f.root, runId, iterationId, revisedReceipt, revised);
     assert.throws(() => verifyProductHandoff(f.root, runId, iterationId, revisedReceipt, moduleSelector), /批准版本/);
-    const development = await publishFormalSpecification(f.root, runId, iterationId, { 'specs/development-spec.md': '开发规格\n' }, 'docs(spec): 保存开发规格');
+    const architecture = '# 开发架构文档\n\n## 影响范围\n\n适用模块选择。\n';
+    const developmentFiles = { 'specs/development-spec.md': '开发规格\n', [architectureDocumentPath]: architecture };
+    const development = await publishFormalSpecification(f.root, runId, iterationId, developmentFiles, 'docs(spec): 保存开发规格');
+    assert.equal(readHandoffFile(f.root, development, architectureDocumentPath), architecture);
     const testing = await publishFormalSpecification(f.root, runId, iterationId, { 'specs/test-spec.md': '测试规格\n' }, 'docs(spec): 保存测试规格');
-    const final = await publishReviewedCandidate(f.root, testing, {}, [], [...revisedReceipt.paths, 'specs/development-spec.md', 'specs/test-spec.md'], baseline);
+    const final = await publishReviewedCandidate(f.root, testing, {}, [], [...revisedReceipt.paths, ...Object.keys(developmentFiles), 'specs/test-spec.md'], baseline);
     assert.equal(final, testing.commit);
     assert.equal(f.git(['rev-parse', `${testing.commit}^`]), development.commit);
     assert.match(f.git(['show', `${final}:${requirements}`]), /上级节点置灰且不可选/);
     assert.equal(f.git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0], baseline);
-    const source = { brief: '适用模块选择', mode: 'live', artifacts: [], reviews: [], outcome: 'in-progress', correlation: { projectId: 'hrm', iterationId, runId, workflowId: 'productDevelopmentWorkflow' }, formalSpecifications: [revisedReceipt] };
-    const next = buildSuccessorBaseline(f.root, runId, source, ['product'], '完善停用模块回显');
-    assert.deepEqual(next.artifacts.map(item => item.path), [requirements, specification]);
+    const source = { brief: '适用模块选择', mode: 'live', artifacts: [], reviews: [], outcome: 'in-progress', correlation: { projectId: 'hrm', iterationId, runId, workflowId: 'productDevelopmentWorkflow' }, formalSpecifications: [revisedReceipt, { kind: 'development', paths: Object.keys(developmentFiles), handoff: development, upstreamCommits: [revisedReceipt.handoff.commit] }, { kind: 'testing', paths: ['specs/test-spec.md'], handoff: testing, upstreamCommits: [revisedReceipt.handoff.commit, development.commit] }] };
+    const next = buildSuccessorBaseline(f.root, runId, source, ['product', 'development', 'testing'], '完善停用模块回显');
+    assert.deepEqual(next.artifacts.map(item => item.path), [requirements, specification, ...Object.keys(developmentFiles), 'specs/test-spec.md']);
+    assert.equal(next.artifacts.find(item => item.path === architectureDocumentPath)?.content, architecture);
   } finally { rmSync(f.directory, { recursive: true, force: true }); }
 });
 

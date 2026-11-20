@@ -134,7 +134,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
     execute: async ({ inputData: state }) => {
       const noop = [{ state, task: null, files: {}, budget: 0 }];
       if (state.phase !== 'implement' || state.outcome !== 'in-progress' || state.recovery) return noop;
-      assertApprovalV2(state); validateIdentityV2(state, config, methods.hash);
+      assertApprovalV2(state); validateIdentityV2(state, config, methods.hashFor(state.input));
       if (state.approvedHash !== state.approvalHash || !state.team || developmentHash(state.team) !== developmentHash(assembleTeam(state))) throw new Error('开发团队未经当前方案批准');
       if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new Error('团队派发基线漂移');
       const remaining = state.plan!.tasks.filter(
@@ -163,7 +163,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
   });
   const worker = createStep({ id: 'execute-team-member', description: '动态任务负责人 → 受限 delegateTask 子成员 → 独立候选补丁', inputSchema: jobSchema, outputSchema: resultSchema,
     // 原生foreach负责并发，成员只处理自己的输入，不共享候选目录。
-    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => executeMember(config, inputData, methods, generate, event => publishLiveOutput(pubsub, runId, event)),
+    execute: async ({ inputData, runId, [PUBSUB_SYMBOL]: pubsub }) => executeMember(config, inputData, methods, generate, event => publishLiveOutput(pubsub, runId, event, 'execute-team-member', inputData.task ? developmentHash(inputData.task.id).slice(0, 16) : undefined)),
   });
   const merge = createStep({ id: 'merge-team-results', description: '等待所有分支、校验范围、合并补丁并保存已完成任务', inputSchema: z.array(resultSchema), outputSchema: stateV2Schema,
     // 只有当前源码仍等于派发基线时才能提交本波次补丁。

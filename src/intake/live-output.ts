@@ -12,6 +12,6 @@ export function projectLiveOutputChunk(chunk: any, role: string, attempt: number
 }
 
 /** 通过 Workflow 原生 PubSub 发布易失展示投影，不修改执行事实。 */
-export async function publishLiveOutput(pubsub: { publish(channel: string, value: any): unknown } | undefined, runId: string, event: LiveOutputEvent): Promise<void> {
-  await pubsub?.publish(`workflow.events.v2.${runId}`, { type: 'watch', runId, data: { type: 'live-output.v1', data: event } });
+export async function publishLiveOutput(pubsub: { publish(channel: string, value: any): unknown } | undefined, runId: string, event: LiveOutputEvent, stepId: string, taskKey?: string): Promise<void> {
+  await pubsub?.publish(`workflow.events.v2.${runId}`, { type: 'watch', runId, data: { type: 'live-output.v1', data: event, stepId, taskKey } });
 }
