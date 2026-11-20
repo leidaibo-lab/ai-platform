@@ -49,14 +49,14 @@ const instructions: Record<RoleV2, string> = {
 };
 
 /** 只给当前职责注册对应方法，实现和自检通过批准任务包消费方法结果。 */
-function selectedMethod(role: RoleV2, methods: DevelopmentMethods) {
-  return role === 'context' ? methods.skills.context : role === 'architect' ? methods.skills.task
+function selectedMethod(role: RoleV2, state: StateV2, methods: DevelopmentMethods) {
+  return role === 'context' ? methods.skills.context : role === 'architect' ? (methods.usesLegacyTaskHandoff(state) ? methods.legacyTask : methods.skills.task)
     : role === 'readiness' ? methods.skills.readiness : role === 'reviewer' ? methods.skills.review : null;
 }
 
 /** 返回当前角色应实际读取的受控方法及参考资料。 */
 function assignedMethods(role: RoleV2, state: StateV2, methods: DevelopmentMethods) {
-  const primary = selectedMethod(role, methods);
+  const primary = selectedMethod(role, state, methods);
   const assigned = primary ? [{ skill: primary, reference: 'upstream.md' }] : [];
   if (state.input.architectureDocumentFormat && (role === 'architect' || role === 'readiness')) {
     assigned.push({ skill: methods.skills.architectureDocument, reference: 'document-layout.md' });

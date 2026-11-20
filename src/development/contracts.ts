@@ -109,25 +109,36 @@ export function validateEvaluationSource(input: DevelopmentInput): void {
     throw new Error('评测自动批准来源的类型、证据或正文hash不合法');
 }
 
-/** 校验真实任务图，拒绝越界写入、未注册角色、重复/环形依赖及遗漏文件责任。 */
-export function validateArchitecture(plan: Architecture, input: DevelopmentInput): void {
+/** 校验授权与任务图。同一文件最近的上游写入者必须是当前写入任务的祖先。 */
+export function validateArchitecture(plan: Architecture, input: DevelopmentInput, orderedPathHandoff = false): void {
   const ids = new Set(plan.tasks.map(
     // 依赖基于稳定任务ID，不基于自然语言角色说明。
     (task) => task.id,
   ));
   if (ids.size !== plan.tasks.length) throw new SyntaxError('任务ID重复');
-  const owned = new Set<string>();
-  const completed = new Set<string>();
+  const owners = new Map<string, string>();
+  const ancestors = new Map<string, Set<string>>();
   for (const task of plan.tasks) {
     if (!input.project.roles.includes(task.role)) throw new SyntaxError('方案使用未注册实现角色');
-    for (const path of task.paths) {
-      if (!canWriteProjectPath(input.project, path) || owned.has(path)) throw new SyntaxError('方案文件责任越界或重复');
-      owned.add(path);
+    const upstream = new Set<string>();
+    for (const dependency of task.dependsOn) {
+      const inherited = ancestors.get(dependency);
+      if (!inherited) throw new SyntaxError('任务须按拓扑顺序排列，依赖不能缺失或成环');
+      upstream.add(dependency);
+      for (const id of inherited) upstream.add(id);
     }
-    for (const dependency of task.dependsOn) if (!ids.has(dependency) || !completed.has(dependency)) throw new SyntaxError('任务须按拓扑顺序排列，依赖不能缺失或成环');
-    completed.add(task.id);
+    if (orderedPathHandoff && new Set(task.paths).size !== task.paths.length) throw new SyntaxError('同一任务重复声明写入路径');
+    for (const path of task.paths) {
+      const previous = owners.get(path);
+      const authorized = canWriteProjectPath(input.project, path);
+      if (!orderedPathHandoff && (!authorized || previous !== undefined)) throw new SyntaxError('方案文件责任越界或重复');
+      if (!authorized) throw new SyntaxError('方案包含未授权写入路径');
+      if (previous !== undefined && !upstream.has(previous)) throw new SyntaxError('共享文件写入任务缺少依赖顺序');
+      owners.set(path, task.id);
+    }
+    ancestors.set(task.id, upstream);
   }
-  if (!plan.blockers.length && input.project.planning !== 'agent' && owned.size !== input.project.writablePaths.length) throw new SyntaxError('方案遗漏文件责任');
+  if (!plan.blockers.length && input.project.planning !== 'agent' && owners.size !== input.project.writablePaths.length) throw new SyntaxError('方案遗漏文件责任');
 }
 
 /** 研发规划、候选写入和交付共用同一源码上界。 */

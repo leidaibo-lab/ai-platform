@@ -25,7 +25,7 @@ function paused(result: any): { path: string[]; payload: any } {
 }
 
 // 每个暂停点关闭Store再装配，验证原生快照续跑而非内存闭包。
-for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'health-failure', 'health-business-gap', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-business-gap', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
+for (const scenario of ['success', 'shared-path-preview', 'stable-requirements', 'stable-revision', 'health-failure', 'health-business-gap', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-business-gap', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
   test(`完整产研主链与跨Store恢复：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'mastra-unified-'));
     const config: PracticeConfig = { ...(['health-failure', 'health-business-gap', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'release-plan-incomplete'].includes(scenario) ? { legacyDeployment: true } : {}), rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
@@ -33,6 +33,18 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
     async function open() {
       const options = createStudioApplicationOptions(config);
       if (scenario.startsWith('stable-')) options.workflows.productDevelopmentWorkflow = createProductDevelopmentWorkflow(options.agents as any, config, undefined, { fixtureRequirementTracking: true, fixtureArchitectureDocument: true });
+      if (scenario === 'shared-path-preview') {
+        /** 候选预览从正常工作台流程读取共享路径关联的批准任务。 */
+        const generate: GeneratorV2 = async (...args) => {
+          const entry = await generateV2(...args);
+          if (args[2] !== 'architect') return entry;
+          const plan = JSON.parse(entry.text);
+          plan.tasks[1].paths.push('src/a.mjs');
+          plan.tasks[1].dependsOn = [plan.tasks[0].id];
+          return { ...entry, text: JSON.stringify(plan) };
+        };
+        options.workflows.productDevelopmentWorkflow = createProductDevelopmentWorkflow(options.agents as any, config, generate);
+      }
       if (scenario === 'qa-fixed') {
         /** 只注入合成评审修复结论；源码修改、自检和QA重跑均真实执行。 */
         const generate: GeneratorV2 = async (...args) => {
@@ -86,12 +98,13 @@ for (const scenario of ['success', 'stable-requirements', 'stable-revision', 'he
         else if (id === 'verify-release-health') { const releaseBusiness = scenario === 'health-business-gap' && visited.filter(/** 仅首个发布健康确认触发业务澄清。 */step => step === id).length === 1; data = { releaseHash: p.releaseHash, deploymentReceiptHash: p.deploymentReceiptHash, operator: 'fixture', checks: [{ id: scenario === 'missing-health' ? 'unknown' : 'ready', status: scenario === 'health-failure' || releaseBusiness ? 'failed' : 'passed', evidence: '合成健康结果', observedAt: '2026-11-07T00:00:00Z' }], findings: releaseBusiness ? [{ id: 'release-business-1', severity: 'blocking', category: 'business', route: 'product', detail: '健康门发现业务验收口径未确认', refs: ['product:L1'], evidence: '合成发布健康业务缺口' }] : [] }; }
         else if (id === 'execute-rollback-externally') data = { releaseHash: p.releaseHash, rollbackArtifactRef: p.rollbackArtifactRef, status: 'rolled-back', jobRef: 'synthetic://rollback', operator: 'fixture', notes: '模拟回滚' };
         else assert.fail(`未预期暂停点 ${id}`);
-        if (scenario === 'success' && id === 'approve-test-cases') {
+        if (['success', 'shared-path-preview'].includes(scenario) && id === 'approve-test-cases') {
           const changes = await readCandidateChanges(app.workflow, runId, config);
           assert.equal(changes.status, 'ready');
           if (changes.status === 'ready') {
             assert.equal(changes.sourceHash, p.plan.sourceHash);
             assert.deepEqual(changes.files.map(file => file.path), ['src/a.mjs', 'src/b.mjs']);
+            assert.deepEqual(changes.files[0]?.taskIds, scenario === 'shared-path-preview' ? ['fixture-task-1', 'fixture-task-2'] : ['fixture-task-1']);
             assert.equal(changes.files[0]?.before, project.files['src/a.mjs']);
             assert.match(changes.files[0]?.after ?? '', /fixtureValue/);
           }
@@ -221,7 +234,7 @@ import { developmentHash } from '../src/development/contracts.js';
 import { generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
 import { LibSQLStore } from '@mastra/libsql';
 
-for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-scope']) {
+for (const scenario of ['dependency', 'shared-path', 'shared-path-recovery', 'shared-path-conflict', 'parallel', 'failed-member', 'delegation-scope']) {
   // 对成功并行分支、依赖波次与越权委派分别保留真实执行断言。
   test(`动态团队：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const parent = mkdtempSync(resolve(tmpdir(), 'mastra-team-regression-')); const directory = resolve(parent, 'run');
@@ -231,6 +244,7 @@ for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-s
     const execution = new DevelopmentExecution(resolve(directory, 'candidate'), project.writablePaths, project.checkFiles);
     const config: PracticeConfig = { ...(['health-failure', 'health-business-gap', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'release-plan-incomplete'].includes(scenario) ? { legacyDeployment: true } : {}), rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(parent, 'workflow.db')}` };
     const children: string[] = [];
+    const sharedPath = scenario.startsWith('shared-path');
     let recovering = false;
     let arrivals = 0; let release!: () => void;
     const barrier = new Promise<void>(/** 两个父任务均进入才允许继续，以证明真实重叠执行。 */(done) => { release = done; });
@@ -242,14 +256,27 @@ for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-s
         if (++arrivals === 2) release();
         await Promise.race([barrier, new Promise<void>(/** 串行退化应有界失败，不能挂住整套回归。 */(_, reject) => { barrierTimeout = setTimeout(/** 超时仅作为并行断言失败。 */() => reject(new Error('parallel barrier timeout')), 3000); })]);
       }
+      if (runtime?.delegate && args[2] === 'frontend' && scenario === 'shared-path-recovery' && !recovering) throw new SyntaxError('controlled-predecessor-failure');
       if (runtime?.delegate && paths.includes('src/b.mjs') && scenario === 'failed-member' && !recovering) throw new SyntaxError('controlled-member-failure');
       if (runtime?.delegate && scenario === 'delegation-scope') await runtime.delegate({ role: 'backend', goal: '越权注入', paths: ['outside.mjs'] });
       if (runtime && !runtime.delegate) {
         if (scenario === 'dependency' && paths.includes('src/b.mjs')) assert.match(await args[1].readFile('src/a.mjs'), /fixtureValue/);
         children.push(paths[0]);
       }
+      const previousShared = runtime && !runtime.delegate && sharedPath && args[2] === 'backend' ? await args[1].readFile('src/a.mjs') : undefined;
+      if (previousShared !== undefined) assert.match(previousShared, /firstWave/);
       const entry = await generateV2(...args);
-      if (args[2] === 'architect' && scenario === 'dependency') { const plan = JSON.parse(entry.text); plan.tasks[1].dependsOn = [plan.tasks[0].id]; return { ...entry, text: JSON.stringify(plan) }; }
+      if (runtime && !runtime.delegate && sharedPath) {
+        // 两次实际修改最终同时存在，后续任务从已合并内容继续编辑。
+        const current = previousShared ?? await args[1].readFile('src/a.mjs');
+        await args[1].writeFile('src/a.mjs', `${current}export const ${args[2] === 'frontend' ? 'firstWave = 1' : 'secondWave = 2'};\n`);
+      }
+      if (args[2] === 'architect' && (scenario === 'dependency' || sharedPath)) {
+        const plan = JSON.parse(entry.text);
+        if (scenario !== 'shared-path-conflict') plan.tasks[1].dependsOn = [plan.tasks[0].id];
+        if (sharedPath) plan.tasks[1].paths.push('src/a.mjs');
+        return { ...entry, text: JSON.stringify(plan) };
+      }
       return entry;
     };
     const workflow = createDevelopmentWorkflowV2(config, execution, true, generate, { team: true });
@@ -258,7 +285,26 @@ for (const scenario of ['dependency', 'parallel', 'failed-member', 'delegation-s
       await storage.init(); const run = await workflow.createRun(); const result: any = await run.start({ inputData: input });
       if (scenario === 'parallel') { assert.equal(arrivals, 2); assert.equal(result.status, 'success'); assert.equal(result.result.outcome, 'development-delivered'); }
       else if (scenario === 'dependency') { assert.equal(result.status, 'success'); assert.equal(result.result.outcome, 'development-delivered'); assert.deepEqual(children, ['src/a.mjs', 'src/b.mjs']); }
-      else {
+      else if (scenario === 'shared-path-conflict') {
+        const pending = paused(result);
+        assert.equal(pending.path.at(-1), 'architecture');
+        assert.equal(pending.payload.recoveryState.faults.at(-1).diagnostic.code, 'path-handoff-unordered');
+        assert.deepEqual(children, []);
+      } else if (sharedPath) {
+        let finished = result;
+        if (scenario === 'shared-path-recovery') {
+          const pending = paused(result);
+          assert.equal(pending.path.at(-1), 'execute-agent-team');
+          assert.deepEqual(children, []);
+          assert.equal(await execution.readFile('src/a.mjs'), project.files['src/a.mjs']);
+          recovering = true;
+          finished = await run.resume({ step: pending.path, resumeData: { ...actor, hash: pending.payload.hash, decision: 'retry' } });
+        }
+        assert.equal(finished.status, 'success');
+        assert.equal(finished.result.outcome, 'development-delivered');
+        assert.deepEqual(children, ['src/a.mjs', 'src/b.mjs']);
+        assert.match(await execution.readFile('src/a.mjs'), /firstWave = 1;\nexport const secondWave = 2;/);
+      } else {
         const pending = paused(result); assert.equal(pending.path.at(-1), 'execute-agent-team');
         if (scenario === 'failed-member') {
           assert.match(await execution.readFile('src/a.mjs'), /fixtureValue/); assert.equal(await execution.readFile('src/b.mjs'), project.files['src/b.mjs']);

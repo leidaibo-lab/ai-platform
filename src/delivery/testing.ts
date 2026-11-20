@@ -117,7 +117,7 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
   const methods = loadDevelopmentMethods(config.rootDir);
   /** 每个有作用节点检查模式、方法与当前候选，不沿用过期测试证据。 */
   async function guard(state: Lifecycle): Promise<void> {
-    validateIdentityV2(state.development, config, methods.hashFor(state.development.input));
+    validateIdentityV2(state.development, config, methods.hashFor(state.development.input, state.development.methodBundleHash));
     await assertCandidate(state, scope.port);
   }
   const extract = createStep({ id: 'select-development-checkpoint', description: '初次消费研发交付；缺陷回归时继续原开发状态', inputSchema: lifecycleSchema, outputSchema: stateV2Schema,

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadGovernedSkill } from '../../mastra/agents/skills.js';
-import type { InputV2 } from './contracts.js';
+import type { InputV2, StateV2 } from './contracts.js';
 import { developmentHash } from '../contracts.js';
 
 /** 装配开发方法，完整原文仍由原生 skill_read 按需读取。 */
@@ -21,10 +21,22 @@ export function loadDevelopmentMethods(rootDir: string) {
     architectureDocument: loadGovernedSkill(resolve(root, '..'), 'development/architecture-document'),
     review: loadGovernedSkill(resolve(root, '..'), 'development/bmad-code-review'),
   };
+  const legacyTask = loadGovernedSkill(resolve(root, '..'), 'development/bmad-task-handoff', 'SKILL.v1.md');
+  const { 'bmad-task-handoff/SKILL.v1.md': legacyTaskDigest, ...currentLock } = lock;
+  const legacyLock = { ...currentLock, 'bmad-task-handoff/SKILL.md': legacyTaskDigest };
   const hash = developmentHash(Object.fromEntries(Object.entries(lock).filter(([path]) => !path.startsWith('architecture-document/'))));
   const architectureHash = developmentHash(lock);
-  /** 架构文档方法只绑定启用该格式的 Run。 */
-  function hashFor(input: InputV2) { return input.architectureDocumentFormat ? architectureHash : hash; }
-  return { hash, hashFor, skills };
+  const legacyHash = developmentHash(Object.fromEntries(Object.entries(legacyLock).filter(([path]) => !path.startsWith('architecture-document/'))));
+  const legacyArchitectureHash = developmentHash(legacyLock);
+  /** 只识别锁定的历史方法散列，未知散列仍由身份校验拒绝。 */
+  function hashFor(input: InputV2, boundHash?: string) {
+    const prior = input.architectureDocumentFormat ? legacyArchitectureHash : legacyHash;
+    return boundHash === prior ? prior : input.architectureDocumentFormat ? architectureHash : hash;
+  }
+  /** 新 Run 允许按依赖交接写入，历史 Run 继续使用原任务规则。 */
+  function usesLegacyTaskHandoff(state: StateV2) {
+    return state.methodBundleHash === (state.input.architectureDocumentFormat ? legacyArchitectureHash : legacyHash);
+  }
+  return { hash, hashFor, skills, legacyTask, usesLegacyTaskHandoff };
 }
 export type DevelopmentMethods = ReturnType<typeof loadDevelopmentMethods>;

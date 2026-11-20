@@ -43,9 +43,14 @@ export function describeRecoveryModelFailureReason(failure: z.infer<typeof model
 function describeRecoveryOutputFailure(fault: GatePayload) {
   if (fault.kind !== 'invalid-output') return undefined;
   const diagnostic = outputDiagnosticSchema.safeParse(fault.diagnostic);
-  return diagnostic.success && diagnostic.data.code === 'path-ownership-invalid'
-    ? '方案的任务文件超出项目授权范围，或同一文件被分配给多个任务'
-    : faultReasons['invalid-output'];
+  if (!diagnostic.success) return faultReasons['invalid-output'];
+  switch (diagnostic.data.code) {
+    case 'path-ownership-invalid': return '方案的任务文件超出项目授权范围，或同一文件被分配给多个任务';
+    case 'path-unauthorized': return '方案包含未授权的写入路径';
+    case 'task-path-duplicate': return '同一任务重复声明了写入路径';
+    case 'path-handoff-unordered': return '写入同一文件的任务需要通过依赖明确先后顺序';
+    default: return faultReasons['invalid-output'];
+  }
 }
 /** 从持久化故障分类生成用户指引；不暴露模型原始错误、源码或内部恢复状态。 */
 function recoveryGuidance(payload: GatePayload) {

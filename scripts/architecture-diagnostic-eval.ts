@@ -27,10 +27,10 @@ function save() { writeFileSync(resolve(directory, 'report.json'), JSON.stringif
 save();
 try {
   const methods = loadDevelopmentMethods(config.rootDir);
-  validateIdentityV2(state, config, methods.hash);
+  validateIdentityV2(state, config, methods.hashFor(state.input, state.methodBundleHash));
   const called = await invokeV2(config, execution, 'architect', { ...state, outcome: 'in-progress', recovery: null, calls: 0, faults: [], recoveries: [] }, [], { priorGates: state.gates, priorReports: state.codeReviews }, methods, generateV2,
     /** 使用与正式架构步骤完全相同的schema与宿主约束。 */
-    (text) => validatePlanV2(planV2Schema.parse(parseDevelopmentJson(text)), state),
+    (text) => validatePlanV2(planV2Schema.parse(parseDevelopmentJson(text)), state, !methods.usesLegacyTaskHandoff(state)),
   );
   report.status = called.entry ? 'architecture-valid' : 'architecture-invalid'; report.faults = called.state.faults;
   report.recovery = called.state.recovery; report.entry = called.entry; save();

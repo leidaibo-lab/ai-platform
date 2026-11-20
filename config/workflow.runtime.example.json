@@ -92,7 +92,7 @@
       "inputContract": "architect.input.v1",
       "outputContract": "plan.output.v1",
       "methodRefs": [
-        "bmad-task-handoff.v1"
+        "bmad-task-handoff.v2"
       ],
       "toolRefs": [
         "candidate.read"

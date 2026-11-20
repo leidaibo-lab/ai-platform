@@ -9,7 +9,7 @@ import { MastraTimeoutError } from '@mastra/core/loop';
 import { LibSQLStore } from '@mastra/libsql';
 import { seedDevelopment } from '../src/development-service.js';
 import { DevelopmentExecution } from '../src/development-execution.js';
-import { developmentHash } from '../src/development/contracts.js';
+import { developmentHash, validateArchitecture } from '../src/development/contracts.js';
 import { matchesRecoveryHashV2, recoveryHashV2, inputV2Schema, stateV2Schema } from '../src/development/v2/contracts.js';
 import { generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
 import { loadDevelopmentMethods } from '../src/development/v2/methods.js';
@@ -31,7 +31,7 @@ function fixture(generate: GeneratorV2) {
     const workflow = createDevelopmentWorkflowV2(config, execution, false, generate, { legacySequential });
     const storage = new LibSQLStore({ id: 'stage-store', url: `file:${resolve(directory, 'workflow.db')}` });
     const mastra = new Mastra({ workflows: { developmentWorkflowV2: workflow }, storage, logger: false });
-    return { config, input, execution, workflow, storage, mastra, evaluationPolicy: false, methodsHash: loadDevelopmentMethods(config.rootDir).hash };
+    return { config, input, execution, workflow, storage, mastra, evaluationPolicy: false, methods: loadDevelopmentMethods(config.rootDir) };
   }
   return { open, directory, parent };
 }
@@ -387,4 +387,28 @@ test('研发六步图就地恢复方案、裁决就绪与评审问题，并复�
     assert.equal(delivered.delivery.sourceHash, checked.checkpointHash);
     assert.deepEqual(delivered.delivery.checks, checked.checks);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('共享写入接受间接依赖，拒绝未排序写入、重复路径与越权路径', /** 用不同深度的并行分支验证不能用任务位置代替依赖。 */() => {
+  const base = { id: 'first', role: 'backend' as const, paths: ['src/shared.mjs'], dependsOn: [] as string[] };
+  const bridge = { ...base, id: 'bridge', paths: ['src/bridge.mjs'], dependsOn: [base.id] };
+  const last = { ...base, id: 'last', dependsOn: [bridge.id] };
+  const project = { id: 'shared', files: { 'src/shared.mjs': '', 'src/bridge.mjs': '', 'check.mjs': '' }, writablePaths: ['src/shared.mjs', 'src/bridge.mjs'], checkFiles: ['check.mjs'], roles: ['backend' as const] };
+  const input = inputV2Schema.parse({ source: { kind: 'evaluation', runId: 'file-handoff', content: '合成接续任务', evidence: 'evaluation-input', hash: developmentHash('合成接续任务') }, project });
+  const plan = { summary: '共享文件接续', coverage: [], contracts: '只使用批准的路径', tasks: [base, bridge, last], blockers: [], risks: [] };
+  assert.doesNotThrow(() => validateArchitecture(plan, input, true));
+  assert.throws(() => validateArchitecture(plan, input), /方案文件责任越界或重复/);
+  assert.throws(() => validateArchitecture({ ...plan, tasks: [base, { ...bridge, dependsOn: [] }, last] }, input, true), /缺少依赖顺序/);
+  assert.throws(() => validateArchitecture({ ...plan, tasks: [{ ...base, paths: [...base.paths, ...base.paths] }] }, input, true), /重复声明/);
+  assert.throws(() => validateArchitecture({ ...plan, tasks: [{ ...base, paths: ['check.mjs'] }] }, input, true), /未授权/);
+  const methods = loadDevelopmentMethods(resolve('.'));
+  const historicalHash = 'b532d9e93f5be0fdafb840241d89dc49b034bbdac699b6e62e2368a0d2b3ab02';
+  assert.equal(methods.hashFor(input, historicalHash), historicalHash);
+  assert.notEqual(methods.hashFor(input), historicalHash);
+  assert.equal(methods.hashFor(input, '0'.repeat(64)), methods.hashFor(input));
+  const historicalDocumentHash = 'd3c5ac30a07d39091b47e87d6dfa47c85ea51278c3412b4d94c74c2109c585fb';
+  const documentInput = inputV2Schema.parse({ ...input, architectureDocumentFormat: 'architecture-markdown.v1' });
+  assert.equal(methods.hashFor(documentInput, historicalDocumentHash), historicalDocumentHash);
+  assert.notEqual(methods.hashFor(documentInput), historicalDocumentHash);
 });

@@ -134,9 +134,10 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
     execute: async ({ inputData: state }) => {
       const noop = [{ state, task: null, files: {}, budget: 0 }];
       if (state.phase !== 'implement' || state.outcome !== 'in-progress' || state.recovery) return noop;
-      assertApprovalV2(state); validateIdentityV2(state, config, methods.hashFor(state.input));
+      assertApprovalV2(state); validateIdentityV2(state, config, methods.hashFor(state.input, state.methodBundleHash));
       if (state.approvedHash !== state.approvalHash || !state.team || developmentHash(state.team) !== developmentHash(assembleTeam(state))) throw new Error('开发团队未经当前方案批准');
-      if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new Error('团队派发基线漂移');
+      const baseline = await execution.snapshot();
+      if (developmentHash(baseline) !== state.checkpointHash) throw new Error('团队派发基线漂移');
       const remaining = state.plan!.tasks.filter(
         // 已完成分支只回读，不在故障接续时重放。
         (task) => !state.completedTasks.includes(task.id),
@@ -151,10 +152,12 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
           (id) => state.completedTasks.includes(id),
         ),
       ).slice(0, capacity);
-      const checkBudget = state.input.autonomy ? Math.floor(Math.max(0, state.input.autonomy.maxCheckRuns - (state.verificationHistory?.length ?? 0) - 2) / ready.length) : undefined;
       if (!ready.length) throw new Error('团队任务图没有可执行节点');
+      const paths = ready.flatMap(/** 即使已批准，实际派发也必须保持路径互斥。 */task => task.paths);
+      if (new Set(paths).size !== paths.length) throw new Error('同波次团队任务写入范围冲突');
+      const checkBudget = state.input.autonomy ? Math.floor(Math.max(0, state.input.autonomy.maxCheckRuns - (state.verificationHistory?.length ?? 0) - 2) / ready.length) : undefined;
       const files: Record<string, string> = {};
-      for (const path of Object.keys(await execution.snapshot())) files[path] = await execution.readFile(path);
+      for (const path of Object.keys(baseline)) files[path] = await execution.readFile(path);
       return ready.map(
         // 每分支最多8次父子模型调用，聚合后全Run仍不超过72次。
         (task) => ({ state, task, files, budget: 8, checkBudget }),

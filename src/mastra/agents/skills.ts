@@ -11,9 +11,9 @@ export const PRODUCT_MAX_STEPS = 24;
  * ADR: docs/decisions/2026-11-06-mastra-pm-skills.md
  * root/relativePath 由应用装配持有，不接受模型传入文件路径；读取失败直接中止启动。
  */
-export function loadGovernedSkill(root: string, relativePath: string) {
+export function loadGovernedSkill(root: string, relativePath: string, definitionFile = 'SKILL.md') {
   const dir = join(root, relativePath);
-  const definition = validateSkillContent({ content: readFileSync(join(dir, 'SKILL.md'), 'utf8') });
+  const definition = validateSkillContent({ content: readFileSync(join(dir, definitionFile), 'utf8') });
   if (!definition.valid || !definition.metadata || !definition.instructions) {
     throw new Error(`Agent Skill 无效（${relativePath}）：${definition.errors.join('；')}`);
   }
