@@ -96,11 +96,27 @@ Mastra Store 中的执行、审批、恢复或交付事实。
 - **AND** SHALL 将业务发现送入与测试相同的产品澄清和修订确认链
 - **AND** SHALL NOT 将健康失败自动解释为可由代码重试解决的问题
 
+### Requirement: Platform-created delivery branches start from remote main
+
+平台首次发布正式 Run 分支或归档分支时，SHALL 从目标仓库的 `origin` 获取 `refs/heads/main`，以获取的分支头作为首笔交付提交的父提交。
+
+#### Scenario: A delivery branch is absent on origin
+
+- **WHEN** 正式规格或归档准备发布到尚不存在的远端分支
+- **THEN** 系统 SHALL 拉取目标远端的 `main`，并基于其分支头创建交付分支
+- **AND** `main` 缺失、拉取失败或正式规格绑定的工程版本与获取的 `main` 分支头不一致时，系统 SHALL 停止此次发布
+- **AND** 未推送的提交仅在其父提交仍匹配本次获取的 `main` 分支头时复用
+
+#### Scenario: A delivery branch already exists on origin
+
+- **WHEN** 对应远端分支已经存在
+- **THEN** 系统 SHALL 追加到该分支当前版本，已发布的相同交付 SHALL 复用原回执
+
 ### Requirement: Confirmed specifications are committed to one remote Run branch
 
 需求文档、产品 Spec、开发 Spec 和测试 Spec SHALL 仅在相应人工确认成功后由系统提交并推送到
 同一远端 Run 分支。该分支 SHALL 使用 `run/<主要能力>-<runId>` 命名，主要能力来自受控的
-Run 标识而非客户端提交的任意 Git ref；同一 Run 不得创建阶段性分支或向主分支写入。
+Run 标识而非客户端提交的任意 Git ref。每个需求 Run 使用独立分支，同一迭代下的不同 Run 也不得复用分支或以其他 Run 分支为创建基线。同一 Run 不得创建阶段性分支或向主分支写入。
 
 #### Scenario: First confirmed requirement creates the Run branch
 

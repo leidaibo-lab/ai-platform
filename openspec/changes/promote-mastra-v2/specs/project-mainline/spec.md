@@ -70,11 +70,27 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **THEN** 系统 SHALL 保留发布和健康证据，并先完成所需回滚关口
 - **AND** SHALL 按与 QA 相同的澄清、确认、重新规划和回归路径继续
 
+### Requirement: Platform-created delivery branches start from remote main
+
+平台首次发布正式 Run 分支或归档分支时，SHALL 从目标仓库的 `origin` 获取 `refs/heads/main`，以获取的分支头作为首笔交付提交的父提交。
+
+#### Scenario: A delivery branch is absent on origin
+
+- **WHEN** 正式规格或归档准备发布到尚不存在的远端分支
+- **THEN** 系统 SHALL 拉取目标远端的 `main`，并基于其分支头创建交付分支
+- **AND** `main` 缺失、拉取失败或正式规格绑定的工程版本与获取的 `main` 分支头不一致时，系统 SHALL 停止此次发布
+- **AND** 未推送的提交仅在其父提交仍匹配本次获取的 `main` 分支头时复用
+
+#### Scenario: A delivery branch already exists on origin
+
+- **WHEN** 对应远端分支已经存在
+- **THEN** 系统 SHALL 追加到该分支当前版本，已发布的相同交付 SHALL 复用原回执
+
 ### Requirement: Formal specifications use one capability-named Run branch
 
 已确认的需求文档、产品 Spec、开发 Spec 与测试 Spec SHALL 由系统在同一个远端 Run 分支
 追加提交和推送。分支名 SHALL 是 `run/<主要能力>-<runId>`，不允许客户端提供 Git ref、目标
-分支或推送地址。
+分支或推送地址。每个需求 Run 使用独立分支，同一迭代下的不同 Run 也不得复用分支或以其他 Run 分支为创建基线。
 
 #### Scenario: A confirmed stage publishes a formal specification
 

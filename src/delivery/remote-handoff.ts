@@ -4,13 +4,14 @@ import { promisify } from 'node:util';
  */
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { existsSync, lstatSync, linkSync, unlinkSync, mkdirSync, readFileSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
+import { existsSync, lstatSync, linkSync, unlinkSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { assetIdSchema, formalSpecificationPathPattern } from './asset-identity.js';
 
 const uuidSchema = '[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}';
+const mainRef = 'refs/heads/main';
 export const remoteHandoffSchema = z.object({ version: z.literal('remote-handoff.v1'), branch: z.string().regex(new RegExp(`^(?:codex/workflow/[a-zA-Z0-9_-]{1,200}|run/[a-z0-9-]{2,48}-${uuidSchema})$`)), commit: z.string().regex(/^[a-f0-9]{40,64}$/), files: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)) });
 export const repositoryRetrySchema = z.object({ repositoryRetry: z.string().regex(/^[a-f0-9]{64}$/) });
 export const repositorySyncPauseSchema = z.object({ kind: z.literal('repository-sync'), mode: z.enum(['fixture', 'live']), retryKey: z.string().regex(/^[a-f0-9]{64}$/), stage: z.string(), reason: z.string() });
@@ -77,11 +78,12 @@ export function readHandoffCache(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-/** 同目录临时文件与原子硬链接发布检查点，进程中断不留下半截完成文件。 */
-export function writeHandoffCache(path: string, value: string): void {
+/** 原子写入检查点，远端主分支推进后允许替换尚未发布的旧提交。 */
+export function writeHandoffCache(path: string, value: string, replace = false): void {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporary, value, { flag: 'wx', mode: 0o600 });
+    if (replace) { renameSync(temporary, path); return; }
     try { linkSync(temporary, path); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || readHandoffCache(path) !== value) throw new Error('交接缓存冲突');
@@ -106,13 +108,20 @@ export async function publishHandoff(root: string, runId: string, files: Record<
   const baseCommit = options.baseCommit && z.string().regex(/^[a-f0-9]{40}$/).parse(options.baseCommit);
   const key = contentHash(JSON.stringify({ branch, files: hashes, message, baseCommit }));
   const receiptPath = join(cache, `${key}.json`);
-  let receipt: RemoteHandoff;
-  if (existsSync(receiptPath)) receipt = remoteHandoffSchema.parse(JSON.parse(readHandoffCache(receiptPath)));
-  else {
-    const ref = `refs/heads/${branch}`;
-    const remote = (await networkGit(root, ['ls-remote', '--refs', 'origin', ref])).split(/\s/)[0];
-    let parent = git(root, ['rev-parse', baseCommit ?? 'HEAD']);
-    if (remote) { await networkGit(root, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref]); parent = remote; }
+  const ref = `refs/heads/${branch}`;
+  const branchHead = (await networkGit(root, ['ls-remote', '--refs', 'origin', ref])).split(/\s/)[0];
+  let mainHead: string | undefined;
+  if (!branchHead) {
+    mainHead = (await networkGit(root, ['ls-remote', '--refs', 'origin', mainRef])).split(/\s/)[0];
+    if (!mainHead) throw new Error('远端 origin 缺少 main，无法创建交付分支');
+    await networkGit(root, ['fetch', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', mainHead]);
+    if (baseCommit && baseCommit !== mainHead) throw new Error('Run 绑定的工程版本与远端 origin/main 不一致，无法创建交付分支');
+  }
+  const cached = existsSync(receiptPath) ? remoteHandoffSchema.parse(JSON.parse(readHandoffCache(receiptPath))) : undefined;
+  let receipt = cached;
+  if (!receipt || (mainHead && git(root, ['show', '-s', '--format=%P', receipt.commit]) !== mainHead)) {
+    const parent = mainHead ?? branchHead;
+    if (branchHead) await networkGit(root, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref]);
     const temporary = mkdtempSync(join(tmpdir(), 'workflow-index-'));
     try {
       const index = join(temporary, 'index');
@@ -124,22 +133,28 @@ export async function publishHandoff(root: string, runId: string, files: Record<
       const tree = git(root, ['write-tree'], undefined, index);
       const commit = git(root, ['-c', 'user.name=Workflow', '-c', 'user.email=workflow@local.invalid', 'commit-tree', tree, '-p', parent], message);
       receipt = remoteHandoffSchema.parse({ version: 'remote-handoff.v1', branch, commit, files: hashes });
-      writeHandoffCache(receiptPath, JSON.stringify(receipt));
       // 本地保留对象可达性，即使网络失败也不会被正常 GC 回收。
       git(root, ['update-ref', `refs/workflow-handoffs/${key}`, commit]);
+      writeHandoffCache(receiptPath, JSON.stringify(receipt), Boolean(cached));
     } finally { rmSync(temporary, { recursive: true, force: true }); }
   }
   if (receipt.branch !== branch || JSON.stringify(receipt.files) !== JSON.stringify(hashes)) throw new Error('交付回执与当前产物不一致');
-  const ref = `refs/heads/${branch}`;
   const remote = (await networkGit(root, ['ls-remote', '--refs', 'origin', ref])).split(/\s/)[0];
   if (remote !== receipt.commit) {
-    // 已经推进到后继提交时只验证祖先关系；拒绝强推或覆盖其他分支历史。
     let delivered = false;
     if (remote) {
       await networkGit(root, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref]);
-      try { git(root, ['merge-base', '--is-ancestor', receipt.commit, remote]); delivered = true; } catch { /* 非祖先交给普通 push 拒绝。 */ }
+      try { git(root, ['merge-base', '--is-ancestor', receipt.commit, remote]); delivered = true; } catch { /* 待推送的提交必须是快进。 */ }
     }
-    if (!delivered) await networkGit(root, ['push', '--porcelain', 'origin', `${receipt.commit}:${ref}`]);
+    if (!delivered) {
+      if (mainHead) {
+        await networkGit(root, ['push', '--porcelain', `--force-with-lease=${ref}:`, 'origin', `${receipt.commit}:${ref}`]);
+      } else {
+        if (!remote) throw new Error('交付分支已被删除，请重试资料同步');
+        git(root, ['merge-base', '--is-ancestor', remote, receipt.commit]);
+        await networkGit(root, ['push', '--porcelain', `--force-with-lease=${ref}:${remote}`, 'origin', `${receipt.commit}:${ref}`]);
+      }
+    }
     const observed = (await networkGit(root, ['ls-remote', '--refs', 'origin', ref])).split(/\s/)[0];
     if (observed !== receipt.commit) { await networkGit(root, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref]); git(root, ['merge-base', '--is-ancestor', receipt.commit, observed]); }
   }
@@ -153,11 +168,10 @@ export async function publishReviewedCandidate(root: string, specification: Remo
   const origin = git(root, ['remote', 'get-url', '--all', 'origin']);
   if (origin.includes('\n') || git(root, ['remote', 'get-url', '--push', '--all', 'origin']) !== origin) throw new Error('交付远端地址不一致');
   const ref = `refs/heads/${branch}`;
-  const main = 'refs/heads/main';
-  await networkGit(root, ['fetch', '--no-tags', 'origin', main, ref]);
-  const refs = await networkGit(root, ['ls-remote', '--refs', 'origin', main, ref]);
+  await networkGit(root, ['fetch', '--no-tags', 'origin', mainRef, ref]);
+  const refs = await networkGit(root, ['ls-remote', '--refs', 'origin', mainRef, ref]);
   const heads = new Map(refs.split('\n').map(/** 按完整 ref 读取远端提交。 */line => { const [sha, name] = line.split('\t'); return [name, sha] as const; }));
-  const mainCommit = heads.get(main);
+  const mainCommit = heads.get(mainRef);
   const remote = heads.get(ref);
   if (!mainCommit || !remote) throw new Error('交付分支或 main 不存在');
   const mergeBase = git(root, ['merge-base', mainCommit, parent]);

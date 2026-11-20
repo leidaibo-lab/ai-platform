@@ -12,7 +12,7 @@ import { productPaths, readProductDocuments } from '../src/business-engineering/
 import { buildSuccessorBaseline } from '../src/intake/successor-run.js';
 
 /** 创建独立工作树与 bare 远端；只使用合成文件。 */
-function repositories() {
+function repositories(seedMain = true) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'remote-handoff-')));
   const root = join(directory, 'repo'); const remote = join(directory, 'remote.git');
   /** 所有参数来自本测试，不打印用户Git配置。 */
@@ -21,8 +21,67 @@ function repositories() {
   execFileSync('git', ['init', '--bare', remote], { stdio: 'ignore' });
   git(['config', 'user.name', 'fixture']); git(['config', 'user.email', 'fixture@example.invalid']);
   writeFileSync(join(root, 'README.md'), 'baseline'); git(['add', 'README.md']); git(['commit', '-m', 'test(workflow): 基线']); git(['remote', 'add', 'origin', remote]);
+  if (seedMain) git(['push', 'origin', 'main']);
   return { root, remote, directory, git };
 }
+
+test('新建正式和归档分支均以远端 main 为父提交', /** 构造互相分叉的本地 HEAD 和远端 main。 */async () => {
+  const f = repositories();
+  const runId = 'a84353b9-e22c-4ea9-b412-c6f28800c567';
+  try {
+    f.git(['commit', '--allow-empty', '-m', 'test(workflow): 推进远端主分支']);
+    const mainHead = f.git(['rev-parse', 'HEAD']);
+    f.git(['push', 'origin', 'main']);
+    f.git(['switch', '-c', 'local-only', 'HEAD^']);
+    f.git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    f.git(['commit', '--allow-empty', '-m', 'test(workflow): 仅本地的提交']);
+    const localHead = f.git(['rev-parse', 'HEAD']);
+    const files = { 'specs/product-spec.md': '产品规格' };
+    await assert.rejects(publishFormalSpecification(f.root, runId, 'inventory', files, 'docs(spec): 保存规格', localHead), /与远端 origin\/main 不一致/);
+    assert.equal(f.git(['ls-remote', 'origin', `refs/heads/${formalRunBranch('inventory', runId)}`]), '');
+    const formal = await publishFormalSpecification(f.root, runId, 'inventory', files, 'docs(spec): 保存规格', mainHead);
+    const otherRunId = 'b84353b9-e22c-4ea9-b412-c6f28800c567';
+    const other = await publishFormalSpecification(f.root, otherRunId, 'inventory', { 'specs/requirements.md': '另一项需求' }, 'docs(spec): 保存需求');
+    const archive = await publishHandoff(f.root, runId, { 'product/run.md': '归档' });
+    assert.notEqual(other.branch, formal.branch);
+    assert.equal(f.git(['rev-parse', `${formal.commit}^`]), mainHead);
+    assert.equal(f.git(['rev-parse', `${other.commit}^`]), mainHead);
+    assert.equal(f.git(['ls-tree', '--name-only', other.commit, 'specs/product-spec.md']), '');
+    assert.equal(f.git(['rev-parse', `${archive.commit}^`]), mainHead);
+    assert.equal(f.git(['rev-parse', 'HEAD']), localHead);
+  } finally { rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test('远端没有 main 时即使本地存在 main 也拒绝创建交付分支', /** 检查本地分支和缓存均无法绕过规则。 */async () => {
+  const f = repositories(false);
+  try {
+    await assert.rejects(publishHandoff(f.root, 'run1', { 'product/run.md': '归档' }), /缺少 main/);
+    assert.equal(f.git(['ls-remote', '--heads', 'origin']), '');
+  } finally { rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test('首次推送失败后 main 推进，重试改用新的远端基线', /** 拒绝第一次推送并保留本地检查点。 */async () => {
+  const f = repositories();
+  try {
+    const hook = join(f.remote, 'hooks/pre-receive');
+    writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+    const files = { 'product/run.md': '归档' };
+    await assert.rejects(publishHandoff(f.root, 'run1', files), /远端同步失败/);
+    const rejected = f.git(['for-each-ref', '--format=%(objectname)', 'refs/workflow-handoffs/']);
+    rmSync(hook);
+    f.git(['commit', '--allow-empty', '-m', 'test(workflow): 推进主分支']);
+    f.git(['push', 'origin', 'main']);
+    const mainHead = f.git(['rev-parse', 'HEAD']);
+    const receipt = await publishHandoff(f.root, 'run1', files);
+    assert.notEqual(receipt.commit, rejected);
+    assert.equal(f.git(['rev-parse', `${receipt.commit}^`]), mainHead);
+    f.git(['commit', '--allow-empty', '-m', 'test(workflow): 再次推进主分支']);
+    f.git(['push', 'origin', 'main']);
+    assert.deepEqual(await publishHandoff(f.root, 'run1', files), receipt);
+    const next = await publishHandoff(f.root, 'run1', { 'product/next.md': '续接' });
+    assert.equal(f.git(['rev-parse', `${next.commit}^`]), receipt.commit);
+  } finally { rmSync(f.directory, { recursive: true, force: true }); }
+});
 
 test('远端交付隔离用户index、保留历史、固定版本读取、幂等不回退', /** 核对实际bare远端内容。 */async () => {
   const f = repositories();
@@ -326,7 +385,16 @@ test('QA 候选只写 Run 分支并复用 MR，源 SHA 漂移时拒绝交付', a
     writeFileSync(join(f.directory, 'gh'), `#!/bin/sh
 for arg in "$@"; do
   case "$arg" in
-    POST) test ! -e '${created}' || exit 97; touch '${created}'; exit 1 ;;
+    POST)
+      base_ok=; head_ok=
+      for field in "$@"; do
+        case "$field" in
+          'base=main') base_ok=1 ;;
+          'head=${spec.branch}') head_ok=1 ;;
+        esac
+      done
+      test "$base_ok$head_ok" = 11 && test ! -e '${created}' || exit 97
+      touch '${created}'; exit 1 ;;
     repos/*/pulls/42) printf '%s' '${JSON.stringify(pull)}'; exit 0 ;;
   esac
 done
