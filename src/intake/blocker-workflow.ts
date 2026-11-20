@@ -1,3 +1,4 @@
+import { usedTechnicalAttempts } from '../development/v2/recovery-policy.js';
 import { productDocumentsInstruction, readProductDocuments } from '../business-engineering/product-documents.js';
 import { publishProductHandoff } from '../business-engineering/product-handoff.js';
 import { projectRepositoryRoot, projectSpec } from '../business-engineering/project.js';
@@ -165,7 +166,7 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
           formalSpecifications = [{ kind: 'product', handoff, paths, upstreamCommits: [] }];
         }
       }
-      return inputV2Schema.parse({ ...old.input, formalSpecifications, ...(old.input.requirementTracking || old.priorAcceptanceCases ? { requirementImpact: revisionImpact(inputData) } : {}), source: { ...old.input.source, content: inputData.draft.content, hash: inputData.draft.hash, evidence: inputData.draft.evidence }, project, budgetContinuation: { calls: old.calls, maxCalls: old.maxCalls, ...(old.contextBudgetLevel !== undefined ? { contextBudgetLevel: old.contextBudgetLevel } : {}) }, continuation: { runId: old.input.source.runId, sourceHash: old.input.source.hash, candidateHash: old.checkpointHash, reason: '前端业务澄清及修订产品稿已人工确认；沿用原代码权限继续规划', authority: 'approved-product-version' }, scopeApproval: { reviewer: inputData.review.reviewer, comment: '批准修订产品稿，并在原项目和代码权限内继续技术规划；只读工程资料已关联', productHash: inputData.draft.hash } });
+      return inputV2Schema.parse({ ...old.input, formalSpecifications, ...(old.input.requirementTracking || old.priorAcceptanceCases ? { requirementImpact: revisionImpact(inputData) } : {}), source: { ...old.input.source, content: inputData.draft.content, hash: inputData.draft.hash, evidence: inputData.draft.evidence }, project, budgetContinuation: { calls: old.calls, maxCalls: old.maxCalls, ...(old.technicalRecovery ? { technical: { version: old.technicalRecovery.version, limit: old.technicalRecovery.limit, priorAttempts: usedTechnicalAttempts(old.technicalRecovery) } } : {}), ...(old.contextBudgetLevel !== undefined ? { contextBudgetLevel: old.contextBudgetLevel } : {}) }, continuation: { runId: old.input.source.runId, sourceHash: old.input.source.hash, candidateHash: old.checkpointHash, reason: '前端业务澄清及修订产品稿已人工确认；沿用原代码权限继续规划', authority: 'approved-product-version' }, scopeApproval: { reviewer: inputData.review.reviewer, comment: '批准修订产品稿，并在原项目和代码权限内继续技术规划；只读工程资料已关联', productHash: inputData.draft.hash } });
     },
   });
   const scope = createExecutionScope(resolveExecution, config.mode === 'live' && !!projectRepositoryRoot(config));

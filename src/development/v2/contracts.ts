@@ -11,7 +11,9 @@ import { architectureSchema, commandEvidenceSchema, developmentInputSchema, deve
 
 /** 新Run显式选择自主政策；缺省不改变历史批准/恢复散列。 */
 export const autonomyPolicySchema = z.object({ version: z.literal('autonomy.v1'), maxCheckRuns: z.number().int().min(2).max(96).default(24), maxNoProgress: z.number().int().min(1).max(5).default(2) });
-export const inputV2Schema = developmentInputSchema.extend({ architectureDocumentFormat: z.literal(architectureDocumentFormat).optional(), productHandoffFormat: z.literal('paired-markdown.v1').optional(), requirementTracking: z.literal(true).optional(), requirementImpact: requirementImpactSchema.optional(), autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
+export const continuationLimitSchema = z.number().int().min(0).max(72);
+const technicalBudgetSchema = z.object({ version: z.literal('technical-recovery.v1'), limit: continuationLimitSchema, priorAttempts: continuationLimitSchema.optional() });
+export const inputV2Schema = developmentInputSchema.extend({ architectureDocumentFormat: z.literal(architectureDocumentFormat).optional(), productHandoffFormat: z.literal('paired-markdown.v1').optional(), requirementTracking: z.literal(true).optional(), requirementImpact: requirementImpactSchema.optional(), autonomy: autonomyPolicySchema.optional(), repositoryHandoff: remoteHandoffSchema.optional(), formalSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(), correlation: correlationSchema.optional(), source: developmentInputSchema.shape.source.extend({ workflowId: z.literal('product-development').optional() }), budgetContinuation: z.object({ contextBudgetLevel: z.number().int().min(0).max(4).optional(), calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), technical: technicalBudgetSchema.optional() }).optional(), scopeApproval: z.object({ reviewer: z.string(), comment: z.string(), productHash: z.string().length(64) }).optional() });
 export type InputV2 = z.infer<typeof inputV2Schema>;
 export const roleV2Schema = z.enum(['context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'self-check', 'reviewer']);
 export type RoleV2 = z.infer<typeof roleV2Schema>;
@@ -41,8 +43,30 @@ export const delegationSchema = z.object({ taskId: z.string(), parentId: z.strin
 /** 宿主检查记录按实际执行追加；分支源码与集成源码分别绑定，不原地覆盖。 */
 export const verificationRecordSchema = z.object({ sequence: z.number().int().positive(), sourceHash: hash, role: roleV2Schema, taskPaths: z.array(z.string()), round: z.number().int().nonnegative(), purpose: z.enum(['tool', 'integration', 'qa']), checks: z.array(commandEvidenceSchema) });
 /** 返工保留失败签名和责任任务；源码变化本身不是进展。 */
-export const repairRecordSchema = z.object({ round: z.number().int().nonnegative(), sourceHash: hash, signature: hash, tasks: z.array(z.string()), noProgress: z.number().int().nonnegative(), kind: z.enum(['code', 'environment', 'business', 'authorization']) });
+export const repairRecordSchema = z.object({
+  round: z.number().int().nonnegative(), sourceHash: hash, signature: hash, tasks: z.array(z.string()),
+  noProgress: z.number().int().nonnegative(), kind: z.enum(['code', 'environment', 'business', 'authorization']),
+  failedChecks: z.array(z.string()).optional(),
+  verification: z.object({ sequence: z.number().int().positive(), sourceHash: hash, passed: z.boolean() }).optional(),
+});
+export const technicalRecoverySchema = technicalBudgetSchema.extend({
+  pendingFaultId: z.uuid().optional(),
+  platformResumes: z.array(z.object({ faultId: z.uuid(), checkpoint: hash, eventId: z.uuid(), requestId: z.uuid().optional() })).optional(),
+  attempts: z.array(z.object({
+    faultId: z.uuid(),
+    action: z.enum(['backoff', 'correct-output', 'rerun-checks', 'platform-repair']),
+    result: z.enum(['failed', 'execution-passed', 'verified']),
+    check: z.enum(['role-execution', 'output-validation', 'registered-checks']),
+    artifactHash: hash.optional(),
+  })),
+  blocked: z.object({
+    faultId: z.uuid(),
+    owner: z.enum(['development', 'platform']),
+    reason: z.enum(['diagnosis-required', 'continuation-limit', 'no-progress', 'integrity']),
+  }).optional(),
+});
 export const stateV2Schema = z.object({
+  technicalRecovery: technicalRecoverySchema.optional(),
   priorAcceptanceCases: z.array(z.object({ id: z.string(), requirementRefs: z.array(z.string()) })).optional(),
   verificationHistory: z.array(verificationRecordSchema).optional(), repairHistory: z.array(repairRecordSchema).optional(),
   stopReason: z.enum(['business-decision', 'authorization-required', 'repair-budget', 'verification-budget', 'no-progress']).optional(),
@@ -61,7 +85,7 @@ export const stateV2Schema = z.object({
   contextBudgetLevel: z.number().int().min(0).max(4).optional(),
   calls: z.number().int().nonnegative(), maxCalls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   work: z.array(z.object({ role: roleV2Schema, round: z.number(), text: z.string(), tools: z.array(z.string()), files: z.array(z.string()).optional(), startedAt: z.string().datetime().optional(), endedAt: z.string().datetime().optional(), durationMs: z.number().nonnegative().optional(), steps: z.number(), modelId: z.string().nullable(), inputTokens: z.number().nullable(), outputTokens: z.number().nullable() })),
-  faults: z.array(z.object({ sequence: z.number(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error', 'context-budget']), budget: contextBudgetFailureSchema.optional(), attempt: z.number(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
+  faults: z.array(z.object({ sequence: z.number(), id: z.uuid().optional(), phase: phaseSchema, role: roleV2Schema, taskId: z.string().nullable(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error', 'context-budget']), origin: z.enum(['role', 'output-validation', 'registered-checks']).optional(), checkIds: z.array(z.string()).optional(), budget: contextBudgetFailureSchema.optional(), attempt: z.number(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), checkpointHash: hash, partialSourceHash: hash, restored: z.literal(true) })),
   recovery: z.object({ hash, checkpointHash: hash, phase: phaseSchema, role: roleV2Schema, kind: z.string(), budget: contextBudgetFailureSchema.optional(), diagnostic: outputDiagnosticSchema.optional(), modelCall: modelCallDiagnosticSchema.optional(), taskId: z.string().nullable() }).nullable(), recoveries: z.array(recoveryReviewSchema),
   checks: z.array(commandEvidenceSchema), checkedSourceHash: hash.nullable(), gates: z.array(gateDecisionSchema),
   outcome: z.enum(['in-progress', 'clarification-required', 'rejected', 'rework-exhausted', 'manual-attention', 'development-delivered']),

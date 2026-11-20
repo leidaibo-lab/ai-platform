@@ -51,7 +51,7 @@ for (const scenario of ['clean', 'repair', 'exhausted'] as ReviewScenario[]) {
 }
 
 // 固化真实专项暴露的边界：代码修好不能替代有效复评报告。
-test('修复后复评结构无效仍暂停，隐藏断言通过也不得计交付', { timeout: 120000 }, /** 不放宽门禁或自动重试来制造通过。 */ async () => {
+test('修复后复评持续无效会停止，隐藏断言通过也不得计交付', { timeout: 120000 }, /** 不放宽门禁或自动重试来制造通过。 */ async () => {
   const parent = mkdtempSync(resolve(tmpdir(), 'review-invalid-report-'));
   /** 第一次评审照常发现缺陷，复评只注入无效报告以验证宿主阻断。 */
   const malformed: GeneratorV2 = async (...args) => {
@@ -61,9 +61,11 @@ test('修复后复评结构无效仍暂停，隐藏断言通过也不得计交�
   try {
     const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(parent, 'store.db')}` };
     const result = await runReviewTrial(config, resolve(parent, 'run'), 'repair', malformed);
-    assert.equal(result.workflowStatus, 'suspended');
+    assert.equal(result.workflowStatus, 'success');
     assert.equal(result.final.passed, true);
-    assert.equal(result.state?.recovery?.phase, 'review-code');
+    assert.equal(result.state?.outcome, 'manual-attention');
+    assert.equal(result.state?.faults.at(-1)?.phase, 'review-code');
+    assert.equal(result.state?.technicalRecovery?.blocked?.reason, 'no-progress');
     assert.equal(result.state?.delivery, null);
     assert.equal(reviewTrialPassed(result), false);
   } finally { rmSync(parent, { recursive: true, force: true }); }

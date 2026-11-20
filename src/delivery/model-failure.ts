@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { HandoffReadError } from './remote-handoff.js';
 
-export const modelFailureSchema = z.object({ source: z.enum(['mastra-total', 'mastra-step', 'mastra-first-chunk', 'upstream-http', 'transport-connect', 'transport-headers', 'transport-timeout', 'handoff-read', 'aborted', 'unknown', 'tool-step-limit', 'output-length', 'content-filter', 'model-finish']), triggerLimitMs: z.number().int().positive().max(3600000).optional(), httpStatus: z.number().int().min(400).max(599).optional(), code: z.enum(['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'HANDOFF_VERSION_UNAVAILABLE', 'HANDOFF_HASH_MISMATCH', 'HANDOFF_FILE_UNREGISTERED']).optional(), finishReason: z.enum(['stop', 'length', 'tool-calls', 'content-filter', 'error', 'other', 'unknown', 'tripwire']).optional(), steps: z.number().int().nonnegative().optional(), maxSteps: z.number().int().positive().optional() });
+export const modelFailureSchema = z.object({ source: z.enum(['mastra-total', 'mastra-step', 'mastra-first-chunk', 'upstream-http', 'transport-connect', 'transport-headers', 'transport-timeout', 'transport-network', 'handoff-read', 'aborted', 'unknown', 'tool-step-limit', 'output-length', 'content-filter', 'model-finish']), triggerLimitMs: z.number().int().positive().max(3600000).optional(), httpStatus: z.number().int().min(400).max(599).optional(), code: z.enum(['ETIMEDOUT', 'EAI_AGAIN', 'ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'HANDOFF_VERSION_UNAVAILABLE', 'HANDOFF_HASH_MISMATCH', 'HANDOFF_FILE_UNREGISTERED']).optional(), finishReason: z.enum(['stop', 'length', 'tool-calls', 'content-filter', 'error', 'other', 'unknown', 'tripwire']).optional(), steps: z.number().int().nonnegative().optional(), maxSteps: z.number().int().positive().optional() });
 export type ModelFailure = z.infer<typeof modelFailureSchema>;
 
 /** 按明确 SDK 属性或传输码分类，忽略 message、URL 和请求响应正文。 */
@@ -22,6 +22,7 @@ export function diagnoseModelFailure(error: unknown): ModelFailure {
     if (value.code === 'UND_ERR_CONNECT_TIMEOUT') return { source: 'transport-connect', code: value.code };
     if (value.code === 'UND_ERR_HEADERS_TIMEOUT') return { source: 'transport-headers', code: value.code };
     if (value.code === 'ETIMEDOUT') return { source: 'transport-timeout', code: value.code };
+    if (value.code === 'EAI_AGAIN' || value.code === 'ECONNRESET' || value.code === 'EPIPE' || value.code === 'UND_ERR_SOCKET') return { source: 'transport-network', code: value.code };
     aborted ||= value.name === 'AbortError';
     current = value.cause;
   }

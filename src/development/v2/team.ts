@@ -18,14 +18,14 @@ import type { LiveOutputEvent } from '../../intake/live-output.js';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
 import { publishLiveOutput } from '../../intake/live-output.js';
 import { delegationSchema, recoveryHashV2, stateV2Schema, taskPackageSchema, type StateV2 } from './contracts.js';
-import { pauseForCallBudget } from './recovery-policy.js';
+import { pauseForCallBudget, usedTechnicalAttempts } from './recovery-policy.js';
 import { assertApprovalV2, unresolvedV2, validateIdentityV2 } from './gates.js';
 import { invokeV2 } from './invoke.js';
 import type { ExecutionPort } from './execution-scope.js';
 import type { DevelopmentMethods } from './methods.js';
 
-const jobSchema = z.object({ state: stateV2Schema, task: taskPackageSchema.nullable(), files: z.record(z.string(), z.string()), budget: z.number().int().nonnegative(), checkBudget: z.number().int().nonnegative().optional() });
-const resultSchema = z.object({ state: stateV2Schema, taskId: z.string().nullable(), patches: z.record(z.string(), z.string()), calls: z.number(), entry: stateV2Schema.shape.work.element.nullable(), faults: stateV2Schema.shape.faults, failed: z.boolean(), blocker: z.boolean(), delegations: z.array(delegationSchema), verificationHistory: stateV2Schema.shape.verificationHistory, stopReason: stateV2Schema.shape.stopReason, blockerKind: z.enum(['business-decision', 'authorization-required']).optional() });
+const jobSchema = z.object({ state: stateV2Schema, task: taskPackageSchema.nullable(), files: z.record(z.string(), z.string()), budget: z.number().int().nonnegative(), checkBudget: z.number().int().nonnegative().optional(), continuationQuota: z.number().int().nonnegative().optional() });
+const resultSchema = z.object({ state: stateV2Schema, taskId: z.string().nullable(), patches: z.record(z.string(), z.string()), calls: z.number(), entry: stateV2Schema.shape.work.element.nullable(), faults: stateV2Schema.shape.faults, failed: z.boolean(), blocker: z.boolean(), delegations: z.array(delegationSchema), verificationHistory: stateV2Schema.shape.verificationHistory, stopReason: stateV2Schema.shape.stopReason, blockerKind: z.enum(['business-decision', 'authorization-required']).optional(), technicalRecovery: stateV2Schema.shape.technicalRecovery });
 
 /** 从批准任务派生具名成员，不固定启动所有角色；团队参与批准包 hash。 */
 export function assembleTeam(state: StateV2): NonNullable<StateV2['team']> {
@@ -119,11 +119,15 @@ async function executeMember(config: PracticeConfig, job: z.infer<typeof jobSche
         throw error;
       }
     };
-    const called = await invokeV2(config, branch, task.role, job.state, task.paths, { ...task, findings: unresolvedV2(job.state) }, methods, parent, undefined, job.checkBudget, onProgress);
+    const policy = job.state.technicalRecovery;
+    const memberState = policy && job.continuationQuota !== undefined
+      ? { ...job.state, technicalRecovery: { ...policy, limit: usedTechnicalAttempts(policy) + job.continuationQuota } }
+      : job.state;
+    const called = await invokeV2(config, branch, task.role, memberState, task.paths, { ...task, findings: unresolvedV2(job.state) }, methods, parent, undefined, job.checkBudget, onProgress);
     const patches: Record<string, string> = {};
-    if (called.entry) for (const path of task.paths) patches[path] = await branch.readFile(path);
+    if (called.entry && !(policy && blockerKind)) for (const path of task.paths) patches[path] = await branch.readFile(path);
     const faults = called.state.faults.slice(job.state.faults.length);
-    return { state: job.state, taskId: task.id, patches, calls, entry: called.entry, faults, failed: !called.entry, blocker: (called.entry?.text.includes('ARCHITECTURE_BLOCKER:') ?? false) || delegatedBlocker, delegations: called.entry ? delegated : [], verificationHistory: called.state.verificationHistory?.slice(job.state.verificationHistory?.length ?? 0), stopReason: called.state.stopReason, blockerKind };
+    return { state: job.state, taskId: task.id, patches, calls, entry: called.entry, faults, failed: !called.entry, blocker: (called.entry?.text.includes('ARCHITECTURE_BLOCKER:') ?? false) || delegatedBlocker, delegations: called.entry ? delegated : [], verificationHistory: called.state.verificationHistory?.slice(job.state.verificationHistory?.length ?? 0), stopReason: called.state.stopReason, blockerKind, technicalRecovery: called.state.technicalRecovery };
   } finally { if (execution) await execution.close(); rmSync(temporary, { recursive: true, force: true }); }
 }
 
@@ -143,11 +147,16 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
         (task) => !state.completedTasks.includes(task.id),
       );
       if (!remaining.length) return noop;
-      const capacity = Math.min(state.team.maxParallel, Math.floor((state.maxCalls - state.calls) / 8));
+      const policy = state.technicalRecovery;
+      const continuationRemaining = policy ? Math.max(0, policy.limit - usedTechnicalAttempts(policy)) : undefined;
+      const capacity = Math.min(state.team.maxParallel, Math.floor((state.maxCalls - state.calls) / 8), continuationRemaining || state.team.maxParallel);
       if (capacity < 1) return [{ state: pauseForCallBudget(state, 'backend'), task: null, files: {}, budget: 0 }];
+      const platformTask = policy?.pendingFaultId && policy.platformResumes?.some(receipt => receipt.faultId === policy.pendingFaultId)
+        ? state.faults.find(fault => fault.id === policy.pendingFaultId)?.taskId
+        : undefined;
       const ready = remaining.filter(
         // 架构声明的依赖全部完成后才进入下一波次。
-        (task) => task.dependsOn.every(
+        (task) => (!platformTask || task.id === platformTask) && task.dependsOn.every(
           // 依赖完成集由宿主维护，不能靠自然语言宣称。
           (id) => state.completedTasks.includes(id),
         ),
@@ -160,7 +169,7 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
       for (const path of Object.keys(baseline)) files[path] = await execution.readFile(path);
       return ready.map(
         // 每分支最多8次父子模型调用，聚合后全Run仍不超过72次。
-        (task) => ({ state, task, files, budget: 8, checkBudget }),
+        (task, index) => ({ state, task, files, budget: 8, checkBudget, continuationQuota: continuationRemaining === undefined ? undefined : Math.floor(continuationRemaining / ready.length) + Number(index < continuationRemaining % ready.length) }),
       );
     },
   });
@@ -201,10 +210,20 @@ export function createTeamExecution(config: PracticeConfig, execution: Execution
       ), checkpointHash: developmentHash(await execution.snapshot()), completedTasks: [...state.completedTasks], work: [...state.work], faults: [...state.faults], delegations: [...(state.delegations ?? [])], verificationHistory: [...(state.verificationHistory ?? [])] };
       for (const result of results) {
         for (const record of result.verificationHistory ?? []) next.verificationHistory.push({ ...record, sequence: next.verificationHistory.length + 1 });
-        if (result.entry) { next.completedTasks.push(result.taskId!); next.work.push(result.entry); next.delegations.push(...result.delegations); }
+        if (result.entry) {
+          next.work.push(result.entry);
+          if (!(state.technicalRecovery && result.blockerKind)) { next.completedTasks.push(result.taskId!); next.delegations.push(...result.delegations); }
+        }
         for (const fault of result.faults) next.faults.push({ ...fault, sequence: next.faults.length + 1 });
       }
-      const stopped = results.find(/** 分支额度耗尽或明确业务/权限阻塞不能当作普通模型故障重试。 */result => result.stopReason || (next.input.autonomy && result.blockerKind));
+      const stopped = results.find(/** 分支额度耗尽或明确业务/权限阻塞不能当作普通模型故障重试。 */result => result.stopReason || ((next.technicalRecovery || next.input.autonomy) && result.blockerKind));
+      const policy = state.technicalRecovery;
+      if (policy) {
+        const attempts = results.flatMap(result => result.technicalRecovery?.attempts.slice(policy.attempts.length) ?? []);
+        const blocked = results.find(result => result.technicalRecovery?.blocked)?.technicalRecovery?.blocked;
+        next.technicalRecovery = { ...policy, attempts: [...policy.attempts, ...attempts], blocked, pendingFaultId: attempts.some(attempt => attempt.faultId === policy.pendingFaultId) ? undefined : policy.pendingFaultId };
+        if (blocked && !stopped) return { ...next, outcome: 'manual-attention' as const };
+      }
       if (stopped) return stopAutonomy(next, stopped.stopReason ?? stopped.blockerKind!);
       const failed = results.find(
         // 已成功分支持久化完成；人工接续只派发失败任务。

@@ -89,7 +89,7 @@ export function repairTasks(state: StateV2, route: StateV2['route']): Set<string
 
 /** 记录可复核的失败签名；只比较失败检查/未解决问题，忽略运行时长与源码噪声。 */
 export function trackRepair(state: StateV2, route: StateV2['route']): StateV2 {
-  if (!state.input.autonomy) return state;
+  if (!state.input.autonomy && !state.technicalRecovery) return state;
   const latest = state.verificationHistory?.filter(/** 分支探查不能冒充集成结论。 */record => record.purpose !== 'tool').at(-1);
   const checks = latest?.sourceHash === state.checkpointHash ? latest.checks : state.checks;
   const failures = checks.filter(/** 超时/截断同样是未完成证据。 */check => check.exitCode !== 0 || (check.processExitCode !== undefined && check.processExitCode !== 0) || check.timedOut || check.stdoutTruncated || check.stderrTruncated);
@@ -98,16 +98,16 @@ export function trackRepair(state: StateV2, route: StateV2['route']): StateV2 {
   const prior = state.repairHistory?.at(-1);
   const noProgress = prior?.signature === signature ? prior.noProgress + 1 : 0;
   const kind = failures.some(/** 环境错误只能通过现有检查重试或已批准infrastructure任务解决，不能擅自装依赖。 */item => item.id.startsWith('environment:') || /cannot connect to.*docker|docker daemon|ECONNREFUSED|ENOTFOUND|no space left|unable to.*(?:image|registry)/i.test(item.stderr + item.stdout)) ? 'environment' as const : 'code' as const;
-  const record = { round: state.round, sourceHash: state.checkpointHash, signature, tasks: [...repairTasks(state, route)], noProgress, kind };
+  const record = { round: state.round, sourceHash: state.checkpointHash, signature, tasks: [...repairTasks(state, route)], noProgress, kind, ...(state.technicalRecovery && failures.length ? { failedChecks: failures.map(item => item.id) } : {}) };
   const next = { ...state, repairHistory: [...(state.repairHistory ?? []), record] };
-  return noProgress >= state.input.autonomy.maxNoProgress ? stopAutonomy(next, 'no-progress') : next;
+  return noProgress >= (state.input.autonomy?.maxNoProgress ?? 2) ? stopAutonomy(next, 'no-progress') : next;
 }
 
 /** 有界业务返工；总次数不因架构重新规划而重置。 */
 export function reworkState(state: StateV2, route: StateV2['route'], phase: StateV2['phase']): StateV2 {
   state = trackRepair(state, route);
   if (state.outcome !== 'in-progress') return state;
-  if (state.round >= state.input.maxReworks) return state.input.autonomy ? stopAutonomy(state, 'repair-budget') : { ...state, outcome: 'rework-exhausted' };
+  if (state.round >= state.input.maxReworks) return state.input.autonomy || state.technicalRecovery ? stopAutonomy(state, 'repair-budget') : { ...state, outcome: 'rework-exhausted' };
   const invalid = repairTasks(state, route);
   return { ...state, round: state.round + 1, route, phase, completedTasks: state.completedTasks.filter(
     // 独立任务保持完成证据，避免并行返工重放无关变更。

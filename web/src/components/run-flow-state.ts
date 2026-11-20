@@ -16,6 +16,7 @@ export interface RunFlowDocument {
   progress?: { phase: string; title: string };
   retry?: { step: string; title: string };
   intake?: { round?: number };
+  technicalRecovery?: { blocked?: unknown; awaitingPlatform?: boolean };
   developmentStop?: { reason: string };
   blockage?: unknown;
   product?: unknown;
@@ -133,12 +134,12 @@ export function projectRunFlow(document: RunFlowDocument) {
   // 恢复节点使用原路径，避免把 QA 缺陷修复错算成测试或产品。
   const gateTeam = gate === 'recover-development' && node ? nodeTeam(node) : teamForPath(gate);
   const active = done ? 'delivery' : document.clarify || document.productCorrection ? 'product'
-    : gateTeam ?? teamForPath(document.retry?.step) ?? (node && nodeTeam(node))
+    : (document.technicalRecovery?.awaitingPlatform ? 'development' : undefined) ?? gateTeam ?? teamForPath(document.retry?.step) ?? (node && nodeTeam(node))
       ?? (document.intake || document.product || document.outcome === 'rejected' ? 'product' : undefined)
       ?? (last && nodeTeam(last)) ?? teamForPath(document.step)
-      ?? (document.developmentStop || document.blockage ? 'development' : 'product');
+      ?? (document.technicalRecovery?.blocked || document.developmentStop || document.blockage ? 'development' : 'product');
   const status = done ? '已完成' : document.clarify ? '等待业务处理' : document.productCorrection ? '纠偏已保存'
-    : failed ? '执行失败' : settled ? '已停止' : document.status === 'suspended' || document.status === 'waiting' ? '等待确认'
+    : document.technicalRecovery?.awaitingPlatform ? '等待平台修复' : failed ? '执行失败' : settled ? '已停止' : document.status === 'suspended' || document.status === 'waiting' ? '等待确认'
       : document.status === 'running' ? '执行中' : '待执行';
   const states = Object.fromEntries(teams.map((team, index) => [team, done || index < teams.indexOf(active) ? 'done'
     : team !== active ? 'pending' : failed ? 'failed' : settled && !document.clarify ? 'stopped' : 'current'])) as Record<Team, TeamState>;

@@ -19,12 +19,12 @@ import { recoverDevelopmentV2 } from '../src/development-v2-service.js';
 import { describeGate, validateGate, describeDevelopmentProgress } from '../src/intake/gates.js';
 
 /** 固定Node项目只验证控制流，检查脚本不依赖模型输出。 */
-function fixture(generate: GeneratorV2) {
+function fixture(generate: GeneratorV2, historical = true) {
   const parent = mkdtempSync(resolve(tmpdir(), 'stage-state-'));
   const directory = resolve(parent, 'run');
   const input = inputV2Schema.parse({ source: { kind: 'evaluation', runId: 'synthetic', content: '固定合成需求：fixtureValue返回1。', hash: developmentHash('合成'), evidence: 'evaluation-input' }, project: { id: 'stage-test', files: { 'src/solution.mjs': 'export function fixtureValue(){return 0;}', 'checks.mjs': 'import assert from "node:assert/strict"; import {fixtureValue} from "./src/solution.mjs"; assert.equal(fixtureValue(),1);' }, writablePaths: ['src/solution.mjs'], checkFiles: ['checks.mjs'], roles: ['backend'] } });
   seedDevelopment(directory, input);
-  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'unused.db')}` };
+  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'unused.db')}`, ...(historical ? { legacyDevelopmentWorkflow: true as const } : {}) };
   /** 重建同一原生Store和候选，用于验证跨装配及旧图兼容。 */
   function open(legacySequential = false) {
     const execution = new DevelopmentExecution(resolve(directory, 'candidate'), input.project.writablePaths, input.project.checkFiles);
@@ -50,6 +50,33 @@ test('超过300非空行的批准原文可进入开发上下文且保留原文�
     assert.equal((snapshot!.steps!['development-iteration-v2.prepare-context'] as any).status, 'success');
     assert.equal((snapshot!.steps!['development-iteration-v2.approve-architecture'] as any).status, 'suspended');
     assert.equal(initialized.approvedHash, null);
+  } finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
+});
+
+test('临时超时自动接续后，缺失业务规则仍交给产品澄清', async () => {
+  let architectureCalls = 0;
+  /** 仅注入首次超时和可定位的业务规则缺口。 */
+  const generate: GeneratorV2 = async (...args) => {
+    if (args[2] === 'architect' && ++architectureCalls === 1) throw new MastraTimeoutError({ timeoutType: 'step', timeoutMs: 600000 });
+    const entry = await generateV2(...args);
+    if (args[2] !== 'readiness') return entry;
+    const report = JSON.parse(entry.text);
+    return { ...entry, text: JSON.stringify({ ...report, verdict: 'CONCERNS', findings: [{ id: 'missing-rule', severity: 'high', category: 'business', route: 'product', detail: '规则未指定审批责任人', evidence: '批准原文没有审批人规则', refs: report.coverageRefs.slice(0, 1) }] }) };
+  };
+  const setup = fixture(generate, false);
+  const app = setup.open();
+  try {
+    const run = await app.workflow.createRun();
+    await run.start({ inputData: app.input });
+    const saved = await app.workflow.getWorkflowRunById(run.runId);
+    const state = stateV2Schema.parse(saved?.result);
+    assert.equal(state.outcome, 'clarification-required');
+    assert.equal(state.technicalRecovery?.attempts.length, 1);
+    assert.equal(state.technicalRecovery?.attempts[0]?.faultId, state.faults[0]?.id);
+    assert.equal(state.technicalRecovery?.attempts[0]?.action, 'backoff');
+    assert.equal(state.technicalRecovery?.attempts[0]?.result, 'execution-passed');
+    assert.equal(state.approvedHash, null);
+    assert.equal(state.completedTasks.length, 0);
   } finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
 });
 
@@ -147,7 +174,7 @@ import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { createProductDevelopmentWorkflow } from '../src/mastra/workflows/product-development.js';
 import { readIntake, respondIntake } from '../src/intake/service.js';
 
-test('主流程停止开发后不进入测试、发布或最终交付；原生暂停投影可直接提交决定', /** 使用正式HTTP服务依赖的命令和原生检查点，避免只验证CLI。 */async () => {
+test('主流程遇到未知开发故障会保留证据并停止下游', /** 使用正式HTTP服务依赖的命令和原生检查点，避免只验证CLI。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'stage-root-'));
   const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   const app = createStudioApplicationOptions(config);
@@ -160,10 +187,10 @@ test('主流程停止开发后不进入测试、发布或最终交付；原生�
     let current = await readIntake(workflow, run.runId);
     current = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: current.product!.artifact.hash, reviewer: 'test', comment: '合成批准', decision: 'approve' });
     current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { reviewer: 'test', comment: '合成项目', project: { id: 'stage-project', files: { 'src/a.mjs': 'export const a=0;', 'check.mjs': 'export const check=1;' }, writablePaths: ['src/a.mjs'], checkFiles: ['check.mjs'], roles: ['backend'] } } });
-    assert.equal(current.gate!.key, 'recover-development'); assert.equal(current.gate!.recoveryInfo!.phase, '技术方案生成');
-    assert.equal('recoveryState' in current.gate!.evidence, false);
-    current = await respondIntake(workflow, 'fixture', run.runId, { gateHash: current.gate!.gateHash, data: { ...current.gate!.fixed, decision: 'stop', reviewer: 'test', comment: '合成停止' } });
     assert.equal(current.status, 'success'); assert.equal(current.outcome, 'blocked'); assert.equal(current.gate, undefined);
+    assert.equal(current.technicalRecovery?.used, 0);
+    assert.equal(current.technicalRecovery?.blocked?.fault?.phase, '技术方案生成');
+    assert.equal(current.technicalRecovery?.blocked?.reason, 'diagnosis-required');
     const snapshot = await workflow.getWorkflowRunById(run.runId);
     for (const key of ['test-team', 'deployment-team', 'delivery-team']) assert.notEqual((snapshot!.steps![key] as any)?.status, 'success');
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -315,7 +342,7 @@ test('架构返回业务阻塞时投影具体事项和产品依据，不冒充�
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('研发六步图就地恢复方案、裁决就绪与评审问题，并复用固定检查', async () => {
+test('研发六步图自动纠偏方案、裁决就绪与评审问题，并复用固定检查', async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'development-consolidated-'));
   const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   const actor = { reviewer: 'test', comment: '合成裁决' };
@@ -351,11 +378,11 @@ test('研发六步图就地恢复方案、裁决就绪与评审问题，并复�
     }
     current = await respondIntake(app.workflow, 'fixture', runId, { role: 'product', artifactHash: current.product!.artifact.hash, decision: 'approve', ...actor });
     current = await submit({ project });
-    assert.equal(current.gate?.key, 'recover-development');
-    assert.equal(current.gate?.recoveryInfo?.phase, '技术方案生成');
-    assert.deepEqual(calls, ['context', 'architect']);
-    await app.storage.close(); app = open();
-    current = await submit({ decision: 'retry' });
+    const recovery = current.technicalRecovery!;
+    assert.equal(recovery.used, 1);
+    assert.equal(recovery.attempts[0]?.action, 'correct-output');
+    assert.equal(recovery.attempts[0]?.result, 'verified');
+    assert.match(recovery.attempts[0]?.artifactHash ?? '', /^[a-f0-9]{64}$/);
     assert.deepEqual(calls, ['context', 'architect', 'architect', 'readiness']);
     assert.equal(current.gate?.key, 'resolve-readiness');
     assert.ok(current.timeline.nodes.some(node => node.id.endsWith('.assess-readiness') && node.status === 'suspended'));

@@ -111,7 +111,9 @@ test('研发阶段角色只映射三类 Agent，自检保留为确定性 Workflo
 test('环境失败保留分类证据，下一轮只在原授权内重试检查', /** 不把环境异常正文写入模型或日志，也不回退宿主命令。 */async () => {
   await harness(input(), generateV2, /** 临时环境恢复后继续，不要求人工重填需求。 */async result => {
     assert.equal(result.status, 'success'); const state: StateV2 = result.result;
-    assert.equal(state.outcome, 'development-delivered'); assert.equal(state.repairHistory![0].kind, 'environment');
+    assert.equal(state.outcome, 'development-delivered', JSON.stringify({ recovery: state.technicalRecovery, faults: state.faults, stop: state.stopReason, checks: state.checks.map(check => check.id) }));
+    assert.equal(state.technicalRecovery?.attempts[0]?.action, 'rerun-checks');
+    assert.equal(state.technicalRecovery?.attempts.at(-1)?.result, 'verified');
     assert.doesNotMatch(JSON.stringify(state.verificationHistory), /synthetic-private-error/);
   }, true, true);
 });
@@ -168,10 +170,10 @@ for (const scenario of ['verification-budget', 'repair-budget', 'failed-branch-e
     };
     await harness(data, generate, /** 失败分支的检查事实必须保留，即使补丁被回滚。 */async result => {
       if (scenario === 'failed-branch-evidence') {
-        assert.equal(result.status, 'suspended');
-        const payload = Object.values(result.steps as Record<string, any>).find(/** 读取原生叶节点暂停载荷。 */step => step.suspendPayload?.recoveryState)?.suspendPayload;
-        assert.ok(payload); const state = stateV2Schema.parse(payload.recoveryState);
-        assert.equal(state.verificationHistory!.length, 3);
+        assert.equal(result.status, 'success');
+        const state = stateV2Schema.parse(result.result);
+        assert.ok(state.technicalRecovery?.blocked);
+        assert.ok(state.verificationHistory!.length >= 2);
         assert.ok(state.faults.length >= state.verificationHistory!.length);
         assert.ok(state.faults.every(/** 每次失败调用均保留回滚证明，不绑定内部重试次数。 */fault => fault.restored));
         assert.equal(state.completedTasks.length, 0);

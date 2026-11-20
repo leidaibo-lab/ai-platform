@@ -1,3 +1,4 @@
+import { platformRecoveryStepId } from '../development/v2/platform-recovery.js';
 import { developmentSteps } from '../mastra/workflows/development-steps.js';
 import { repositoryRetrySchema, repositorySyncPauseSchema } from '../delivery/remote-handoff.js';
 /** 业务关口白名单：复用已有 Zod 契约，不接受客户端指定步骤或执行命令。 */
@@ -5,7 +6,7 @@ import { z } from 'zod';
 import { blockerAnswerSchema, revisedProductReviewSchema, blockerCycleSchema, validateBlockerAnswers } from './blocker-contracts.js';
 import { modelCallDiagnosticSchema, describeModelCall } from '../development/v2/model-diagnostic.js';
 import { outputDiagnosticSchema } from '../development/v2/output-diagnostic.js';
-import { applyRecoveryDecision } from '../development/v2/recovery-policy.js';
+import { applyRecoveryDecision, usedTechnicalAttempts } from '../development/v2/recovery-policy.js';
 import { stageFailureDetailsSchema } from '../development/v2/stage-failure.js';
 import { developmentHash, projectSchema, recoveryReviewSchema } from '../development/contracts.js';
 import { autonomyPolicySchema, stateV2Schema, approvalHashV2, recoveryHashV2, findingsHashV2, approvalV2Schema, findingsReviewSchema } from '../development/v2/contracts.js';
@@ -32,11 +33,41 @@ const definitions: Record<string, { title: string; description: string; schema: 
 };
 export type GatePayload = Record<string, any>;
 const phaseNames: Record<string, string> = { ...Object.fromEntries(developmentSteps.map(step => [step.id, step.title])), 'analyze-blocker-questions': '待决问题整理', 'write-revised-product': '产品稿修订', 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
+
+/** 工作台只读取脱敏故障和复验结果，不投影内部候选或模型正文。 */
+export function describeTechnicalRecovery(state: z.infer<typeof stateV2Schema>) {
+  const policy = state.technicalRecovery;
+  const repairs = (state.repairHistory ?? []).filter(repair => repair.failedChecks?.length).slice(-8);
+  if (!policy || (!policy.attempts.length && !policy.blocked && !policy.pendingFaultId && !repairs.length)) return undefined;
+  const related = new Map(state.faults.filter(fault => fault.id).map(fault => [fault.id!, fault]));
+  /** 使用相同的故障文案，优先展示确定性校验原因。 */
+  function describeFault(id: string) {
+    const fault = related.get(id);
+    if (!fault) return undefined;
+    return {
+      phase: phaseNames[fault.phase] ?? '开发阶段',
+      origin: fault.origin,
+      reason: fault.origin === 'registered-checks' ? '登记检查执行未完成'
+        : describeRecoveryOutputFailure(fault) ?? (fault.modelCall ? describeRecoveryModelFailureReason(fault.modelCall.failure) : faultReasons[fault.kind]),
+      diagnostic: fault.diagnostic,
+      modelCall: fault.modelCall,
+      checkIds: fault.checkIds,
+      checkpointHash: fault.checkpointHash,
+    };
+  }
+  return {
+    used: usedTechnicalAttempts(policy), limit: policy.limit,
+    pending: policy.pendingFaultId ? describeFault(policy.pendingFaultId) : undefined,
+    blocked: policy.blocked && { ...policy.blocked, fault: describeFault(policy.blocked.faultId) },
+    attempts: policy.attempts.slice(-8).map(attempt => ({ ...attempt, fault: describeFault(attempt.faultId) })),
+    repairs: repairs.map(repair => ({ round: repair.round, failedChecks: repair.failedChecks!, verification: repair.verification })),
+  };
+}
 const faultReasons: Record<string, string> = { 'model-timeout': '本次模型调用未在规定时间内完成响应', 'model-network': '本次模型请求的传输连接未完成', 'invalid-output': '模型返回的内容未通过结构或引用校验', 'model-error': '模型调用未成功' };
 /** 只依据已保存的白名单诊断说明单次调用，不把上游响应错误归因于用户网络或整个模型服务。 */
 export function describeRecoveryModelFailureReason(failure: z.infer<typeof modelCallDiagnosticSchema>['failure']) {
   if (failure.source === 'upstream-http') return failure.httpStatus === undefined ? '上游模型网关返回 HTTP 错误（状态码未记录）' : `上游模型网关返回 HTTP ${failure.httpStatus}${[408, 504, 524].includes(failure.httpStatus) ? '（请求超时）' : ''}`;
-  const finishReasons: Partial<Record<typeof failure.source, string>> = { 'tool-step-limit': '资料读取达到工具步骤上限，尚未生成最终结果', 'output-length': '模型输出被长度上限截断', 'content-filter': '模型输出被安全规则阻断', 'model-finish': '模型提前结束，结果未完成', 'mastra-total': 'Agent 总执行时限触发', 'mastra-step': '单次模型步骤时限触发', 'mastra-first-chunk': '等待首段内容超时', 'transport-connect': '模型请求连接建立超时', 'transport-headers': '模型请求等待响应头超时', 'transport-timeout': '模型请求传输超时', aborted: '模型请求已中断（未确认时限来源）', unknown: '未记录明确的失败来源' };
+  const finishReasons: Partial<Record<typeof failure.source, string>> = { 'tool-step-limit': '资料读取达到工具步骤上限，尚未生成最终结果', 'output-length': '模型输出被长度上限截断', 'content-filter': '模型输出被安全规则阻断', 'model-finish': '模型提前结束，结果未完成', 'mastra-total': 'Agent 总执行时限触发', 'mastra-step': '单次模型步骤时限触发', 'mastra-first-chunk': '等待首段内容超时', 'transport-connect': '模型请求连接建立超时', 'transport-headers': '模型请求等待响应头超时', 'transport-network': '模型服务连接暂时中断', 'transport-timeout': '模型请求传输超时', aborted: '模型请求已中断（未确认时限来源）', unknown: '未记录明确的失败来源' };
   return finishReasons[failure.source];
 }
 /** 用宿主白名单诊断解释输出校验失败。 */
@@ -99,6 +130,7 @@ export function gateInitial(key: string, payload: GatePayload) {
 /** 只投影白名单关口和当前实际材料，未知暂停点保持不可操作。 */
 export function describeGate(path: string, payload: GatePayload) {
   const nativeKey = path.split('.').at(-1)!;
+  if (nativeKey === platformRecoveryStepId) return undefined;
   const stageRecovery = payload.recoveryState && stateV2Schema.safeParse(payload.recoveryState).success;
   const findings = stateV2Schema.safeParse(payload.findingsState).data;
   const findingsKey = nativeKey === 'assess-readiness' && findings?.phase === 'resolve-readiness' ? 'resolve-readiness'

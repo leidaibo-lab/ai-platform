@@ -242,7 +242,7 @@ for (const scenario of ['dependency', 'shared-path', 'shared-path-recovery', 'sh
     const input = inputV2Schema.parse({ source: { kind: 'evaluation', runId: 'team-evaluation', content, hash: developmentHash(content), evidence: 'evaluation-input' }, project, maxReworks: 1 });
     seedDevelopment(directory, input);
     const execution = new DevelopmentExecution(resolve(directory, 'candidate'), project.writablePaths, project.checkFiles);
-    const config: PracticeConfig = { ...(['health-failure', 'health-business-gap', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'release-plan-incomplete'].includes(scenario) ? { legacyDeployment: true } : {}), rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(parent, 'workflow.db')}` };
+    const config: PracticeConfig = { ...(['shared-path-recovery', 'failed-member'].includes(scenario) ? { legacyDevelopmentWorkflow: true } : {}), rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(parent, 'workflow.db')}` };
     const children: string[] = [];
     const sharedPath = scenario.startsWith('shared-path');
     let recovering = false;
@@ -286,9 +286,9 @@ for (const scenario of ['dependency', 'shared-path', 'shared-path-recovery', 'sh
       if (scenario === 'parallel') { assert.equal(arrivals, 2); assert.equal(result.status, 'success'); assert.equal(result.result.outcome, 'development-delivered'); }
       else if (scenario === 'dependency') { assert.equal(result.status, 'success'); assert.equal(result.result.outcome, 'development-delivered'); assert.deepEqual(children, ['src/a.mjs', 'src/b.mjs']); }
       else if (scenario === 'shared-path-conflict') {
-        const pending = paused(result);
-        assert.equal(pending.path.at(-1), 'architecture');
-        assert.equal(pending.payload.recoveryState.faults.at(-1).diagnostic.code, 'path-handoff-unordered');
+        assert.equal(result.status, 'success');
+        assert.equal(result.result.outcome, 'manual-attention');
+        assert.equal(result.result.faults.at(-1).diagnostic.code, 'path-handoff-unordered');
         assert.deepEqual(children, []);
       } else if (sharedPath) {
         let finished = result;
@@ -305,15 +305,20 @@ for (const scenario of ['dependency', 'shared-path', 'shared-path-recovery', 'sh
         assert.deepEqual(children, ['src/a.mjs', 'src/b.mjs']);
         assert.match(await execution.readFile('src/a.mjs'), /firstWave = 1;\nexport const secondWave = 2;/);
       } else {
-        const pending = paused(result); assert.equal(pending.path.at(-1), 'execute-agent-team');
         if (scenario === 'failed-member') {
+          const pending = paused(result); assert.equal(pending.path.at(-1), 'execute-agent-team');
           assert.match(await execution.readFile('src/a.mjs'), /fixtureValue/); assert.equal(await execution.readFile('src/b.mjs'), project.files['src/b.mjs']);
           recovering = true;
           const resumed: any = await run.resume({ step: pending.path, resumeData: { ...actor, hash: pending.payload.hash, decision: 'retry' } });
           assert.equal(resumed.status, 'success'); assert.equal(resumed.result.outcome, 'development-delivered');
           assert.equal(children.filter(/** 成功分支不应在人工重试中重新派发。 */path => path === 'src/a.mjs').length, 1);
         }
-        else { assert.equal(await execution.readFile('src/a.mjs'), project.files['src/a.mjs']); assert.deepEqual(children, []); }
+        else {
+          assert.equal(result.status, 'success');
+          assert.equal(result.result.outcome, 'manual-attention');
+          assert.equal(await execution.readFile('src/a.mjs'), project.files['src/a.mjs']);
+          assert.deepEqual(children, []);
+        }
       }
     } finally { if (barrierTimeout) clearTimeout(barrierTimeout); await execution.close(); await storage.close(); rmSync(parent, { recursive: true, force: true }); }
   });

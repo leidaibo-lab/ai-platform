@@ -21,6 +21,10 @@ export interface PracticeConfig {
   legacyDeployment?: true;
   /** 使用收敛前的研发执行图恢复历史 Run。 */
   legacyDevelopmentWorkflow?: true;
+  /** 新研发 Run 的技术接续预算。 */
+  developmentContinuationLimit?: number;
+  /** 平台集成专用凭据，配置后启用依赖修复通知。 */
+  platformRepairToken?: string;
   /** 使用历史四段产品图恢复已有暂停点。 */
   legacyProductWorkflow?: true;
   /** 使用此前嵌套的三阶段产品图恢复已有 Run。 */
@@ -57,11 +61,14 @@ export function readConfig(): PracticeConfig {
   const browserQaHeaded = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_BROWSER_QA_HEADED) === 'true';
   const legacyDeployment = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEPLOYMENT) === 'true';
   const legacyDevelopmentWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEVELOPMENT_WORKFLOW) === 'true';
+  const developmentContinuationLimit = z.coerce.number().int().min(0).max(72).default(4).parse(process.env.MASTRA_DEVELOPMENT_CONTINUATION_LIMIT);
+  const platformRepairToken = process.env.MASTRA_PLATFORM_REPAIR_TOKEN || undefined;
+  if (platformRepairToken && !/^[A-Za-z0-9_-]{32,256}$/.test(platformRepairToken)) throw new Error('平台修复通知凭据格式无效');
   const legacyProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_PRODUCT_WORKFLOW) === 'true';
   const nestedProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NESTED_PRODUCT_WORKFLOW) === 'true';
   const nativeThreeStageProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NATIVE_THREE_STAGE_PRODUCT_WORKFLOW) === 'true';
   if ([legacyProductWorkflow, nestedProductWorkflow, nativeThreeStageProductWorkflow].filter(Boolean).length > 1) throw new Error('只能选择一种历史产品流程图');
-  return { rootDir: root, mode, port, browserQaHeaded, ...(legacyDevelopmentWorkflow ? { legacyDevelopmentWorkflow: true } : {}), ...(nativeThreeStageProductWorkflow ? { nativeThreeStageProductWorkflow: true } : {}), ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), ...(legacyDeployment ? { legacyDeployment: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  return { rootDir: root, mode, port, browserQaHeaded, developmentContinuationLimit, platformRepairToken, ...(legacyDevelopmentWorkflow ? { legacyDevelopmentWorkflow: true } : {}), ...(nativeThreeStageProductWorkflow ? { nativeThreeStageProductWorkflow: true } : {}), ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), ...(legacyDeployment ? { legacyDeployment: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
 }
 
 /** 默认启用注册中心；只有明确关闭才允许本地兼容路径。 */

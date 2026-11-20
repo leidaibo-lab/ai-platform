@@ -1,3 +1,4 @@
+import { platformWait, projectRecoveryMetrics } from './platform-recovery.js';
 import { readProductDocuments } from '../business-engineering/product-documents.js';
 import { successorSource } from './successor-run.js';
 import { waitForWorkflowToSettle } from '../mastra/platform/workflow-recovery.js';
@@ -23,7 +24,7 @@ import { validateIdentityV2 } from '../development/v2/gates.js';
 import type { createProductDevelopmentWorkflow } from '../mastra/workflows/product-development.js';
 import { deliverySchema, pendingSchema, reviewSchema, validateReview } from '../mastra/workflows/delivery.js';
 import { alignmentRetryInput, describeRecovery } from './recovery.js';
-import { describeGate, validateGate, describeDevelopmentProgress } from './gates.js';
+import { describeGate, validateGate, describeDevelopmentProgress, describeTechnicalRecovery } from './gates.js';
 import { intakeSchema, validateAnswers } from './contracts.js';
 import { projectRunTimeline } from './run-timeline.js';
 import { assertProjectCorrelation, projectTarget } from '../business-engineering/project.js';
@@ -101,6 +102,15 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
   }
   const retry = describeRecovery(runId, snapshot.status, snapshot.steps ?? {});
   const development = stateV2Schema.safeParse((snapshot.result as { development?: unknown } | undefined)?.development);
+  const recentDevelopment = development.data ?? Object.values(snapshot.steps ?? {}).flatMap(step => {
+    if (Array.isArray(step)) return [];
+    const record = step as { output?: unknown; suspendPayload?: { recoveryState?: unknown; findingsState?: unknown } };
+    const output = record.output as { development?: unknown } | undefined;
+    const parsed = stateV2Schema.safeParse(record.suspendPayload?.recoveryState ?? record.suspendPayload?.findingsState ?? output?.development ?? output);
+    return parsed.data?.technicalRecovery ? [parsed.data] : [];
+  }).sort((left, right) => right.calls - left.calls || (right.technicalRecovery?.attempts.length ?? 0) - (left.technicalRecovery?.attempts.length ?? 0) || right.faults.length - left.faults.length)[0];
+  const recoveryEvidence = recentDevelopment ? describeTechnicalRecovery(recentDevelopment) : undefined;
+  const technicalRecovery = recoveryEvidence && { ...recoveryEvidence, awaitingPlatform: !!platformWait(snapshot) };
   const blockers = development.success ? developmentBlockers(development.data) : [];
   const preparationRequired = development.success && !!development.data.input.project.preparationIssues?.length;
   const blockage = development.success && (development.data.outcome === 'clarification-required' || preparationRequired && development.data.outcome === 'manual-attention') && development.data.plan && blockers.length ? { phase: '技术方案生成', title: '技术方案已生成，开工条件未齐', summary: development.data.plan.summary, blockers, taskCount: development.data.plan.tasks.length, productContent: development.data.input.source.content, preparationRequired } : undefined;
@@ -141,7 +151,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
     : undefined;
   const pendingProduct = step === 'review-product' && review.success ? review.data : undefined;
   const productDocuments = projectProductDocuments(pendingProduct?.artifact.content ?? approvedProduct?.content);
-  return { productDocuments, projectId: delivery?.correlation?.projectId, acceptanceEvidence, mergeRequest, directionDraft, approvedProduct, specifications, productCorrection, activeProductAttempt, appliedCorrection, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, successor, successorBaseline, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: delivery?.mode ?? (sync.success ? sync.data.mode : undefined), intakeMode, brief: delivery?.brief ?? '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: pendingProduct };
+  return { productDocuments, projectId: delivery?.correlation?.projectId, acceptanceEvidence, mergeRequest, directionDraft, approvedProduct, specifications, technicalRecovery, recoveryMetrics: projectRecoveryMetrics(snapshot), productCorrection, activeProductAttempt, appliedCorrection, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, successor, successorBaseline, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: delivery?.mode ?? (sync.success ? sync.data.mode : undefined), intakeMode, brief: delivery?.brief ?? '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: pendingProduct };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {

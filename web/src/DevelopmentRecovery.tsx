@@ -2,6 +2,45 @@
 import { useState } from 'react';
 import type { WorkflowGate } from './WorkflowGate';
 export interface RecoveryInfo { budgetUsage?: string; additionalCalls?: number; attemptDetails?: string[]; title: string; phase: string; reason: string; description: string; preserved: string; next: string; retryLabel: string; stopLabel: string; stopImpact: string; limit: string }
+interface TechnicalFault {
+  phase: string;
+  reason?: string;
+  checkpointHash: string;
+  diagnostic?: { code: string; issues?: { path: string; code: string }[] };
+  checkIds?: string[];
+}
+export interface TechnicalRecoveryData {
+  used: number;
+  limit: number;
+  pending?: TechnicalFault;
+  awaitingPlatform?: boolean;
+  blocked?: { owner: 'development' | 'platform'; reason: 'diagnosis-required' | 'continuation-limit' | 'no-progress' | 'integrity'; fault?: TechnicalFault };
+  attempts: { faultId: string; action: 'backoff' | 'correct-output' | 'rerun-checks' | 'platform-repair'; result: 'failed' | 'execution-passed' | 'verified'; artifactHash?: string; fault?: TechnicalFault }[];
+  repairs?: { round: number; failedChecks: string[]; verification?: { sourceHash: string; passed: boolean } }[];
+}
+
+const recoveryActions = { backoff: '等待后重新执行', 'correct-output': '按校验反馈纠偏', 'rerun-checks': '重跑登记检查', 'platform-repair': '平台修复后复验' };
+const recoveryResults = { failed: '本次接续未通过', 'execution-passed': '本次执行通过', verified: '原检查复验通过' };
+const blockedReasons = { 'diagnosis-required': '需要诊断并处理故障', 'continuation-limit': '已达到自动接续上限', 'no-progress': '重复尝试未取得进展', integrity: '需要核对候选检查点' };
+
+/** 从运行记录呈现研发接续和验证证据。 */
+export function TechnicalRecoveryStatus({ recovery }: { recovery: TechnicalRecoveryData }) {
+  const { blocked, pending, attempts } = recovery;
+  const last = attempts.at(-1);
+  const summary = blocked?.fault ?? pending ?? last?.fault;
+  return <section className="intake-card development-recovery">
+    <h2>{recovery.awaitingPlatform ? '等待平台修复依赖' : blocked ? `技术故障待${blocked.owner === 'platform' ? '平台' : '研发'}处理` : pending ? '正在接续研发步骤' : '技术故障接续记录'}</h2>
+    {summary && <p>{summary.phase} · {summary.reason}</p>}
+    {blocked && <p>{recovery.awaitingPlatform ? '平台确认依赖恢复后，流程将从已保存的检查点接续并复验。' : `${blockedReasons[blocked.reason]}。已保存候选和诊断记录。`}</p>}
+    {!blocked && !pending && last && <p>{recoveryActions[last.action]} · {recoveryResults[last.result]}</p>}
+    <details>
+      <summary>查看处理证据 · 已接续 {recovery.used} / {recovery.limit} 次</summary>
+      {blocked?.fault && <p>待处理检查点 {blocked.fault.checkpointHash.slice(0, 12)}{blocked.fault.checkIds?.length ? ` · ${blocked.fault.checkIds.join('、')}` : ''}</p>}
+      {attempts.map(attempt => <p key={attempt.faultId}>{attempt.fault?.phase} · {recoveryActions[attempt.action]} · {recoveryResults[attempt.result]}{attempt.artifactHash ? ` · 版本 ${attempt.artifactHash.slice(0, 12)}` : ''}{attempt.fault?.diagnostic ? ` · ${attempt.fault.diagnostic.code}` : ''}</p>)}
+      {recovery.repairs?.map(repair => <p key={`${repair.round}-${repair.failedChecks.join(',')}`}>研发修复 · {repair.failedChecks.join('、')} · {repair.verification ? `${repair.verification.passed ? '复验通过' : '复验未通过'} · 版本 ${repair.verification.sourceHash.slice(0, 12)}` : '等待复验'}</p>)}
+    </details>
+  </section>;
+}
 /** 明确点击处理动作后再核对后果，失败保留确认人和草稿。 */
 export function DevelopmentRecovery({ gate, busy, submit }: { gate: WorkflowGate; busy: boolean; submit: (body: unknown) => Promise<void> }) {
   const info = gate.recoveryInfo!;

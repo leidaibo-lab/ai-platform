@@ -1,6 +1,7 @@
 import { loadEngineeringProject, projectRepositoryRoot } from '../business-engineering/project.js';
 import { createIntakeVoiceRoute } from '../intake/voice.js';
 import { createIntakeRoutes } from '../intake/routes.js';
+import { createPlatformRecoveryRoutes } from '../intake/platform-recovery.js';
 import { createAssetRoutes } from '../delivery/asset-routes.js';
 import { Mastra } from '@mastra/core';
 import { createDevelopmentNodeWorkflows } from '../evaluation/development-nodes.js';
@@ -27,6 +28,6 @@ export function createStudioApplicationOptions(config: PracticeConfig) {
     workflows: { productDevelopmentWorkflow, ...createDevelopmentNodeWorkflows(config) },
     storage,
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
-    server: { host: '127.0.0.1', port: config.port, apiRoutes: [createIntakeVoiceRoute(config), ...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config)] },
+    server: { host: '127.0.0.1', port: config.port, apiRoutes: [createIntakeVoiceRoute(config), ...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config), ...createPlatformRecoveryRoutes(productDevelopmentWorkflow, config)] },
   };
 }

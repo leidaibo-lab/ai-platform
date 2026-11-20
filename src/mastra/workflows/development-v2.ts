@@ -5,7 +5,7 @@ import { reworkState, stopAutonomy, runVerification, VerificationBudgetError } f
 /** 版本化受限开发流水线；阶段状态由原生dountil/suspend保存，终态只由交付门写入。 */
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { PracticeConfig } from '../config.js';
 import type { Step } from '@mastra/core/workflows';
 import { developmentExecutionIdentity, developmentHash, recoveryReviewSchema, validateEvaluationSource } from '../../development/contracts.js';
@@ -14,7 +14,7 @@ import { approvalHashV2, approvalV2Schema, assessmentSchema, contextDraftSchema,
 import { applyFindingsReview, assertApprovalV2, checksPassedV2, reportV2, unresolvedV2, validateAssessment, validateIdentityV2, validateReviewResolutions } from '../../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../../development/v2/methods.js';
 import { generateV2, type GeneratorV2 } from '../../development/v2/agents.js';
-import { applyRecoveryDecision, pauseForCallBudget } from '../../development/v2/recovery-policy.js';
+import { applyRecoveryDecision, blockTechnicalRecovery, matchingFault, pauseForCallBudget, recordTechnicalAttempt, usedTechnicalAttempts } from '../../development/v2/recovery-policy.js';
 import { invokeV2 } from '../../development/v2/invoke.js';
 import { assembleTeam, createTeamExecution } from '../../development/v2/team.js';
 import type { ExecutionPort } from '../../development/v2/execution-scope.js';
@@ -24,6 +24,7 @@ import { readAcceptanceRequirements } from '../../business-engineering/acceptanc
 import { createProductUnits } from '../../development/v2/product-units.js';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
 import { publishLiveOutput } from '../../intake/live-output.js';
+import { acceptPlatformRepair, matchesPlatformSecret, platformRepairPause, platformRepairProof, platformRecoveryStepId, platformRepairPauseSchema, platformRepairResumeSchema } from '../../development/v2/platform-recovery.js';
 
 /** 与团队和独立测试共用同一返工策略；保留既有公开入口。 */
 export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], phase: StateV2['phase']): StateV2 {
@@ -64,7 +65,10 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         ? readAcceptanceRequirements(inputData.source.content)
         : createProductUnits(inputData.source.content);
       if (inputData.requirementImpact && inputData.requirementImpact.productHash !== inputData.source.hash) throw new Error('需求修订影响与当前产品版本不匹配');
-      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hashFor(inputData), phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null });
+      const technicalRecovery = options.legacySequential || config.legacyDevelopmentWorkflow
+        ? undefined
+        : { ...(inputData.budgetContinuation?.technical ?? { version: 'technical-recovery.v1' as const, limit: config.developmentContinuationLimit ?? 4 }), attempts: [] };
+      return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hashFor(inputData), phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null, ...(technicalRecovery ? { technicalRecovery } : {}) });
     },
   });
   const context = createStep({ id: 'prepare-context', description: 'plan-development｜prepare-context｜development-lead-agent 核实工程上下文', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
@@ -105,7 +109,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     await guard(inputData);
     const called = await invokeV2(config, execution, 'architect', inputData, [], { priorGates: inputData.gates, priorReports: inputData.codeReviews }, methods, generate,
       // 结构错误保留故障，不能跳到人工批准。
-      (text) => { parsePlan(text, inputData); }, undefined, event => publishLiveOutput(pubsub, runId, event, 'architecture'));
+      (text) => developmentHash(parsePlan(text, inputData)), undefined, event => publishLiveOutput(pubsub, runId, event, 'architecture'));
     if (!called.entry) return called.state;
     const plan = parsePlan(called.entry.text, inputData);
     const preparationIssues = inputData.input.project.preparationIssues;
@@ -148,6 +152,9 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     if (!called.entry) return called.state;
     const report = reportV2(assessmentSchema.parse(parseDevelopmentJson(called.entry.text)), called.state);
     const state = { ...called.state, readiness: report, work: [...called.state.work, called.entry] };
+    if (state.technicalRecovery && report.assessment.findings.some(item => item.category === 'business' || item.route === 'product')) {
+      return { ...state, outcome: 'clarification-required' as const };
+    }
     if (report.assessment.verdict === 'CONCERNS') return { ...state, phase: 'resolve-readiness' as const };
     if (report.assessment.verdict !== 'PASS') return { ...state, outcome: report.assessment.findings.some(
       // 业务缺口回产品，其他关注保留人工审查事实。
@@ -216,8 +223,8 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
         const called = await invokeV2(config, execution, task.role, state, task.paths, { ...task, findings: unresolvedV2(state) }, methods, generate, undefined, undefined, event => publishLiveOutput(pubsub, runId, event, 'implement', developmentHash(task.id).slice(0, 16)));
         if (!called.entry) return called.state;
         state = { ...called.state, work: [...called.state.work, called.entry], completedTasks: [...called.state.completedTasks, task.id] };
-        if (state.input.autonomy && called.entry.text.includes('BUSINESS_BLOCKER:')) return stopAutonomy(state, 'business-decision');
-        if (state.input.autonomy && called.entry.text.includes('AUTHORIZATION_BLOCKER:')) return stopAutonomy(state, 'authorization-required');
+        if ((state.technicalRecovery || state.input.autonomy) && called.entry.text.includes('BUSINESS_BLOCKER:')) return stopAutonomy(state, 'business-decision');
+        if ((state.technicalRecovery || state.input.autonomy) && called.entry.text.includes('AUTHORIZATION_BLOCKER:')) return stopAutonomy(state, 'authorization-required');
         if (called.entry.text.includes('ARCHITECTURE_BLOCKER:')) return reworkDevelopmentV2(state, 'architecture', 'prepare-context');
       }
       return { ...state, phase: 'development-self-check' as const };
@@ -233,10 +240,33 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       catch (error) { if (error instanceof VerificationBudgetError) return stopAutonomy(inputData, 'verification-budget'); throw error; }
       const checks = verified.checks;
       await guard(verified.state);
-      const state = { ...verified.state, checks, checkedSourceHash: verified.state.checkpointHash };
+      let state: StateV2 = { ...verified.state, checks, checkedSourceHash: verified.state.checkpointHash };
+      const repairs = state.repairHistory ?? [];
+      const repair = repairs.at(-1);
+      if (repair?.failedChecks?.length && !repair.verification && repair.round < state.round) {
+        const { sequence, sourceHash } = verified.record;
+        const passed = checksPassedV2(state) && repair.failedChecks.every(id => checks.some(check => check.id === id));
+        state = { ...state, repairHistory: [...repairs.slice(0, -1), { ...repair, verification: { sequence, sourceHash, passed } }] };
+      }
+      const prior = matchingFault(state, 'self-check', null);
+      if (state.technicalRecovery?.pendingFaultId && prior?.id === state.technicalRecovery.pendingFaultId && prior.origin === 'registered-checks') {
+        const platform = state.technicalRecovery.platformResumes?.some(receipt => receipt.faultId === prior.id);
+        state = recordTechnicalAttempt(state, { faultId: prior.id, action: platform ? 'platform-repair' : 'rerun-checks', check: 'registered-checks', result: checksPassedV2(state) ? 'verified' : 'failed', artifactHash: state.checkpointHash });
+      }
       if (!checksPassedV2(state)) {
-        // 检查只说明失败事实；自动模式交回批准团队联合修复，其他模式显式等待人工定位。
-        return state.input.autonomy ? reworkDevelopmentV2(state, 'all', 'implement') : { ...state, outcome: 'manual-attention' as const };
+        if (state.technicalRecovery) {
+          const failures = checks.filter(check => check.exitCode !== 0 || check.processExitCode !== 0 || check.timedOut || check.stdoutTruncated || check.stderrTruncated);
+          const environmental = failures.some(check => check.id.startsWith('environment:'));
+          const timedOut = failures.length > 0 && failures.every(check => check.timedOut);
+          if (environmental || timedOut) {
+            const fault = { sequence: state.faults.length + 1, id: randomUUID(), phase: state.phase, role: 'self-check' as const, taskId: null, kind: 'model-error' as const, origin: 'registered-checks' as const, checkIds: failures.map(check => check.id), attempt: (prior?.attempt ?? 0) + 1, checkpointHash: state.checkpointHash, partialSourceHash: state.checkpointHash, restored: true as const };
+            state = { ...state, faults: [...state.faults, fault] };
+            if (usedTechnicalAttempts(state.technicalRecovery!) >= state.technicalRecovery!.limit) return blockTechnicalRecovery(state, fault, 'continuation-limit');
+            if (fault.attempt >= 3) return blockTechnicalRecovery(state, fault, 'no-progress');
+            return { ...state, technicalRecovery: { ...state.technicalRecovery!, pendingFaultId: fault.id } };
+          }
+        }
+        return state.technicalRecovery || state.input.autonomy ? reworkDevelopmentV2(state, 'all', 'implement') : { ...state, outcome: 'manual-attention' as const };
       }
       return { ...state, phase: 'review-code' as const };
     },
@@ -296,18 +326,18 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       ));
       const route = findings.some(
         // 业务/完整性问题不能通过实现重试或接受风险绕过。
-        (finding) => finding.category === 'business',
+        (finding) => finding.category === 'business' || (inputData.technicalRecovery && finding.route === 'product'),
       ) ? 'product' : findings.some(
         // 真实完整性问题直接停止人工处理。
         (finding) => finding.category === 'integrity',
-      ) ? 'human' : routes.has('architecture') ? 'architecture' : routes.size === 1 && !routes.has('human') ? [...routes][0] : inputData.input.autonomy ? 'all' : 'human';
+      ) ? 'human' : routes.has('architecture') ? 'architecture' : routes.size === 1 && !routes.has('human') ? [...routes][0] : (inputData.technicalRecovery || inputData.input.autonomy) && !routes.has('human') ? 'all' : 'human';
       const decision = route === 'product' ? 'clarify' as const : route === 'architecture' ? 'replan' as const : route === 'human' ? 'stop' as const : 'rework' as const;
       const state = { ...inputData, gates: [...inputData.gates, { decision, reasons: findings.map(
         // 完整保存所有未解决发现ID。
         (finding) => finding.id,
       ), sourceHash: inputData.checkpointHash, reportHash: latest.hash }] };
       if (route === 'product') return state.input.autonomy ? stopAutonomy(state, 'business-decision') : { ...state, outcome: 'clarification-required' as const };
-      if (route === 'human' && state.input.autonomy && findings.some(/** 完整性异常不得当作可修复代码问题。 */finding => finding.category === 'integrity')) return stopAutonomy(state, 'authorization-required');
+      if (route === 'human' && (state.technicalRecovery || state.input.autonomy) && findings.some(/** 完整性异常不得当作可修复代码问题。 */finding => finding.category === 'integrity')) return stopAutonomy(state, 'authorization-required');
       if (route === 'human') return { ...state, phase: 'resolve-findings' as const, outcome: findings.some(
         // 完整性问题不提供接受风险后通过的旁路。
         (finding) => finding.category === 'integrity',
@@ -377,6 +407,22 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     return step;
   }
   const teamExecution = options.team ? createTeamExecution(config, execution, methods, generate, bind) : null;
+  const awaitPlatformRepair = createStep({
+    id: platformRecoveryStepId,
+    description: '等待平台修复依赖后复验',
+    inputSchema: stateV2Schema, outputSchema: stateV2Schema,
+    suspendSchema: platformRepairPauseSchema, resumeSchema: platformRepairResumeSchema,
+    /** 恢复点和修复事件均使用原生快照，继续前重新核对候选与方法身份。 */
+    execute: async ({ inputData, suspendData, resumeData, suspend }) => {
+      const state = suspendData?.recoveryState ?? inputData;
+      const pause = platformRepairPause(state);
+      if (!pause || !config.platformRepairToken) return state;
+      if (!resumeData || resumeData.checkpoint !== pause.checkpoint || resumeData.faultId !== pause.faultId
+        || !matchesPlatformSecret(resumeData.proof, platformRepairProof(config.platformRepairToken, resumeData))) return suspend(pause);
+      await guard(state);
+      return acceptPlatformRepair(state, resumeData, config.platformRepairToken);
+    },
+  });
   const definition = createWorkflow({ id: options.id ? `${options.id}-iteration` : 'development-iteration-v2', inputSchema: stateV2Schema, outputSchema: stateV2Schema });
   let flow: any = definition;
   let prior: string | undefined;
@@ -454,14 +500,17 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     append(bind(planning), 'prepare-context', 'architecture', 'assemble-team');
     append(bind(ready), 'assess-readiness', 'resolve-readiness');
     append(bind(approve), 'approve-architecture');
-    append(implementation, 'implement');
+    append(implementation, 'implement', 'development-self-check');
     append(bind(quality), 'review-code', 'assess-delivery', 'resolve-findings');
   }
   /** 原生条件分支跳过非当前业务阶段；映射仅传递状态，不冒充业务步骤已执行。 */
   function append(step: Step<any, any, any, any, any, any>, ...phases: StateV2['phase'][]) {
     const previous = prior;
     const mapId = `state-after-${step.id}`;
-    flow = flow.branch([[/** 故障优先于正常阶段，旧恢复记录仍可接续。 */async ({ inputData }: { inputData: StateV2 }) => phases.length ? phases.some(phase => active(inputData, phase)) : inputData.outcome === 'in-progress' && !!inputData.recovery, step]])
+    flow = flow.branch([[/** 故障优先于正常阶段，旧恢复记录仍可接续。 */async ({ inputData }: { inputData: StateV2 }) => {
+      if (step.id === platformRecoveryStepId) return !!config.platformRepairToken && !!platformRepairPause(inputData);
+      return phases.length ? phases.some(phase => active(inputData, phase)) : inputData.outcome === 'in-progress' && !!inputData.recovery;
+    }, step]])
       .map(/** 未选择分支时沿用上一份原生状态，不执行该业务阶段。 */async ({ inputData, getInitData, getStepResult }: any) => {
         const values = Object.values(inputData).filter(/** 只有执行过的分支有输出。 */value => value !== undefined);
         if (values.length > 1) throw new Error('开发流程命中多个阶段');
@@ -489,6 +538,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     append(bind(resolveFindings), 'resolve-findings');
     append(bind(recovery));
   }
+  if (!options.legacySequential) append(executionBind(awaitPlatformRepair));
   const iteration = flow.commit() as Step<string, any, StateV2, StateV2, any, any>;
   const workflow = createWorkflow({ id: options.id ?? 'development-execution-v2', description: 'development-team 内部执行｜plan-development → develop-and-check → review-development-quality', inputSchema: inputV2Schema, outputSchema: stateV2Schema }).then(bind(initialize)).dountil(iteration,
     // 原生循环只在有界返工或已确认故障接续后继续。
