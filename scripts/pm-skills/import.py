@@ -39,7 +39,7 @@ def copy(source, destination, source_root, repository):
             'localPath': destination.relative_to(TARGET).as_posix(), 'sha256': digest(data)}
 
 
-def frontmatter(name, description, pattern, source):
+def frontmatter(name, description, pattern, source, version='1.0.0'):
     """生成满足公司规范的中文发现元数据。"""
     return f'''---
 name: "{name}"
@@ -48,7 +48,7 @@ license: "MIT"
 metadata:
   pattern: "{pattern}"
   author: "Mastra 实践维护者；上游 Pawel Huryn"
-  version: "1.0.0"
+  version: "{version}"
   upstream: "{source}"
 ---
 '''
@@ -74,6 +74,7 @@ def main():
             'licenses': [], 'entries': [], 'support': []}
     for root, filename, key in [(pm, 'LICENSE', 'pm-skills'), (shipping, 'LICENSE.md', 'product-engineering')]:
         lock['licenses'].append(copy(root / filename, TARGET / 'licenses' / f'{key}-MIT.txt', root, key))
+    active_skills = set(json.loads((TARGET.parent / 'manifest.json').read_text(encoding='utf-8'))['activeSkills'])
     groups = {}
     for original in sources:
         relative = original.relative_to(pm)
@@ -97,6 +98,8 @@ def main():
                 rel = source.relative_to(implementation.parent)
                 local = rel if rel.parts[0] == 'references' else Path('references/resources') / rel
                 files.append(copy(source, dest / local, source_root, repository))
+                if name == 'product-pm-flow-ship-check' and local.as_posix() == 'references/resources/scripts/review.py':
+                    continue
                 resources.append(local.as_posix())
         # 上游提及的能力映射只作为按需发现线索，不递归加载全部依赖。
         text = implementation.read_text()
@@ -132,7 +135,9 @@ def main():
             body += '\n## 已迁移实现与辅助方法\n\n`references/migration-notice.md` 保留原仓迁移提示；实际工作读取 `references/upstream.md`。原文的 `independent-review`、`release-gate`、`test-harness` 辅助方法及其引用放在 `product-pm-catalog` 的 `references/shipping/`；需要相应步骤时先加载该目录 Skill 并读取其明确资源路径。独立评审、执行测试或发布依赖实际工具，没有这些能力时明确未验证。\n'
         body += '\n## 参考资料与来源\n\n- `references/upstream.md`：完整上游方法，按上述步骤读取。\n' + ref_text
         body += f'- 来源：`{repository}` 的 `{implementation.relative_to(source_root).as_posix()}`，固定 commit `{lock["repositories"][repository]["commit"]}`。MIT 原文见技能根目录 `licenses/`，本地路径及SHA256见 `upstream-lock.json`。\n'
-        write(dest / 'SKILL.md', body)
+        # 已启用的方法由平台独立维护中文入口，导入仅刷新其上游资料。
+        if name not in active_skills or not (dest / 'SKILL.md').exists():
+            write(dest / 'SKILL.md', body)
         entry = {'group': group, 'kind': kind, 'originalName': short, 'sourcePath': relative.as_posix(),
                  'sourceSha256': digest(original.read_bytes()), 'name': name,
                  'path': f'product-pm/{directory}', 'resolvedRepository': repository,
@@ -151,8 +156,13 @@ def main():
             local = Path('shipping') / short / ('method.md' if rel.as_posix() == 'SKILL.md' else rel)
             file = copy(source, TARGET / 'product-pm/catalog/references' / local, shipping, 'product-engineering')
             lock['support'].append(file)
-            support_links.append(f'- `references/{local.as_posix()}`：{short} 的完整方法或分支参考；仅相关任务按需读取。')
-    catalog = frontmatter('product-pm-catalog', 'PM技能目录与原始名称映射。任务涉及整套能力导航、复合产品工作或原名查找时使用。', 'pipeline', f'pm-skills@{PM_SHA}')
+            if local.as_posix() == 'shipping/independent-review/scripts/review.py':
+                continue
+            if local.as_posix() == 'shipping/independent-review/method.md':
+                support_links.append('- `references/shipping/independent-review/method.md`：按需读取独立评审的方法说明。Nacos 包仅提供方法说明，涉及外部 CLI 的步骤应报告未执行。')
+            else:
+                support_links.append(f'- `references/{local.as_posix()}`：{short} 的完整方法或分支参考；仅相关任务按需读取。')
+    catalog = frontmatter('product-pm-catalog', 'PM技能目录与原始名称映射。任务涉及整套能力导航、复合产品工作或原名查找时使用。', 'pipeline', f'pm-skills@{PM_SHA}', version='1.0.1')
     catalog += '''
 # 产品方法目录
 
@@ -177,14 +187,14 @@ def main():
     write(TARGET / 'product-pm/catalog/references/catalog.md', '\n'.join(rows))
     write(TARGET / 'product-pm-catalog.md', '''# Mastra 产品 Skills
 
-这是根 Mastra 主线的产品 Skill 套件说明。Skill 实体只位于 `product-pm/<技能>/SKILL.md`，避免说明文件被运行时误识别为一个 Skill。
+这里记录 Mastra 主线导入的产品方法及其来源。运行时启用范围见[产品资源清单](../manifest.json)。
 
 - 69个原子能力、42个命令转换的流程能力，完整覆盖锁定版 pm-skills；另有1个本地导航，共112个本地 Skill。
-- 产品 Agent 自动注册112项及原有需求交接，共113项；先匹配描述，再通过 Mastra 原生 `skill` / `skill_read` / `skill_search` 渐进读取。单次生成最多24步，达到限制仍未完成时不得声称完整流程通过。
+- 产品 Agent 注册清单中的方法，通过 Mastra 原生 `skill` / `skill_read` / `skill_search` 按任务读取。
 - [完整能力目录](product-pm/catalog/references/catalog.md)逐项列出原始名称、分类和本地名称。原 commands 使用 `flow-` 前缀，避免与原子方法重名。
 - `SKILL.md` 为中文工作入口；`references/upstream.md` 精确保留英文原文与模板；8个shipping迁移项使用新仓实际方法，并保留迁移提示。另有3个shipping辅助方法以目录Skill的参考资源提供。
 - 原文的插件工具白名单、斜杠命令、固定模型、Agent委派、Shell和写路径均不自动授予本产品Agent能力。当前没有网络搜索、任意文件、数据库或代码/测试执行工具。需要这些步骤时输出缺失材料和未执行项；人工关口继续由Workflow掌握。
-- 仅挂到产品 Agent；开发/测试/运维/只读阅读助手职责由原配置控制。导航不是另一个代理或运行时。
+- 已启用方法的中文入口由平台维护，导入器保留现有入口并刷新上游参考原文。
 
 ## 来源与维护
 

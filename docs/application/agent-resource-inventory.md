@@ -33,17 +33,18 @@
 
 ## 产品 Skill 资源清单
 
-| 范围 | 资源与来源 | 当前绑定与目标 |
+[产品资源清单](../../nacos-resources/product/manifest.json) 定义本地兼容路径和 Nacos 候选包的启用集合。
+
+| Skill | 产品经理 | 独立审查 |
 | --- | --- | --- |
-| 111 项产品方法 | 69 原子 Skill、42 流程 Skill，逐项原名和本地 ID 见 [完整能力目录](../../nacos-resources/product/skills/product-pm/catalog/references/catalog.md)；正文和来源锁位于 `nacos-resources/product/skills/` | 本地兼容路径全量可见；新 Run 只有显式配置且已发布的 Nacos Skill。目标逐项发布、保留来源和许可证，并由角色绑定版本 |
-| 1 项导航 | `product-pm-catalog`，含目录和 `references/shipping/` 辅助资料 | 当前本地套件加载；目标单独发布并完整保留引用，脚本仅可作文本参考，不授予执行权限 |
-| 1 项交接方法 | `product-requirements-handoff`：`nacos-resources/product/skills/product/requirements-handoff/SKILL.md` | 本地兼容路径加载；目标在经理交付绑定，并由流程验证真实方法使用，不能仅靠 Prompt 声称已调用 |
+| `product-pm-product-requirements-alignment` | 需求澄清与正式稿写作 | 核对已确认规则、未决项与交付内容 |
+| `product-requirements-handoff` | 平台版式与双文档追踪 | 核对版式、业务结果与需求引用 |
+| `product-pm-create-prd` | 检查模块 PRD 完整性 | |
+| `product-pm-user-stories` | 拆分可估算、可验收的研发任务 | |
+| `product-pm-test-scenarios` | 补齐验收场景 | 核对正常、边界、异常和权限覆盖 |
+| `product-pm-strategy-red-team` | 按需检验关键业务规则 | 复核高影响的权限、状态与异常分支 |
 
-本地共 113 个入口，目录和许可证不等于远端已发布。每个 Skill 包须逐项检查名称、版本、来源、许可证、references、摘要及打包安全；当前 ZIP 只接受 `SKILL.md` 和 `references/`，须先确认完整引用和文件兼容。当前最多 128 个 Skill、单包/响应 1 MiB、快照总计 8 MiB；这些是适配器限制，不代表全部资产已经验证能装入一个 Run。
-
-2026-11-17 本地只读盘点：迁移前 `product-pm` 112 个目录合计 1,054,304 字节，最大单目录 250,586 字节、最多 15 个文件；各目录文件均位于入口或 `references/`。原文现已迁至 `nacos-resources/product/skills/` 并通过来源锁和全套方法装配测试；真实 Nacos 全量发布仍待验证。
-
-本地角色的优先方法：产品经理为 `product-pm-flow-triage-requests`、`product-pm-analyze-feature-requests`、`product-pm-prioritization-frameworks`、`product-pm-create-prd`；审查为 `product-pm-test-scenarios`、`product-pm-strategy-red-team`、`product-pm-pre-mortem`。它们是选法提示，本地两角色实际都能看到全套；Nacos 审查角色可以绑定已冻结集合的名称子集。
+[上游方法归档](../../nacos-resources/product/skills/product-pm-catalog.md) 保留 111 项方法入口及其来源和许可证。适配器支持精确版本、单包/响应 1 MiB、快照总计 8 MiB，运行配置按注册版本取回实际资源。
 
 ## 其他角色绑定与后续范围
 
@@ -70,15 +71,15 @@
 
 ## Skill 包准备与验证
 
-执行 `npx tsx scripts/prepare-nacos-product-skills.ts <尚不存在的输出目录> 1.2.0` 可准备 113 个独立 ZIP 和 `manifest.json`。工具检查上游来源锁和许可证、限制文件布局、拒绝符号链接，并记录原文件与 ZIP 的 SHA-256；输出状态明确为待审核、未发布。版本为调用者指定的迁移候选版本，不能视为已有注册中心版本或审批结论。目录必须不存在，以避免覆盖已有审查材料。
+执行 `npx tsx scripts/prepare-nacos-product-skills.ts <尚不存在的输出目录> 1.4.0` 可准备 6 个独立 ZIP 和 `manifest.json`。工具检查上游来源锁和许可证、限制文件布局、拒绝符号链接，并记录原文件与 ZIP 的 SHA-256；输出状态明确为待审核、未发布。版本为调用者指定的迁移候选版本，不能视为已有注册中心版本或审批结论。目录必须不存在，以避免覆盖已有审查材料。
 
-`tests/nacos-product-suite.test.ts` 用本地 HTTP 模拟 Nacos，将全部 113 个真实 Skill 包经现有 Adapter 冻结并按原版本复核，比较参考资料清单，再装配到锁定版本的 Mastra 两个产品 Agent。该测试不证明真实 Nacos 上已发布、人工审批完成或产品角色的真实模型质量；另有测试覆盖审查角色只加载绑定子集。
+`tests/nacos-product-suite.test.ts` 用本地 HTTP 模拟 Nacos，将 6 个候选 Skill 包经现有 Adapter 冻结并按原版本复核，比较参考资料清单，再装配到锁定版本的 Mastra 两个产品 Agent。该测试不证明真实 Nacos 上已发布、人工审批完成或产品角色的真实模型质量；另有测试覆盖审查角色只加载绑定子集。
 
-跨电脑的候选入口位于 `nacos-resources/product/`；本机注册脚本及使用方法见该目录 README。隔离 Nacos 3.3 已发布并读回全部 113 项 Skill 和两个角色 Prompt；注册幂等及同版本冲突也由模拟服务验证。其他机器注册、生产治理和阶段 Prompt 迁移仍待完成。真实 Run 证据及限制见 [live 流程验证](./nacos-live-run-findings.md)。
+跨电脑的候选入口位于 `nacos-resources/product/`；本机注册脚本及使用方法见该目录 README。2026-11-17 在隔离 Nacos 3.3 发布并读回了 `1.0.0` 的 113 项 Skill 和两个角色 Prompt；注册幂等及同版本冲突也由模拟服务验证。其他机器注册、生产治理和阶段 Prompt 迁移仍待完成。真实 Run 证据及限制见 [live 流程验证](./nacos-live-run-findings.md)。
 
 ## 按顺序完成迁移与证据
 
-1. 产出逐项资源包和清单：113 个 Skill 的内容、references、来源许可、版本、hash、审批及 ZIP 兼容；整理上述 Prompt 与输入变量。发布前审查内容，不在资源里存凭据。
+1. 产出逐项资源包和清单：启用 Skill 的内容、references、来源许可、版本、hash、审批及 ZIP 兼容；整理上述 Prompt 与输入变量。发布前审查内容，不在资源里存凭据。
 2. 设计并实现 Nacos 角色绑定和阶段 Prompt 清单：角色各自指定精确资源版本，校验引用、重复和上限，初始化 Run 一次冻结，产品审批 hash 绑定全部实际资源；旧快照保持兼容。Nacos 负责分发版本化资产，Mastra Workflow 仍负责调度、状态和审批。
 3. 完成产品所有阶段和阻塞回流的迁移；验证 Run 暂停、进程重启、发布新版本、原版本下线/权限撤销、篡改、旧 Run 兼容和工具权限隔离。角色资源及模板的变更应有可复核审批记录。
 4. 在隔离 Nacos 3.3 上发布并读取真实产品资源包，核对每个引用和许可；再由目标环境负责人按最小权限发布到实际命名空间。使用真实模型和业务样例对提示词与方法质量做单独验收；Mock 通过不代表业务效果或生产认证完成。

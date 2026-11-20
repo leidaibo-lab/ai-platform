@@ -5,7 +5,7 @@ license: "MIT"
 metadata:
   pattern: "pipeline"
   author: "Mastra 实践维护者；上游 Pawel Huryn"
-  version: "1.0.0"
+  version: "1.0.1"
   upstream: "pm-skills@2a12295a7717569baa7be181b4cfebe3ca38a6bb"
 ---
 
@@ -21,8 +21,7 @@ metadata:
 
 上游8项已迁移实现会引用下列3个辅助方法，它们是补充参考，不计入111项上游入口。原文的相对 `references/` 路径相对于各辅助方法目录，实际读取下列完整资源路径：
 
-- `references/shipping/independent-review/method.md`：independent-review 的完整方法或分支参考；仅相关任务按需读取。
-- `references/shipping/independent-review/scripts/review.py`：independent-review 的完整方法或分支参考；仅相关任务按需读取。
+- `references/shipping/independent-review/method.md`：按需读取独立评审的方法说明。Nacos 包仅提供方法说明，涉及外部 CLI 的步骤应报告未执行。
 - `references/shipping/release-gate/method.md`：release-gate 的完整方法或分支参考；仅相关任务按需读取。
 - `references/shipping/release-gate/references/checklist.md`：release-gate 的完整方法或分支参考；仅相关任务按需读取。
 - `references/shipping/release-gate/references/go-live.md`：release-gate 的完整方法或分支参考；仅相关任务按需读取。

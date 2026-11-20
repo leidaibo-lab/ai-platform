@@ -61,7 +61,7 @@
 
 ### Requirement: Product assets are prepared with traceable source
 
-产品 Skill 迁移包 SHALL 保留每个 Skill 的完整入口与引用，并记录精确版本、逐文件摘要、来源锁和许可证摘要。打包过程 SHALL 拒绝符号链接及不受支持的目录，产物不得包含凭据或审批通过的虚假声明。
+产品 Skill 迁移包 SHALL 保留每个 Skill 的完整入口与运行所需引用，并记录精确版本、逐文件摘要、来源锁和许可证摘要。打包过程 SHALL 拒绝符号链接及不受支持的目录，产物不得包含凭据或审批通过的虚假声明。
 
 产品 Skill、来源锁和许可证的仓库唯一来源 SHALL 位于 `nacos-resources/product/skills/`；本地兼容路径与资源导出 SHALL 读取同一来源，保留 Skill 名称、参考资料及原始摘要。
 
@@ -70,3 +70,32 @@
 - **WHEN** 维护者为迁移准备产品 Skill 包
 - **THEN** 每个 Skill SHALL 有独立 ZIP 和可核对清单
 - **AND** 角色绑定、人工审核和 Nacos 发布状态 SHALL NOT 因打包成功而被视为完成
+
+#### Scenario: Prepare formal requirements alignment resources
+
+- **WHEN** 维护者导出包含公司需求对齐方法的产品候选包
+- **THEN** 导出清单 SHALL 记录 `product-pm-product-requirements-alignment` 的固定来源提交和逐文件摘要，并完整打包其参考资料
+- **AND** 产品经理和独立审查角色的候选绑定 SHALL 包含该 Skill，两角色的正式写作与审稿 Prompt SHALL 指示读取 `references/delivery-writing.md`
+- **AND** 已有 Run SHALL 继续使用原资源快照
+
+#### Scenario: Limit the B2B module delivery skill set
+
+- **WHEN** 装配本地兼容产品角色或准备当前产品资源候选包
+- **THEN** 产品经理 SHALL 只绑定 `create-prd`、`user-stories`、`test-scenarios`、`strategy-red-team`、公司需求对齐与平台需求交接六项，候选包 SHALL 只导出该集合
+- **AND** 独立审查 SHALL 只绑定其中的验收场景、关键业务分支审查及两项交付规范
+- **AND** 两条装配路径 SHALL 使用同一候选清单定义角色范围，已有 Run SHALL 继续使用原资源快照
+- **AND** 正式稿 SHALL 沿用产品需求对齐和平台交接结构，关键业务分支审查 SHALL 聚焦具体模块的规则、状态和权限
+
+#### Scenario: Resume importing a Skill version
+
+- **WHEN** 授权维护者发布新 Skill 版本或重跑中断的导入
+- **THEN** 注册器 SHALL 校验已有草稿的精确版本与内容，通过 Nacos 常规提审及发布接口推进该版本
+- **AND** 同版本内容不一致时 SHALL 停止，客户端按精确版本读回并核对内容后才报告成功
+- **AND** 上传包 SHALL 明确声明候选发布版本，读回校验 SHALL 仅容许 Nacos 将已存在的版本字段同步为该发布版本
+
+#### Scenario: Export product shipping methods
+
+- **WHEN** 维护者导出产品方法目录或 Ship Check Skill
+- **THEN** 两份 Nacos 发布包 SHALL 保留独立评审方法的说明，并排除产品 Agent 无法执行的上游 `review.py`
+- **AND** 仓库 SHALL 保留上游脚本原件及来源摘要，导出清单 SHALL 只列出实际打包的文件
+- **AND** 候选清单 MAY 为单个 Skill 指定修订版本，导出清单和运行时绑定 SHALL 使用该资源的精确版本

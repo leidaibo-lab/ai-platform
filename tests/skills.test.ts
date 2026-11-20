@@ -37,8 +37,8 @@ test('111项上游入口和解析后资源完整且符合来源锁', async () =>
     // 原生对象名称作为引用解析集合。
     (skill) => skill.name,
   ));
-  assert.equal(loaded.length, 112);
-  assert.equal(names.size, 112);
+  assert.equal(loaded.length, 113);
+  assert.equal(names.size, 113);
   const sources = new Set<string>();
   for (const entry of lock.entries) {
     counts[entry.kind]++;
@@ -123,19 +123,14 @@ function scriptedModel(plan: { name: string; input: Record<string, unknown>; pre
 
 // 两个产品 Agent 通过正式注册实例读取对应方法；产品经理承担全部产品阶段，审查 Agent 保持独立。
 for (const [agentKey, profile] of [['productManagerAgent', productManagerProfile], ['productReviewerAgent', productReviewerProfile]] as const) {
-  test(`${profile.name} 可发现完整套件并实际读取角色方法与交接检查`, async () => {
+  test(`${profile.name} 只发现角色绑定并实际读取角色方法与交接检查`, async () => {
     const registered = agents();
     const agent = registered[agentKey];
     const listed = await agent.listSkills();
-    const names = new Set(
-      // 检查完整集合而非只检查优先列表，保留角色自主选择其他方法的能力。
-      listed.map((skill) => skill.name),
-    );
-    assert.equal(names.size, 113);
-    for (const name of ['product-requirements-handoff', ...loadProductSkills(skillsRoot).map(
-      // 使用实际套件库存核对角色没有被不小心裁剪。
-      (skill) => skill.name,
-    )]) assert.ok(names.has(name));
+    const names = new Set(listed.map(/** 收集实际发现的角色方法。 */skill => skill.name));
+    const expected = ['product-pm-product-requirements-alignment', 'product-requirements-handoff', 'product-pm-test-scenarios', 'product-pm-strategy-red-team'];
+    if (agentKey === 'productManagerAgent') expected.push('product-pm-create-prd', 'product-pm-user-stories');
+    assert.deepEqual(names, new Set(expected));
     const instructions = JSON.stringify(await agent.getInstructions());
     assert.ok(instructions.includes(profile.instructions));
     for (const name of profile.preferredSkills) {
@@ -159,39 +154,37 @@ for (const [agentKey, profile] of [['productManagerAgent', productManagerProfile
   });
 }
 
-// 产品经理可在单一 Agent 内完成方法→原文→嵌套资源的调用链。
-test('正式产品Agent原生多步加载流程、原子方法、嵌套参考与交接方法', async () => {
+// 产品经理能在同一轮加载需求对齐、PRD 方法和正式交接规范。
+test('产品 Agent 原生多步读取正式写作方法与交接参考', async () => {
   const agent = agents().productManagerAgent;
-  const result = await agent.generate('根据提供的需求写PRD并检查风险；本测试只验证工具链', { model: scriptedModel([
-    { name: 'skill', input: { name: 'product-pm-flow-write-prd' } },
-    { name: 'skill_read', input: { skillName: 'product-pm-flow-write-prd', path: 'references/upstream.md' }, previous: 'product-pm-create-prd' },
-    { name: 'skill', input: { name: 'product-pm-create-prd' }, previous: 'write-prd' },
-    { name: 'skill_read', input: { skillName: 'product-pm-create-prd', path: 'references/upstream.md' }, previous: '精简产品需求文档' },
-    { name: 'skill', input: { name: 'product-pm-code-review' }, previous: 'Who' },
-    { name: 'skill_read', input: { skillName: 'product-pm-code-review', path: 'references/correctness-taxonomy.md' }, previous: '代码与状态正确性评审' },
-    { name: 'skill', input: { name: 'product-requirements-handoff' }, previous: 'correctness' },
+  const result = await agent.generate('根据提供的需求写 PRD', { model: scriptedModel([
+    { name: 'skill', input: { name: 'product-pm-product-requirements-alignment' } },
+    { name: 'skill_read', input: { skillName: 'product-pm-product-requirements-alignment', path: 'references/delivery-writing.md' }, previous: 'delivery-writing.md' },
+    { name: 'skill', input: { name: 'product-pm-create-prd' }, previous: '面向用户的正式交付准则' },
+    { name: 'skill_read', input: { skillName: 'product-pm-create-prd', path: 'references/upstream.md' }, previous: '可观察的验收结果' },
+    { name: 'skill', input: { name: 'product-requirements-handoff' }, previous: 'Who' },
   ]) });
-  assert.equal(result.toolResults.length, 7);
-  assert.equal(result.steps.length, 8);
+  assert.equal(result.toolResults.length, 5);
+  assert.equal(result.steps.length, 6);
   assert.match(result.text, /确定性工具回归/);
   for (const tool of result.toolResults) assert.doesNotMatch(JSON.stringify(tool.payload.result), /not found|Error executing/);
 });
 
-// 嵌套参考在Studio流式入口仍可读取，并且任意路径没有宿主文件读取能力。
-test('流式产品Agent可读shipping辅助参考，未知路径返回缺失且越界路径被拒绝', async () => {
-  const result = await agents().productManagerAgent.stream('检查可用辅助方法', { model: scriptedModel([
-    { name: 'skill_read', input: { skillName: 'product-pm-catalog', path: 'references/shipping/test-harness/references/coverage-map.md' } },
-    { name: 'skill_search', input: { query: 'coverage', skillNames: ['product-pm-catalog'], topK: 2 }, previous: 'coverage' },
-    { name: 'skill_read', input: { skillName: 'product-pm-create-prd', path: '../../../../../package.json' }, previous: 'product-pm-catalog' },
-    { name: 'skill_read', input: { skillName: 'missing-skill', path: 'references/upstream.md' }, previous: 'Invalid asset path' },
+// Studio 流式入口只读取当前角色已经绑定的参考资料。
+test('流式产品 Agent 可读交接参考，停用方法与越界路径不可读', async () => {
+  const result = await agents().productManagerAgent.stream('检查正式交接方法', { model: scriptedModel([
+    { name: 'skill_read', input: { skillName: 'product-requirements-handoff', path: 'references/document-layout.md' } },
+    { name: 'skill_search', input: { query: '产品规格任务', skillNames: ['product-requirements-handoff'], topK: 2 }, previous: '状态流转' },
+    { name: 'skill_read', input: { skillName: 'product-pm-create-prd', path: '../../../../../package.json' }, previous: 'product-requirements-handoff' },
+    { name: 'skill_read', input: { skillName: 'product-pm-catalog', path: 'references/catalog.md' }, previous: 'Invalid asset path' },
   ]) });
   await result.consumeStream();
   assert.match(await result.text, /确定性工具回归/);
   const toolResults = await result.toolResults;
-  // 原生框架把越界操作记为tool-error，不加入成功toolResults；下一步Mock已检查错误进入模型上下文。
+  // 越界操作记为 tool-error，由下一步 Mock 检查错误是否进入模型上下文。
   assert.equal(toolResults.length, 3);
-  assert.match(JSON.stringify(toolResults[0].payload.result), /coverage/);
-  assert.match(JSON.stringify(toolResults[1].payload.result), /product-pm-catalog/);
+  assert.match(JSON.stringify(toolResults[0].payload.result), /状态流转/);
+  assert.match(JSON.stringify(toolResults[1].payload.result), /product-requirements-handoff/);
   assert.match(JSON.stringify(toolResults[2].payload.result), /not found/);
 });
 

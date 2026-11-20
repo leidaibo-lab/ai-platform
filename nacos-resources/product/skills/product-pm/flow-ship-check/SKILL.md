@@ -42,5 +42,4 @@ metadata:
 
 - `references/upstream.md`：完整上游方法，按上述步骤读取。
 - `references/resources/agents/openai.yaml`：原方法所引用的细节，涉及该分支时用 `skill_read` 读取。
-- `references/resources/scripts/review.py`：原方法所引用的细节，涉及该分支时用 `skill_read` 读取。
 - 来源：`product-engineering` 的 `ai-shipping/skills/ship-check/SKILL.md`，固定 commit `0e8b5a5fdd7155a5c440ade930c3e081eb387943`。MIT 原文见技能根目录 `licenses/`，本地路径及SHA256见 `upstream-lock.json`。

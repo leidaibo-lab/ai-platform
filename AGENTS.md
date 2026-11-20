@@ -32,7 +32,7 @@
 - 工作台：`web/`
 - 维护、回归与评测：`scripts/`、`tests/`、`evaluations/`
 - 研发架构送审 Skill：`.agents/skills/development/architecture-document/`。研发负责人生成正文和图，就绪审查核对其与任务包的一致性。
-- 产品 Skill：`nacos-resources/product/skills/`。产品稿版式与独立审查口径见 `product/requirements-handoff`。
+- 产品 Skill 位于 `nacos-resources/product/skills/`。正式需求写作与复核见 `product-pm/product-requirements-alignment`，平台版式与双文档追踪见 `product/requirements-handoff`。本地与 Nacos 候选绑定统一由 `nacos-resources/product/manifest.json` 定义。
 - Mastra 操作文档：`docs/application/`
 - 稳定契约：`openspec/specs/mastra-role-resources/`、`openspec/specs/project-mainline/`
 - 当前迁移变更：`openspec/changes/promote-mastra-v2/`

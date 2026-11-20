@@ -1,6 +1,6 @@
 # Mastra 产品 Skills
 
-产品 Skill 套件位于 `product-pm/<技能>/SKILL.md`，其中包含 69 个原子能力、42 个流程能力和 1 个本地导航能力。运行时只将这些二级目录加载为 Skill；本文件保留在套件目录之外，避免被当作无效 Skill。
+产品 Skill 套件位于 `product-pm/<技能>/SKILL.md`，其中包含 69 个原子能力、42 个流程能力和 1 个本地导航能力。这些资产用于来源追溯。运行时启用范围见[产品资源清单](../manifest.json)。
 
 - [完整能力目录](./product-pm/catalog/references/catalog.md)列出原始名称、分类和本地名称。
 - `upstream-lock.json` 记录锁定来源、路径与逐文件 SHA256。

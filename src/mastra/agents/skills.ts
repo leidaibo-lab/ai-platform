@@ -6,6 +6,31 @@ import { z } from 'zod';
 /** 产品复合任务共享有限预算；不把方法加载误作无限自主执行。 */
 export const PRODUCT_MAX_STEPS = 24;
 
+const productSkillName = z.string().regex(/^(product-pm-[a-z0-9-]+|product-requirements-handoff)$/);
+export const productSkillSelectionSchema = z.object({
+  activeSkills: z.array(productSkillName).min(1),
+  reviewerSkills: z.array(productSkillName).min(1),
+}).refine(/** 两个角色的绑定必须唯一，审查角色的资源来自候选集合。 */({ activeSkills, reviewerSkills }) =>
+  new Set(activeSkills).size === activeSkills.length &&
+  new Set(reviewerSkills).size === reviewerSkills.length &&
+  reviewerSkills.every(/** 验证审查方法已登记。 */name => activeSkills.includes(name)), '产品角色 Skill 绑定重复或引用了未启用的资源');
+
+/** 将已校验的资源名称映射到受治理的两级路径。 */
+export function productSkillPath(name: string) {
+  return name === 'product-requirements-handoff' ? 'product/requirements-handoff' : `product-pm/${name.slice('product-pm-'.length)}`;
+}
+
+/** 本地角色仅装配与 Nacos 候选包共享的启用清单。 */
+export function loadProductSkillSelection(bundleRoot: string) {
+  const selection = productSkillSelectionSchema.parse(JSON.parse(readFileSync(join(bundleRoot, 'manifest.json'), 'utf8')));
+  const skills = selection.activeSkills.map(/** 校验本地 Skill 声明与绑定名称相同。 */name => {
+    const skill = loadGovernedSkill(join(bundleRoot, 'skills'), productSkillPath(name));
+    if (skill.name !== name) throw new Error(`Skill 名称与清单不符：${name}`);
+    return skill;
+  });
+  return { skills, reviewerSkills: selection.reviewerSkills };
+}
+
 /**
  * 将公司两级目录适配为原生 inline Skill，参考资料仍由 Mastra skill_read 按需交付。
  * ADR: docs/decisions/2026-11-06-mastra-pm-skills.md
