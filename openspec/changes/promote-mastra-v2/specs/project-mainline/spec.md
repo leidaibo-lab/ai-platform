@@ -341,12 +341,13 @@ HRM 的 CIP 基线 SHALL 在确认开发范围时绑定 Git 提交。研发与 Q
 - **WHEN** 用户新建需求或补充当前需求
 - **THEN** 输入 SHALL 保持在主栏底部，并以明确的提交操作区分需求创建、表单草稿和本机记录
 - **AND** 没有服务端附件接收能力时 SHALL 明示图片仅供本机草稿预览，不随需求进入流程
-#### Scenario: Transcribe a workbench draft through Mastra
 
-- **WHEN** 用户主动开启麦克风并结束录音
-- **THEN** 工作台 SHALL 将有大小和格式限制的音频送到同源 Mastra 转写入口，将返回文字追加到可编辑草稿，等待用户提交
-- **AND** 平台应用层 SHALL 通过 Mastra Voice 和服务端凭据调用语音提供方，录音与转写中间结果不进入 Run 或 Store
-- **AND** 样例模式 SHALL 使用确定性结果，不请求外部语音服务。未配置或转写失败时 SHALL 保留现有草稿并显示可理解的提示
+#### Scenario: Dictate into a workbench draft in the browser
+
+- **WHEN** 用户在支持语音识别的浏览器中主动开启麦克风
+- **THEN** 工作台 SHALL 使用浏览器语音识别，将识别文字追加到可编辑草稿，等待用户提交
+- **AND** 输入区 SHALL 在录音时显示状态且不向 Mastra 转写入口上传音频
+- **AND** 浏览器不支持、权限被拒绝或识别失败时 SHALL 保留现有草稿并显示提示
 
 #### Scenario: Switch execution nodes during a live connection
 

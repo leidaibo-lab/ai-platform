@@ -1,121 +1,108 @@
 import { useEffect, useRef, useState } from 'react';
 
-interface Recording {
-  controller: AbortController;
-  recorder?: MediaRecorder;
-  stream?: MediaStream;
+interface BrowserRecognition {
+  lang: string;
+  onstart: (() => void) | null;
+  onresult: ((event: { results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+
+type VoiceWindow = Window & {
+  SpeechRecognition?: new () => BrowserRecognition;
+  webkitSpeechRecognition?: new () => BrowserRecognition;
+};
+
+interface VoiceSession {
+  recognition: BrowserRecognition;
   timer?: ReturnType<typeof setTimeout>;
 }
 
-/** 关闭录音计时器和麦克风。 */
-function release(recording: Recording) {
-  clearTimeout(recording.timer);
-  recording.stream?.getTracks().forEach(track => track.stop());
-}
-
-/** 请求同源转写服务，返回可编辑文本和样例标识。 */
-async function transcribe(audio: Blob, signal: AbortSignal): Promise<{ text: string; fixture: boolean }> {
-  const response = await fetch('/intake-api/voice/transcribe', {
-    method: 'POST',
-    body: audio,
-    signal: AbortSignal.any([signal, AbortSignal.timeout(40000)]),
-  });
-  const result = await response.json().catch(() => null);
-  if (!response.ok || typeof result?.text !== 'string' || !result.text.trim()) {
-    throw new Error(typeof result?.error === 'string' ? result.error : '语音转写未完成，请稍后重试。');
-  }
-  return result;
-}
-
-/** 管理一次录音和转写，切离需求后释放麦克风并丢弃迟到的结果。 */
-export function useVoiceDraft(onText: (text: string) => void) {
-  const active = useRef<Recording | null>(null);
+/** 使用浏览器语音识别收集中文转写，结束后更新当前草稿。 */
+export function useVoiceDraft(onText: (text: string) => void, readOnly?: boolean) {
+  const active = useRef<VoiceSession | null>(null);
   const result = useRef(onText);
   result.current = onText;
   const [state, setState] = useState<'idle' | 'requesting' | 'recording' | 'processing'>('idle');
   const [message, setMessage] = useState('');
-  const supported = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
   useEffect(() => {
-    /** 离开输入区时取消上传及录音。 */
+    if (readOnly) setState('idle');
+    /** 切换需求或进入只读状态时停止识别并丢弃迟到的结果。 */
     return () => {
-      const recording = active.current;
+      const session = active.current;
       active.current = null;
-      if (!recording) return;
-      recording.controller.abort();
-      release(recording);
+      if (!session) return;
+      clearTimeout(session.timer);
+      session.recognition.abort();
     };
-  }, []);
+  }, [readOnly]);
 
-  /** 结束录音并等待浏览器交付最后一段音频。 */
-  function stop(recording: Recording) {
-    if (recording.recorder?.state !== 'recording') return;
-    setState('processing');
-    recording.recorder.stop();
-    release(recording);
-  }
-
-  /** 请求麦克风权限，结束录音后把转写结果交给当前草稿。 */
-  async function toggle() {
+  /** 启动浏览器识别，或结束当前录音并等待最终结果。 */
+  function toggle() {
+    if (readOnly) return;
     if (active.current) {
-      stop(active.current);
+      clearTimeout(active.current.timer);
+      setState('processing');
+      active.current.recognition.stop();
       return;
     }
-    const mime = supported && ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type));
-    if (!mime) {
-      setMessage('当前浏览器无法录音，请使用支持 WebM 或 MP4 录音的浏览器，并从本机或 HTTPS 页面打开。');
+    const browser = window as VoiceWindow;
+    const Recognize = browser.SpeechRecognition ?? browser.webkitSpeechRecognition;
+    if (!Recognize) {
+      setMessage('当前浏览器不支持语音识别，可以继续输入文字。');
       return;
     }
-    const recording = { controller: new AbortController() } as Recording;
-    active.current = recording;
+    const recognition = new Recognize();
+    const session: VoiceSession = { recognition };
+    active.current = session;
+    recognition.lang = 'zh-CN';
+    let transcript = '';
     setMessage('');
     setState('requesting');
 
-    /** 结束当前会话并展示反馈。 */
-    function finish(text: string = '') {
-      if (active.current !== recording) return;
+    /** 清理当前识别状态，并保留文本草稿。 */
+    function finish(feedback = '') {
+      if (active.current !== session) return;
       active.current = null;
-      release(recording);
-      setMessage(text);
+      clearTimeout(session.timer);
+      setMessage(feedback);
       setState('idle');
     }
 
-    try {
-      recording.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (active.current !== recording) {
-        release(recording);
-        return;
-      }
-      const recorder = new MediaRecorder(recording.stream, { mimeType: mime });
-      recording.recorder = recorder;
-      const chunks: Blob[] = [];
-      /** 收集浏览器产生的音频片段。 */
-      recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
-      /** 录制失败时释放设备。 */
-      recorder.onerror = () => finish('录音未完成，请重试。');
-      /** 汇总音频并回填，切换需求后忽略旧响应。 */
-      recorder.onstop = async () => {
-        if (active.current !== recording) return;
-        release(recording);
-        setState('processing');
-        const audio = new Blob(chunks, { type: recorder.mimeType || mime });
-        if (!audio.size) return finish('录音为空，请重新录制。');
-        if (audio.size > 5 * 1024 * 1024) return finish('录音超过 5 MB，请缩短后重试。');
-        try {
-          const data = await transcribe(audio, recording.controller.signal);
-          if (active.current !== recording) return;
-          result.current(data.text.trim());
-          finish(data.fixture ? '已填入固定样例转写。' : '');
-        } catch (error) {
-          finish(error instanceof Error && error.name === 'Error' ? error.message : '语音转写未完成，请稍后重试。');
-        }
-      };
-      recorder.start();
+    /** 识别开始后显示波形，限制单次录音时长。 */
+    recognition.onstart = () => {
+      if (active.current !== session) return;
       setState('recording');
-      recording.timer = setTimeout(() => stop(recording), 60000);
-    } catch {
-      finish('无法开始录音，请检查麦克风权限和设备。');
-    }
+      /** 到达录音上限时请求浏览器返回最终结果。 */
+      session.timer = setTimeout(() => {
+        if (active.current === session) toggle();
+      }, 60000);
+    };
+    /** 浏览器每次返回完整结果列表，按确认片段汇总以避免重复插入。 */
+    recognition.onresult = event => {
+      if (active.current !== session) return;
+      transcript = Array.from(event.results, entry => entry.isFinal ? entry[0].transcript : '').join('').trim();
+    };
+    /** 识别结束时仅追加有效文字。 */
+    recognition.onend = () => {
+      if (active.current !== session) return;
+      if (transcript) result.current(transcript);
+      finish(transcript ? '' : '未识别到文字，可以再试一次。');
+    };
+    /** 区分浏览器权限、静音与识别服务失败。 */
+    recognition.onerror = ({ error }) => {
+      if (error === 'not-allowed' || error === 'service-not-allowed' || error === 'audio-capture') {
+        finish('无法使用麦克风，请检查浏览器权限和设备。');
+      } else {
+        finish(error === 'no-speech' ? '未识别到文字，可以再试一次。' : '浏览器语音识别未完成，可以重试或继续输入文字。');
+      }
+    };
+    try { recognition.start(); }
+    catch { finish('无法开始语音识别，请检查麦克风权限。'); }
   }
 
   return { state, message, toggle };

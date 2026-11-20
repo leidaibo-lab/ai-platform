@@ -23,7 +23,7 @@ export function WorkbenchComposer({ value, change, send, disabled, readOnly, max
   const voice = useVoiceDraft(text => {
     change(`${value}${value.trim() ? '\n' : ''}${text}`.slice(0, maxLength));
     input.current?.focus();
-  });
+  }, readOnly);
   useLayoutEffect(() => {
     const field = input.current;
     if (!field) return;
@@ -93,7 +93,7 @@ export function WorkbenchComposer({ value, change, send, disabled, readOnly, max
     <div className="workbench-composer-actions">
       <input hidden ref={picker} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" multiple onChange={event => { add(event.target.files ?? []); event.target.value = ''; }} />
       <button type="button" title="预览截图" aria-label="预览截图" onClick={() => picker.current?.click()}><Plus size={17} /></button>
-      <button className="workbench-mic" type="button" title="使用麦克风录音，结束后由 Mastra 服务转写" aria-label={voice.state === 'recording' ? '结束录音并转写' : '语音输入'} aria-pressed={voice.state === 'recording'} disabled={readOnly || voice.state === 'requesting' || voice.state === 'processing'} onClick={() => { setMessage(''); void voice.toggle(); }}>{voice.state === 'recording' ? <span className="workbench-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span> : <Mic size={16} />}</button>
+      <button className="workbench-mic" type="button" title="使用浏览器语音识别，音频可能由浏览器语音服务处理" aria-label={voice.state === 'recording' ? '结束录音并转写' : '语音输入'} aria-pressed={voice.state === 'recording'} disabled={readOnly || voice.state === 'requesting' || voice.state === 'processing'} onClick={() => { setMessage(''); voice.toggle(); }}>{voice.state === 'recording' ? <span className="workbench-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span> : <Mic size={16} />}</button>
       <button className="primary workbench-send" type="submit" aria-label="发送" title="发送 · Enter" disabled={!canSend}><ArrowUp size={18} /></button>
     </div>
   </form>;
