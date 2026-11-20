@@ -30,7 +30,7 @@ export function openDevelopmentV2(config: PracticeConfig, directory: string, eva
   const workflow = createDevelopmentWorkflowV2(config, execution, evaluationPolicy, generate);
   const storage = new LibSQLStore({ id: 'development-v2-store', url: `file:${resolve(directory, 'workflow.db')}` });
   const mastra = new Mastra({ workflows: { developmentWorkflowV2: workflow }, storage, logger: false });
-  return { config, input, execution, workflow, storage, mastra, evaluationPolicy, methodsHash: loadDevelopmentMethods(config.rootDir).hash };
+  return { config, input, execution, workflow, storage, mastra, evaluationPolicy, methods: loadDevelopmentMethods(config.rootDir) };
 }
 export type ApplicationV2 = ReturnType<typeof openDevelopmentV2>;
 
@@ -47,7 +47,7 @@ async function pendingV2(app: ApplicationV2, runId: string, step: string): Promi
   const pending = status.steps?.[`development-iteration-v2.${step}`] ?? (step === 'recover-development' ? Object.values(status.steps ?? {}).find(/** 新图故障在原阶段暂停，恢复状态由原生暂停载荷持有。 */value => !Array.isArray(value) && value.status === 'suspended' && value.suspendPayload?.recoveryState) : undefined);
   if (status.status !== 'suspended' || !pending || Array.isArray(pending) || pending.status !== 'suspended') throw new Error('v2没有对应待审暂停点');
   const state = stateV2Schema.parse(pending.suspendPayload?.recoveryState ?? pending.payload);
-  validateIdentityV2(state, app.config, app.methodsHash);
+  validateIdentityV2(state, app.config, app.methods.hashFor(state.input, state.methodBundleHash));
   if (developmentHash(state.input) !== developmentHash(app.input)) throw new Error('v2开发输入发生漂移');
   if (state.checkpointHash !== developmentHash(await app.execution.snapshot())) throw new Error('v2源码检查点漂移');
   return state;

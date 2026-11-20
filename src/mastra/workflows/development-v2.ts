@@ -45,7 +45,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   }
   /** 所有节点共用身份/源码检查，不让后续正常变更与初始baseline永久比较。 */
   async function guard(state: StateV2): Promise<void> {
-    validateIdentityV2(state, config, methods.hashFor(state.input));
+    validateIdentityV2(state, config, methods.hashFor(state.input, state.methodBundleHash));
     if (state.checkpointHash !== developmentHash(await execution.snapshot())) throw new Error('v2源码检查点漂移');
   }
   /** 非当前阶段节点只传递快照，恢复从持久化phase继续。 */
@@ -93,7 +93,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       }, undefined, event => publishLiveOutput(pubsub, runId, event, 'prepare-context'));
     if (!called.entry) return called.state;
     const draft = contextDraftSchema.parse(parseDevelopmentJson(called.entry.text));
-    return { ...called.state, context: { ...draft, files, productHash: inputData.input.source.hash, baselineHash: inputData.checkpointHash, methodBundleHash: methods.hashFor(inputData.input) }, phase: 'architecture' as const, work: [...called.state.work, called.entry] };
+    return { ...called.state, context: { ...draft, files, productHash: inputData.input.source.hash, baselineHash: inputData.checkpointHash, methodBundleHash: inputData.methodBundleHash }, phase: 'architecture' as const, work: [...called.state.work, called.entry] };
   }
   const architecture = createStep({ id: 'architecture', description: 'plan-development｜architecture｜development-lead-agent 产出技术方案与任务包', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     // 任务包严格按manifest和原文索引校验；计划变更清空旧批准。
@@ -111,7 +111,8 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     const preparationIssues = inputData.input.project.preparationIssues;
     if (inputData.input.project.planning === 'agent' && !plan.blockers.length) {
       const existing = await execution.snapshot();
-      for (const task of plan.tasks) for (const path of task.paths) if (!(path in existing)) await execution.writeFile(path, '');
+      const paths = new Set(plan.tasks.flatMap(/** 接续写入的新文件只预建一次。 */task => task.paths));
+      for (const path of paths) if (!(path in existing)) await execution.writeFile(path, '');
     }
     const checkpointHash = developmentHash(await execution.snapshot());
     return { ...called.state, checkpointHash, plan, planHash: developmentHash(plan), planSourceHash: inputData.checkpointHash, approvedHash: null, approvalHash: null, completedTasks: [], team: undefined, phase: options.team ? 'assemble-team' as const : 'assess-readiness' as const, work: [...called.state.work, called.entry], outcome: preparationIssues?.length ? 'manual-attention' as const : plan.blockers.length ? 'clarification-required' as const : 'in-progress' as const };
@@ -120,7 +121,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   function parsePlan(text: string, state: StateV2) {
     const plan = planV2Schema.parse(parseDevelopmentJson(text));
     if (state.input.project.preparationIssues?.length) plan.blockers = [...new Set([...plan.blockers, ...state.input.project.preparationIssues.map(/** 宿主工程事实不能被模型PASS、业务回答或人工评论消除。 */issue => `工程上下文缺口：${issue}`)])];
-    validatePlanV2(plan, state);
+    validatePlanV2(plan, state, !methods.usesLegacyTaskHandoff(state));
     return plan;
   }
   const assemble = createStep({ id: 'assemble-agent-team', description: 'plan-development｜assemble-agent-team｜按批准任务动态组建 development-implementer-agent', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
@@ -140,7 +141,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   async function assessReadiness(inputData: StateV2, runId: string, pubsub: Parameters<typeof publishLiveOutput>[0]): Promise<StateV2> {
     if (!active(inputData, 'assess-readiness')) return inputData;
     await guard(inputData);
-    validatePlanV2(inputData.plan!, inputData);
+    validatePlanV2(inputData.plan!, inputData, !methods.usesLegacyTaskHandoff(inputData));
     const called = await invokeV2(config, execution, 'readiness', inputData, [], null, methods, generate,
       // 判定、发现和覆盖都必须结构一致。
       (text) => validateAssessment(assessmentSchema.parse(parseDevelopmentJson(text)), inputData), undefined, event => publishLiveOutput(pubsub, runId, event, 'assess-readiness'));
@@ -182,7 +183,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
     execute: async ({ inputData, resumeData, suspend, runId }) => {
       if (!active(inputData, 'approve-architecture')) return inputData;
       await guard(inputData); assertApprovalV2(inputData);
-      if (!resumeData && !evaluationPolicy) return suspend({ hash: inputData.approvalHash!, plan: inputData.plan!, ...(inputData.plan!.document ? { architectureMarkdown: architectureMarkdown(inputData.plan!.document) } : {}), readiness: inputData.readiness!.assessment, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hashFor(inputData.input), team: inputData.team, executionBudget: { maxReworks: inputData.input.maxReworks, maxCalls: inputData.maxCalls, autonomy: inputData.input.autonomy } });
+      if (!resumeData && !evaluationPolicy) return suspend({ hash: inputData.approvalHash!, plan: inputData.plan!, ...(inputData.plan!.document ? { architectureMarkdown: architectureMarkdown(inputData.plan!.document) } : {}), readiness: inputData.readiness!.assessment, contextHash: developmentHash(inputData.context), methodBundleHash: inputData.methodBundleHash, team: inputData.team, executionBudget: { maxReworks: inputData.input.maxReworks, maxCalls: inputData.maxCalls, autonomy: inputData.input.autonomy } });
       const review = resumeData ?? { hash: inputData.approvalHash!, decision: 'approve' as const, reviewer: 'evaluation-organizer-policy', comment: '仅隔离fixture自动执行，不代表业务批准', resolutions: [] };
       if (review.hash !== inputData.approvalHash) throw new Error('v2批准包版本不匹配');
       if (review.resolutions.length) throw new Error('方案批准不能处理交付评审发现');
@@ -314,7 +315,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       return reworkDevelopmentV2(state, route, route === 'architecture' ? 'prepare-context' : 'implement');
     }
     // 非PASS原报告只能在全部原发现已有明确处理后进入此处；原报告保留。
-    return { ...inputData, outcome: 'development-delivered' as const, gates: [...inputData.gates, { decision: 'deliver' as const, reasons: [], sourceHash: inputData.checkpointHash, reportHash: latest.hash }], delivery: { version: 'development-delivery.v2' as const, productHash: inputData.input.source.hash, planHash: inputData.planHash!, approvalHash: inputData.approvalHash!, contextHash: developmentHash(inputData.context), methodBundleHash: methods.hashFor(inputData.input), readinessHash: inputData.readiness!.hash, reviewHash: latest.hash, sourceHash: inputData.checkpointHash, files: await execution.snapshot(), checks: inputData.checks, resolutions: inputData.resolutions, limitations: ['受限研发交付；固定Node语法和登记smoke，不等于独立业务验收', '只读模型评审不证明完整业务质量；fixture仅验证原生控制流', '无生产部署、跨库原子交接和跨实例启动幂等'] } };
+    return { ...inputData, outcome: 'development-delivered' as const, gates: [...inputData.gates, { decision: 'deliver' as const, reasons: [], sourceHash: inputData.checkpointHash, reportHash: latest.hash }], delivery: { version: 'development-delivery.v2' as const, productHash: inputData.input.source.hash, planHash: inputData.planHash!, approvalHash: inputData.approvalHash!, contextHash: developmentHash(inputData.context), methodBundleHash: inputData.methodBundleHash, readinessHash: inputData.readiness!.hash, reviewHash: latest.hash, sourceHash: inputData.checkpointHash, files: await execution.snapshot(), checks: inputData.checks, resolutions: inputData.resolutions, limitations: ['受限研发交付；固定Node语法和登记smoke，不等于独立业务验收', '只读模型评审不证明完整业务质量；fixture仅验证原生控制流', '无生产部署、跨库原子交接和跨实例启动幂等'] } };
   }
   const resolveFindings = createStep({ id: 'resolve-findings', description: 'review-development-quality｜resolve-findings｜人工裁决评审发现或进入有界返工', inputSchema: stateV2Schema, outputSchema: stateV2Schema,
     suspendSchema: z.object({ hash: z.string(), reports: z.unknown() }), resumeSchema: findingsReviewSchema,

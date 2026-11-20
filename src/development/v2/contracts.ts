@@ -88,8 +88,8 @@ export function evidenceRefs(state: StateV2): Set<string> {
 }
 
 /** 对任务和可追溯引用做宿主硬校验；语义是否完整交给独立评估。 */
-export function validatePlanV2(plan: z.infer<typeof planV2Schema>, state: StateV2): void {
-  validateArchitecture(plan, state.input);
+export function validatePlanV2(plan: z.infer<typeof planV2Schema>, state: StateV2, orderedPathHandoff = true): void {
+  validateArchitecture(plan, state.input, orderedPathHandoff);
   if (state.input.architectureDocumentFormat && !plan.blockers.length && !plan.document) throw new SyntaxError('开发方案缺少待审架构文档');
   if (plan.document) validateArchitectureDocument(plan.document);
   const requirements = new Set(state.requirements.map(

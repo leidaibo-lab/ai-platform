@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 export const outputDiagnosticSchema = z.object({
   stage: z.enum(['structured-output', 'method', 'schema', 'json', 'constraint', 'unknown']),
-  code: z.enum(['structured-output-invalid', 'method-load-missing', 'method-read-missing', 'schema-invalid', 'json-invalid', 'task-id-duplicate', 'role-unregistered', 'path-ownership-invalid', 'dependency-invalid', 'path-ownership-missing', 'requirement-ref-unknown', 'context-ref-unknown', 'check-ref-unregistered', 'requirement-ref-missing', 'assessment-ref-unknown', 'assessment-finding-duplicate', 'assessment-route-unregistered', 'assessment-verdict-inconsistent', 'assessment-coverage-missing', 'output-invalid']),
+  code: z.enum(['structured-output-invalid', 'method-load-missing', 'method-read-missing', 'schema-invalid', 'json-invalid', 'task-id-duplicate', 'role-unregistered', 'path-ownership-invalid', 'path-unauthorized', 'task-path-duplicate', 'path-handoff-unordered', 'dependency-invalid', 'path-ownership-missing', 'requirement-ref-unknown', 'context-ref-unknown', 'check-ref-unregistered', 'requirement-ref-missing', 'assessment-ref-unknown', 'assessment-finding-duplicate', 'assessment-route-unregistered', 'assessment-verdict-inconsistent', 'assessment-coverage-missing', 'output-invalid']),
   issues: z.array(z.object({ path: z.string().max(150), code: z.enum(['invalid_type', 'too_small', 'too_big', 'invalid_value', 'invalid_format', 'unrecognized_keys', 'custom', 'other']) })).max(12).optional(),
 });
 export type OutputDiagnostic = z.infer<typeof outputDiagnosticSchema>;
@@ -20,7 +20,8 @@ export class OutputValidationError extends SyntaxError {
 
 const constraints: Record<string, OutputDiagnostic['code']> = {
   '任务ID重复': 'task-id-duplicate', '方案使用未注册实现角色': 'role-unregistered',
-  '方案文件责任越界或重复': 'path-ownership-invalid', '任务须按拓扑顺序排列，依赖不能缺失或成环': 'dependency-invalid',
+  '方案文件责任越界或重复': 'path-ownership-invalid', '方案包含未授权写入路径': 'path-unauthorized',
+  '同一任务重复声明写入路径': 'task-path-duplicate', '共享文件写入任务缺少依赖顺序': 'path-handoff-unordered', '任务须按拓扑顺序排列，依赖不能缺失或成环': 'dependency-invalid',
   '方案遗漏文件责任': 'path-ownership-missing', '任务引用未知需求或验收': 'requirement-ref-unknown',
   '任务引用未知上下文': 'context-ref-unknown', '任务引用未登记检查': 'check-ref-unregistered',
   '任务遗漏批准原文引用': 'requirement-ref-missing',

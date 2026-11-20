@@ -28,7 +28,7 @@ export function createDeploymentWorkflow(agents: ReturnType<typeof createAgents>
   /** 恢复暂停节点后重新检查模型身份、测试版本与实际候选。 */
   async function guard(state: Lifecycle): Promise<void> {
     assertReleaseInput(state);
-    validateIdentityV2(state.development, config, methods.hashFor(state.development.input));
+    validateIdentityV2(state.development, config, methods.hashFor(state.development.input, state.development.methodBundleHash));
     await assertCandidate(state, scope.port);
   }
   const prepare = createStep({ id: 'prepare-release-plan', description: '部署角色拟定环境、制品、发布、健康检查与回滚计划', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema,

@@ -5,6 +5,7 @@ import { intakeRequest } from '../intake-request';
 type ChangedFile = {
   path: string;
   taskId: string;
+  taskIds?: string[];
   kind: 'added' | 'deleted' | 'modified';
   before?: string;
   after?: string;
@@ -18,7 +19,7 @@ const captions = { added: '新增', deleted: '删除', modified: '修改' };
 function FileChanges({ file, split }: { file: ChangedFile; split: boolean }) {
   const [open, setOpen] = useState(false);
   return <details className="candidate-change-file" onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary><span>{captions[file.kind]}</span><code>{file.path}</code><small>{file.taskId}</small></summary>
+    <summary><span>{captions[file.kind]}</span><code>{file.path}</code><small>{(file.taskIds ?? [file.taskId]).join('、')}</small></summary>
     {open && (file.before === undefined || file.after === undefined
       ? <p>该文件正文超出预览范围。</p>
       : <div className="candidate-diff-content"><ReactDiffViewer oldValue={file.before} newValue={file.after}

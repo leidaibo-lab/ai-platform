@@ -328,7 +328,7 @@ Run 标识而非客户端提交的任意 Git ref。每个需求 Run 使用独立
 #### Scenario: A reviewer opens the candidate changes
 
 - **WHEN** 用户打开研发页的代码变更栏
-- **THEN** 服务端 SHALL 只展示当前 Run 已保存检查点中属于已批准任务范围的变更，核对候选散列，并标明对比版本
+- **THEN** 服务端 SHALL 只展示当前 Run 已保存检查点中属于已批准任务范围的变更，核对候选散列，并标明对比版本。共享文件 SHALL 只展示一份差异，并标明批准方案中的关联任务
 - **AND** 无可用检查点、候选不一致或正文超出展示上限时，工作台 SHALL 明确显示对应状态
 
 ### Requirement: Product workflow focuses on direction, specification and handoff
@@ -421,3 +421,22 @@ Run 标识而非客户端提交的任意 Git ref。每个需求 Run 使用独立
 - **WHEN** 受控实时输出关联到一个节点及角色轮次
 - **THEN** 页面 SHALL 保留当前页面会话中已收到的其他节点输出，状态和审批继续以服务端快照为准
 - **AND** 节点及并行任务的标识 SHALL 由执行端提供，同角色并行任务的输出独立展示
+
+### Requirement: Development tasks hand off shared files through dependencies
+
+研发 v2 方案 SHALL 允许多个任务分阶段写入同一授权文件。宿主 SHALL 校验同一文件的写入任务由直接或间接 `dependsOn` 形成明确顺序。同一执行波次每个文件 SHALL 至多有一个写入任务。项目写入上界、受保护检查、任务级路径限制与方案审批 SHALL 继续生效。
+
+#### Scenario: A downstream task extends a shared file
+
+- **WHEN** 已批准任务通过依赖顺序写入同一文件
+- **THEN** 后续任务 SHALL 在前序任务成功合并后从当前候选检查点读取文件。前序失败时后续 SHALL 等待，恢复时 SHALL 保留已成功合并的任务
+
+#### Scenario: Tasks have conflicting paths
+
+- **WHEN** 同一任务重复声明路径、无依赖顺序的任务声明写入同一文件，或方案声明未授权路径
+- **THEN** 宿主 SHALL 在批准前拒绝方案，并区分重复路径、未排序写入与未授权路径。派发和合并 SHALL 拦截同批写入冲突
+
+#### Scenario: A saved development run resumes
+
+- **WHEN** 研发 Run 已绑定历史任务交接方法
+- **THEN** 系统 SHALL 按所绑定版本继续规划或执行，并继续校验原有批准和恢复散列

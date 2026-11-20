@@ -27,7 +27,13 @@ export async function readCandidateChanges(workflow: IntakeWorkflow, runId: stri
     const project = state.input.project;
     const files = [];
     let remaining = 500_000;
+    const tasksByPath = new Map<string, string[]>();
     for (const task of state.plan.tasks) for (const path of task.paths) {
+      const taskIds = tasksByPath.get(path) ?? [];
+      taskIds.push(task.id);
+      tasksByPath.set(path, taskIds);
+    }
+    for (const [path, taskIds] of tasksByPath) {
       if (!canWriteProjectPath(project, path) || /secret|credential|private[-_]?key/i.test(path)) continue;
       const before = Object.hasOwn(project.files, path) ? project.files[path] : undefined;
       const afterHash = snapshot[path];
@@ -38,7 +44,7 @@ export async function readCandidateChanges(workflow: IntakeWorkflow, runId: stri
       const bytes = Buffer.byteLength(before ?? '') + Buffer.byteLength(after);
       const omitted = bytes > 100_000 || bytes > remaining || (before ?? '').includes('\0') || after.includes('\0');
       if (!omitted) remaining -= bytes;
-      files.push({ path, taskId: task.id, kind, ...(omitted ? {} : { before: before ?? '', after }) });
+      files.push({ path, taskId: taskIds[0], taskIds, kind, ...(omitted ? {} : { before: before ?? '', after }) });
     }
     return { status: 'ready' as const, sourceHash: state.checkpointHash, baseline: project.engineeringRevision ?? developmentHash(project.files), files: files.sort((a, b) => a.path.localeCompare(b.path)) };
   } finally {

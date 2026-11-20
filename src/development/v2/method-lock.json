@@ -5,7 +5,7 @@
   "bmad-context/references/source-lock.json": "a564bde7e5b309d1bcea1597bf8442b94429b57caee63206fb2c9d0814d16428",
   "bmad-context/references/template.md": "5e2bc291e734a481fd2925877adfbe82b03313f300baf67dfdb6fa22a1181601",
   "bmad-context/references/upstream.md": "50b0ee0f4905273dd7f8a57a4e79b2ff47eabb074b6f4bce8242b950b37dfb63",
-  "bmad-task-handoff/SKILL.md": "840c1eeccd1152b36e12efb563c5ecb00698487f0c23495488af11d7a119522c",
+  "bmad-task-handoff/SKILL.md": "946b0ac9688b39c9056ae5ca6e80e9669f3d43d1d55f7e315bbb6a9e80768c2a",
   "bmad-task-handoff/references/LICENSE": "0aa79baf6328b4a1e694ce10a12ffc36d7666554da128dff0e8fcda0fc536a66",
   "bmad-task-handoff/references/source-lock.json": "7c6ef805c7eeb84e44b7eb18dcbb38b7bad8aba7965b144516a7dafae0c15c6d",
   "bmad-task-handoff/references/step-02-plan.md": "5c999430f818f58fc5e4f64309a1b0f81358ce0ddcfbd3f44b25d56279ef25d8",
@@ -23,5 +23,6 @@
   "bmad-code-review/references/upstream.md": "337ac3ad2cd8cabb34f4e47c8778cfd703f919753573dd9d708b7218fd5de684",
   "bmad-code-review/references/verification-gap.md": "06f6184d7d94c808970d0146cdc4585dfd66b94a7b7ab2988277fb6fc4208508",
   "architecture-document/SKILL.md": "95de912332d510444bbe5b4ebad86c01ed6edeb677ead968e26c289f86be62a5",
-  "architecture-document/references/document-layout.md": "e51e9821451f4fc173f34752c48f5f42e051d96a5d2db6914f490b5e3edec0d8"
+  "architecture-document/references/document-layout.md": "e51e9821451f4fc173f34752c48f5f42e051d96a5d2db6914f490b5e3edec0d8",
+  "bmad-task-handoff/SKILL.v1.md": "840c1eeccd1152b36e12efb563c5ecb00698487f0c23495488af11d7a119522c"
 }
