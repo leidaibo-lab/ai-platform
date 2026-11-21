@@ -12,8 +12,8 @@ export interface LiveActivity {
   occurredAt: string;
 }
 
-export type ProductStreamEvent = { type: 'text'; text: string; role: string; attempt: number } | { type: 'tool'; name: string; state: 'started' | 'completed' | 'failed'; role: string; attempt: number };
-export interface ProductStreamView { role: string; attempt: number; entries: Array<{ type: 'text'; text: string } | { type: 'tool'; name: string; state: 'started' | 'completed' | 'failed' }>; }
+export type ProductStreamEvent = { type: 'text'; text: string; role: string; attempt: number } | { type: 'tool'; action: string; object?: string; state: 'started' | 'completed' | 'failed'; role: string; attempt: number };
+export interface ProductStreamView { role: string; attempt: number; entries: Array<{ type: 'text'; text: string } | { type: 'tool'; action: string; object?: string; state: 'started' | 'completed' | 'failed' }>; }
 
 /** 将同一节点的文本增量合并；切换角色或重试时从新片段开始。 */
 export function appendProductStream(previous: ProductStreamView | undefined, event: ProductStreamEvent): ProductStreamView {
@@ -22,7 +22,7 @@ export function appendProductStream(previous: ProductStreamView | undefined, eve
     const last = entries.at(-1);
     if (last?.type === 'text') entries[entries.length - 1] = { type: 'text', text: (last.text + event.text).slice(-30000) };
     else entries.push({ type: 'text', text: event.text.slice(-30000) });
-  } else entries.push({ type: 'tool', name: event.name, state: event.state });
+  } else entries.push({ type: 'tool', action: event.action, ...(event.object ? { object: event.object } : {}), state: event.state });
   return { role: event.role, attempt: event.attempt, entries: entries.slice(-100) };
 }
 
@@ -67,9 +67,16 @@ export function RunActivityFeed({ timeline, status, liveActivity, progressText, 
   const roles: Record<string, string> = { analysis: '需求分析', clarification: '需求澄清整理', 'scope-priority': '范围与优先级', writing: '产品稿写作', reviewer: '独立审查', context: '研发上下文核实', architect: '技术方案设计', readiness: '实施前就绪审查', frontend: '前端实现', backend: '后端实现', infrastructure: '基础设施实现', testing: '测试计划', operations: '发布计划' };
   return <details key={live ? 'live' : 'saved'} open={live || undefined} className="intake-card live-model-output" aria-label="节点实时输出">
     <summary>{stream ? roles[stream.role] ?? stream.role : '当前进展'} · {live ? '实时输出' : '本次连接输出'}{stepLabel && <small title={stepLabel}> · {stepLabel.split('.').at(-1)}</small>}{taskKey && <small title={taskKey}> · 任务 {taskKey.slice(0, 8)}</small>}</summary>
-    {stream && <><p className="live-model-output-note">模型生成片段 · 第 {stream.attempt} 次尝试 · 完成前内容可能变化</p><div ref={outputRef} className="live-model-output-stream" aria-live="off" onScroll={handleOutputScroll}>{stream.entries.map((entry, index) => entry.type === 'text' ? <p className="live-model-output-text" key={index}>{entry.text}</p> : <p className="live-model-output-tool" key={index}>工具 {entry.name} · {{ started: '调用中', completed: '已完成', failed: '失败' }[entry.state]}</p>)}</div></>}
+    {stream && <><p className="live-model-output-note">模型生成片段 · 第 {stream.attempt} 次尝试 · 完成前内容可能变化</p><div ref={outputRef} className="live-model-output-stream" aria-live="off" onScroll={handleOutputScroll}>{stream.entries.map((entry, index) => entry.type === 'text' ? <p className="live-model-output-text" key={index}>{entry.text}</p> : <p className="live-model-output-tool" key={index}>{toolLabel(entry)} · {{ started: '调用中', completed: '已完成', failed: '失败' }[entry.state]}</p>)}</div></>}
     {!stream && currentText && <p className="run-activity-copy" role="status">{currentText}</p>}
     {!stream && live && nextText && <p className="run-activity-copy run-activity-next">{nextText}</p>}
     {!stream && live && <p className="live-model-output-note">等待模型文本或工具调用；部分节点暂未接入实时输出。</p>}
   </details>;
+}
+
+/** 将内部工具标识转换成可理解的操作名称，并明确展示被调用的 Skill。 */
+function toolLabel(entry: { action: string; object?: string }): string {
+  const labels: Record<string, string> = { 'skill.load': '加载 Skill', 'skill.read': '读取 Skill 资料', 'skill.search': '搜索 Skill', 'handoff.locate': '查找交接资料', 'handoff.read': '读取交接资料', 'file.read': '读取文件', 'file.write': '写入文件', 'checks.run': '运行登记检查', 'task.delegate': '委派任务', 'platform.info': '读取平台说明', 'tool.invoke': '调用工具' };
+  const action = labels[entry.action] ?? '调用工具';
+  return entry.object ? `${action}：${entry.object}` : action;
 }

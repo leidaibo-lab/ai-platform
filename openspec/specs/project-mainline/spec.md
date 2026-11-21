@@ -63,6 +63,13 @@ Mastra Store 中的执行、审批、恢复或交付事实。
 
 - **WHEN** 模型流包含隐藏推理、工具参数、工具结果正文、密钥、文件内容或未登记角色
 - **THEN** 系统 SHALL NOT 将该数据投影到浏览器
+#### Scenario: Tool events use one safe display contract
+
+- **WHEN** 任一模型角色通过共享 SSE 链路发送工具调用事件
+- **THEN** 工具事件 SHALL 使用稳定操作码、可选白名单对象和统一生命周期状态
+- **AND** 浏览器 SHALL 将操作码映射为用户可理解的操作名称；未知工具 SHALL 显示通用“调用工具”
+- **AND** 搜索词、任意工具参数、结果正文和模型隐藏推理 SHALL NOT 发送到浏览器
+
 - **AND** 确定性 self-check SHALL 仅以既有 Workflow 活动和检查证据呈现，不得伪造模型正文流
 
 ### Requirement: Development preparation respects repository facts

@@ -3,7 +3,7 @@ import { productSteps } from '../mastra/workflows/product-steps.js';
 import { createHash } from 'node:crypto';
 import type { WorkflowRunStatus } from '@mastra/core/workflows';
 import { stateV2Schema } from '../development/v2/contracts.js';
-import type { LiveOutputEvent } from './live-output.js';
+import type { LiveOutputEvent, ToolAction } from './live-output.js';
 
 /** 对外公开的执行节点状态；不包含 Mastra 内部错误和模型隐藏内容。 */
 export type RunTimelineStatus = 'pending' | 'running' | 'completed' | 'failed' | 'waiting' | 'suspended' | 'cancelled';
@@ -59,7 +59,10 @@ export function projectLiveOutputFrame(value: unknown): { output: LiveOutputEven
       if (!data || typeof data.role !== 'string' || !['analysis', 'clarification', 'scope-priority', 'writing', 'reviewer', 'context', 'architect', 'readiness', 'frontend', 'backend', 'infrastructure', 'testing', 'operations'].includes(data.role) || typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt < 1 || attempt > 2) return undefined;
       let output: LiveOutputEvent | undefined;
       if (data.type === 'text' && typeof data.text === 'string' && data.text.length <= 16384) output = { type: 'text', text: data.text, role: data.role, attempt };
-      if (data.type === 'tool' && typeof data.name === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(data.name) && (data.state === 'started' || data.state === 'completed' || data.state === 'failed')) output = { type: 'tool', name: data.name, state: data.state, role: data.role, attempt };
+      if (data.type === 'tool' && ['skill.load', 'skill.read', 'skill.search', 'handoff.locate', 'handoff.read', 'file.read', 'file.write', 'checks.run', 'task.delegate', 'platform.info', 'tool.invoke'].includes(String(data.action)) && (data.state === 'started' || data.state === 'completed' || data.state === 'failed')) {
+        const object = typeof data.object === 'string' && data.object.length <= 500 ? data.object : undefined;
+        output = { type: 'tool', action: data.action as ToolAction, ...(object ? { object } : {}), state: data.state, role: data.role, attempt };
+      }
       if (!output) return undefined;
       const stepId = typeof record.stepId === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(record.stepId) ? record.stepId : undefined;
       const taskKey = typeof record.taskKey === 'string' && /^[a-f0-9]{16}$/.test(record.taskKey) ? record.taskKey : undefined;
