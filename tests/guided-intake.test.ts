@@ -294,9 +294,9 @@ test('澄清约束：坏表单、单多选、文本、重复问题与继续澄�
   assert.throws(/** 同一表单不能生成重复问题标识。 */() => planSchema.parse({ ...plan, questions: [plan.questions[0], plan.questions[0]] }));
 });
 
-for (const scenario of ['success', 'rollback']) test(`业务前端接口连续推进：${scenario}，非法输入保留暂停点`, /** 合成项目通过 HTTP handler 串联真实检查与人工回执。 */async () => {
+test('业务前端接口连续推进至 MR，非法输入保留暂停点', /** 合成项目通过 HTTP handler 串联真实检查与人工关口。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-all-gates-'));
-  const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, legacyDeployment: true, legacyProductWorkflow: true, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
+  const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, legacyProductWorkflow: true, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   new Mastra(app); const router = new Hono();
   for (const route of app.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
   const runId = randomUUID(); const actor = { reviewer: 'test-human', comment: '仅合成测试，不代表真实业务授权' };
@@ -324,22 +324,17 @@ for (const scenario of ['success', 'rollback']) test(`业务前端接口连续�
       else if (g.key === 'approve-architecture') data = { ...data, decision: 'approve', resolutions: [] };
       else if (g.key === 'approve-test-cases') data = { ...data, decision: 'approve', cases: [{ id: 'all', requirementRefs: p.requirements.map(/** 覆盖已批准原文引用。 */(r: any) => r.id), expected: '两个模块返回1', method: 'registered-check', checkRefs: p.registeredChecks }] };
       else if (g.key === 'review-test-results') data = { ...data, decision: 'pass', manualResults: [], findings: [] };
-      else if (g.key === 'approve-release-scope') data = { ...data, decision: 'approve', scope: { environment: 'synthetic', artifactDigest: 'a'.repeat(64), artifactRef: 'synthetic://build', rollbackArtifactRef: 'synthetic://previous', healthChecks: [{ id: 'ready', expected: '可用' }] } };
-      else if (g.key === 'execute-release-externally') data = { ...data, status: 'succeeded', jobRef: 'synthetic://job', operator: 'test', finishedAt: '2026-11-07T00:00:00Z', notes: '合成回执，没有实际部署' };
-      else if (g.key === 'verify-release-health') data = { ...data, operator: 'test', checks: [{ id: 'ready', status: scenario === 'rollback' ? 'failed' : 'passed', evidence: '合成健康检查', observedAt: '2026-11-07T00:00:00Z' }] };
-      else if (g.key === 'execute-rollback-externally') data = { ...data, status: 'rolled-back', jobRef: 'synthetic://rollback', operator: 'test', notes: '合成回滚回执，未实际部署' };
       else assert.fail(`未预期关口 ${g.key}`);
       const stale = await post({ gateHash: '0'.repeat(64), data }); assert.equal(stale.status, 409);
       if (g.key === 'confirm-project-scope') assert.equal((await post({ gateHash: g.gateHash, data: { ...data, project: { ...project, checkFiles: ['src/a.mjs'] } } })).status, 409);
       if (g.key === 'approve-test-cases') assert.equal((await post({ gateHash: g.gateHash, data: { ...data, cases: [{ ...data.cases[0], requirementRefs: ['unknown'] }] } })).status, 409);
-      if (g.key === 'verify-release-health') assert.equal((await post({ gateHash: g.gateHash, data: { ...data, checks: [{ ...data.checks[0], id: 'unknown' }] } })).status, 409);
       assert.equal((await readIntake(app.workflows.productDevelopmentWorkflow, runId)).gate?.gateHash, g.gateHash);
       const response = await post({ gateHash: g.gateHash, data }); assert.equal(response.status, 200, `${g.key}: ${await response.clone().text()}`); current = await response.json();
       assert.notEqual(current.status, 'failed', JSON.stringify(current));
     }
-    assert.deepEqual(visited, ['confirm-project-scope', 'approve-architecture', 'approve-test-cases', 'review-test-results', 'approve-release-scope', 'execute-release-externally', 'verify-release-health', ...(scenario === 'rollback' ? ['execute-rollback-externally'] : [])]);
+    assert.deepEqual(visited, ['confirm-project-scope', 'approve-architecture', 'approve-test-cases', 'review-test-results']);
     assert.equal(current.status, 'success');
-    const snapshot = await app.workflows.productDevelopmentWorkflow.getWorkflowRunById(runId); assert.equal((snapshot!.result as any).outcome, scenario === 'rollback' ? 'rolled-back' : 'fixture-completed');
+    const snapshot = await app.workflows.productDevelopmentWorkflow.getWorkflowRunById(runId); assert.equal((snapshot!.result as any).outcome, 'fixture-completed');
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

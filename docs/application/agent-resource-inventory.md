@@ -1,15 +1,15 @@
 # 产研角色资源清单与绑定
 
-盘点基于当前代码，目标是让可编辑的角色、任务 Prompt 和 Skill 由 Nacos 版本化管理。下列 `product.*` 是**建议资源 ID**，不是已发布资源或当前生效配置。实际发布版本、审批和角色绑定尚未建立；此文不作为运行时注册表。已有 [Nacos 方案](../decisions/2026-11-17-nacos-mastra-resources.md)的生产验收边界继续适用。
+本文保留原产品资源盘点及迁移历史；下方 `product.*` 是当时的建议资源 ID，不能作为当前运行时注册表。当前全团队绑定、冻结和候选导出见[统一方法 ADR](../decisions/2026-11-21-unified-nacos-team-methods.md)与[运行配置](../../config/README.md#nacos-团队方法资源)。目标环境发布和真实模型验收仍需单独完成。
 
-## 产品角色绑定表
+## 历史盘点：产品角色绑定表
 
 | 角色及阶段 | 当前绑定 | 目标资源及能力 | 当前状态 |
 | --- | --- | --- | --- |
 | 产品经理：澄清、分析、范围、写作 | `product-manager-agent`；配置中的主 Prompt、主 Skill 和追加 Skill | `product.role.manager`；按角色绑定产品 Skill 集；分别绑定 `product.task.intake`、`product.task.analysis`、`product.task.clarification`、`product.task.scope-priority`、`product.task.writing` 及补全/澄清模式指令 | 角色 Prompt/指定 Skill 可按 Run 冻结；阶段和模式指令仍在代码 |
 | 独立产品审查 | `product-reviewer-agent`；可选独立 Prompt，否则复用主 Prompt；可配置冻结 Skill 子集 | `product.role.reviewer`、`product.task.review` 和独立审查 Skill 集 | Prompt 和 Skill 子集可独立配置；任务 Prompt 仍在代码 |
 | 研发阻塞回流产品经理 | 同一产品经理角色；分析阻塞及按人工回答修订 | 原 Run 冻结的 `product.role.manager` 和 Skill；`product.task.blocker-questions`、`product.task.revision` | 调用产品 Agent 已接回原 Run 快照；两项任务指令仍在代码 |
-| 产品文档阅读助手 | `reading-agent`，独立只读问答 | `product.role.reader` | Prompt 在代码；不属于当前产品成稿的 Nacos 接入范围 |
+| 产品文档阅读助手 | `reading-agent`，独立只读问答 | `product.role.reader` | 源正文已抽离；独立辅助 Agent 的调用需由调用入口提供对应快照 |
 
 未配置审查 Skill 子集时，两角色共用全部已配置 Nacos Skill；配置子集后按 Run 冻结。旧 Run 和显式关闭 Nacos 的运行继续读取本地资源；新 Run 不自动加载原本地套件。
 
@@ -29,7 +29,7 @@
 | `shared.context.material-policy` | 原文定位、分片读取、来源与材料使用说明 | `src/delivery/task-context.ts` | 多角色共用，待迁移；真实读取权限仍由工具控制 |
 | `shared.memory.observer`、`shared.memory.reflector` | 保留来源、已确认约束和未决项的观察/反思指令 | `src/mastra/context-memory.ts` | 多角色共用，待迁移；需验证 Mastra Memory 配置与恢复语义 |
 
-这些资源将变量数据和模板分开；远程模板变更不得改变输出 schema、审批事实或工具权限。以当前冻结身份覆盖角色 Prompt、阶段 Prompt、Skill 名称、精确版本、内容和摘要，是目标而非已实现状态。
+这些资源将变量数据和模板分开；远程模板变更不得改变输出 schema、审批事实或工具权限。表中状态描述为迁移前盘点；新 Run 的冻结身份已覆盖登记的团队目录，发布与生产验收仍待完成。
 
 ## 产品 Skill 资源清单
 
@@ -46,7 +46,7 @@
 
 [上游方法归档](../../nacos-resources/product/skills/product-pm-catalog.md) 保留 111 项方法入口及其来源和许可证。适配器支持精确版本、单包/响应 1 MiB、快照总计 8 MiB，运行配置按注册版本取回实际资源。
 
-## 其他角色绑定与后续范围
+## 历史盘点：其他角色绑定
 
 | 角色/阶段 | 当前 Prompt 和 Skill 来源 | 迁移说明 |
 | --- | --- | --- |
@@ -77,7 +77,7 @@
 
 跨电脑的候选入口位于 `nacos-resources/product/`；本机注册脚本及使用方法见该目录 README。2026-11-17 在隔离 Nacos 3.3 发布并读回了 `1.0.0` 的 113 项 Skill 和两个角色 Prompt；注册幂等及同版本冲突也由模拟服务验证。其他机器注册、生产治理和阶段 Prompt 迁移仍待完成。真实 Run 证据及限制见 [live 流程验证](./nacos-live-run-findings.md)。
 
-## 按顺序完成迁移与证据
+## 历史迁移计划与仍需的证据
 
 1. 产出逐项资源包和清单：启用 Skill 的内容、references、来源许可、版本、hash、审批及 ZIP 兼容；整理上述 Prompt 与输入变量。发布前审查内容，不在资源里存凭据。
 2. 设计并实现 Nacos 角色绑定和阶段 Prompt 清单：角色各自指定精确资源版本，校验引用、重复和上限，初始化 Run 一次冻结，产品审批 hash 绑定全部实际资源；旧快照保持兼容。Nacos 负责分发版本化资产，Mastra Workflow 仍负责调度、状态和审批。

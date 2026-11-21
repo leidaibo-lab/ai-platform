@@ -12,7 +12,7 @@ import { developmentHash, projectSchema, recoveryReviewSchema } from '../develop
 import { autonomyPolicySchema, stateV2Schema, approvalHashV2, recoveryHashV2, findingsHashV2, approvalV2Schema, findingsReviewSchema } from '../development/v2/contracts.js';
 import { applyFindingsReview, assertApprovalV2 } from '../development/v2/gates.js';
 import { validateCases, validateQualityReview } from '../delivery/testing.js';
-import { lifecycleSchema, mergeRequestRetrySchema, planApprovalSchema, qualityReviewSchema, releaseApprovalSchema, deploymentReceiptSchema, healthReceiptSchema, rollbackReceiptSchema } from '../delivery/contracts.js';
+import { lifecycleSchema, mergeRequestRetrySchema, planApprovalSchema, qualityReviewSchema } from '../delivery/contracts.js';
 export const scopeFormSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 const definitions: Record<string, { title: string; description: string; schema: z.ZodType }> = {
   'retry-repository-sync': { title: '重试角色资料远端同步', description: '已保存角色产物；仅重试提交和推送，成功后继续原流程，不重新调用模型或替代审批。', schema: repositoryRetrySchema },
@@ -26,10 +26,6 @@ const definitions: Record<string, { title: string; description: string; schema: 
   'approve-test-cases': { title: '确认测试用例', description: '逐项确认需求、预期结果与执行方式；浏览器用例须核对候选入口、资源、交互与文本断言。', schema: planApprovalSchema },
   'review-test-results': { title: '确认测试结果', description: '查看登记检查与浏览器执行证据，补齐人工用例结果，再决定通过、返工或停止。', schema: qualityReviewSchema },
   'submit-merge-request': { title: '重试提交 MR', description: '从当前 QA 版本重试交付。', schema: mergeRequestRetrySchema },
-  'approve-release-scope': { title: '确认发布范围', description: '确认环境、真实制品、健康检查和回滚引用。此步骤保存发布授权，不会代替外部平台执行。', schema: releaseApprovalSchema },
-  'execute-release-externally': { title: '填写发布执行回执', description: '请在外部平台执行已批准的发布，再填写真实任务引用和执行结果。不要填入密钥。', schema: deploymentReceiptSchema },
-  'verify-release-health': { title: '确认发布后健康检查', description: '按批准清单填写实际观测结果和证据；失败会进入回滚处理。', schema: healthReceiptSchema },
-  'execute-rollback-externally': { title: '填写回滚执行回执', description: '在外部平台完成回滚后填写真实回执；无法恢复时明确标为需要人工处理。', schema: rollbackReceiptSchema },
 };
 export type GatePayload = Record<string, any>;
 const phaseNames: Record<string, string> = { ...Object.fromEntries(developmentSteps.map(step => [step.id, step.title])), 'analyze-blocker-questions': '待决问题整理', 'write-revised-product': '产品稿修订', 'prepare-context': '项目与需求分析', architecture: '技术方案生成', 'execute-agent-team': '代码实现', 'assemble-team': '开发团队组建', 'assess-readiness': '开工条件检查', implement: '代码实现', 'development-self-check': '开发自检', 'review-code': '独立代码评审', 'assess-delivery': '研发交付检查' };
@@ -123,8 +119,7 @@ export function gateInitial(key: string, payload: GatePayload) {
   if (key === 'retry-repository-sync') fixed.repositoryRetry = payload.retryKey;
   if (payload.hash) fixed.hash = payload.hash;
   if (key === 'approve-test-cases') fixed.hash = payload.plan?.hash;
-  if (key === 'approve-release-scope') fixed.hash = payload.packageHash;
-  for (const name of ['sourceHash', 'releaseHash', 'deploymentReceiptHash', 'artifactDigest', 'environment', 'rollbackArtifactRef']) if (payload[name] !== undefined) fixed[name] = payload[name];
+  if (payload.sourceHash !== undefined) fixed.sourceHash = payload.sourceHash;
   return fixed;
 }
 /** 只投影白名单关口和当前实际材料，未知暂停点保持不可操作。 */
@@ -153,7 +148,6 @@ export function describeGate(path: string, payload: GatePayload) {
   if (key === 'confirm-project-scope') initial.project = { id: '', files: {}, writablePaths: [''], checkFiles: [''], roles: [''] };
   if (key === 'approve-test-cases') initial.cases = (payload.requirements ?? []).map(/** 只预填引用与空用例，不替人决定预期或映射。 */(item: GatePayload, index: number) => ({ id: `case-${index + 1}`, requirementRefs: [item.id], expected: '', method: '', checkRefs: [] }));
   if (key === 'review-test-results') initial.manualResults = (payload.quality?.approval?.cases ?? []).filter(/** 机器结果不能被人工填报覆盖。 */(item: GatePayload) => item.method === 'manual').map(/** 结果与证据保持空白，必须实际填报。 */(item: GatePayload) => ({ caseId: item.id, status: '', evidence: '' }));
-  if (key === 'verify-release-health') initial.checks = (payload.requiredChecks ?? []).map(/** 检查清单是已批准事实，实际结果不预选。 */(item: GatePayload) => ({ id: item.id, status: '', evidence: '', observedAt: '' }));
   const recoveryInfo = key === 'recover-development' ? recoveryGuidance(payload) : undefined;
   const { recoveryState: _privateState, findingsState: _findingsState, ...publicEvidence } = payload;
   return { initial, key, title: recoveryInfo?.title ?? definition.title, description: recoveryInfo?.description ?? (key === 'submit-merge-request' ? payload.reason : definition.description), recoveryInfo, gateHash: developmentHash({ path, payload }), evidence: publicEvidence, fixed, schema };
@@ -169,11 +163,6 @@ export function validateGate(path: string, payload: GatePayload, input: unknown,
   if (gate.key === 'confirm-blocker-answers') validateBlockerAnswers(blockerCycleSchema.parse(savedState), data);
   if (gate.key === 'review-revised-product') { const state = blockerCycleSchema.parse(savedState); if (data.hash !== state.draft?.hash) throw new Error('修订产品稿版本发生变化'); }
   if (gate.key === 'approve-architecture' && data.resolutions.length) throw new Error('方案确认不能替代发现裁决');
-  if (gate.key === 'approve-release-scope' && new Set(data.scope.healthChecks.map(/** 健康清单标识必须唯一。 */(check: GatePayload) => check.id)).size !== data.scope.healthChecks.length) throw new Error('健康检查重复');
-  if (gate.key === 'verify-release-health') {
-    const actual = new Set(data.checks.map(/** 不允许重复结果补足遗漏。 */(check: GatePayload) => check.id));
-    if (actual.size !== data.checks.length || actual.size !== payload.requiredChecks.length || payload.requiredChecks.some(/** 每个批准检查必须回填。 */(check: GatePayload) => !actual.has(check.id))) throw new Error('健康结果必须覆盖批准清单');
-  }
   if (['approve-architecture', 'resolve-readiness', 'resolve-findings', 'recover-development'].includes(gate.key)) {
     const state = stateV2Schema.parse(payload.recoveryState ?? payload.findingsState ?? savedState);
     if (gate.key === 'approve-architecture') { assertApprovalV2(state); if (data.hash !== approvalHashV2(state)) throw new Error('方案版本发生漂移'); }

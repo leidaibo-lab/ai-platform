@@ -16,7 +16,7 @@ flowchart TB
     TEAMS --> PORT["受控执行 Port：候选读写、固定检查、浏览器 QA 与 MR"]
     APP <--> STORE[("Mastra Store：运行、审批、检查点与恢复事实")]
     TEAMS --> MODEL["模型服务：推理、生成与评审"]
-    NACOS["Nacos：产品 Prompt / Skill 精确版本"] --> TEAMS
+    NACOS["Nacos：团队 Prompt / Skill 精确版本"] --> TEAMS
     PROJECT["项目注册表 + Adapter：按 Run 冻结工程绑定"] --> APP
     PROJECT --> PORT
     GIT["业务工程 Harness：Git 中的 AGENTS、SDD、源码与保护检查"] --> PROJECT
@@ -26,6 +26,8 @@ flowchart TB
 三层职责分别是平台执行治理、团队专业闭环、业务工程契约；跨团队调用由主 Workflow 负责。Agent 组合角色职责、版本化方法、任务上下文、模型和最小工具；检查、权限与交付门由确定性代码判断，人工决定不能由模型代替。
 
 Mastra Store 是唯一运行事实源；Git 交接、资产目录、档案和页面是规格、产物或只读投影，不构成第二套审批或恢复引擎。详细角色、数据归属与证据链见 [Harness 架构](docs/application/harness-architecture.md)。
+
+Nacos 只承担经治理 Prompt / Skill 的**版本化分发与发现**：新 live Run 读取指定精确版本，并将正文、引用、绑定和摘要冻结到 Mastra Store。它不保存候选人等业务数据、Run 状态或人工审批，也不授予工具、仓库写入或部署权限；Git 则保留可审查的源资产、来源锁和候选定义。资源更新只影响新 Run，旧 Run 必须按其冻结身份恢复。
 
 ## 产研工作流
 
@@ -59,7 +61,7 @@ flowchart TB
 | 公共 Team Loop | 研发与测试接入公共信封、纯决策和返工 Port | 所有团队已经统一执行内核或完全解耦 |
 | 多项目 | Run 级绑定贯穿产品上下文、候选、资产、归档、同步、后继与 MR | 完整多租户授权、跨进程创建幂等或生产多实例验收 |
 | 工程适配 | 登记 Node/Python 固定 Adapter；HRM 保留兼容 Docker 执行档 | 任意技术栈自动接入、完整环境跨机器复现 |
-| 方法与上下文 | 产品 Nacos 精确版本快照、研发本地方法锁、固定版本按需读取与调用级 Memory | 全团队已迁入 Nacos、共享跨项目长期记忆 |
+| 方法与上下文 | 主线团队方法可按 Run 冻结 Nacos 精确版本，调用前核验；本地保留源资产和历史兼容 | 目标环境已发布及完成生产验收、共享跨项目长期记忆 |
 | 浏览器 QA | 批准候选静态 HTML 与资源的真实 Chromium 回执 | 任意动态全栈应用自动启动与业务验收 |
 | 交付与验证 | 同版本证据核验、Run 分支及 MR 回执机制 | 默认自动合并、CI/CD、部署；fixture 代替真实业务质量 |
 
@@ -99,7 +101,7 @@ npm run review:dev
 | `MASTRA_MODE` / `MASTRA_DATA_DIR` | 区分 fixture/live 与数据目录；live 会产生模型费用 |
 | `MASTRA_MODEL` / `MASTRA_BASE_URL` / `OPENAI_API_KEY` | 默认模型与服务出口；live 需显式配置 |
 | `MASTRA_PRODUCT_MODEL` / `MASTRA_DEVELOPMENT_MODEL` | 产品与研发角色覆盖；未设置时回退默认模型 |
-| `NACOS_*` | 默认启用的产品 Prompt / Skill 精确版本与只读访问；未配置时需显式关闭 |
+| `NACOS_*` | 默认启用的产品及团队方法精确版本与只读访问；新 live Run 需完整团队目录 |
 | `MASTRA_ENGINEERING_PROJECTS` | 多项目注册表；客户端仅提交 ID，初始化冻结 Run 绑定 |
 | `MASTRA_ENGINEERING_PROJECT` | 历史单项目入口，与多项目配置互斥 |
 | `MASTRA_HRM_REPOSITORY` | 未登记项目时的 HRM 兼容 checkout，默认同级 `hrm` |
@@ -139,6 +141,7 @@ src/delivery/                独立测试、资产、归档、同步与 MR
 src/evaluation/              原生评分器与节点评测
 .agents/skills/development/  本地版本化研发方法
 nacos-resources/product/     产品方法资源与清单
+nacos-resources/teams/       团队 Prompt 源资产与候选导出
 openspec/                    稳定行为契约与变更
 docs/decisions/              架构决策
 tests/ evaluations/ scripts/ 回归、评测与维护

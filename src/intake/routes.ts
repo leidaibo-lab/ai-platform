@@ -10,7 +10,7 @@ import { readRepositoryCatalog } from './repository-catalog.js';
 import { z } from 'zod';
 import { assetIdSchema } from '../delivery/asset-identity.js';
 import type { IntakeWorkflow } from './service.js';
-import { correctIntake, GateInputError, readIntake, respondIntake } from './service.js';
+import { correctIntake, GateInputError, readIntake, recoverStaleProductWriting, respondIntake } from './service.js';
 import { projectLiveOutputFrame, projectWorkflowActivity } from './run-timeline.js';
 import { intakeModeSchema } from './contracts.js';
 import { deliverySchema } from '../mastra/workflows/delivery.js';
@@ -179,6 +179,21 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         } catch {
           return c.json({ status: 'unavailable' });
         }
+      },
+    }),
+    registerApiRoute('/intake-api/runs/:runId/recover-stale-product-writing', { method: 'POST',
+      /** 仅登录账号可接管超时遗留的产品写作；服务端复核步骤和时限。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        const id = c.req.param('runId'); let acquired = false;
+        try {
+          origin(c);
+          if (!account.current(c)) return c.json({ error: '请登录后恢复写作。' }, 401);
+          if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
+          const selected = await verifyRunProject(id);
+          return c.json(await recoverStaleProductWriting(workflow, mode, id, selected));
+        } catch (error) { return failure(c, error); }
+        finally { if (acquired) busy.delete(id); }
       },
     }),
     registerApiRoute('/intake-api/runs/:runId/events', { method: 'GET',

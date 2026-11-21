@@ -1,6 +1,6 @@
 # Agent Skills Index
 
-根 `.agents/skills/` 保存共用治理、研发、文档和测试 Skill；产品方法的唯一来源位于 `nacos-resources/product/skills/`。两处均由同一治理脚本校验。
+根 `.agents/skills/` 保存共用治理、研发、文档和测试 Skill；产品方法源位于 `nacos-resources/product/skills/`。两处均由同一治理脚本校验；团队运行方法以 Run 冻结的 Nacos 目录为准，源文件用于治理、候选导出和历史兼容。
 
 ## 目录规则
 

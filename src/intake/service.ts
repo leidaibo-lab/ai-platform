@@ -33,6 +33,7 @@ export class GateInputError extends Error {}
 export type IntakeWorkflow = ReturnType<typeof createProductDevelopmentWorkflow>;
 const recoveryInFlight = new Set<string>();
 const correctionsInFlight = new Set<string>();
+const staleProductWritingTimeoutMs = 30 * 60 * 1000;
 /** 在团队化主流程中按叶节点后缀读取步骤，避免业务服务依赖嵌套层数。 */
 function findStep(snapshot: any, suffix: string) {
   const entries = Object.entries(snapshot.steps ?? {}).filter(([path, step]) => !Array.isArray(step) && (path === suffix || path.endsWith(`.${suffix}`)));
@@ -161,6 +162,22 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
   if (recovering) recoveryInFlight.add(runId);
   try { return await respondIntakeOnce(workflow, mode, runId, input, config); }
   finally { if (recovering) recoveryInFlight.delete(runId); }
+}
+
+/** 仅接管已超过写作总时限且没有结果的遗留执行；从同一原生步骤输入继续。 */
+export async function recoverStaleProductWriting(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, config?: PracticeConfig) {
+  if (config) config = snapshotProjectConfig(config, await workflow.getWorkflowRunById(runId));
+  const snapshot = await workflow.getWorkflowRunById(runId);
+  if (!snapshot || snapshot.status !== 'running') throw new GateInputError('当前运行不需要恢复，请刷新');
+  const entry = snapshot.steps?.['product-team.product-writing'];
+  if (!entry || Array.isArray(entry) || entry.status !== 'running' || entry.output || entry.suspendPayload || !entry.payload || !entry.startedAt || Date.now() - new Date(entry.startedAt).getTime() < staleProductWritingTimeoutMs) {
+    throw new GateInputError('当前写作仍在执行或检查点不符合安全恢复条件');
+  }
+  const state = deliverySchema.safeParse(entry.payload);
+  if (!state.success || state.data.mode !== mode || state.data.artifacts.length || state.data.reviews.length) throw new GateInputError('写作检查点已变化，不能安全恢复');
+  const run = await workflow.createRun({ runId });
+  await run.timeTravel({ step: ['product-team', 'product-writing'], inputData: state.data });
+  return readIntake(workflow, runId, config);
 }
 
 /** 在进程内串行恢复同一 Run，实际权限与版本仍在执行前重新校验。 */

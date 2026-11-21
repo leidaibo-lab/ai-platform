@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 
-export const acceptanceRequirementsInstruction = '增加“可验收需求”清单。每个条目使用独立的一行，格式严格为“- REQ-大写英文或数字标识: 业务规则 | 验收: 可观察的预期结果”。ID 由业务能力命名，例如 REQ-APPLICATION-SUBMIT，不使用行号。同一需求修订、移动时保留原 ID，新增需求分配新 ID，移除需求的 ID 不复用。条目必须覆盖本期可独立验收的业务规则与关键异常，不能引入未经确认的规则。最多100项。';
 const idPattern = /^REQ-[A-Z0-9]+(?:-[A-Z0-9]+)*$/;
 export const requirementImpactSchema = z.object({
   previousProductHash: z.string(), productHash: z.string(),

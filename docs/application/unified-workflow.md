@@ -208,33 +208,7 @@ live 交付沿用已授权的 Git 远端，并使用宿主配置的 GitHub CLI �
 
 MR 回执保存后，交付页显示源分支、完整候选提交与「本地验证」。在业务仓库本地运行页面生成的命令，从交付仓库拉取 Run 分支，并在相邻目录创建检出固定提交的 worktree。可进入该目录，按业务项目说明启动并复跑用例。
 
-## 历史试点部署流程
-
-已有部署暂停点可通过 `MASTRA_LEGACY_DEPLOYMENT=true` 使用旧试点图恢复。默认实例走 MR 交付。自主合并、CI/CD 和部署属于后续规划。
-
-部署当前采用原生暂停和人工回填，没有远程执行 Adapter。`deployment-team` 内部 `deployment-and-rollback-cycle` 负责部署方案、审批、外部执行回执、健康检查和回滚。部署角色生成方案后，`approve-release-scope` 的 Resume 包含 `hash`（暂停信息中的 `packageHash`）、`decision: "approve" | "stop"`、`reviewer`、`comment` 和 `scope`：
-
-```json
-{
-  "environment": "staging",
-  "artifactDigest": "实际制品的64位十六进制SHA256",
-  "artifactRef": "外部制品的不可变引用",
-  "rollbackArtifactRef": "已确认的回滚制品引用",
-  "healthChecks": [{"id": "service-ready", "expected": "服务就绪且关键路径正常"}]
-}
-```
-
-此对象放入 `scope` 字段。制品散列与源码散列分别记录；当前制品到源码的构建关系来自负责人确认，未进行 CI 机器校验。批准后，执行节点仅等待授权人员在外部 CI/CD 操作，不启动远程任务：
-
-| 暂停节点 | Resume 字段 |
-| --- | --- |
-| `execute-release-externally` | `releaseHash/sourceHash/artifactDigest/environment` 精确复制暂停绑定；`status` 为 `succeeded/failed/cancelled`；另填 `jobRef/operator/finishedAt/notes` |
-| `verify-release-health` | `releaseHash/deploymentReceiptHash/operator/checks`；每项检查含 `id/status/evidence/observedAt`，status 为 `passed/failed`，清单必须与批准范围完全一致 |
-| `execute-rollback-externally` | `releaseHash/rollbackArtifactRef/status/jobRef/operator/notes`，status 为 `rolled-back/manual-attention` |
-
-时间使用 ISO UTC，例如 `2026-11-07T08:00:00Z`。所有外部回执的 authority 为 `local-human-report`，本地操作者标签不等于认证身份。最终确认必须有同版本测试通过、发布成功和全部健康通过记录；失败则等待回滚并产生明确终态。
-
-终态 `delivery-confirmed` 表示基于已收集证据确认交付，不表示远程机器独立验证；fixture 模式仅产生 `fixture-completed`。其他终态包括 `blocked/rework-exhausted/rejected/rolled-back/manual-attention`。产品拒绝结束本轮，产品退回进入同 Run 返工并等待新稿确认。新图使用新 Run；旧 Run 不承诺跨版本透明续跑；仅对未实施的业务阻塞提供经过版本和源码校验的固定澄清入口，见[工作台契约](./guided-intake.md)。
+历史部署试点及其恢复入口已退役。主线交付到 MR；自主合并、CI/CD 和部署不属于当前流程。产品退回和测试业务缺口仍走受控澄清，见[工作台契约](./guided-intake.md)。
 
 采用锁定版本的原生 Workflow 嵌套与 `foreach concurrency`，未采用 Agent network 自由路由或自建通用调度引擎；团队职责边界见[团队边界决策](../../docs/decisions/2026-11-14-mastra-workflow-team-boundaries.md)，开发团队内部调度见[统一团队选型](../../docs/decisions/2026-11-07-mastra-unified-development-team.md)。
 

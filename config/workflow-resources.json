@@ -251,7 +251,7 @@
       "evidence": [
         "src/development/v2/agents.ts",
         "src/delivery/testing.ts",
-        "src/delivery/deployment.ts"
+        "src/delivery/merge-request.ts"
       ],
       "detail": "各阶段仍消费StateV2/Lifecycle或较大的上游快照；尚未形成逐角色最小输入DTO。"
     },
@@ -289,7 +289,7 @@
       "evidence": [
         "src/delivery/deployment.ts"
       ],
-      "detail": "历史部署图的发布、健康和回滚由人工回填。默认图核验 GitHub MR 回执后结束。"
+      "detail": "旧部署图已退役；主线核验 GitHub MR 回执后结束。"
     }
   ],
   "nextRuntimeDesign": {

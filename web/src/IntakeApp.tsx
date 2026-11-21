@@ -321,6 +321,17 @@ export function IntakeApp() {
     } catch (reason) { await recoverResponse(id, reason); }
     finally { setBusy(false); }
   }
+  /** 服务端逐项核对运行时限和步骤快照，页面不自行判断或重放写作。 */
+  async function recoverStaleWriting() {
+    if (!id) return;
+    setOperation({ label: '正在核对遗留写作检查点并从原输入恢复…' }); setBusy(true); setError(''); setNotice('');
+    try {
+      const next = await request<Document>(`/${id}/recover-stale-product-writing`, {});
+      setDocument(next); setRuns(previous => [next, ...previous.filter(run => run.runId !== next.runId)]);
+      setNotice('已从保存的产品写作输入恢复；已确认回答和前序成果保持不变。');
+    } catch (reason) { await recoverResponse(id, reason); }
+    finally { setBusy(false); }
+  }
   /** 更新一个问题的显式选择，用户可以用补充文本覆盖或说明。 */
   function update(q: Question, selected: string[], custom: string) {
     updateDraft({ answers: { ...answers, [q.id]: { questionId: q.id, selected, custom } } });
@@ -466,7 +477,7 @@ export function IntakeApp() {
         {onActiveTeam && document && !intake && !document.product && !document.gate && !document.blockage && (!document.progress || document.retry) && (document.retry ? <div id="workflow-recovery"><RequirementWorkspace title="恢复与下一步" panel={<><p>{document.retry.next ?? '从已保存的检查点继续，已确认内容和前序成果保留。'}</p><h3>执行影响</h3><p>{document.retry.impact}</p></>} actions={<button className="primary" disabled={busy || uncertain} onClick={/** 恢复只提交当前服务端版本，不允许客户端指定路径。 */() => void submit({ retryHash: document.retry!.hash })}>{busy ? '正在重试…' : '重试'}</button>}>
           <section className="intake-card requirement-completeness"><div className="intake-eyebrow">当前成果状态</div><h1>已保存的工作与待补结果</h1><p>已保存 {document.retry.savedAnswers} 轮回答。当前停在“{document.retry.title}”，恢复后仍会停在相应的人工确认关口。</p>{document.retry.preserved.length > 0 && <ul className="requirement-preserved">{document.retry.preserved.map(/** 状态由服务端依据保存的角色结果判断，计划句不计作完成交付。 */item => <li key={item.role}><span>{item.label}</span><strong>{item.complete === false ? '仅保存执行计划，未保存检查结果' : '已完成'}</strong></li>)}</ul>}</section>
           <section className="intake-card"><h2>当前需要处理的问题</h2><p><strong>{document.retry.title}：</strong>{document.retry.reason}</p>{document.retry.attemptDetails?.map(/** 保留服务端脱敏后的失败依据，不推断额外故障原因。 */detail => <p key={detail}>{detail}</p>)}<p>{document.retry.message}</p></section>
-        </RequirementWorkspace></div> : document.status === 'running' ? null : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
+        </RequirementWorkspace></div> : document.status === 'running' ? <section className="intake-card" role="status"><h2>产品稿写作状态</h2><p>当前 Run 正在处理。若服务曾重启且写作步骤已超过受控时限，系统会仅从同一保存输入恢复写作。</p><button disabled={busy || uncertain || !accountName} onClick={() => void recoverStaleWriting()}>{busy ? '正在核对并恢复…' : '核对并恢复遗留写作'}</button></section> : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
       </>}
       </div>
       {canUseComposer && <WorkbenchComposer key={`${id || 'create'}:${correctionDraft?.attempt ?? activeAttempt?.attempt ?? 'note'}`}

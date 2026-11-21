@@ -91,6 +91,6 @@
 <rect x="721" y="1015" width="671" height="54" rx="7" fill="#f5f8fc" stroke="#c5d2e0" stroke-width="2"/>
 <text x="69" y="1042" fill="#097868" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="700" dominant-baseline="middle">Mastra Store  ·  Run、人工决定、暂停检查点与交付回执</text>
 <text x="742" y="1042" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="16" font-weight="700" dominant-baseline="middle">Git / GitHub  ·  正式规格、Run 分支候选与实际 MR</text>
-<text x="48" y="1095" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">历史兼容  ·  MASTRA_LEGACY_DEPLOYMENT=true 加载旧部署试点图，用于已有部署暂停点恢复。</text>
+<text x="48" y="1095" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">交付边界  ·  旧部署试点已退役，当前流程以核验 MR 回执结束。</text>
 <text x="48" y="1120" fill="#435b73" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="15" font-weight="400" dominant-baseline="middle">后续建设  ·  自主合并、CI/CD、部署与回滚。Fixture 只验证控制流，实际 MR 交付由 live 模式执行。</text>
 </svg>

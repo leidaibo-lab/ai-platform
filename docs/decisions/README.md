@@ -2,6 +2,8 @@
 
 本目录保存平台能力的方案发现、验证和选择证据。记录用于回答“为什么这样选”和“为什么没有使用其他方案”，不能只描述最终实现。
 
+[全团队方法统一由 Nacos 版本化托管](./2026-11-21-unified-nacos-team-methods.md)已接受；目标环境发布与真实模型质量另验。
+
 [统一 Team Loop 信封、返工 Port 与项目 Adapter 注册表](./2026-11-21-unified-team-loop-and-project-adapters.md)已接受。公共 Kernel 仅做纯决策，Mastra Store 继续持有运行事实。
 
 [MR 交付边界](./2026-11-19-merge-request-delivery.md)已接受。默认 Workflow 在创建并核对 MR 后结束。
@@ -10,7 +12,7 @@
 
 [划分平台与团队 Harness 职责](./2026-11-18-platform-team-harness.md)是旧版职责决策，已由三层设计替代。
 
-[在 Mastra 主线适配 Nacos AI 资源](./2026-11-17-nacos-mastra-resources.md)：提议；已有默认启用的产品阶段 Prompt/Skill 验证切片，正式接入与生产验收待完成；MCP 和 A2A 延后。
+[在 Mastra 主线适配 Nacos AI 资源](./2026-11-17-nacos-mastra-resources.md)：历史提议与产品阶段验证记录；当前整体定位由 2026-11-21 统一团队方法决策定义，目标环境发布、真实模型质量与生产验收仍待分别证明。
 
 [以完整远端基线推进 Mastra v2.0 主线](./2026-11-16-mastra-v2-mainline.md)：接受；以 `fa9715f` 的完整 Mastra 代码提升根目录，原自研 Runtime 下沉为 `practices/custom-exploration/`。
 

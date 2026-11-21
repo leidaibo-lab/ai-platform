@@ -23,7 +23,7 @@ export function createStudioApplicationOptions(config: PracticeConfig) {
   const storage = new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl });
   const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config, undefined, { storage });
   return {
-    agents: { productManagerAgent: agents.productManagerAgent, productReviewerAgent: agents.productReviewerAgent, testingAgent: agents.testingAgent, operationsAgent: agents.operationsAgent },
+    agents: { productManagerAgent: agents.productManagerAgent, productReviewerAgent: agents.productReviewerAgent, testingAgent: agents.testingAgent },
     scorers: createNodeScorers(config),
     workflows: { productDevelopmentWorkflow, ...createDevelopmentNodeWorkflows(config) },
     storage,

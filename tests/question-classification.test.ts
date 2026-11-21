@@ -1,7 +1,16 @@
 /** 分类契约与恢复边界：不调用真实模型，不改写历史问题和确认事实。 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generatedPlanSchema, planSchema, validateAnswers, intakeHash, canFinalizePlan, collectConfirmedDecisions, assessmentHistory, classifyPublicationDependency } from '../src/intake/contracts.js';
+import { generatedPlanSchema, planSchema, validateAnswers, intakeHash, canFinalizePlan, collectConfirmedDecisions, assessmentHistory, classifyPublicationDependency, classifyWritingPrerequisite } from '../src/intake/contracts.js';
+
+test('文档尚未生成不循环阻断写作，但业务问题和其他交付缺口保持阻断', () => {
+  const clear = { clear: true, evidence: '历史已确认' };
+  const base = generatedPlanSchema.parse({ maturity: { decisions: clear, mainFlow: clear, exceptions: clear, delivery: { clear: false, evidence: '尚未输出正式项目总览、模块PRD、测试场景和完整验收映射；因此不能宣称交付稿已完成。' } }, summary: '合成数据范围', assumptions: [], questions: [] });
+  assert.equal(canFinalizePlan(classifyWritingPrerequisite(base)), true);
+  assert.equal(canFinalizePlan(classifyWritingPrerequisite({ ...base, questions: [{ id: 'scope', title: '确认范围', reason: '影响交付', required: true, decision: { blocks: 'product', reason: '未定', unanswered: '请回答' }, kind: 'text', options: [], recommendation: '建议明确' }] })), false);
+  assert.equal(canFinalizePlan(classifyWritingPrerequisite({ ...base, maturity: { ...base.maturity, exceptions: { clear: false, evidence: '异常未定' } } })), false);
+  assert.equal(canFinalizePlan(classifyWritingPrerequisite({ ...base, maturity: { ...base.maturity, delivery: { clear: false, evidence: '仍缺少验收边界和权限规则' } } })), false);
+});
 
 test('评估历史只包含显式回答与补充，保留轮次身份且不改写原历史', () => {
   const question = { id: 'scope', title: '首期范围', reason: '确认范围', required: true, kind: 'single' as const, options: [{ id: 'small', label: '招聘闭环' }], recommendation: '推荐招聘闭环' };

@@ -12,7 +12,7 @@ Mastra 主线按平台 Harness、团队 Harness、业务工程 Harness 三层组
 
 主图采用本阶段的交付目标。团队层由产品、研发、测试和交付四类团队组成，交付团队核对候选提交和对应的 QA 证据，从候选分支向 `main` 创建 MR，记录 MR 回执后结束本轮。自主合并、CI/CD 和部署在流程运行稳定后逐步建设。默认 Workflow 已按此装配。历史外部发布回执流程可按原试点图恢复。
 
-Nacos 作为共享角色资源服务，按命名空间和版本分发 Prompt 与 Skill。产品经理和独立产品审查已接入，平台按 Run 保存冻结快照并在调用前复核原版本。研发独立代码审查以虚线标出，作为跨团队复用的待验证试点。详见 [Nacos 资源流](./visual-framework.md#nacos源资产冻结与角色装配)。
+Nacos 作为共享团队方法的版本化分发与发现服务，按命名空间和精确版本提供 Prompt 与 Skill；新 live Run 冻结完整团队目录，并在调用前复核原版本。它不是业务数据、审批、恢复或权限的事实源：这些运行事实由 Mastra Store 持有，受审查源资产和来源锁由 Git 持有。目标环境发布、真实模型质量与生产验收仍需独立证据。详见 [Nacos 资源流](./visual-framework.md#nacos源资产冻结与角色装配)。
 
 ### 运行形态与 Agent 组合
 
@@ -43,7 +43,7 @@ flowchart TB
 | 测试 Agent / 浏览器 QA | 测试计划与批准用例处理；执行结果由真实登记套件或浏览器回执证明 |
 | 确定性节点 | 检查执行、版本核验、交付门与 MR 核验，不需要模型自证完成 |
 
-产品资源从 Nacos 精确版本冻结；研发方法由本地 Skill 与 `method-lock.json` 锁定。大材料经登记引用、有界定位与分段读取进入任务上下文。Memory 按调用隔离并使用原生观察/反思，关闭语义召回和工作记忆，不是跨项目长期知识库。方法指导不授予工具或审批权限。详见[资源流](./visual-framework.md#nacos源资产冻结与角色装配)、[上下文配置](../../config/README.md#原生上下文配置)与[研发内部流程](./development-workflow-design.md#当前研发内部执行图)。
+启用 Nacos 的新 live Run 从完整团队目录冻结各角色的精确方法版本；历史 Run 没有目录快照时按其原身份兼容。大材料经登记引用、有界定位与分段读取进入任务上下文。Memory 按调用隔离并使用原生观察/反思，关闭语义召回和工作记忆，不是跨项目长期知识库。方法指导不授予工具或审批权限。详见[资源流](./visual-framework.md#nacos源资产冻结与角色装配)、[上下文配置](../../config/README.md#原生上下文配置)与[研发内部流程](./development-workflow-design.md#当前研发内部执行图)。
 
 ## 职责与依赖规则
 
@@ -109,7 +109,7 @@ flowchart TB
 | 通用机制候选 | [`execution-scope.ts`](../../src/development/v2/execution-scope.ts)、[`development-execution.ts`](../../src/development-execution.ts)、[`autonomy.ts`](../../src/development/v2/autonomy.ts) | Port、隔离、预算与专业返工策略仍绑定研发类型，不可整体直接改名为通用平台 |
 | 公共团队控制 | [`contracts.ts`](../../src/team/contracts.ts)、[`loop.ts`](../../src/team/loop.ts)、[`rework-port.ts`](../../src/development/rework-port.ts) | 公共信封、纯决策与返工 Port 已接入研发和测试；不是所有团队共用的调度框架 |
 | 业务工程 Harness 与项目适配 | [`project.ts`](../../src/business-engineering/project.ts)、[`adapters.ts`](../../src/business-engineering/adapters.ts)、[`hrm-execution.ts`](../../src/development/hrm-execution.ts) | Run 级绑定、Node/Python 固定检查与多项目路由已接入；真实业务和完整运行镜像仍需验收 |
-| 方法资源 | [`nacos-resources.ts`](../../src/mastra/nacos-resources.ts)、[`methods.ts`](../../src/development/v2/methods.ts)、[`产品资源`](../../nacos-resources/product/README.md) | 产品远端资源与研发方法来源不同；不能把 Nacos 描述为全部团队运行底座 |
+| 方法资源 | [`nacos-resources.ts`](../../src/mastra/nacos-resources.ts)、[`team-methods.ts`](../../src/mastra/team-methods.ts)、[`产品资源`](../../nacos-resources/product/README.md) | 新 live Run 使用 Nacos 完整团队方法目录；Git 源资产和历史本地锁仅服务于受审查准备与旧 Run 兼容，不能替代冻结目录 |
 
 ## 事实所有权
 

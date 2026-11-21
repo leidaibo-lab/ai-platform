@@ -6,20 +6,21 @@ import { posix } from 'node:path';
 import { fromBuffer, type Entry } from 'yauzl';
 import { z } from 'zod';
 import { validateSkillContent } from '@mastra/core/skills';
+import { methodBindingsSchema, teamMethodsSchema, type MethodBindings, type TeamMethods } from './team-method-contracts.js';
 
 const limit = 1024 * 1024;
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const resourceSchema = z.object({ name: z.string().min(1).max(200), version: z.string().min(1).max(100), sha256: digest, content: z.string().min(1).max(limit) }).strict();
 const skillSchema = resourceSchema.extend({ references: z.record(z.string(), z.string().max(limit)) });
-export const nacosSnapshotSchema = z.object({ schemaVersion: z.literal('nacos-product-resources.v1'), source: z.url(), namespace: z.string().min(1), prompt: resourceSchema, reviewerPrompt: resourceSchema.optional(), skill: skillSchema, additionalSkills: z.array(skillSchema).max(127).optional(), reviewerSkills: z.array(z.string().min(1).max(200)).max(128).optional() }).strict();
+export const nacosSnapshotSchema = z.object({ schemaVersion: z.literal('nacos-product-resources.v1'), source: z.url(), namespace: z.string().min(1), prompt: resourceSchema, reviewerPrompt: resourceSchema.optional(), skill: skillSchema, additionalSkills: z.array(skillSchema).max(127).optional(), reviewerSkills: z.array(z.string().min(1).max(200)).max(128).optional(), methods: teamMethodsSchema.optional() }).strict();
 export type NacosSnapshot = z.infer<typeof nacosSnapshotSchema>;
-export interface NacosResourceConfig { url: string; namespace: string; username: string; password: string; promptName: string; promptVersion: string; skillName: string; skillVersion: string; reviewerPrompt?: { name: string; version: string }; additionalSkills?: { name: string; version: string }[]; reviewerSkills?: string[] }
+export interface NacosResourceConfig { url: string; namespace: string; username: string; password: string; promptName: string; promptVersion: string; skillName: string; skillVersion: string; reviewerPrompt?: { name: string; version: string }; additionalSkills?: { name: string; version: string }[]; reviewerSkills?: string[]; methods?: MethodBindings }
 
 /** 仅投影资源版本和摘要，用于审批及对外交接，不包含正文或凭据。 */
 export function nacosResourceIdentity(snapshot: NacosSnapshot) {
   /** 保留身份、精确版本与内容摘要。 */
   const ref = (resource: { name: string; version: string; sha256: string }) => ({ name: resource.name, version: resource.version, sha256: resource.sha256 });
-  return { source: snapshot.source, namespace: snapshot.namespace, prompt: ref(snapshot.prompt), skill: ref(snapshot.skill), ...(snapshot.reviewerPrompt ? { reviewerPrompt: ref(snapshot.reviewerPrompt) } : {}), ...(snapshot.additionalSkills ? { additionalSkills: snapshot.additionalSkills.map(ref) } : {}), ...(snapshot.reviewerSkills ? { reviewerSkills: snapshot.reviewerSkills } : {}) };
+  return { source: snapshot.source, namespace: snapshot.namespace, prompt: ref(snapshot.prompt), skill: ref(snapshot.skill), ...(snapshot.reviewerPrompt ? { reviewerPrompt: ref(snapshot.reviewerPrompt) } : {}), ...(snapshot.additionalSkills ? { additionalSkills: snapshot.additionalSkills.map(ref) } : {}), ...(snapshot.reviewerSkills ? { reviewerSkills: snapshot.reviewerSkills } : {}), ...(snapshot.methods ? { methods: { schemaVersion: snapshot.methods.schemaVersion, sha256: snapshot.methods.sha256 } } : {}) };
 }
 
 /** 为快照内容计算可重复的 SHA-256。 */
@@ -88,11 +89,15 @@ export function validateNacosSnapshot(input: unknown): NacosSnapshot {
     names.add(skill.name);
   }
   if (snapshot.reviewerSkills && (new Set(snapshot.reviewerSkills).size !== snapshot.reviewerSkills.length || snapshot.reviewerSkills.some(/** 角色绑定只能选择冻结集合中的名称。 */name => !names.has(name)))) throw new Error('审查角色 Skill 绑定无效');
+  if (snapshot.methods) {
+    validateTeamMethods(snapshot.methods);
+    if (snapshot.methods.source !== snapshot.source || snapshot.methods.namespace !== snapshot.namespace) throw new Error('团队方法目录与 Run 资源来源不一致');
+  }
   return snapshot;
 }
 
-/** 通过 Nacos Client API 获取指定版本，冻结可恢复的正文及参考资料。 */
-export async function loadNacosSnapshot(config: NacosResourceConfig): Promise<NacosSnapshot> {
+/** 建立一次有界只读会话，凭据和令牌只留在调用闭包。 */
+async function createNacosReader(config: NacosResourceConfig) {
   const base = new URL(config.url);
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.pathname !== '/' || base.search || base.hash) throw new Error('Nacos 地址无效');
   /** 所有请求均限制时长且禁止重定向，避免转发凭据。 */
@@ -116,6 +121,62 @@ export async function loadNacosSnapshot(config: NacosResourceConfig): Promise<Na
     const value = JSON.stringify({ content: skill.content, references: Object.fromEntries(Object.entries(skill.references).sort(([a], [b]) => a.localeCompare(b))) });
     return { name: ref.name, version: ref.version, content: skill.content, references: skill.references, sha256: hash(value) };
   }
+  return { getPrompt, getSkill, source: base.origin };
+}
+
+/** 对冻结目录作递归稳定编码，避免键序影响跨进程身份。 */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
+/** 验证每项正文、完整引用及目录绑定摘要，拒绝篡改和无效 Skill。 */
+export function validateTeamMethods(input: unknown): TeamMethods {
+  const value = teamMethodsSchema.parse(input);
+  const { sha256, ...body } = value;
+  if (Buffer.byteLength(JSON.stringify(value)) > 8 * limit || hash(canonical(body)) !== sha256) throw new Error('团队方法目录摘要不匹配或超过限制');
+  for (const prompt of Object.values(value.prompts)) if (hash(prompt.content) !== prompt.sha256) throw new Error('团队 Prompt 摘要不匹配');
+  for (const skill of Object.values(value.skills)) {
+    if (Object.keys(skill.references).some(path => !path || path.includes('\\') || path.startsWith('/') || /[\x00-\x1f]/.test(path) || path.split('/').some(part => ['..', '.', '__proto__', 'constructor', 'prototype'].includes(part)))) throw new Error('团队 Skill 引用路径不安全');
+    if (hash(JSON.stringify({ content: skill.content, references: Object.fromEntries(Object.entries(skill.references).sort(([a], [b]) => a.localeCompare(b))) })) !== skill.sha256) throw new Error('团队 Skill 摘要不匹配');
+    const definition = validateSkillContent({ content: skill.content });
+    if (!definition.valid || definition.metadata?.name !== skill.name) throw new Error('团队 Skill 声明无效');
+  }
+  return value;
+}
+
+/** 使用同一只读会话冻结全团队目录，逐项限制累计大小。 */
+async function readTeamMethods(reader: Awaited<ReturnType<typeof createNacosReader>>, namespace: string, input: MethodBindings): Promise<TeamMethods> {
+  const bindings = methodBindingsSchema.parse(input);
+  const prompts: TeamMethods['prompts'] = {}; const skills: TeamMethods['skills'] = {};
+  let size = 0;
+  for (const [key, ref] of Object.entries(bindings.prompts)) {
+    prompts[key] = await reader.getPrompt(ref); size += Buffer.byteLength(JSON.stringify(prompts[key]));
+    if (size > 8 * limit) throw new Error('团队方法超过总大小限制');
+  }
+  for (const [key, ref] of Object.entries(bindings.skills)) {
+    skills[key] = await reader.getSkill(ref); size += Buffer.byteLength(JSON.stringify(skills[key]));
+    if (size > 8 * limit) throw new Error('团队方法超过总大小限制');
+  }
+  const body = { schemaVersion: 'nacos-team-methods.v1' as const, source: reader.source, namespace, prompts, skills };
+  return validateTeamMethods({ ...body, sha256: hash(canonical(body)) });
+}
+
+/** 调用前只复核原目录中的精确版本，不采用新默认值或静默降级。 */
+export async function verifyTeamMethods(config: NacosResourceConfig | undefined, input: TeamMethods): Promise<void> {
+  const frozen = validateTeamMethods(input);
+  if (!config || new URL(config.url).origin !== frozen.source) throw new Error('团队方法 Nacos 来源不可用');
+  const ref = ({ name, version }: { name: string; version: string }) => ({ name, version });
+  const bindings = methodBindingsSchema.parse({ prompts: Object.fromEntries(Object.entries(frozen.prompts).map(([key, value]) => [key, ref(value)])), skills: Object.fromEntries(Object.entries(frozen.skills).map(([key, value]) => [key, ref(value)])) });
+  const current = await readTeamMethods(await createNacosReader({ ...config, namespace: frozen.namespace }), frozen.namespace, bindings);
+  if (current.sha256 !== frozen.sha256) throw new Error('团队方法版本发生漂移');
+}
+
+/** 通过 Nacos Client API 获取指定版本，冻结可恢复的正文及参考资料。 */
+export async function loadNacosSnapshot(config: NacosResourceConfig): Promise<NacosSnapshot> {
+  const reader = await createNacosReader(config);
+  const { getPrompt, getSkill } = reader;
   const prompt = await getPrompt({ name: config.promptName, version: config.promptVersion });
   const reviewerPrompt = config.reviewerPrompt ? await getPrompt(config.reviewerPrompt) : undefined;
   const skill = await getSkill({ name: config.skillName, version: config.skillVersion });
@@ -127,13 +188,15 @@ export async function loadNacosSnapshot(config: NacosResourceConfig): Promise<Na
     if (totalBytes > 8 * limit) throw new Error('冻结资源超过总大小限制');
     additionalSkills!.push(item);
   }
-  return validateNacosSnapshot({ schemaVersion: 'nacos-product-resources.v1', source: base.origin, namespace: config.namespace, prompt, reviewerPrompt, skill, additionalSkills, reviewerSkills: config.reviewerSkills });
+  const methods = config.methods ? await readTeamMethods(reader, config.namespace, config.methods) : undefined;
+  return validateNacosSnapshot({ schemaVersion: 'nacos-product-resources.v1', source: reader.source, namespace: config.namespace, prompt, reviewerPrompt, skill, additionalSkills, reviewerSkills: config.reviewerSkills, ...(methods ? { methods } : {}) });
 }
 
 /** 每次调用前确认原版本仍可访问；授权撤销或版本漂移时失败关闭。 */
 export async function verifyNacosAccess(config: NacosResourceConfig | undefined, snapshot: NacosSnapshot): Promise<void> {
   const frozen = validateNacosSnapshot(snapshot);
   if (!config || new URL(config.url).origin !== frozen.source) throw new Error('冻结资源的 Nacos 来源不可用');
-  const current = await loadNacosSnapshot({ ...config, namespace: frozen.namespace, promptName: frozen.prompt.name, promptVersion: frozen.prompt.version, reviewerPrompt: frozen.reviewerPrompt && { name: frozen.reviewerPrompt.name, version: frozen.reviewerPrompt.version }, skillName: frozen.skill.name, skillVersion: frozen.skill.version, additionalSkills: frozen.additionalSkills?.map(/** 恢复读取原冻结版本，而非当前默认配置。 */skill => ({ name: skill.name, version: skill.version })), reviewerSkills: frozen.reviewerSkills });
+  const current = await loadNacosSnapshot({ ...config, methods: undefined, namespace: frozen.namespace, promptName: frozen.prompt.name, promptVersion: frozen.prompt.version, reviewerPrompt: frozen.reviewerPrompt && { name: frozen.reviewerPrompt.name, version: frozen.reviewerPrompt.version }, skillName: frozen.skill.name, skillVersion: frozen.skill.version, additionalSkills: frozen.additionalSkills?.map(/** 恢复读取原冻结版本，而非当前默认配置。 */skill => ({ name: skill.name, version: skill.version })), reviewerSkills: frozen.reviewerSkills });
   if (current.prompt.sha256 !== frozen.prompt.sha256 || current.reviewerPrompt?.sha256 !== frozen.reviewerPrompt?.sha256 || current.skill.sha256 !== frozen.skill.sha256 || JSON.stringify(current.additionalSkills?.map(/** 依次核对全部方法摘要。 */skill => skill.sha256)) !== JSON.stringify(frozen.additionalSkills?.map(/** 按快照顺序比较。 */skill => skill.sha256))) throw new Error('Nacos 资源版本发生漂移');
+  if (frozen.methods) await verifyTeamMethods(config, frozen.methods);
 }

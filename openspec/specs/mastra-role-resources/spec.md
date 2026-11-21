@@ -8,6 +8,29 @@
 
 ## Requirements
 
+### Requirement: All team methods use a frozen Nacos catalog
+
+启用 Nacos 的新 live 主线 Run SHALL 在初始化冻结产品、研发、测试、浏览器 QA 及共享上下文方法的角色和任务 Prompt、Skill 正文、references、角色绑定、精确版本和摘要。方法 SHALL 来自统一的服务端清单；缺失绑定或资源、越界、撤销及同版本漂移 SHALL 失败关闭，不得静默回退本地方法。Nacos SHALL NOT 授予工具、改变结构化输出 Schema、执行计划、预算上限或人工审批事实。
+
+#### Scenario: A Run continues after resource defaults change
+
+- **WHEN** 新 Run 已冻结完整方法目录，服务重启后默认资源版本改变
+- **THEN** 产品、研发、测试及业务阻塞回流 SHALL 继续消费原目录，并在模型调用前复核原来源和精确版本
+- **AND** 研发批准与恢复身份、测试计划和浏览器证据 SHALL 绑定实际使用的方法摘要
+- **AND** 文件、API 和实时输出 SHALL NOT 暴露注册中心凭据
+
+#### Scenario: Old Run has only product resources
+
+- **WHEN** 历史 Run 没有全团队方法目录
+- **THEN** 系统 SHALL 保留原产品资源、本地研发方法锁及旧批准语义，不为历史记录补造冻结方法
+- **AND** 显式关闭 Nacos 的离线验证 SHALL 使用版本化本地源资产，不能声称已验证真实注册中心或模型质量
+
+#### Scenario: Resources are prepared but not published
+
+- **WHEN** 维护者导出全团队方法候选
+- **THEN** 导出器 SHALL 校验来源锁、许可、安全路径和完整清单，并输出 Prompt、Skill ZIP、摘要和无凭据运行绑定
+- **AND** 导出 SHALL NOT 自动发布或修改应用环境，真实注册中心上线与业务质量验收 SHALL 单独记录
+
 ### Requirement: Product approval facts accompany development handoff
 
 当 Workflow 已对当前产品版本保存批准，研发与阻塞澄清 SHALL 接收与产品摘要一致的宿主审批事实；产品正文中生成时的审批状态仅代表当时文档内容，不能覆盖后续审批事实。缺少匹配批准时 SHALL NOT 补造已批准状态或放行研发。

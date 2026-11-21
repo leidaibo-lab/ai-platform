@@ -16,16 +16,16 @@ import { createDevelopmentTeamWorkflow } from './development-team.js';
 import { deliverySchema, successorBaselineSchema } from './delivery.js';
 import { stateV2Schema } from '../../development/v2/contracts.js';
 import { developmentHash } from '../../development/contracts.js';
-import { emptyQuality, lifecycleSchema, qualityHash, releaseHash } from '../../delivery/contracts.js';
-import { assertCandidate, createTestingWorkflow } from '../../delivery/testing.js';
+import { emptyQuality, lifecycleSchema } from '../../delivery/contracts.js';
+import { createTestingWorkflow } from '../../delivery/testing.js';
 import { createMergeRequestDelivery } from '../../delivery/merge-request.js';
-import { createDeploymentWorkflow } from '../../delivery/deployment.js';
 import { assetIdSchema, correlationSchema } from '../../delivery/asset-identity.js';
 import { registerAssetRun } from '../../delivery/asset-catalog.js';
 import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { intakeModeSchema } from '../../intake/contracts.js';
 import { loadNacosSnapshot } from '../nacos-resources.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
+import { assertCompleteMethods } from '../team-methods.js';
 
 const inputSchema = z.object({ projectId: correlationSchema.shape.projectId.optional(), intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000), successorBaseline: successorBaselineSchema.optional() }).strict();
 
@@ -54,7 +54,9 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       }
       if (project) registerAssetRun(project.root, correlation, inputData.brief, project);
       const intakeMode = inputData.intakeMode ?? (inputData.guidedIntake === true ? 'clarify' : 'autofill');
+      if (config.mode === 'live' && config.nacosResources && !config.nacosResources.methods) throw new Error('新 live Run 必须配置完整 Nacos 团队方法目录');
       const nacosResources = config.nacosResources ? await loadNacosSnapshot(config.nacosResources) : undefined;
+      if (nacosResources?.methods) assertCompleteMethods(nacosResources.methods);
       return { ...(!config.legacyDevelopmentWorkflow && (config.mode === 'live' || options.fixtureArchitectureDocument) ? { architectureDocumentFormat } as const : {}), ...(config.mode === 'live' || options.fixtureRequirementTracking ? { requirementTracking: true as const, productHandoffFormat: 'paired-markdown.v1' as const } : {}), ...(!config.legacyProductWorkflow ? { productFlow: config.nestedProductWorkflow ? 'three-stage' as const : config.nativeThreeStageProductWorkflow ? 'native-three-stage' as const : 'four-step' as const } : {}), nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, successorBaseline: inputData.successorBaseline, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' as const };
     },
   });
@@ -68,27 +70,11 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
   });
   const lifecycle = createStep({ id: 'initialize-delivery-lifecycle', description: '研发交付进入独立测试与交付', inputSchema: stateV2Schema, outputSchema: lifecycleSchema,
     // 新生命周期保存各轮角色证据，原开发状态及累计预算保持不变。
-    execute: async ({ inputData, getInitData, bail }) => { const state = lifecycleSchema.parse({ version: 'delivery-lifecycle.v1', brief: getInitData<z.infer<typeof inputSchema>>().brief, development: inputData, formalSpecifications: inputData.formalSpecification ? [inputData.formalSpecification] : [], quality: emptyQuality(), qualityHistory: [], developmentHistory: [], release: { plan: null, qualityHash: null, approval: null, hash: null, receipt: null, health: null, rollback: null, authority: 'local-human-report' }, releaseHistory: [], outcome: inputData.outcome === 'development-delivered' ? 'in-progress' : inputData.outcome === 'rework-exhausted' ? 'rework-exhausted' : 'blocked', limitations: ['自动测试仅执行项目授权的登记套件，语义覆盖由测试负责人确认，人工用例结果单独标记。', config.legacyDeployment ? '历史部署流程使用外部人工发布回执。' : '交付终点为向 main 提交 MR 并记录回执。'] }); return state.outcome === 'in-progress' ? state : bail(state); },
+    execute: async ({ inputData, getInitData, bail }) => { const state = lifecycleSchema.parse({ version: 'delivery-lifecycle.v1', brief: getInitData<z.infer<typeof inputSchema>>().brief, development: inputData, formalSpecifications: inputData.formalSpecification ? [inputData.formalSpecification] : [], quality: emptyQuality(), qualityHistory: [], developmentHistory: [], release: { plan: null, qualityHash: null, approval: null, hash: null, receipt: null, health: null, rollback: null, authority: 'local-human-report' }, releaseHistory: [], outcome: inputData.outcome === 'development-delivered' ? 'in-progress' : inputData.outcome === 'rework-exhausted' ? 'rework-exhausted' : 'blocked', limitations: ['自动测试仅执行项目授权的登记套件，语义覆盖由测试负责人确认，人工用例结果单独标记。', '交付终点为向 main 提交 MR 并记录回执。'] }); return state.outcome === 'in-progress' ? state : bail(state); },
   });
-  const finish = createStep({ id: 'confirm-final-delivery', description: '汇总产品、开发、测试和部署证据，确认最终交付', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema,
-    // 生成计划或研发自检均不能替代质量放行和实际外部发布回执。
-    execute: async ({ inputData: state }) => {
-      if (state.outcome !== 'delivery-confirmed') return state;
-      await assertCandidate(state, developmentTeam.execution.port);
-      if (state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || state.quality.reportHash !== qualityHash(state) || state.release.qualityHash !== state.quality.reportHash || state.release.hash !== releaseHash(state) || state.release.receipt?.status !== 'succeeded' || state.release.receipt.releaseHash !== state.release.hash || state.release.receipt.sourceHash !== state.development.checkpointHash || state.release.health?.releaseHash !== state.release.hash || state.release.health.deploymentReceiptHash !== developmentHash(state.release.receipt) || !state.release.health.checks.length || !state.release.health.checks.every(
-        // 只有批准的发布后检查全部有成功回执才形成成功终态。
-        (check) => check.status === 'passed',
-      )) throw new Error('最终交付缺少同版本质量、发布或健康证据');
-      return { ...state, outcome: config.mode === 'fixture' ? 'fixture-completed' as const : 'delivery-confirmed' as const };
-    },
-  });
-  const deliveryTeam = createWorkflow({ id: 'delivery-team', description: '交付团队：汇总产品、研发、测试与发布证据并确认最终交付', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema })
-    .then(withRepositoryAssets(developmentTeam.execution.bind(finish), config))
-    .commit();
-  const main = createWorkflow({ options: runArchiveLifecycle(config), id: 'product-development', description: config.legacyDeployment ? '历史试点：产品 → 研发 → 测试 → 部署 → 交付' : '产研主线：产品 → 研发 → 测试 → 交付 MR', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
+  const main = createWorkflow({ options: runArchiveLifecycle(config), id: 'product-development', description: '产研主线：产品 → 研发 → 测试 → 交付 MR', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
     .then(withRepositoryAssets(initialize, config)).then(createProductTeamWorkflow(agents, config, options.storage)).then(withRepositoryAssets(routeProductTeamResult, config)).then(developmentTeam.workflow);
   const tested = main.then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, developmentTeam.execution, generate));
-  if (config.legacyDeployment) return bindProjectWorkflow(tested.then(createDeploymentWorkflow(agents, config, developmentTeam.execution)).then(deliveryTeam).commit(), registryConfig);
   return bindProjectWorkflow(tested.then(createMergeRequestDelivery(config, developmentTeam.execution)).commit(), registryConfig);
 }
 

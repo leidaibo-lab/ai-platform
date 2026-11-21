@@ -13,6 +13,11 @@ import { resolve } from 'node:path';
 import { Mastra } from '@mastra/core';
 import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { createProductDevelopmentWorkflow } from '../src/mastra/workflows/product-development.js';
+import { describeGate } from '../src/intake/gates.js';
+
+test('旧部署关口已退役，不能从工作台继续', () => {
+  for (const step of ['approve-release-scope', 'execute-release-externally', 'verify-release-health', 'execute-rollback-externally']) assert.equal(describeGate(`deployment-team.${step}`, {}), undefined);
+});
 import { readIntake, respondIntake } from '../src/intake/service.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
 
@@ -27,10 +32,10 @@ function paused(result: any): { path: string[]; payload: any } {
 }
 
 // 每个暂停点关闭Store再装配，验证原生快照续跑而非内存闭包。
-for (const scenario of ['success', 'shared-path-preview', 'stable-requirements', 'stable-revision', 'health-failure', 'health-business-gap', 'reject-product', 'stale-product', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'qa-rework', 'qa-business-gap', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete', 'release-plan-incomplete']) {
+for (const scenario of ['success', 'shared-path-preview', 'stable-requirements', 'stable-revision', 'reject-product', 'stale-product', 'qa-rework', 'qa-business-gap', 'qa-fixed', 'browser-success', 'browser-failure', 'test-plan-incomplete']) {
   test(`完整产研主链与跨Store恢复：${scenario}`, /** 在独占运行库验证当前分支。 */ async () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'mastra-unified-'));
-    const config: PracticeConfig = { ...(['health-failure', 'health-business-gap', 'stale-release', 'wrong-artifact', 'missing-health', 'deploy-failure', 'release-plan-incomplete'].includes(scenario) ? { legacyDeployment: true } : {}), rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+    const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
     /** 重装相同Workflow与数据库，保持审批事实归原生Store。 */
     async function open() {
       const options = createStudioApplicationOptions(config);
@@ -58,8 +63,8 @@ for (const scenario of ['success', 'shared-path-preview', 'stable-requirements',
         };
         options.workflows.productDevelopmentWorkflow = createProductDevelopmentWorkflow(options.agents as any, config, generate);
       }
-      if (scenario === 'test-plan-incomplete' || scenario === 'release-plan-incomplete') {
-        const agent = scenario === 'test-plan-incomplete' ? options.agents.testingAgent : options.agents.operationsAgent;
+      if (scenario === 'test-plan-incomplete') {
+        const agent = options.agents.testingAgent;
         // 模拟原生压缩或模型调用中断仍带部分文本，不能进入人工批准。
         agent.generate = (async () => ({ text: '部分计划', finishReason: 'other' })) as any;
       }
@@ -95,10 +100,6 @@ for (const scenario of ['success', 'shared-path-preview', 'stable-requirements',
         else if (id === 'review-test-results') { assert.ok(p.quality.checks.length); const firstReview = visited.filter(/** 只在首轮质量门注入缺陷。 */step => step === id).length === 1; const qaBusiness = ['qa-business-gap', 'stable-revision'].includes(scenario) && firstReview; const qaRework = ['qa-rework', 'qa-fixed'].includes(scenario) && firstReview; data = { ...actor, hash: p.hash, decision: qaBusiness || qaRework ? 'rework' : 'pass', manualResults: [], findings: qaBusiness ? [{id: 'qa-business-1', severity: 'blocking', category: 'business', route: 'product', detail: '验收口径缺少人工确认', refs: [p.quality.approval.cases[0].requirementRefs[0]], evidence: '合成 QA 业务缺口'}] : qaRework ? [{id: 'qa-1', severity: 'medium', category: 'implementation', route: 'backend', detail: '合成缺陷用于验证修复路由', refs: ['task:fixture-task-2'], evidence: '合成质量门故障注入'}] : [] }; }
         else if (id === 'confirm-blocker-answers') data = { hash: p.hash, reviewer: 'fixture', answers: p.plan.questions.filter(/** 所有必答业务阻塞都必须有显式选择。 */(question: any) => question.required).map((question: any) => ({ questionId: question.id, selected: [question.options[0].id], custom: '' })), supplement: '合成确认 QA 或发布阶段发现的业务口径' };
         else if (id === 'review-revised-product') data = { hash: p.draft.hash, decision: 'approve', reviewer: 'fixture', comment: '合成确认修订产品稿，重新规划并回归' };
-        else if (id === 'approve-release-scope') data = { ...actor, hash: scenario === 'stale-release' ? '0'.repeat(64) : p.packageHash, decision: 'approve', scope: { environment: 'synthetic', artifactDigest: 'a'.repeat(64), artifactRef: 'synthetic://artifact', rollbackArtifactRef: 'synthetic://previous', healthChecks: [{ id: 'ready', expected: 'ready' }] } };
-        else if (id === 'execute-release-externally') data = { releaseHash: p.releaseHash, sourceHash: p.sourceHash, artifactDigest: scenario === 'wrong-artifact' ? 'b'.repeat(64) : p.artifactDigest, environment: p.environment, status: scenario === 'deploy-failure' ? 'failed' : 'succeeded', jobRef: 'synthetic://job', operator: 'fixture', finishedAt: '2026-11-07T00:00:00Z', notes: '模拟回执，未部署' };
-        else if (id === 'verify-release-health') { const releaseBusiness = scenario === 'health-business-gap' && visited.filter(/** 仅首个发布健康确认触发业务澄清。 */step => step === id).length === 1; data = { releaseHash: p.releaseHash, deploymentReceiptHash: p.deploymentReceiptHash, operator: 'fixture', checks: [{ id: scenario === 'missing-health' ? 'unknown' : 'ready', status: scenario === 'health-failure' || releaseBusiness ? 'failed' : 'passed', evidence: '合成健康结果', observedAt: '2026-11-07T00:00:00Z' }], findings: releaseBusiness ? [{ id: 'release-business-1', severity: 'blocking', category: 'business', route: 'product', detail: '健康门发现业务验收口径未确认', refs: ['product:L1'], evidence: '合成发布健康业务缺口' }] : [] }; }
-        else if (id === 'execute-rollback-externally') data = { releaseHash: p.releaseHash, rollbackArtifactRef: p.rollbackArtifactRef, status: 'rolled-back', jobRef: 'synthetic://rollback', operator: 'fixture', notes: '模拟回滚' };
         else assert.fail(`未预期暂停点 ${id}`);
         if (['success', 'shared-path-preview'].includes(scenario) && id === 'approve-test-cases') {
           const changes = await readCandidateChanges(app.workflow, runId, config);
@@ -120,15 +121,14 @@ for (const scenario of ['success', 'shared-path-preview', 'stable-requirements',
         await app.storage.close(); app = await open(); run = await app.workflow.createRun({ runId });
         result = await run.resume({ step: pending.path, resumeData: data });
       }
-      if (scenario === 'test-plan-incomplete' || scenario === 'release-plan-incomplete') {
+      if (scenario === 'test-plan-incomplete') {
         assert.equal(result.status, 'failed');
-        assert.equal(visited.includes(scenario === 'test-plan-incomplete' ? 'approve-test-cases' : 'approve-release-scope'), false);
+        assert.equal(visited.includes('approve-test-cases'), false);
         return;
       }
-      if (['stale-release', 'wrong-artifact', 'missing-health'].includes(scenario)) { assert.equal(result.status, 'failed'); return; }
       if (scenario === 'stale-product') { assert.equal(result.status, 'failed'); assert.deepEqual(visited, ['review-product']); return; }
       assert.equal(result.status, 'success', JSON.stringify(result));
-      assert.equal(result.result.outcome, scenario === 'browser-failure' || ['qa-business-gap', 'health-business-gap', 'stable-revision'].includes(scenario) ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : ['health-failure', 'deploy-failure'].includes(scenario) ? 'rolled-back' : 'fixture-completed');
+      assert.equal(result.result.outcome, scenario === 'browser-failure' || ['qa-business-gap', 'stable-revision'].includes(scenario) ? 'blocked' : scenario === 'qa-rework' ? 'rework-exhausted' : scenario === 'reject-product' ? 'rejected' : 'fixture-completed');
       if (['qa-rework', 'qa-fixed'].includes(scenario)) { assert.equal(result.result.qualityHistory.length, 1); assert.equal(result.result.development.round, 1); }
       if (scenario === 'stable-requirements') {
         const completed = result.result.development;
@@ -166,16 +166,16 @@ for (const scenario of ['success', 'shared-path-preview', 'stable-requirements',
         assert.ok(delivery && !Array.isArray(delivery));
         assert.equal(delivery.status, 'success');
       }
-      if (['qa-business-gap', 'health-business-gap', 'stable-revision'].includes(scenario)) {
+      if (['qa-business-gap', 'stable-revision'].includes(scenario)) {
         assert.equal(result.result.development.outcome, 'clarification-required');
         assert.equal(result.result.development.delivery, null);
-        assert.ok(result.result.development.plan.blockers.some((blocker: string) => blocker.includes(scenario !== 'health-business-gap' ? 'QA业务待决' : '发布业务待决')));
-        assert.ok(result.result.qualityHistory.length || result.result.releaseHistory.length, '后期澄清前必须保留阶段证据');
+        assert.ok(result.result.development.plan.blockers.some((blocker: string) => blocker.includes('QA业务待决')));
+        assert.ok(result.result.qualityHistory.length, '后期澄清前必须保留阶段证据');
         const intake = await readIntake(app.workflow, runId);
         assert.ok(intake.clarify); assert.match(intake.clarify!.title, /后期业务缺口/);
         const clarified = await respondIntake(app.workflow, 'fixture', runId, { clarifyHash: intake.clarify!.hash }, config);
         assert.equal(clarified.gate?.key, 'confirm-blocker-answers', '后期业务缺口必须进入既有澄清入口');
-        if (scenario !== 'health-business-gap') {
+        {
           const native = await app.workflow.getWorkflowRunById(runId);
           const paused = Object.values(native!.steps!).find(/** QA 回流的原生澄清暂停点保存原发现引用。 */ step => !Array.isArray(step) && step.status === 'suspended') as any;
           const finding = result.result.qualityHistory.at(-1).review.findings[0];

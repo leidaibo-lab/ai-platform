@@ -39,6 +39,7 @@
 - 维护、回归与评测：`scripts/`、`tests/`、`evaluations/`
 - 研发架构送审 Skill：`.agents/skills/development/architecture-document/`。研发负责人生成正文和图，就绪审查核对其与任务包的一致性。
 - 产品 Skill 位于 `nacos-resources/product/skills/`。正式需求写作与复核见 `product-pm/product-requirements-alignment`，平台版式与双文档追踪见 `product/requirements-handoff`。本地与 Nacos 候选绑定统一由 `nacos-resources/product/manifest.json` 定义。
+- Nacos 是经治理团队 Prompt / Skill 的版本化分发与发现服务，不保存业务数据、审批或 Run 状态，也不授予工具、仓库或部署权限。团队 Prompt 源资产位于 `nacos-resources/teams/prompts.json`；研发及浏览器 QA Skill 沿用 `.agents/skills/` 的受治理源。新 live Run 从 Nacos 冻结完整方法目录，历史快照按原身份恢复；修改方法须同步资源绑定与验证。
 - Mastra 操作文档：`docs/application/`
 - 稳定契约：`openspec/specs/mastra-role-resources/`、`openspec/specs/project-mainline/`
 - 当前迁移变更：`openspec/changes/promote-mastra-v2/`

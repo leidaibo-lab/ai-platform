@@ -304,7 +304,7 @@
         <mxCell id="git-summary" value="Git / GitHub  ·  正式规格、Run 分支候选与实际 MR" style="text;html=0;align=left;verticalAlign=middle;whiteSpace=nowrap;spacing=0;fontFamily=PingFang SC;fontSize=16;fontColor=#435b73;fontStyle=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
           <mxGeometry x="742" y="1030.8" width="630" height="22.4" as="geometry" />
         </mxCell>
-        <mxCell id="compatibility" value="历史兼容  ·  MASTRA_LEGACY_DEPLOYMENT=true 加载旧部署试点图，用于已有部署暂停点恢复。" style="text;html=0;align=left;verticalAlign=middle;whiteSpace=nowrap;spacing=0;fontFamily=PingFang SC;fontSize=15;fontColor=#435b73;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+        <mxCell id="compatibility" value="交付边界  ·  旧部署试点已退役，当前流程以核验 MR 回执结束。" style="text;html=0;align=left;verticalAlign=middle;whiteSpace=nowrap;spacing=0;fontFamily=PingFang SC;fontSize=15;fontColor=#435b73;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">
           <mxGeometry x="48" y="1084.5" width="1344" height="21.0" as="geometry" />
         </mxCell>
         <mxCell id="scope" value="后续建设  ·  自主合并、CI/CD、部署与回滚。Fixture 只验证控制流，实际 MR 交付由 live 模式执行。" style="text;html=0;align=left;verticalAlign=middle;whiteSpace=nowrap;spacing=0;fontFamily=PingFang SC;fontSize=15;fontColor=#435b73;fontStyle=0;strokeColor=none;fillColor=none;" vertex="1" parent="1">

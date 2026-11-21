@@ -7,8 +7,6 @@ export const intakeModeSchema = z.enum(['clarify', 'autofill']);
 export type IntakeMode = z.infer<typeof intakeModeSchema>;
 /** 模型解释未决项的业务影响；历史问题可缺省，不补写旧判断。 */
 export const questionDecisionSchema = z.object({ blocks: z.enum(['product', 'development', 'none']), reason: text, unanswered: text });
-/** 两处澄清复用同一判断标准，具体业务证据仍由当前输入提供。 */
-export const questionDecisionInstructions = '主动区分必答与可选，不要把所有细节都设为必答。每题必须提供decision:{blocks:"product"|"development"|"none",reason:string,unanswered:string}。仅当未决选择影响本期范围、权限、核心流程、验收或已确认答案存在冲突时设required:true，并说明影响哪条结果及为什么当前不能继续确认；初始需求blocks为product，开发阻塞blocks为development。可延后细节/增强/偏好设required:false、blocks:none，说明不回答时明确保留待决或排除本期；不能默认采用推荐或擅自编造规则。已有人类回答不要重问。';
 /** 各业务维度分别给出判断依据；题数与轮次不代表成熟度。 */
 export const maturitySchema = z.object({
   decisions: z.object({ clear: z.boolean(), evidence: text }),
@@ -102,6 +100,14 @@ export function classifyPublicationDependency(plan: z.infer<typeof generatedPlan
     questions: plan.questions.map(question => repeated.includes(question) ? { ...question, required: false, decision: { blocks: 'none', reason: '仅合成数据研发验收；公司制度仍阻断真实资料导入和正式发布', unanswered: question.decision.unanswered } } : question),
     maturity: { ...plan.maturity, delivery: { clear: true, evidence: '本期受控研发与验收范围已收敛，可进入待审双文档写作；尚未生成的正文由后续节点完成。公司书面治理制度仍是发布阻断项，不得导入真实资料。' } },
   });
+}
+/** 只消除“文档尚未写出所以不能开始写作”的循环依赖；业务或交付其他缺口照常阻断。 */
+export function classifyWritingPrerequisite(plan: z.infer<typeof generatedPlanSchema>) {
+  if (plan.questions.some(question => question.required) || !plan.maturity.decisions.clear || !plan.maturity.mainFlow.clear || !plan.maturity.exceptions.clear || plan.maturity.delivery.clear) return plan;
+  const evidence = plan.maturity.delivery.evidence;
+  if (!/(尚未|未|没有|待).{0,18}(生成|输出|编写|完成|形成|撰写).{0,18}(正式|需求|产品|双文档|PRD|项目总览|模块|用户故事|测试场景|验收映射)|(?:正式|需求|产品|双文档|PRD|项目总览|模块|用户故事|测试场景|验收映射).{0,18}(尚未|未|没有|待).{0,18}(生成|输出|编写|完成|形成|撰写)/.test(evidence)) return plan;
+  if (/(仍|还|尚).{0,12}(缺少|缺乏|未明确|未确认).{0,20}(业务|权限|字段|状态|流程|异常|验收边界)/.test(evidence)) return plan;
+  return generatedPlanSchema.parse({ ...plan, maturity: { ...plan.maturity, delivery: { clear: true, evidence: `${evidence}；上述正式交付由后续产品写作和审查完成，不是启动写作的前置条件。` } } });
 }
 /** 散列绑定原始需求、轮次、建议与历史，避免旧卡片答案用于新方案。 */
 export function intakeHash(brief: string, intake: Intake): string {

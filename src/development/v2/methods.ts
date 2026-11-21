@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { loadGovernedSkill } from '../../mastra/agents/skills.js';
 import type { InputV2, StateV2 } from './contracts.js';
 import { developmentHash } from '../contracts.js';
+import { validateTeamMethods } from '../../mastra/nacos-resources.js';
 
 /** 装配开发方法，完整原文仍由原生 skill_read 按需读取。 */
 export function loadDevelopmentMethods(rootDir: string) {
@@ -30,6 +31,7 @@ export function loadDevelopmentMethods(rootDir: string) {
   const legacyArchitectureHash = developmentHash(legacyLock);
   /** 只识别锁定的历史方法散列，未知散列仍由身份校验拒绝。 */
   function hashFor(input: InputV2, boundHash?: string) {
+    if (input.teamMethods) return validateTeamMethods(input.teamMethods).sha256;
     const prior = input.architectureDocumentFormat ? legacyArchitectureHash : legacyHash;
     return boundHash === prior ? prior : input.architectureDocumentFormat ? architectureHash : hash;
   }

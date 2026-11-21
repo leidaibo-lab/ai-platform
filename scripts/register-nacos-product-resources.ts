@@ -1,7 +1,7 @@
 /** 将经审查的导出包注册到本机 Nacos；不覆盖已存在的不同内容。 */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -26,7 +26,7 @@ const username = requiredPublishValue('NACOS_PUBLISH_USERNAME');
 const password = requiredPublishValue('NACOS_PUBLISH_PASSWORD');
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const skillVersionSchema = z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
-const manifest = z.object({ version: z.string(), prompts: z.array(z.object({ name: z.string().regex(/^[a-z0-9-]+$/), version: z.string(), source: z.string(), sha256: digestSchema })), skills: z.array(z.object({ name: z.string().regex(/^[a-z0-9-]+$/), version: skillVersionSchema, archive: z.string().regex(/^[a-z0-9-]+\.zip$/), archiveSha256: digestSchema })) }).passthrough().parse(JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')));
+const manifest = z.object({ schemaVersion: z.string().optional(), version: z.string(), prompts: z.array(z.object({ name: z.string().regex(/^[a-z0-9-]+$/), version: z.string(), source: z.string(), sha256: digestSchema })), skills: z.array(z.object({ name: z.string().regex(/^[a-z0-9-]+$/), version: skillVersionSchema, archive: z.string().regex(/^[a-z0-9-]+\.zip$/), archiveSha256: digestSchema })) }).passthrough().parse(JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')));
 
 /** 计算资源摘要，用于检测本地文件漂移。 */
 function hash(value: string | Buffer) { return createHash('sha256').update(value).digest('hex'); }
@@ -160,7 +160,10 @@ async function publishSkill(name: string, version: string, archive: Buffer, file
 
 for (const prompt of manifest.prompts) {
   const source = resolve(prompt.source);
-  if (!source.startsWith(`${resolve('nacos-resources/product/prompts')}/`)) throw new Error('Prompt 来源路径无效');
+  const teamCandidate = manifest.schemaVersion === 'nacos-team-method-export.v1';
+  if (teamCandidate) {
+    if (source !== join(root, `${prompt.name}.md`) || lstatSync(source).isSymbolicLink() || realpathSync(source) !== join(realpathSync(root), `${prompt.name}.md`)) throw new Error('团队 Prompt 候选路径无效');
+  } else if (!source.startsWith(`${resolve('nacos-resources/product/prompts')}/`)) throw new Error('Prompt 来源路径无效');
   const content = readFileSync(source, 'utf8');
   if (hash(content) !== prompt.sha256) throw new Error(`Prompt 与审查清单不符：${prompt.name}`);
   if (!(await verifyPrompt(prompt.name, prompt.version, content))) {

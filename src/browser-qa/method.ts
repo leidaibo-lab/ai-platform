@@ -4,8 +4,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { developmentHash } from '../development/contracts.js';
 import { loadGovernedSkill } from '../mastra/agents/skills.js';
+import { methodSkill } from '../mastra/team-methods.js';
+import type { TeamMethods } from '../mastra/team-method-contracts.js';
 /** 原文和中文适配入口共同进入运行证据绑定。 */
-export function loadBrowserMethod(root: string) {
+export function loadBrowserMethod(root: string, methods?: TeamMethods) {
+  if (methods) return { skill: methodSkill(methods, 'browser'), hash: methods.sha256 };
   const shared = resolve(root, '.agents/skills');
   const relative = 'testing/gstack-browser-qa';
   const directory = resolve(shared, relative);

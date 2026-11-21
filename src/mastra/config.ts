@@ -5,6 +5,8 @@ import { z } from 'zod';
 import type { EngineeringProject } from '../business-engineering/project.js';
 import type { RemoteSyncTarget } from '../delivery/remote-sync-settings.js';
 import type { NacosResourceConfig } from './nacos-resources.js';
+import { defaultMethodBindings } from './team-methods.js';
+import { methodBindingsSchema } from './team-method-contracts.js';
 
 /** 独立实践配置；数据库使用绝对路径，fixture 模式不会访问模型服务。 */
 export interface PracticeConfig {
@@ -17,8 +19,6 @@ export interface PracticeConfig {
   roleModels?: Partial<Record<'product' | 'development', `openai/${string}`>>;
   /** 在后端桌面会话显示独立的浏览器 QA 窗口。 */
   browserQaHeaded?: boolean;
-  /** 恢复旧部署试点流程时使用原流程图。 */
-  legacyDeployment?: true;
   /** 使用收敛前的研发执行图恢复历史 Run。 */
   legacyDevelopmentWorkflow?: true;
   /** 新研发 Run 的技术接续预算。 */
@@ -63,7 +63,7 @@ export function readConfig(): PracticeConfig {
   if (baseUrl) z.url().parse(baseUrl);
   const nacosResources = readNacosConfig(process.env);
   const browserQaHeaded = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_BROWSER_QA_HEADED) === 'true';
-  const legacyDeployment = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEPLOYMENT) === 'true';
+  if (process.env.MASTRA_LEGACY_DEPLOYMENT === 'true') throw new Error('旧部署流程已退役，请移除 MASTRA_LEGACY_DEPLOYMENT');
   const legacyDevelopmentWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEVELOPMENT_WORKFLOW) === 'true';
   const developmentContinuationLimit = z.coerce.number().int().min(0).max(72).default(4).parse(process.env.MASTRA_DEVELOPMENT_CONTINUATION_LIMIT);
   const platformRepairToken = process.env.MASTRA_PLATFORM_REPAIR_TOKEN || undefined;
@@ -72,7 +72,7 @@ export function readConfig(): PracticeConfig {
   const nestedProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NESTED_PRODUCT_WORKFLOW) === 'true';
   const nativeThreeStageProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NATIVE_THREE_STAGE_PRODUCT_WORKFLOW) === 'true';
   if ([legacyProductWorkflow, nestedProductWorkflow, nativeThreeStageProductWorkflow].filter(Boolean).length > 1) throw new Error('只能选择一种历史产品流程图');
-  return { rootDir: root, mode, port, browserQaHeaded, developmentContinuationLimit, platformRepairToken, ...(legacyDevelopmentWorkflow ? { legacyDevelopmentWorkflow: true } : {}), ...(nativeThreeStageProductWorkflow ? { nativeThreeStageProductWorkflow: true } : {}), ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), ...(legacyDeployment ? { legacyDeployment: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  return { rootDir: root, mode, port, browserQaHeaded, developmentContinuationLimit, platformRepairToken, ...(legacyDevelopmentWorkflow ? { legacyDevelopmentWorkflow: true } : {}), ...(nativeThreeStageProductWorkflow ? { nativeThreeStageProductWorkflow: true } : {}), ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
 }
 
 /** 默认启用注册中心；只有明确关闭才允许本地兼容路径。 */
@@ -97,7 +97,12 @@ export function readNacosConfig(env: Record<string, string | undefined>): NacosR
     catch { throw new Error('Nacos 审查角色 Skill 绑定必须为名称数组。'); }
     if (new Set(reviewerSkills).size !== reviewerSkills.length || reviewerSkills.some(/** 只能绑定已配置的资源。 */name => !names.includes(name))) throw new Error('Nacos 审查角色 Skill 绑定无效。');
   }
-  return { ...parsed.data, ...(reviewerName && reviewerVersion ? { reviewerPrompt: { name: reviewerName, version: reviewerVersion } } : {}), ...(additionalSkills ? { additionalSkills } : {}), ...(reviewerSkills ? { reviewerSkills } : {}) };
+  let methods: NacosResourceConfig['methods'];
+  if (env.NACOS_TEAM_METHODS) {
+    try { methods = methodBindingsSchema.parse(JSON.parse(env.NACOS_TEAM_METHODS)); }
+    catch { throw new Error('Nacos 全团队方法绑定格式无效'); }
+  } else if (env.NACOS_TEAM_METHOD_VERSION?.trim()) methods = defaultMethodBindings(env.NACOS_TEAM_METHOD_VERSION.trim());
+  return { ...parsed.data, ...(methods ? { methods } : {}), ...(reviewerName && reviewerVersion ? { reviewerPrompt: { name: reviewerName, version: reviewerVersion } } : {}), ...(additionalSkills ? { additionalSkills } : {}), ...(reviewerSkills ? { reviewerSkills } : {}) };
 }
 
 /** 解析必填默认模型和可选角色组覆盖；缺省或空覆盖回退默认模型，非法值直接拒绝。 */

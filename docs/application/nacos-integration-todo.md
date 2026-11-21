@@ -1,6 +1,8 @@
-# Nacos 产品资源接入待办
+# Nacos 历史接入待办与剩余验证
 
-本清单依据 [live 验证记录](./nacos-live-run-findings.md) 整理。当前仅本机隔离实例获得部分接入证据；不要把未完成的事项视为已验收。用户要求暂不启动新的 Run。
+> 本文是产品资源阶段的历史待办，不是当前 Nacos 能力总览或运行时注册表。当前定位、全团队方法冻结和边界以[统一方法 ADR](../decisions/2026-11-21-unified-nacos-team-methods.md)、[运行配置](../../config/README.md#nacos-团队方法资源)和 OpenSpec 为准。
+
+本清单依据 [live 验证记录](./nacos-live-run-findings.md) 整理。当前仅本机隔离实例获得部分接入证据；不要把未完成的事项视为已验收。
 
 ## 优先处理
 
