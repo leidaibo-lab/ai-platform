@@ -1,6 +1,44 @@
 # 研发阶段工作流设计
 
-> 文档范围：开发模块设计基线，包含旧独立 CLI 用法。当前操作使用[产研工作台](./guided-intake.md)，当前主链与返工边界见[完整产研流程](./unified-workflow.md)。本文历史计数不表示当前测试总数。
+> 文档范围：当前研发内部执行图及早期开发模块设计基线，包含历史 CLI 用法。当前操作使用[产研工作台](./guided-intake.md)，当前主链与返工边界见[完整产研流程](./unified-workflow.md)。历史范围、重试政策及计数不表示当前主线能力或测试总数。
+
+## 当前研发内部执行图
+
+当前主线由 Mastra 嵌套 Workflow 执行，默认交付经独立测试后进入 MR，不默认部署。以下是当前研发语义图；后文日期记录和 CLI 是早期基线，不能替代当前入口。实现以 [`development-v2.ts`](../../src/mastra/workflows/development-v2.ts)、[`team.ts`](../../src/development/v2/team.ts) 和 [`agents.ts`](../../src/development/v2/agents.ts) 为准。
+
+```mermaid
+flowchart TB
+  INPUT["已批准产品 + 固定工程快照"] --> CONTEXT["负责人 Agent：依序读取 AGENTS，核实 SDD 与源码"]
+  CONTEXT --> PLAN["负责人 Agent：架构、接口契约、任务依赖及验收引用"]
+  PLAN --> READY["独立评审 Agent：开工就绪审查"]
+  READY --> HUMAN{"人工方案审批及必要的问题裁决"}
+  HUMAN -->|批准| SELECT["程序：按依赖选择就绪波次，最多 3 个任务"]
+  HUMAN -->|调整方案| PLAN
+  SELECT --> A["实现任务 A：独占候选、批准路径"]
+  SELECT --> B["实现任务 B：独占候选、批准路径"]
+  SELECT --> C["实现任务 C：独占候选、批准路径"]
+  A --> MERGE["程序：波次屏障、范围与冲突校验、合并补丁"]
+  B --> MERGE
+  C --> MERGE
+  MERGE -->|还有依赖任务| SELECT
+  MERGE -->|完成全部任务| CHECK["程序：Adapter 固定工程检查"]
+  CHECK --> REVIEW["独立评审 Agent：只读代码审查"]
+  REVIEW --> GATE{"程序：同版本研发交付门"}
+  GATE -->|通过| OUTPUT["development-delivery.v2：候选与完整证据"]
+  GATE -->|范围内缺陷，有剩余预算| SELECT
+  GATE -->|需改变批准设计| PLAN
+  GATE -->|业务、授权、完整性或预算问题| STOP["受控回流 / 人工处理 / 明确停止"]
+```
+
+图表示专业责任与反馈关系，不表示所有失败都直接跳转或自动重试。任务按批准的 `dependsOn` 执行；同文件多任务写入须有明确依赖顺序，同一波次禁止多个任务写同一文件。当前任务负责人通过受限 `delegateTask` 委派，最多 3 次、深度 1，不扩大父任务路径。每任务候选隔离，合并与权限核验由宿主承担。
+
+上下文 Agent 必须产生适用 `instructionFiles` 的真实读取回执；方法 Skill 与 reference 的必要读取也由宿主核实。实现工具只能写批准路径，`runChecks` 不接收任意命令；自检不调用 Agent，独立评审不写代码。测试退回通过[版本化返工 Port](./team-loop-architecture.md)，不得直接拼装研发状态。
+
+### 当前边界与历史基线
+
+登记工程支持 Node 与 Python 固定 Adapter，HRM 继续使用兼容 Docker/Compose 执行档。可执行文件和检查计划身份已绑定，但完整环境镜像未冻结；真实业务质量、生产多实例与任意技术栈不在已验收承诺内。预算及故障续办的当前规则见[自主开发与排障](./unified-workflow.md#批准范围内自主开发与排障)及[运行时限与上下文](./unified-workflow.md#运行时限与上下文)。
+
+以下内容保留为历史设计与评测基线；其中“仅 Node”“部署主链”“单次重试”和 CLI 示例描述当时切片，不是当前默认路径。
 
 本文只定义产品确认之后的**开发阶段**目标边界，作为实现和评测的设计基线。测试阶段是独立的后续阶段，不属于本文开发模块的角色、流程或放行逻辑；当前统一主链已接入测试和部署子流程，见下文补充。当前离线执行切片及其限制见文末，不能据此推断全部全栈架构能力已验证；不改变探索主线架构或稳定契约。
 
@@ -122,13 +160,13 @@
 
 首版只执行预置脱敏目录内的 Node ESM 代码，不开放 shell、联网安装依赖、任意仓库或生产部署。前端/后端角色在离线函数切片实测，基础设施角色按任务可用但真实 Docker/CI 执行未验；Next.js/NestJS/PostgreSQL/Prisma 整栈、真实浏览器、数据库事务与队列不在本轮证据中。macOS Seatbelt 已实测，Linux bwrap 未验；这是受控代码质量执行，不是恶意代码强隔离服务。
 
-[研发评测资产](./evaluations/development/README.md)含24案例、12类各2个，其中22个实现案例、2个需求阻塞案例。真实模型执行、行为断言和人工量表分别登记；人工未评、样本或重复不足时能力准入保持未判定。2026-11-06 首轮48项 live pilot 暴露测试进程与恢复配置门禁缺口，原始断言值不计为能力成绩；修复后的全量重跑及观察记录见[评测报告](./evaluations/development/observations-2026-11-06.md)。当前证据仍限于 Node ESM 函数切片，不足以证明截图技术栈整栈能力。测试阶段不属于本期建设范围。
+[研发评测资产](../../evaluations/development/README.md)含24案例、12类各2个，其中22个实现案例、2个需求阻塞案例。真实模型执行、行为断言和人工量表分别登记；人工未评、样本或重复不足时能力准入保持未判定。2026-11-06 首轮48项 live pilot 暴露测试进程与恢复配置门禁缺口，原始断言值不计为能力成绩；修复后的全量重跑及观察记录见[评测报告](../../evaluations/development/observations-2026-11-06.md)。当前证据仍限于 Node ESM 函数切片，不足以证明截图技术栈整栈能力。测试阶段不属于本期建设范围。
 
 ## 开发执行入口
 
 当前实现了澄清新版本入口、单角色文件快照回滚、单次瞬时重试、原生暂停和一次人工恢复。续办修复已通过99项实践回归：架构返工后清除重规划标记，接续时沿用已完成任务；方案与恢复hash绑定执行身份（mode、modelId、规范化endpoint摘要），模型或端点漂移拒绝且保留暂停点，API key可单独轮转。旧快照没有执行身份时仍可查看，但不得推测身份继续审批/恢复，需新建Run。
 
-评测自动批准同时校验evaluation类型、evaluation-input证据和正文hash，真实产品不能借用合成来源入口。SDK返回finishReason=error时只提取白名单类型/code/status并转为安全分类，原始异常不附加cause；架构结构与任务图语义错误统一归类invalid-output，只调用一次后暂停。Mastra默认错误处理器也会重试，故同时固定SDK maxRetries=0和maxProcessorRetries=0，临时故障只由文件检查点Adapter最多重试一次。真实SDK本地401、503和连接重置已验证分类、HTTP请求次数及日志脱敏。完整实测与待办见[续办记录](./evaluations/development/continuation-2026-11-06.md)；原v3中断批次保留，不回写成绩。当前仍为受控试点，不构成正式开发或整栈准入。
+评测自动批准同时校验evaluation类型、evaluation-input证据和正文hash，真实产品不能借用合成来源入口。SDK返回finishReason=error时只提取白名单类型/code/status并转为安全分类，原始异常不附加cause；架构结构与任务图语义错误统一归类invalid-output，只调用一次后暂停。Mastra默认错误处理器也会重试，故同时固定SDK maxRetries=0和maxProcessorRetries=0，临时故障只由文件检查点Adapter最多重试一次。真实SDK本地401、503和连接重置已验证分类、HTTP请求次数及日志脱敏。完整实测与待办见[续办记录](../../evaluations/development/continuation-2026-11-06.md)；原v3中断批次保留，不回写成绩。当前仍为受控试点，不构成正式开发或整栈准入。
 
 在仓库根目录使用 Node.js 24+，创建项目 manifest：`id`、`files`（相对路径到脱敏源码/公开检查内容的映射）、`writablePaths`、`checkFiles`、`roles`（frontend/backend及按需infrastructure）。检查文件必须存在且不可写；当前执行命令仅 Node 语法检查和登记的 node:test。
 

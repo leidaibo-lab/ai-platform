@@ -4,12 +4,14 @@ import { contentHash } from '../delivery/remote-handoff.js';
 import type { PracticeConfig } from '../mastra/config.js';
 import { executionResolver } from '../mastra/workflows/development-team.js';
 import type { IntakeWorkflow } from './service.js';
+import { snapshotProjectConfig } from '../business-engineering/project.js';
 
 const checkpointSteps = new Set(['approve-architecture', 'merge-team-results', 'develop-and-check', 'implement', 'development-self-check', 'review-development-quality', 'review-code', 'assess-delivery', 'plan-development', 'prepare-revised-development']);
 
 /** 读取原生检查点的候选差异，只返回批准任务中可展示的文件。 */
 export async function readCandidateChanges(workflow: IntakeWorkflow, runId: string, config: PracticeConfig) {
   const run = await workflow.getWorkflowRunById(runId);
+  config = snapshotProjectConfig(config, run);
   const saved = Object.entries(run?.steps ?? {}).flatMap(([path, step]) => {
     const leaf = path.replace(/#\d+$/, '').split('.').at(-1)!;
     if (Array.isArray(step) || step.status !== 'success' || !checkpointSteps.has(leaf)) return [];

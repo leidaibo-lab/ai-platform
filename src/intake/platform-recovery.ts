@@ -8,6 +8,7 @@ import { matchesPlatformSecret, platformRecoveryStepId, platformRepairEventSchem
 import type { PracticeConfig } from '../mastra/config.js';
 import { executionResolver } from '../mastra/workflows/development-team.js';
 import type { IntakeWorkflow } from './service.js';
+import { assertProjectCorrelation, selectProjectConfig } from '../business-engineering/project.js';
 
 type Snapshot = NonNullable<Awaited<ReturnType<IntakeWorkflow['getWorkflowRunById']>>>;
 
@@ -75,7 +76,7 @@ export function projectRecoveryMetrics(snapshot: Snapshot) {
 
 /** 按暂停版本回读原生回执，重复通知不触发第二次执行。 */
 export async function notifyPlatformRepair(
-  workflow: Pick<IntakeWorkflow, 'getWorkflowRunById' | 'createRun'>,
+  workflow: Pick<IntakeWorkflow, 'getWorkflowRunById' | 'createRun' | 'mastra'>,
   runId: string, input: z.infer<typeof platformRepairEventSchema>, secret: string,
   verify: (state: StateV2) => Promise<void>,
 ) {
@@ -96,7 +97,27 @@ export async function notifyPlatformRepair(
   await verify(pause.recoveryState);
   try {
     const run = await workflow.createRun({ runId });
-    await run.resume({ step: pause.path.split('.'), resumeData: { ...input, proof: platformRepairProof(secret, input) } });
+    const store = await workflow.mastra?.getStorage()?.getStore('workflows');
+    if (!store?.supportsConcurrentUpdates()) throw new Error('平台恢复要求原生 Store 原子认领');
+    const before = await store.loadWorkflowSnapshot({ workflowName: 'product-development', runId });
+    const current = await workflow.getWorkflowRunById(runId);
+    const currentPause = current && platformWait(current);
+    if (!before || !currentPause || currentPause.path !== pause.path || currentPause.faultId !== input.faultId || currentPause.checkpoint !== input.checkpoint) return current && receipt(current) ? 'duplicate' : current?.status === 'running' ? 'processing' : 'stale';
+    const claimed = await store.updateWorkflowState({ workflowName: 'product-development', runId, opts: { status: 'running', expectedStatus: 'suspended' } });
+    if (!claimed) return 'processing';
+    // CAS 只比较状态，必须再比较返回的原上下文；旧通知不能认领后继的同名团队暂停。
+    const { status: _beforeStatus, ...beforeIdentity } = before;
+    const { status: _claimedStatus, ...claimedIdentity } = claimed;
+    if (developmentHash(claimedIdentity) !== developmentHash(beforeIdentity)) {
+      await store.updateWorkflowState({ workflowName: 'product-development', runId, opts: { status: 'suspended', expectedStatus: 'running' } });
+      return 'stale';
+    }
+    let started = false;
+    try {
+      await run.resumeClaimed({ claimedSnapshot: claimed, step: currentPause.path.split('.'), resumeData: { ...input, proof: platformRepairProof(secret, input) }, onExecutionStarted: () => { started = true; } });
+    } finally {
+      if (!started) await store.updateWorkflowState({ workflowName: 'product-development', runId, opts: { status: 'suspended', expectedStatus: 'running' } });
+    }
   } catch {
     // 多实例由 Mastra 获取原生执行所有权。失败和竞争都按实际状态回读。
     const current = await workflow.getWorkflowRunById(runId);
@@ -105,7 +126,8 @@ export async function notifyPlatformRepair(
     return 'stale';
   }
   const current = await workflow.getWorkflowRunById(runId);
-  return current && receipt(current) === 'duplicate' ? 'accepted' : current?.status === 'running' ? 'processing' : 'stale';
+  const consumed = current && observedDevelopmentStates(current).flatMap(state => state.technicalRecovery?.platformResumes ?? []).some(record => record.eventId === input.eventId && record.faultId === input.faultId && record.checkpoint === input.checkpoint);
+  return consumed ? 'accepted' : current && receipt(current) === 'duplicate' ? 'duplicate' : current?.status === 'running' ? 'processing' : 'stale';
 }
 
 /** 平台机器接口与工作台人工决定入口独立授权。 */
@@ -120,8 +142,10 @@ export function createPlatformRecoveryRoutes(workflow: IntakeWorkflow, config: P
   }
   /** 在原生认领前检查固定项目候选，步骤执行时再次检查。 */
   async function validateCandidate(state: StateV2) {
-    validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hashFor(state.input, state.methodBundleHash));
-    const execution = executionResolver(config, { requireExisting: true })(state.input);
+    const selected = selectProjectConfig(config, state.input.correlation?.projectId);
+    assertProjectCorrelation(selected, state.input.correlation);
+    validateIdentityV2(state, selected, loadDevelopmentMethods(selected.rootDir).hashFor(state.input, state.methodBundleHash));
+    const execution = executionResolver(selected, { requireExisting: true })(state.input);
     try {
       if (developmentHash(await execution.snapshot()) !== state.checkpointHash) throw new Error('候选检查点已变化');
     } finally { await execution.close(); }

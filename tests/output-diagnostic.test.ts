@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { z } from 'zod';
 import { diagnoseOutput, OutputValidationError } from '../src/development/v2/output-diagnostic.js';
-import { assessmentOutputSchema } from '../src/development/v2/agents.js';
+import { assessmentOutputSchema, assertProjectInstructionsRead } from '../src/development/v2/agents.js';
 
 // 任意错误消息及cause不进入持久化诊断。
 test('输出诊断丢弃凭据、响应正文和动态属性名', /** 校验全部非白名单文本不出现在结果。 */() => {
@@ -28,4 +28,12 @@ test('就绪结构输出声明实际引用域和必要覆盖数量', /** 数量�
   assert.throws(/** 少于原文和任务数量不能通过结构校验。 */() => schema.parse({ ...report, coverageRefs: ['product:L1', 'task:task-1'] }));
   assert.throws(/** 模型不能引用宿主以外的内容。 */() => schema.parse({ ...report, coverageRefs: ['product:L1', 'product:L2', 'task:unknown'] }));
   assert.equal(schema.parse({ ...report, coverageRefs: ['product:L1', 'product:L2', 'task:task-1'] }).coverageRefs.length, 3);
+});
+
+test('项目规则缺少真实读取回执时拒绝进入规划', /** 工具事实而非模型自述决定是否完成开工规则读取。 */() => {
+  assert.doesNotThrow(() => assertProjectInstructionsRead(['AGENTS.md', 'src/AGENTS.md'], ['src/a.mjs', 'AGENTS.md', 'src/AGENTS.md']));
+  assert.throws(
+    () => assertProjectInstructionsRead(['AGENTS.md', 'src/AGENTS.md'], ['AGENTS.md']),
+    (error: unknown) => error instanceof OutputValidationError && error.diagnostic.code === 'project-instruction-read-missing',
+  );
 });

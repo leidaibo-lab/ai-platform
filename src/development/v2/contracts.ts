@@ -168,7 +168,7 @@ export function registeredChecks(input: InputV2): string[] {
   if (input.project.executionProfile) return ['project:check', 'project:build', 'project:smoke'];
   return [...Object.keys(input.project.files).filter(
     // 与受限执行 Adapter 的实际 Node 语法检查选择保持一致。
-    (path) => path.startsWith('src/') && path.endsWith('.mjs'),
+    (path) => path.startsWith('src/') && path.endsWith(input.project.adapterId === 'python-unittest.v1' ? '.py' : '.mjs'),
   ).sort().map(
     // 语法检查使用 Adapter 的固定 ID。
     (path) => `syntax:${path}`,

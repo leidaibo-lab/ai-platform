@@ -37,6 +37,10 @@ export interface PracticeConfig {
   hrmRepositoryRoot?: string;
   /** 服务端登记的固定版本业务工程。 */
   engineeringProject?: EngineeringProject;
+  /** 服务端项目注册表；多个项目共用 Mastra Store，运行期按 Run 冻结绑定隔离。 */
+  engineeringProjects?: EngineeringProject[];
+  /** 仅由服务端注册表选择器标记，阶段设置按项目隔离；历史单项目保持旧路径。 */
+  projectRegistrySelection?: true;
   /** 仅服务端环境登记的远端目标，页面只能引用其ID。 */
   remoteSyncTargets?: RemoteSyncTarget[];
   /** 仅服务端持有的 Nacos 配置与凭据；关闭时不访问网络。 */

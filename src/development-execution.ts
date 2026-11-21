@@ -9,6 +9,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { LocalFilesystem, LocalSandbox, type NativeSandboxConfig } from '@mastra/core/workspace';
+import { adapterChecks, pythonIdentity, runtimeDigest, type AdapterCheck } from './business-engineering/adapters.js';
 
 /** 实际进程结果；退出码、超时和输出均来自原生沙箱，不采用模型自述。 */
 export interface DevelopmentCheckResult {
@@ -46,8 +47,8 @@ function boundedTimeout(value: number | undefined, fallback: number, name: strin
 function literal(value: string): string { return JSON.stringify(value); }
 
 /** 构建 deny 优先的 macOS 策略；仅读取运行系统、Node 和当前候选目录。 */
-function seatbeltPolicy(root: string, temporary: string, nodeDirectory: string, libraries: string[]): string {
-  const readable = ['/usr', '/System', '/bin', '/sbin', '/dev', '/private/var/select', nodeDirectory, root, temporary];
+function seatbeltPolicy(root: string, temporary: string, nodeDirectory: string, libraries: string[], runtimes: string[] = []): string {
+  const readable = ['/usr', '/System', '/bin', '/sbin', '/dev', '/private/var/select', nodeDirectory, root, temporary, ...runtimes];
   const excluded = readable.map(
     // allow-read 后补充排除式 deny，避免 macOS 对单独 allow-subpath 的兼容限制。
     (path) => `(require-not (subpath ${literal(path)}))`,
@@ -119,7 +120,7 @@ function nodeLibraries(node: string): string[] {
 }
 
 /** Linux 仅绑定系统运行库、Node 与只读候选；不共享宿主网络或临时目录。 */
-function bubblewrapPolicy(root: string, temporary: string, nodeDirectory: string): string[] {
+function bubblewrapPolicy(root: string, temporary: string, nodeDirectory: string, runtimes: string[] = []): string[] {
   const args = ['--unshare-all', '--die-with-parent', '--new-session', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp'];
   for (const path of ['/usr', '/bin', '/sbin', '/lib', '/lib64']) {
     if (existsSync(path)) args.push('--ro-bind', path, path);
@@ -128,6 +129,7 @@ function bubblewrapPolicy(root: string, temporary: string, nodeDirectory: string
     if (existsSync(path)) args.push('--ro-bind', path, path);
   }
   if (!nodeDirectory.startsWith('/usr/')) args.push('--ro-bind', nodeDirectory, nodeDirectory);
+  for (const runtime of runtimes) if (!runtime.startsWith('/usr/')) args.push('--ro-bind', runtime, runtime);
   args.push('--ro-bind', root, root, '--bind', temporary, temporary, '--chdir', root);
   return args;
 }
@@ -146,10 +148,12 @@ export class DevelopmentExecution {
   private readonly resources: string;
   private readonly testTimeoutMs: number;
   private readonly commandTimeoutMs: number;
+  private readonly python?: string;
+  private readonly pythonHash?: string;
   private closed = false;
 
   /** 绑定已存在候选目录；调用者负责只在独占运行目录建立脱敏输入。 */
-  constructor(root: string, writablePaths: string[], checkFiles: string[], limits: DevelopmentExecutionLimits = {}) {
+  constructor(root: string, writablePaths: string[], checkFiles: string[], limits: DevelopmentExecutionLimits = {}, private readonly adapterId?: 'node-test.v1' | 'python-unittest.v1') {
     this.testTimeoutMs = boundedTimeout(limits.testTimeoutMs, defaultTestTimeoutMs, 'Node测试超时');
     this.commandTimeoutMs = boundedTimeout(limits.commandTimeoutMs, defaultCommandTimeoutMs, '检查进程超时');
     const nodeMajor = Number(process.versions.node.split('.')[0]);
@@ -168,7 +172,12 @@ export class DevelopmentExecution {
     const detected = LocalSandbox.detectIsolation();
     if (!detected.available || (detected.backend !== 'seatbelt' && detected.backend !== 'bwrap')) throw new Error('研发执行需要可用 OS 隔离后端，拒绝无隔离执行');
     this.isolation = detected.backend;
-    const libraries = this.isolation === 'seatbelt' ? nodeLibraries(realpathSync(process.execPath)) : [];
+    const identity = adapterId === 'python-unittest.v1' ? pythonIdentity() : undefined;
+    this.python = identity?.executable;
+    this.pythonHash = identity?.sha256;
+    const pythonRoot = identity?.root;
+    const runtimeRoots = pythonRoot ? [pythonRoot] : [];
+    const libraries = this.isolation === 'seatbelt' ? [...nodeLibraries(realpathSync(process.execPath)), ...(this.python ? nodeLibraries(this.python) : [])] : [];
     this.resources = realpathSync(mkdtempSync(resolve(tmpdir(), 'mastra-development-execution-')));
     const temporary = resolve(this.resources, 'tmp');
     mkdirSync(temporary);
@@ -176,9 +185,9 @@ export class DevelopmentExecution {
     const nativeSandbox: NativeSandboxConfig = { allowNetwork: false, readOnly: true };
     if (this.isolation === 'seatbelt') {
       const profile = resolve(this.resources, 'strict.sb');
-      writeFileSync(profile, seatbeltPolicy(this.root, temporary, nodeDirectory, libraries), { mode: 0o600 });
+      writeFileSync(profile, seatbeltPolicy(this.root, temporary, nodeDirectory, libraries, runtimeRoots), { mode: 0o600 });
       nativeSandbox.seatbeltProfilePath = profile;
-    } else nativeSandbox.bwrapArgs = bubblewrapPolicy(this.root, temporary, nodeDirectory);
+    } else nativeSandbox.bwrapArgs = bubblewrapPolicy(this.root, temporary, nodeDirectory, runtimeRoots);
     this.filesystem = new LocalFilesystem({ basePath: this.root, contained: true });
     this.sandbox = new LocalSandbox({
       workingDirectory: this.root, isolation: this.isolation, nativeSandbox, timeout: this.commandTimeoutMs,
@@ -255,14 +264,10 @@ export class DevelopmentExecution {
     const results: DevelopmentCheckResult[] = [];
     const before = await this.snapshot();
     const files = await this.listFiles();
-    for (const path of files) {
-      if (path.startsWith('src/') && path.endsWith('.mjs')) results.push(await this.run('syntax:' + path, ['--check', path]));
-      if (results.at(-1) && results.at(-1)!.exitCode === 0 && (await this.snapshotHash()) !== developmentSnapshotHash(before)) throw new Error('语法检查期间候选源码发生变化');
-    }
-    for (const path of this.checkFiles) {
-      this.validatePath(path);
-      results.push(await this.run('test:' + path, ['--test', '--test-reporter=tap', `--test-timeout=${this.testTimeoutMs}`, path]));
-      if ((await this.snapshotHash()) !== developmentSnapshotHash(before)) throw new Error('冒烟检查期间候选源码发生变化');
+    for (const check of adapterChecks(this.adapterId ?? 'node-test.v1', files, this.checkFiles, this.testTimeoutMs)) {
+      this.validatePath(check.path);
+      results.push(await this.run(check));
+      if ((await this.snapshotHash()) !== developmentSnapshotHash(before)) throw new Error('登记检查期间候选源码发生变化');
     }
     if (!results.length) throw new Error('没有可执行的研发检查');
     return results;
@@ -274,24 +279,24 @@ export class DevelopmentExecution {
   }
 
   /** 宿主固定 argv 与有界时间/16 KiB输出预算，只返回实际进程证据。 */
-  private async run(id: string, args: string[]): Promise<DevelopmentCheckResult> {
+  private async run(check: AdapterCheck): Promise<DevelopmentCheckResult> {
     if (this.closed) throw new Error('研发执行环境已关闭');
-    const node = realpathSync(process.execPath);
-    const argv = ['--max-old-space-size=128', ...args];
-    const result = await this.sandbox.executeCommand!(node, argv, { timeout: this.commandTimeoutMs, maxRetainedBytes: 16384 });
-    const isTest = id.startsWith('test:');
+    if (check.runtime === 'python' && runtimeDigest(this.python!) !== this.pythonHash) throw new Error('Python 解释器在执行前发生变化');
+    const result = await this.sandbox.executeCommand!(check.runtime === 'python' ? this.python! : realpathSync(process.execPath), check.args, { timeout: this.commandTimeoutMs, maxRetainedBytes: 16384 });
+    if (check.runtime === 'python' && runtimeDigest(this.python!) !== this.pythonHash) throw new Error('Python 解释器在执行期间发生变化');
+    const isTest = check.test;
     const output = `${result.stdout}\n${result.stderr}`;
     const tests = isTest ? output.match(/^# tests\s+(\d+)\s*$/m)?.[1] : undefined;
     const passes = isTest ? output.match(/^# pass\s+(\d+)\s*$/m)?.[1] : undefined;
     const failures = isTest ? output.match(/^# fail\s+(\d+)\s*$/m)?.[1] : undefined;
     const executedTests = isTest ? [...output.matchAll(/^ok \d+ - ([^\r\n]+)$/gm)].filter(
       // Node会把没有运行test()便退出的文件记为文件级通过，必须排除这类占位记录。
-      (entry) => ![args.at(-1), resolve(this.root, args.at(-1)!)].includes(entry[1]),
+      (entry) => ![check.path, resolve(this.root, check.path)].includes(entry[1]),
     ) : [];
-    const summaryValid = !isTest || Boolean(tests && passes && Number(tests) > 0 && tests === passes && failures === '0' && executedTests.length > 0);
+    const summaryValid = !isTest || (check.runtime === 'python' ? /^Ran [1-9]\d* tests? in /m.test(output) && /^OK$/m.test(output) : Boolean(tests && passes && Number(tests) > 0 && tests === passes && failures === '0' && executedTests.length > 0));
     const truncated = Boolean(result.stdoutTruncated || result.stderrTruncated);
     const evidenceError = result.timedOut || truncated || !summaryValid;
-    return { id, command: `node ${argv.join(' ')}`, processExitCode: result.exitCode, exitCode: evidenceError ? (result.exitCode === 0 ? 1 : result.exitCode) : result.exitCode, stdout: result.stdout,
+    return { id: check.id, command: check.command, processExitCode: result.exitCode, exitCode: evidenceError ? (result.exitCode === 0 ? 1 : result.exitCode) : result.exitCode, stdout: result.stdout,
       stderr: `${result.stderr}${evidenceError ? `\n研发检查证据无效：${result.timedOut ? '超时' : truncated ? '输出超限' : '缺少具名测试执行记录'}` : ''}`, durationMs: result.executionTimeMs, timedOut: result.timedOut ?? false,
       stdoutTruncated: Boolean(result.stdoutTruncated), stderrTruncated: Boolean(result.stderrTruncated) };
   }

@@ -69,7 +69,6 @@ export function IntakeApp() {
   const [iterationId, setIterationId] = useState('unassigned');
   const [intakeMode, setIntakeMode] = useState<'clarify' | 'autofill'>('clarify');
   const [activeQuestion, setActiveQuestion] = useState('');
-  const [reviewer, setReviewer] = useState('');
   const [comment, setComment] = useState('');
   const [uncertain, setUncertain] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -91,6 +90,7 @@ export function IntakeApp() {
   const [streams, setStreams] = useState<Record<string, ProductStreamView & { stepId?: string; taskKey?: string }>>({});
   const streamRound = useRef(0);
   const [project, setProject] = useState<{ id?: string; title?: string }>();
+  const [projects, setProjects] = useState<Array<{ id: string; title: string }>>([]);
   const [flowOpen, setFlowOpen] = useState(false);
   const [material, setMaterial] = useState<Material>();
   const [notes, setNotes] = useState<Record<string, string[]>>({});
@@ -133,11 +133,15 @@ export function IntakeApp() {
   const materialOpen = !!document && !!material && (material !== 'gate' || !!document.gate);
   useEffect(() => {
     const controller = new AbortController();
-    void fetch('/intake-api/project', { signal: controller.signal }).then(async response => {
-      if (response.ok && !controller.signal.aborted) setProject(await response.json());
-    }).catch(() => { /* 沿用当前实例工作区标签。 */ });
+    void fetch('/intake-api/projects', { signal: controller.signal }).then(async response => {
+      if (response.ok && !controller.signal.aborted) { const value = await response.json(); setProjects(value.projects); setProject(value.projects[0]); }
+    }).catch(() => { /* 保留读取错误后的工作区标签。 */ });
     return () => controller.abort();
   }, []);
+  useEffect(() => {
+    const selected = projects.find(item => item.id === document?.projectId);
+    if (selected) setProject(selected);
+  }, [document?.projectId, projects]);
   useEffect(() => {
     if (content.current) content.current.scrollTop = 0;
   }, [id]);
@@ -190,7 +194,7 @@ export function IntakeApp() {
   const draftRun = intake || document?.product ? document?.runId : undefined;
   const { draft, persisted, update: updateDraft } = useClarificationDraft(draftRun, intake?.hash);
   const { answers, supplement } = draft;
-  const draftReviewer = draft.reviewer ?? reviewer;
+  const draftReviewer = accountName ?? '';
   const missingRequired = questions.filter(question => question.required && !isQuestionAnswered(answers[question.id])).length;
   /** 深链接与所选 Run 一致，刷新恢复当前人工节点。 */
   function choose(value: string) {
@@ -281,8 +285,9 @@ export function IntakeApp() {
   }
   /** 创建前固定 UUID，即使响应丢失仍可按地址找回同一流程。 */
   async function start() {
+    if (!project?.id) return;
     const runId = crypto.randomUUID(); choose(runId); setOperation({ label: intakeMode === 'autofill' ? '正在自主补全需求并生成产品稿…' : '正在分析需求并生成澄清方案…' }); setNotice(''); setBusy(true); setError('');
-    try { const next = await request<Document>('', { runId, brief, iterationId, intakeMode }); setDocument(next); setBrief(''); setRuns(previous => [next, ...previous.filter(run => run.runId !== next.runId)]); }
+    try { const next = await request<Document>('', { runId, projectId: project?.id, brief, iterationId, intakeMode }); setDocument(next); setBrief(''); setRuns(previous => [next, ...previous.filter(run => run.runId !== next.runId)]); }
     catch (reason) { await recoverResponse(runId, reason); }
     finally { setBusy(false); }
   }
@@ -324,9 +329,8 @@ export function IntakeApp() {
   /** 业务问题与当前 hash 一起提交，服务端重复执行相同校验。 */
   function respond(action: 'refine' | 'finalize') {
     if (!intake) return;
-    setReviewer(draftReviewer);
     setActiveQuestion('');
-    void submit({ hash: intake.hash, action, reviewer: draftReviewer, answers: Object.values(answers), supplement });
+    void submit({ hash: intake.hash, action, answers: Object.values(answers), supplement });
   }
   /** 纠偏使用独立请求，生成中的原请求可以继续观察暂停结果。 */
   async function correctProduct() {
@@ -359,10 +363,10 @@ export function IntakeApp() {
   }
   /** 将产品审阅决定绑定到当前稿件版本。 */
   function review(decision: 'approve' | 'reject' | 'rework') {
-    void submit({ role: 'product', artifactHash: document!.product!.artifact.hash, decision, reviewer, comment });
+    void submit({ role: 'product', artifactHash: document!.product!.artifact.hash, decision, comment });
   }
   if (showRepositoryManagement) return <RepositoryManagement close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowRepositoryManagement(false)} />;
-  if (showSyncSettings) return <RemoteSyncSettings close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowSyncSettings(false)} />;
+  if (showSyncSettings) return <RemoteSyncSettings projectId={project?.id} close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowSyncSettings(false)} />;
   const availableMaterials = document ? [
     (document.product || document.approvedProduct) && 'product',
     document.gate && !document.gate.recoveryInfo && ['approve-architecture','approve-test-cases','review-test-results'].includes(document.gate.key) && 'gate',
@@ -379,6 +383,7 @@ export function IntakeApp() {
     <aside className="intake-sidebar" aria-label="项目与需求">
       <div className="workbench-sidebar-nav">
         <div className="workbench-nav-row"><strong>项目</strong><button type="button" className="workbench-row-action" disabled={navigationLocked} title="登记项目仓库" aria-label="登记项目仓库" onClick={() => setShowRepositoryManagement(true)}><FolderPlus size={15} /></button></div>
+        {projects.length > 1 && <label>选择项目<select aria-label="选择项目" value={project?.id ?? ''} disabled={navigationLocked} onChange={event => { const next = projects.find(item => item.id === event.target.value); choose(''); setDocument(undefined); setProject(next); }}>{projects.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}
         <div className="workbench-project-group">
           <button type="button" className="workbench-project-add workbench-row-action" disabled={navigationLocked} aria-label="新增需求" title="新增需求" onClick={() => choose('')}><Plus size={15} /></button>
           <details open><summary className="workbench-nav-row"><ChevronDown size={13} className="workbench-chevron"/><Folder size={14} /><span title={projectLabel}>{projectLabel}</span></summary>
@@ -432,7 +437,7 @@ export function IntakeApp() {
           questions={questions} questionKey={intake.hash} answers={answers} activeQuestion={activeQuestion}
           onSelect={setActiveQuestion} onChange={update} disabled={busy || uncertain} prefix="intake-question"
           supplement={supplement} onSupplementChange={value => updateDraft({ supplement: value })}
-          reviewer={draftReviewer} onReviewerChange={value => updateDraft({ reviewer: value })}
+          reviewer={draftReviewer} onReviewerChange={() => {}}
           missingRequired={missingRequired} draftPersisted={persisted} busy={busy}
           onRefine={() => respond('refine')} onFinalize={() => respond('finalize')}
         />
@@ -445,15 +450,15 @@ export function IntakeApp() {
           {intake.history.length > 0 && <section className="intake-card"><details><summary>查看已提交的确认记录（{intake.history.length} 轮）</summary>{intake.history.map(/** 回答原样回读，选择标签来自对应历史方案。 */(entry, index) => <div className="intake-assumptions" key={index}><strong>第 {index + 1} 轮 · {entry.response.reviewer}</strong>{entry.response.answers.map(/** 用本轮选项解释已确认答案。 */answer => { const q = entry.plan.questions.find(/** 按历史 ID 查找问题。 */item => item.id === answer.questionId); return <p key={answer.questionId}>{q?.title}：{answer.selected.map(/** 展示历史选项标签。 */id => q?.options.find(/** 按 ID 查找本轮选项。 */option => option.id === id)?.label ?? id).join('、')} {answer.custom}</p>; })}{entry.response.supplement && <p>补充：{entry.response.supplement}</p>}</div>)}</details></section>}
         </RequirementWorkspace></section>}
         {document?.product && <section id="product-team-action" className="intake-card" aria-label="产品团队 · 产品稿审阅"><h2>人工审批与交接</h2><button type="button" onClick={event => openMaterial('product', event.currentTarget)}>审阅产品正文</button> · <code>{document.product.artifact.hash.slice(0, 12)}</code><p>核对本版需求正文后填写审阅意见。确认只作用于当前产品版本。</p>
-          <label>审阅人<input value={reviewer} maxLength={100} onChange={/** 产品审阅单独记录操作者。 */e => setReviewer(e.target.value)} /></label><label>审阅意见<textarea value={comment} maxLength={2000} onChange={/** 明确记录产品决定依据。 */e => { setComment(e.target.value); setApproving(false); }} /></label>
-          {approving ? <div className="intake-assumptions"><p>确认当前版本后，本页将展示项目文件与可写范围授权。实施前仍需确认开发方案。</p><button className="primary" disabled={busy || uncertain} onClick={/** 二次确认只批准当前 hash。 */() => review('approve')}>确认产品版本并继续</button><button disabled={busy || uncertain} onClick={/** 取消不推进。 */() => setApproving(false)}>取消</button></div> : <div className="intake-actions"><button disabled={busy || uncertain || !reviewer.trim() || !comment.trim()} onClick={/** 终止只作用当前产品轮次。 */() => review('reject')}>拒绝并结束</button><button disabled={busy || uncertain || !reviewer.trim() || !comment.trim()} onClick={/** 产品团队按审阅意见选择重跑节点。 */() => review('rework')}>退回修改</button><button className="primary" disabled={busy || uncertain || !reviewer.trim() || !comment.trim()} onClick={/** 先展示下一步影响。 */() => setApproving(true)}>确认产品稿 →</button></div>}
+          <p>审阅人：{accountName ?? '请先登录工作台'}</p><label>审阅意见<textarea value={comment} maxLength={2000} onChange={/** 明确记录产品决定依据。 */e => { setComment(e.target.value); setApproving(false); }} /></label>
+          {approving ? <div className="intake-assumptions"><p>确认当前版本后，本页将展示项目文件与可写范围授权。实施前仍需确认开发方案。</p><button className="primary" disabled={busy || uncertain || !accountName} onClick={/** 二次确认只批准当前 hash。 */() => review('approve')}>确认产品版本并继续</button><button disabled={busy || uncertain} onClick={/** 取消不推进。 */() => setApproving(false)}>取消</button></div> : <div className="intake-actions"><button disabled={busy || uncertain || !accountName || !comment.trim()} onClick={/** 终止只作用当前产品轮次。 */() => review('reject')}>拒绝并结束</button><button disabled={busy || uncertain || !accountName || !comment.trim()} onClick={/** 产品团队按审阅意见选择重跑节点。 */() => review('rework')}>退回修改</button><button className="primary" disabled={busy || uncertain || !accountName || !comment.trim()} onClick={/** 先展示下一步影响。 */() => setApproving(true)}>确认产品稿 →</button></div>}
         </section>}
         </>}
         {selectedTeam === 'development' && document?.technicalRecovery && <TechnicalRecoveryStatus recovery={document.technicalRecovery} />}
         {selectedTeam === 'development' && document?.developmentStop && <section className="intake-card"><h2>自主开发需要处理</h2><p>{{'business-decision':'实现过程中发现需要新增业务决定。请先明确该规则与验收预期。','authorization-required':'当前任务需要扩大授权，或发现权限与证据完整性问题。请核对已保存候选与范围。','repair-budget':'已达到批准的返工轮数上限。','verification-budget':'已达到分配的登记检查执行上限。','no-progress':'相同失败连续出现，已达到批准的无进展上限。'}[document.developmentStop.reason] ?? document.developmentStop.reason}</p><p>已返工 {document.developmentStop.rounds} 轮 · 模型调用 {document.developmentStop.calls} 次 · 登记检查执行 {document.developmentStop.checkRuns} 次。候选与证据已保存。</p>{document.developmentStop.latestChecks?.map(/** 只显示服务端已脱敏的实际检查，不提供命令输入。 */check => <details key={check.id}><summary>{check.id} · 退出码 {check.exitCode ?? '未知'}</summary><pre>{check.command}<br />{check.stderr || check.stdout}</pre></details>)}</section>}
         {onActiveTeam && document?.blockage && <section id={document.clarify ? "product-team-action" : undefined} className="intake-card"><div className="intake-eyebrow">{document.blockage.phase} · 已返回方案，尚未开工</div><h1>{document.blockage.title}</h1><p>已保存开发方案，包含 {document.blockage.taskCount} 项任务。以下事项仍阻止开工，本次没有进入代码实施。</p><Markdown business>{document.blockage.summary}</Markdown><h2>接下来需要处理什么？</h2><p>{document.blockage.preparationRequired ? '当前项目尚未具备实施与验证条件。开发侧需要先按方案完成工程准备，再点击下方入口重新确认项目；产品需求和本次方案已保存，工程缺口不需要通过修改产品稿解决。' : '先补齐产品稿中的业务选择；工程资料缺口由开发侧核对。补齐后再继续方案规划和确认，不应把这些未决项直接当作已批准规则。'}</p>{document.reconfigure && <button className="primary" disabled={busy || uncertain} onClick={/** 返回项目确认关口重新检查工程环境，不重做产品生成或自动批准。 */() => void submit({ reconfigureHash: document.reconfigure!.hash })}>重新检查项目，继续交接 →</button>}{document.clarify && <button className="primary" disabled={busy || uncertain} onClick={/** 在原Run创建原生澄清暂停点，不选择答案或自动批准。 */() => void submit({ clarifyHash: document.clarify!.hash })}>{busy ? '正在准备选择卡片…' : '补齐业务选择，修订产品稿 →'}</button>}<details open><summary>查看具体阻塞事项（{document.blockage.blockers.length}）</summary><ul>{document.blockage.blockers.map(/** 阻塞依据来自模型已保存的实际方案，不代替用户作决定。 */(item, index) => <li key={index}><p>{item}</p></li>)}</ul></details><button type="button" onClick={/** 从阻塞说明转到产品批准材料。 */() => selectTeam('product')}>查看产品团队成果</button></section>}
         {onActiveTeam && document?.status === 'failed' && document.progress && !document.gate && <section className="intake-card" role="status"><div className="intake-eyebrow">当前阶段 · {document.progress.phase}</div><h1>{document.progress.title}</h1><p>{document.progress.detail}</p><p>{document.progress.next}</p>{!!document.progress.attemptDetails?.length && <details><summary>查看模型调用诊断</summary>{document.progress.attemptDetails.map(/** 后端仅返回经过白名单校验的来源和计时。 */(detail, index) => <p key={index}>{detail}</p>)}</details>}</section>}
-        {onActiveTeam && (document?.gate?.key === 'confirm-project-scope' ? <RepositoryScope key={document.gate.gateHash} gateHash={document.gate.gateHash} busy={busy || uncertain} submit={submit} /> : document?.gate && <section id={['confirm-blocker-answers', 'review-revised-product'].includes(document.gate.key) ? "product-team-action" : undefined} aria-label={document.gate.key === 'confirm-blocker-answers' ? '产品团队 · 业务缺口澄清' : document.gate.key === 'review-revised-product' ? '产品团队 · 修订稿审阅' : undefined}>
+        {onActiveTeam && (document?.gate?.key === 'confirm-project-scope' ? <RepositoryScope runId={document.runId} key={document.gate.gateHash} gateHash={document.gate.gateHash} busy={busy || uncertain} submit={submit} /> : document?.gate && <section id={['confirm-blocker-answers', 'review-revised-product'].includes(document.gate.key) ? "product-team-action" : undefined} aria-label={document.gate.key === 'confirm-blocker-answers' ? '产品团队 · 业务缺口澄清' : document.gate.key === 'review-revised-product' ? '产品团队 · 修订稿审阅' : undefined}>
           {document.gate.key === 'confirm-blocker-answers' && <div className="intake-eyebrow">产品团队 · 业务缺口澄清</div>}
           {document.gate.key === 'review-revised-product' && <div className="intake-eyebrow">产品团队 · 修订稿审阅</div>}
           <WorkflowGateForm key={document.gate.gateHash} gate={document.gate} busy={busy || uncertain} submit={submit} onInspect={availableMaterials.includes('gate') ? trigger => openMaterial('gate', trigger) : undefined} />
@@ -470,7 +475,7 @@ export function IntakeApp() {
         change={correctionMode ? changeCorrection : id ? value => setMessages(previous => ({ ...previous, [id]: value })) : setBrief}
         send={correctionMode ? () => void correctProduct() : id ? sendNote : () => void start()}
         maxLength={correctionMode ? 2000 : undefined}
-        disabled={correctionMode ? correcting || staleCorrection || !!savedCorrection || !activeAttempt || activeAttempt.stopping : navigationLocked || (!id && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId))} />}
+        disabled={correctionMode ? correcting || staleCorrection || !!savedCorrection || !activeAttempt || activeAttempt.stopping : navigationLocked || (!id && (!project?.id || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)))} />}
       <WorkbenchAccount key={String(accountOpen)} open={accountOpen} signedIn={setAccountName} close={() => setAccountOpen(false)} />
     </main>
     {materialOpen && document && material && <aside ref={materialPanel} className="workbench-materials" aria-label="审查材料"><header><div className="workbench-tools">{availableMaterials.map(view => <button key={view} type="button" aria-pressed={view === material} onClick={() => setMaterial(view)}>{view === 'gate' && document.gate?.key === 'approve-architecture' ? '架构方案' : view === 'gate' && document.gate?.key === 'approve-test-cases' ? '测试用例' : materialLabels[view]}</button>)}</div><button type="button" aria-label="关闭材料" onClick={closeMaterial}><X size={16} /></button></header>

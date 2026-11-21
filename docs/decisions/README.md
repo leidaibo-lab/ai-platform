@@ -2,6 +2,8 @@
 
 本目录保存平台能力的方案发现、验证和选择证据。记录用于回答“为什么这样选”和“为什么没有使用其他方案”，不能只描述最终实现。
 
+[统一 Team Loop 信封、返工 Port 与项目 Adapter 注册表](./2026-11-21-unified-team-loop-and-project-adapters.md)已接受。公共 Kernel 仅做纯决策，Mastra Store 继续持有运行事实。
+
 [MR 交付边界](./2026-11-19-merge-request-delivery.md)已接受。默认 Workflow 在创建并核对 MR 后结束。
 
 [三层 Harness 与跨团队编排](./2026-11-19-three-layer-harness.md)已接受。对应主架构图、代码入口和验证范围。

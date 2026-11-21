@@ -1,121 +1,115 @@
 # AI 应用基础平台 v2.0
 
-根目录使用完整 Mastra Agent、Workflow 和 LibSQLStore 作为主线应用。原自研 Runtime、Demo、
-LiteLLM 和 pi 适配实验保留在 `practices/custom-exploration/`，与主线独立管理依赖、配置和数据。
+以 **Mastra Workflow 为流程控制核心、Agent 为专业执行单元、Git 规格与保护检查为工程契约、Mastra Store 为运行事实源**的 AI 产研平台。将需求、方案、实现、独立测试和人工确认串成可追溯、可恢复的执行链；默认终点为提交并核验指向 `main` 的 MR，不默认自动合并或部署。
 
-## 当前入口与流程
+根目录是 Mastra 主线。原自研 Runtime、Demo、LiteLLM 和 pi 实验位于 `practices/custom-exploration/`，依赖、配置和数据独立，不能自动计入主线能力。
 
-### 主流程
+## 整体架构
 
-日常操作使用[产研工作台](http://127.0.0.1:4112/)：创建需求、回答澄清问题、阅读完整产品稿，并继续完成项目范围、开发方案和测试确认，查看最终 MR 回执。流程在同一个 `productDevelopmentWorkflow` Run 内推进，暂停与恢复事实由 Mastra Store 保存。
-
-需求从工作台进入，依次经过产品、研发、测试和交付团队。同一版本通过质量确认后，交付团队向 `main` 提交 MR 并核验回执。
+当前形态是模块化单体应用与独立工作台，不是每个 Agent 一个微服务。平台仓库负责执行与治理，被接入的业务 Git 仓库负责自己的规则、SDD、源码和保护检查。
 
 ```mermaid
 flowchart TB
-    Intake["产研工作台提交需求"] --> Align
-    subgraph Product["产品团队"]
-        Align["对齐需求"] --> Write["生成待审规格"]
-        Write --> Review["独立质量审查"]
-        Review --> Approve["人工审批与交接"]
-    end
-    Approve -->|批准当前版本| Dev["研发团队<br/>确认权限、审批方案、实施验证与独立代码评审"]
-    Dev -->|候选版本与研发证据| QA["测试团队<br/>确认用例、独立执行与人工质量确认"]
-    QA -->|同版本质量放行| Delivery["交付团队<br/>向 main 提交 MR 并核验回执"]
-    QA -->|代码缺陷返工| Dev
+    UI["产研工作台：项目、需求、审批、差异与证据"] --> APP["Mastra 应用 API 与主 Workflow"]
+    APP --> TEAMS["团队 Harness：产品 → 研发 → 测试 → 交付"]
+    PLATFORM["平台 Harness：权限、隔离、预算、完整性与恢复"] -.约束执行.-> TEAMS
+    TEAMS --> PORT["受控执行 Port：候选读写、固定检查、浏览器 QA 与 MR"]
+    APP <--> STORE[("Mastra Store：运行、审批、检查点与恢复事实")]
+    TEAMS --> MODEL["模型服务：推理、生成与评审"]
+    NACOS["Nacos：产品 Prompt / Skill 精确版本"] --> TEAMS
+    PROJECT["项目注册表 + Adapter：按 Run 冻结工程绑定"] --> APP
+    PROJECT --> PORT
+    GIT["业务工程 Harness：Git 中的 AGENTS、SDD、源码与保护检查"] --> PROJECT
+    PORT --> RESULT["正式规格、Run 分支、资产与 MR 回执"]
 ```
 
-[完整产研流程图与可编辑源图](./docs/application/unified-workflow.md#workflow-执行链路图)
+三层职责分别是平台执行治理、团队专业闭环、业务工程契约；跨团队调用由主 Workflow 负责。Agent 组合角色职责、版本化方法、任务上下文、模型和最小工具；检查、权限与交付门由确定性代码判断，人工决定不能由模型代替。
 
-### 主架构
+Mastra Store 是唯一运行事实源；Git 交接、资产目录、档案和页面是规格、产物或只读投影，不构成第二套审批或恢复引擎。详细角色、数据归属与证据链见 [Harness 架构](docs/application/harness-architecture.md)。
 
-主 Workflow 负责跨团队编排。平台 Harness 依托 Mastra 管理执行、审批与暂停恢复，团队 Harness 负责专业执行与验收，业务工程 Harness 通过项目适配提供 Git 中版本化的 SDD 和保护检查。
+## 产研工作流
 
-![Mastra 主架构：三层 Harness 与跨团队编排](./docs/assets/mastra-mainline-architecture.png)
+日常使用[产研工作台](http://127.0.0.1:4112/)。整个流程在同一个 `productDevelopmentWorkflow` 根 Run 下，通过原生子 Workflow、暂停和恢复推进。
 
-[Harness 架构说明与可编辑主图](./docs/application/harness-architecture.md#总体结构)
+```mermaid
+flowchart TB
+    START["选择登记项目并提交需求"] --> P1
+    subgraph PRODUCT["产品团队"]
+        P1["对齐需求：逐项澄清或 AI 主动补全"] --> P2["生成待审规格"]
+        P2 --> P3["独立质量审查"] --> P4{"人工审批与交接"}
+        P4 -->|退回| P1
+    end
+    P4 -->|批准当前版本| DEV["研发团队：核实规则、架构与任务、就绪审查、人工开工批准"]
+    DEV --> CODE["动态任务实现、固定检查、独立代码评审与研发交付门"]
+    CODE --> QA["测试团队：计划、人工确认用例、真实执行与质量确认"]
+    QA -->|代码缺陷经返工 Port| CODE
+    QA -->|业务规则缺口，受控回流| P1
+    QA -->|同版本质量放行| MR["交付：核验规格、候选与 QA，提交 Run 分支并核验 MR"]
+    CODE -->|越权、完整性问题或预算耗尽| STOP["人工处理 / 明确停止"]
+```
 
-### 运行与查阅
+图是业务语义概览，回流必须通过版本、证据和预算校验，不表示任意跳转。研发自检不等于独立测试，MR 不等于已合并或上线。详细关口与历史兼容见[完整产研流程](docs/application/unified-workflow.md)，动态组队与候选屏障见[研发内部执行图](docs/application/development-workflow-design.md#当前研发内部执行图)。
 
-研发团队由 `development-lead-agent`、按任务动态创建的 `development-implementer-agent` 和 `development-reviewer-agent` 组成。
+## 当前能力与边界
 
-新工作台输入显式批准自主开发策略：团队可在候选内运行登记检查、携带失败证据连续排障，多角色缺陷联合修复并重跑下游。默认3轮返工、72次开发模型调用、24次检查套件执行，连续2次重复失败且无新证据时停止；新增业务决定、扩大授权或预算耗尽升级人工。旧输入保持原政策。原生 Workflow 与真实隔离检查回归已验证，真实模型完整业务交付尚未验收。详见[自主开发与排障](./docs/application/unified-workflow.md#批准范围内自主开发与排障)及[决策记录](./docs/decisions/2026-11-09-mastra-autonomous-development.md)。
+| 领域 | 已接入主线 | 尚不能据此承诺 |
+| --- | --- | --- |
+| 专业协作 | 产品经理与独立审查、研发负责人/动态实现/独立评审、独立测试和 MR 交付 | 无人参与的全自动软件工厂 |
+| 受控自治 | 批准路径、受限委派、真实固定检查、有界返工与失败恢复 | 任意 shell、自由扩权或无限自修复 |
+| 公共 Team Loop | 研发与测试接入公共信封、纯决策和返工 Port | 所有团队已经统一执行内核或完全解耦 |
+| 多项目 | Run 级绑定贯穿产品上下文、候选、资产、归档、同步、后继与 MR | 完整多租户授权、跨进程创建幂等或生产多实例验收 |
+| 工程适配 | 登记 Node/Python 固定 Adapter；HRM 保留兼容 Docker 执行档 | 任意技术栈自动接入、完整环境跨机器复现 |
+| 方法与上下文 | 产品 Nacos 精确版本快照、研发本地方法锁、固定版本按需读取与调用级 Memory | 全团队已迁入 Nacos、共享跨项目长期记忆 |
+| 浏览器 QA | 批准候选静态 HTML 与资源的真实 Chromium 回执 | 任意动态全栈应用自动启动与业务验收 |
+| 交付与验证 | 同版本证据核验、Run 分支及 MR 回执机制 | 默认自动合并、CI/CD、部署；fixture 代替真实业务质量 |
 
-- [产研可视化框架](./docs/application/visual-framework.md)：以不同颜色展示主流程、Git 数据交接和 Nacos 资源传递。
-- [工作台输入与人工关口](./docs/application/guided-intake.md)：澄清、版本确认、后续表单与校验。
-- [产物归档与数据流转](./docs/application/artifact-dataflow.md)：项目/迭代/Run 关联、历史版本及下载；[产物查看页](http://127.0.0.1:4111/delivery-assets)只读。
-- [Studio 流程图](http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph)：技术调试与流程检查；日常人工确认可在工作台完成。
+以上区分“机制已实现”和“真实业务/生产验收”。具体历史结果以关联 ADR 和评测记录为准，不以测试数量代替能力结论。
 
-开发角色的单模型步骤时限为10分钟，每次 Agent 执行总时限为30分钟（`development-timeout.v3`），不把整个开发阶段或人工等待限制为30分钟。临时模型故障每轮最多5次尝试（含首次），退避后仍失败则原阶段暂停，可多轮人工继续；累计调用额度用完后可在前端填写追加次数，计数不清零。资料不再设置累计读取、初始目录或模型请求体字节门槛，也不要求资料升档确认。live 角色显式启用 Mastra 原生 Observational Memory，按执行独立线程观察和反思工具历史；原生压缩失败仍走检查点恢复。每次失败保存来源、实际触发时限、耗时、UTC时间与调用序号。历史未采集的细项不补猜；已有失败架构节点通过检查点/身份校验后可受控恢复，不跳过方案批准。
+## 快速启动
 
-## 运行档案
-
-新主流程自动将开始、阶段返回、暂停、失败和完成的观察记录保存到绑定业务仓库的 `product/catalog/runs/<RunId>/history/`。Studio Workspace 提供对应项目的运行档案。live 沿用产品阶段开关同步到 Run 交接分支；同步失败保留本地文件，可用 npm run run:archive -- sync <RunId> 补推。档案不迁移执行状态或填充另一台机器的 Recent runs。详见[运行档案说明](./docs/application/artifact-dataflow.md#2026-11-09项目运行档案)。
-
-## 角色资料交接
-
-绑定仓库的 live 主流程在角色交付时自动提交并推送 `codex/workflow/<根RunId>`，成功回执绑定 commit 与文件散列。推送失败在工作台暂停，可仅重试同步而不重新生成；fixture 不推送真实远端。“项目仓库管理”登记并校验本机项目 checkout，“远端同步设置”再为产品、技术方案、开发与评审、测试、发布五个阶段分别启停同步并选择已登记仓库；默认入口使用 HRM，显式登记项目的阶段同步使用其绑定仓库。管理页不接受凭据，保存时服务端核对 Git 根目录与 HTTPS origin；`MASTRA_REMOTE_SYNC_TARGETS` 仍可作为首次启动的初始字典。设置只作用于后续进入的节点，不改写已保存的 Run、审批或交接回执。当前路由粒度是阶段；要按前端/后端等动态开发角色拆仓，需要先让角色任务形成独立交付节点与路由键，不能仅靠页面配置假装已经隔离。Agent 默认接收任务和资料目录，按需分段读取固定版本原文，并由 Mastra 原生观察记忆管理执行中的上下文。历史审批与恢复快照仍兼容保留。详见[远端交接说明](./docs/application/artifact-dataflow.md#2026-11-08远端交接与按需上下文)。
-
-## 原生上下文管理
-
-`@mastra/memory@1.41.0` 与 `@mastra/core@1.81.0` 配合，由统一工厂装配产品、开发v2、独立测试和部署角色。观察器和反思器使用当前角色同一模型及出口，不自动切换服务商。每次调用/重试使用独立线程；默认在估算的 24000 消息 token 触发同步观察、12000 观察 token 触发反思。这些是内部压缩阈值，不是资料容量或人工审批门槛；provider 溢出时启用原生观察后重试。
-
-资料仍按固定版本分页读取，单次返回有界、累计不限。压缩属于有损模型操作，会产生额外调用，不能保证任意模型窗口或业务事实零遗漏；原文可以重新读取，审批只认 Workflow 的保存事实。历史资料预算失败可直接从原检查点继续，无需升档。真实长资料任务的质量与成本仍需验证。
-
-## 启动
-
-使用 Node.js 24+，在仓库根目录安装依赖。标准流程默认启用 Nacos，先按下文和 `.env.example` 配置已发布的产品资源及只读账号；以下 fixture 命令显式关闭 Nacos，只验证本地固定流程。后端与前端分别保持一个终端运行；同一项目目录只启动一个 Mastra dev 实例。
+使用 Node.js 24+。在克隆的仓库根目录执行：
 
 ```bash
-cd /Users/Administrator/self-code/ai-platform
 npm ci --ignore-scripts --no-audit --no-fund
 npm --prefix web ci --ignore-scripts --no-audit --no-fund
+```
 
-# 终端一：无密钥固定模式，使用独立数据目录。
+后端与前端分别保持一个终端；同一项目目录只启动一个 Mastra dev 实例。
+
+```bash
+# 终端一：固定响应模式，关闭 Nacos，不调用真实模型。
 NACOS_RESOURCES_ENABLED=false MASTRA_MODE=fixture MASTRA_DATA_DIR=.data/fixture npm run dev
 
-# 终端二：启动产研工作台。
+# 终端二：工作台，代理到 127.0.0.1:4111。
 npm run review:dev
 ```
 
-打开工作台，填写需求与迭代标识。页面默认开启需求澄清；fixture 使用固定响应，只能验证控制流，不理解业务输入。阅读和恢复已有 Run 时，后端必须使用创建时的模式与数据目录。前端代理固定连接 `127.0.0.1:4111`。
+打开工作台，填写需求与迭代标识；注册表模式还需显式选择项目。fixture 不理解业务输入，只验证固定控制流；检查仍可能依赖对应 Adapter 的运行环境。查看和恢复 Run 需保持原模式、数据目录与受校验的工程/执行身份。
 
-## 配置真实模型
+- [工作台](http://127.0.0.1:4112/)：需求、人工关口和证据。
+- [Studio 流程图](http://127.0.0.1:4111/workflows/productDevelopmentWorkflow/graph)：技术调试。
+- [产物查看页](http://127.0.0.1:4111/delivery-assets)：只读资产与历史版本。
 
-只使用仓库根目录的 `.env`，按下表设置模型配置。进程环境变量优先。
+## 配置入口
 
-| 配置 | 默认 / 要求 |
+配置说明和示例见 [.env.example](.env.example) 与[运行配置指南](config/README.md#运行配置指南)。真实凭据只放本机根 `.env` 或进程环境，不能提交；进程环境优先，工作台不持有模型密钥。
+
+| 配置 | 用途 |
 | --- | --- |
-| `MASTRA_MODE` | `fixture`；显式设置 `live` 才调用远程模型 |
-| `OPENAI_API_KEY` | live 必填 |
-| `MASTRA_MODEL` | 真实模式必填；未匹配角色的默认模型，参见 `.env.example` |
-| `MASTRA_BASE_URL` | 可选 OpenAI-compatible API 基址 |
-| `MASTRA_PORT` | `4111`；修改后需同步前端代理 |
-| `MASTRA_DATA_DIR` | `.data`，相对仓库根目录，也可为绝对路径 |
-| `MASTRA_HRM_REPOSITORY` | 可选 HRM checkout 绝对路径；默认同级 `hrm`，origin 必须匹配 `leidaibo-lab/hrm` |
-| `MASTRA_REMOTE_SYNC_TARGETS` | 可选 JSON 数组，登记额外目标：`id`、`label`、`root`、`origin`；服务重启后在“远端同步设置”选择 |
+| `MASTRA_MODE` / `MASTRA_DATA_DIR` | 区分 fixture/live 与数据目录；live 会产生模型费用 |
+| `MASTRA_MODEL` / `MASTRA_BASE_URL` / `OPENAI_API_KEY` | 默认模型与服务出口；live 需显式配置 |
+| `MASTRA_PRODUCT_MODEL` / `MASTRA_DEVELOPMENT_MODEL` | 产品与研发角色覆盖；未设置时回退默认模型 |
+| `NACOS_*` | 默认启用的产品 Prompt / Skill 精确版本与只读访问；未配置时需显式关闭 |
+| `MASTRA_ENGINEERING_PROJECTS` | 多项目注册表；客户端仅提交 ID，初始化冻结 Run 绑定 |
+| `MASTRA_ENGINEERING_PROJECT` | 历史单项目入口，与多项目配置互斥 |
+| `MASTRA_HRM_REPOSITORY` | 未登记项目时的 HRM 兼容 checkout，默认同级 `hrm` |
+| `MASTRA_REMOTE_SYNC_TARGETS` | 历史远端同步目标初始字典；登记项目按自身 Run 绑定路由 |
 
-配置真实模型后，先运行 `npm run smoke:live` 检查终答与实际工具调用，再启动后端：
+登记项目需在固定 commit 中提供三份 SDD 和 `specs/engineering.json`，不能只填写仓库地址就自动开放实现；无工程骨架时可先只读规划，准备缺口未解除不得实施。[项目登记与 manifest](docs/application/harness-architecture.md#登记业务工程项目)解释文件规则、Adapter 和恢复约束。
 
-```bash
-MASTRA_MODE=live MASTRA_DATA_DIR=.data/live npm run dev
-```
+真实模式先按配置指南准备模型、Nacos 和明确授权的工程/同步环境，再执行 live 冒烟或启动。live 冒烟会调用真实模型；阶段同步和 MR 可能写远端，不能把 fixture 的无远端写入边界套到 live。服务当前仅供本机使用；本机账号及人工关口见[工作台说明](docs/application/guided-intake.md)。
 
-真实模式会产生模型调用费用。前端不持有模型密钥。服务仅供本机使用。工作台左下角的账号菜单可设置本机账号并登录，产品生成中的纠偏从底部输入框提交，提交人由登录会话记录。每个数据目录支持一个账号，重启后需重新登录。其他人工关口仍使用本地审阅标签。
-
-## 当前执行边界
-
-HRM 项目由服务端自动关联当前仓库、分支和版本。用户确认项目后，开发 Agent 根据需求决定具体改动路径和团队，方案批准后才实施。HRM 候选通过 Docker/Compose 执行完整的 `pnpm check`、`pnpm build` 和 `pnpm smoke`，数据库为独立临时实例；检查脚本、依赖清单和锁文件受保护。旧 Node fixture 执行器保留兼容。
-
-只有产品资料、尚未建立工程骨架的仓库也可先交接生成方案。工作台逐项列出工程文件、固定脚本及 Docker 的准备缺口；这些缺口随本次输入保存，存在时仅允许只读规划，不能批准实施或执行检查。工程准备完成后，使用“重新检查项目，继续交接”返回同一 Run 的项目确认关口；保留产品批准，重新确认当前仓库版本后再规划。不会自动创建工程骨架。
-
-可在本目录运行 `npm run verify:hrm -- /Users/lei/code/hrm` 重新验证当前基线，要求 Docker Desktop 可用。结果保存到忽略的 `.data/hrm-verification-result.json`。2026-11-08 三项真实基线检查通过；这不代表招聘业务已实现或全部业务验收通过。候选代码尚未自动回写 HRM，Git 回库和 CI 制品绑定仍未接通。独立测试会重跑登记套件，人工用例需要实际结果和证据。
-
-默认流程在同版本 QA 放行后向 `main` 提交 MR。宿主通过已授权的 Git 和 GitHub CLI 会话推送候选到 Run 分支，核验 MR 回执后结束本轮。自主合并、CI/CD、部署和回滚属于后续规划。旧部署试点 Run 可使用 `MASTRA_LEGACY_DEPLOYMENT=true` 加载原图恢复。真实业务全链路和生产多实例尚未验收。
-
-HRM 的 `product/sources/` 为产品资料来源；阶段投影分别归档到 `product/`、`testSet/`、`deploy/`。归档文件只供查看，审批和恢复以 Mastra Store 为准。
-
-## 维护与评测
+## 开发与验证
 
 ```bash
 npm run check
@@ -125,42 +119,45 @@ npm run smoke
 npm run build
 ```
 
-这些是可执行的检查命令，不表示本次文档整理重新运行了它们。测试数量和具体通过结果以对应验证记录为准，固定模型控制流、真实模型质量与实际工程交付分别记录。
+默认启用 Nacos；未配置资源的构建环境可显式使用 `NACOS_RESOURCES_ENABLED=false npm run build`，仅作用于该进程。部分工程回归需要 Python 或 Docker，按对应案例准备。命令列表不表示本次文档整理重跑了所有检查。
 
-- [需求工作台验证证据](./docs/application/guided-intake.md)
-- [开发角色评测](./evaluations/native/development-nodes/README.md)、[独立评审与返工](./evaluations/native/review-rework/README.md)
-- [招聘管理验证项目](./projects/pm-hrm-recruitment/README.md)
-- [资源配置归属](./config/README.md)与[资源输入契约](./config/runtime-resource-contract.md)：配置规范仍是定义稿，未作为统一运行时配置加载。
-- [产品角色与 Skill](./src/mastra/agents/product-roles.ts)、[PM 技能套件](./.agents/skills/README.md)、[第三方声明](./web/THIRD_PARTY_NOTICES.md)
+固定控制流、真实工程执行、真实模型质量与生产验收分别记录。评测见 [evaluations/](evaluations/README.md)；模型调用、费用、远端写入和生产操作需明确处理。贡献规则见 [AGENTS.md](AGENTS.md)，行为变化先更新 OpenSpec，决策依据进入 ADR。
 
-Mastra 提供 Agent、工具循环、Workflow 与存储；主线维护业务 schema、版本绑定、人工关口、权限边界和 I/O 适配。不将文件投影另建为审批库，不以评测计数替代业务质量验收。
+HRM 兼容基线可用 `npm run verify:hrm -- /path/to/hrm` 单独检查，需要 Docker；结果是登记工程检查证据，不等于业务验收或部署授权。
 
-## 研发执行说明
+## 代码目录
 
-[独立开发设计](./docs/application/development-workflow-design.md)补充研发团队的受限执行说明；当前操作统一以上文工作台与完整产研流程为准。
-
-### 按角色配置模型
-
-模型选择集中在根 `.env`，示例见 [.env.example](./.env.example)：
-
-```dotenv
-MASTRA_MODEL=openai/gpt-5.6-sol
-MASTRA_PRODUCT_MODEL=openai/gpt-6-luna
-MASTRA_DEVELOPMENT_MODEL=openai/gpt-5.6-luna
+```text
+web/                         工作台
+src/mastra/                  应用装配、Agent、主编排与平台机制
+src/intake/                  需求、澄清、纠偏、恢复与时间线
+src/team/                    公共团队信封与纯 Loop 决策
+src/development/v2/          研发角色、任务、动态团队、预算与门禁
+src/business-engineering/    项目注册、SDD、规则与 Adapter
+src/browser-qa/              批准候选的浏览器验证
+src/delivery/                独立测试、资产、归档、同步与 MR
+src/evaluation/              原生评分器与节点评测
+.agents/skills/development/  本地版本化研发方法
+nacos-resources/product/     产品方法资源与清单
+openspec/                    稳定行为契约与变更
+docs/decisions/              架构决策
+tests/ evaluations/ scripts/ 回归、评测与维护
+practices/custom-exploration/ 独立探索实践
 ```
 
-复用 Mastra 原生 Agent 的 model 配置。产品经理和产品审查 Agent 使用产品覆盖；研发团队及其评审/委派角色使用开发覆盖；其他角色和评测裁判使用默认模型。角色变量缺省或为空时回退 `MASTRA_MODEL`。真实模式要求显式设置默认模型；fixture 缺少默认配置时仅使用模拟模型占位标识。代码不内置上述业务模型名称，端点和凭据沿用原配置。
+## 专题文档导航
 
-重启实践服务后生效。开发恢复身份记录实际开发模型，切换开发模型后旧 Run 的身份校验可能拒绝继续，应使用新 Run。模型可用性与真实质量仍需上游验证。
+| 需要了解 | 阅读入口 |
+| --- | --- |
+| 三层职责、Agent 组合、事实所有权、AI 工程化证据链 | [Harness 架构](docs/application/harness-architecture.md) |
+| 产品、研发、测试、交付和人工关口 | [完整产研流程](docs/application/unified-workflow.md)、[工作台](docs/application/guided-intake.md) |
+| 动态组队、依赖并发、检查与研发交付门 | [研发执行设计](docs/application/development-workflow-design.md#当前研发内部执行图) |
+| 公共 Team Loop、Node/Python、Run 级多项目路由 | [Team Loop 与项目 Adapter](docs/application/team-loop-architecture.md) |
+| Git 交接、Nacos 冻结与按需上下文 | [流程与资源流](docs/application/visual-framework.md) |
+| 资产下载、Run 档案、远端同步与恢复边界 | [产物归档与数据流](docs/application/artifact-dataflow.md) |
+| 模型、Nacos、上下文及配置权威入口 | [配置指南](config/README.md)、[角色资源清单](docs/application/agent-resource-inventory.md) |
+| 浏览器安装、批准用例及回执限制 | [浏览器 QA](docs/application/browser-qa.md) |
+| 需求契约与决策依据 | [稳定规格](openspec/specs/project-mainline/spec.md)、[ADR 索引](docs/decisions/README.md) |
+| 实验和评测结论 | [评测入口](evaluations/README.md)、[招聘管理验证项目](projects/pm-hrm-recruitment/README.md) |
 
-### Nacos 产品方法资源
-
-默认启用。新建产品 Run 使用 Nacos 3.3 的 Prompt 和 Skill，在根 `.env` 中按示例设置服务地址、命名空间、只读账号及明确的资源名称和版本；缺少配置时启动失败。先在 Nacos 完成审核和发布；应用不负责发布资源。服务端在 Run 初始化时读取并保存正文、参考文件与 SHA-256，产品需求澄清、写作和审查从快照装配，不再追加本地产品方法套件；调用前重新确认相同版本可访问且内容未改变，资源下线、撤销或注册中心不可用时停止调用。远端内容不授予额外工具或审批权限。
-
-可通过 `NACOS_REVIEW_PROMPT_NAME` 和 `NACOS_REVIEW_PROMPT_VERSION` 为产品审查角色指定独立 Prompt；缺省时共用产品 Prompt。通过 `NACOS_ADDITIONAL_SKILLS` 配置额外 Skill 的名称与版本数组，最多额外 127 个，冻结内容总计不超过 8 MiB。可通过 `NACOS_REVIEW_SKILLS` 指定审查角色使用的已登记 Skill 名称子集；未配置时两角色共享全部 Skill，空数组表示审查角色不加载 Skill。绑定进入 Run 快照和审批身份，配置变更只作用于新 Run；发布到 Nacos 的资源需先自行完成治理和授权。
-
-此前本地的 113 项产品方法不会自动迁移或装入新 Run；需要使用时先将对应 Skill 发布到 Nacos，再将其名称和版本加入配置。构建环境若不提供 Nacos 配置，可显式设置 `NACOS_RESOURCES_ENABLED=false` 执行构建；这只影响该构建进程。
-
-旧 Run 没有快照时沿用原本地资源；已启用 Nacos 的 Run 恢复需要可访问原服务、相同版本及可用凭据。配置变更只影响新 Run 的选择，切换服务地址会阻断旧 Run。隔离评测或历史兼容可显式设置 `NACOS_RESOURCES_ENABLED=false`。研发阻塞回流调用产品角色时也使用原产品 Run 快照；研发、测试、部署等自身角色仍使用原有资源，MCP 暂不接入。单机集成和生产权限配置、真实模型质量需按实际环境单独验收。
-
-浏览器 QA 已接入主 Workflow：在测试用例批准关口显式选择 browser，执行真实 Chromium 并在质量关口查看截图与版本绑定回执。安装、示例与边界见[浏览器 QA](./docs/application/browser-qa.md)；首版限候选静态 HTML，HRM 全栈需后续启动 Adapter。
+README 提供入口，架构文档解释机制，AGENTS 约束协作，OpenSpec 定义行为契约，ADR 记录决策。配置盘点 JSON 是审计快照，不是可直接修改权限或审批的运行时配置；边界见[资源接入定义](config/runtime-resource-contract.md)。

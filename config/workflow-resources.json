@@ -306,22 +306,22 @@
     "decision": "../../docs/decisions/2026-11-07-mastra-resource-contract.md"
   },
   "evidenceFileHashes": {
-    "artifact-dataflow.md": "ec78b899493306ff436f44f00b765e550f41fb6a36f1aae77028ef9fe7bef9aa",
-    "src/delivery/asset-identity.ts": "781786dee3aed93becb08c8f2381531349414f96223d060a458f2305e0bd5c3e",
+    "artifact-dataflow.md": "1141785ac796346a1802f0730a3a3ac8f491dca729119d2626956d9eb14e47cc",
+    "src/delivery/asset-identity.ts": "c5293c5cb441882556cb14b8fbe18e656cd87a54a480f15c2acc21ae50aae572",
     "src/delivery/contracts.ts": "f8ec1b469c2a312b5f91d63267163093e99441efd68938dc80d2ac61c22ca8fc",
     "src/delivery/deployment.ts": "a79daea118cd55d4bbeb5c2f2d64590e44296c0a251225fd41a390619ba21a94",
     "src/delivery/repository-assets.ts": "42468a4b00072ab68e83ad5f64311d3ab748cf7b7fcf2d414221df7365fe02d5",
-    "src/delivery/testing.ts": "ab7a2831a33286ae2861fc591f6a47c0c8328e0f7d73f76e2236f4693085e384",
-    "src/development/v2/agents.ts": "848893c69c3587ec894945dc1f5ce17d37dfc0639aa32233e10e4021d52e325f",
-    "src/development/v2/contracts.ts": "4b7ac4f4ca9d680cc39ae8f07a0c59e53f62f77c916e495fce9f74cf3cc84570",
+    "src/delivery/testing.ts": "ed8e512c1c1342d3d45cdbc3ffdf539f6446308db4508ae5b4f5ef7027cde0bb",
+    "src/development/v2/agents.ts": "9f161c5126b1e0cff455f13054b6875f8dc6f82a0f82159c53423aa9055273e4",
+    "src/development/v2/contracts.ts": "acf66667ca86621a8f7879785a6cd67ef603347dda7b0ffce1c9654aafb5f67f",
     "src/development/v2/execution-scope.ts": "4356c09ae90e813922a4772d46f170a22dce6e87cf08825d6494697e5571aaea",
     "src/development/v2/method-lock.json": "0cda61f5dfef9d30e16acc48ec7863da3338a4d1744f5f14770bc11a7a772090",
     "src/development/v2/methods.ts": "a90b8b16b4466d791476279a0d2708460c5acccf11c5f5b280b308d61ba6500c",
     "src/development/v2/team.ts": "f4f166b27c9fd765e63025f7a578868187bb65cf218577166828000e80de6b81",
     "src/mastra/agents/product-roles.ts": "165ea86ae17f8ef03b63993afa046c9e720c8371c0547e82477799c0470a733d",
     "src/mastra/agents/skills.ts": "229aad7ec3270f85257d31bea3d31607c33de852b8e0f69fa0a65549333e0455",
-    "src/mastra/app.ts": "0201cf09af7bb2f788b700d9ba6aa7da6c3884d357401847feac9ba8d88eb5f4",
-    "src/mastra/config.ts": "17c412d9210c9a69b851a672826f8e63a0e81a83dc34c36fbf3a8562565fb1d1",
+    "src/mastra/app.ts": "0c3f03c34ae8257f34d66d530c27d0e79c3017a8b6e1751e81436cca7012453d",
+    "src/mastra/config.ts": "0a3639cdda045b0c598396d7beb85d6bafc3fc57e31b559c00b32a6525cf917c",
     "src/mastra/workflows/delivery.ts": "52fc4965446348dd7ba344ade9badc9b08d4f472bd7a91bc254b3e9ca9592f66"
   }
 }

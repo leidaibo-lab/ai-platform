@@ -58,9 +58,9 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
       return { ...next, formalSpecifications: [...(next.formalSpecifications ?? []), receipt] };
     },
   });
-  const phases = createProductManagerPhases(agents, config.mode, bind, projectRepositoryRoot(config),
+  const phases = createProductManagerPhases(agents, config.mode, bind, () => projectRepositoryRoot(config),
     /** 调用前复核授权并从 Run 快照装配。 */
-    async resources => resolveProductAgents(config, resources, storage), projectSpec(config, 'product'),
+    async resources => resolveProductAgents(config, resources, storage), () => projectSpec(config, 'product'),
     config.legacyProductWorkflow ? 'legacy' : config.nestedProductWorkflow ? 'nested' : config.nativeThreeStageProductWorkflow ? 'native' : 'flat');
   const team = createWorkflow({ id: 'product-team', description: productSteps.map(step => step.title).join(' → '), inputSchema: deliverySchema, outputSchema: deliverySchema });
   if (phases.graph === 'flat') return team.then(phases.align).then(phases.writing).then(phases.qualityReview).then(bind(review)).commit();

@@ -101,7 +101,7 @@ flowchart TB
     linkStyle 0,1,2,3,4,5,6,7,8,9,10,11,12 stroke:#097868,stroke-width:2px
 ```
 
-- 默认 HRM 使用 `product/sources/` 的只读 Workspace。登记项目从固定 Git commit 加载产品、开发、测试 SDD、候选源码与保护检查。项目授权由服务端核对目录散列。
+- 默认 HRM 使用 `product/sources/` 的只读 Workspace。登记项目从固定 Git commit 加载产品、开发、测试 SDD、候选源码、保护检查，以及根目录和候选路径祖先目录中适用的 `AGENTS.md`。项目规则按目录层级冻结为只读 `instructionFiles`，上下文 Agent 的真实读取回执进入 Run 证据；项目授权由服务端核对目录散列。
 - 阶段资料使用 `<area>/runs/<根RunId>/<stage>/<hash>/` 保存。产品与研发资料归 `product`，测试归 `testSet`，发布与最终交付归 `deploy`。
 - 候选代码通过 `candidate-files.json` 等资料形成交付副本，不自动合入业务源码主分支；实际开发修改发生在隔离候选目录。
 - HRM 兼容配置支持按阶段选择远端目标。显式登记项目的阶段同步使用绑定仓库。Live 正式规格沿同一能力命名 Run 分支追加。

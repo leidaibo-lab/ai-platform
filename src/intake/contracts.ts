@@ -69,9 +69,39 @@ export function collectConfirmedDecisions(intake: Intake): ConfirmedDecision[] {
   });
   return decisions;
 }
+/** 评估仅消费已提交的回答和补充；原始逐轮问题卡继续保存在 Workflow 快照。 */
+export function assessmentHistory(intake: Intake) {
+  return intake.history.map((entry, index) => ({
+    round: index + 1,
+    reviewer: entry.response.reviewer,
+    action: entry.response.action,
+    supplement: entry.response.supplement,
+    answers: entry.response.answers.map(answer => ({
+      question: entry.plan.questions.find(question => question.id === answer.questionId)?.title ?? answer.questionId,
+      selected: answer.selected.map(id => entry.plan.questions.find(question => question.id === answer.questionId)?.options.find(option => option.id === id)?.label ?? id),
+      custom: answer.custom,
+    })),
+  }));
+}
 /** 最新分析各业务维度均明确且没有必答缺口时，才允许请求结束澄清。 */
 export function canFinalizePlan(plan: z.infer<typeof planSchema>): boolean {
   return !!plan.maturity && Object.values(plan.maturity).every(/** 每个维度均需有判断。 */item => item.clear) && !plan.questions.some(/** 必答问题仍然表示关键缺口。 */question => question.required);
+}
+/** 已明确受限研发范围时，只将重复的公司书面治理制度归入发布待决，不降级其他业务问题。 */
+export function classifyPublicationDependency(plan: z.infer<typeof generatedPlanSchema>, history: Intake['history']) {
+  const governance = history.some(entry => entry.response.answers.some(answer =>
+    /governance|data_lifecycle|resume-retention/i.test(answer.questionId)
+    && /合成数据|合成资料/.test(answer.custom)
+    && /真实.*(关闭|禁止|受阻)|不得导入真实/.test(answer.custom)
+    && /书面|法务/.test(answer.custom)));
+  if (!governance || !plan.maturity.decisions.clear || !plan.maturity.mainFlow.clear || !plan.maturity.exceptions.clear) return plan;
+  const repeated = plan.questions.filter(question => question.required && /governance[_-]?policy|data[_-]?lifecycle/i.test(question.id) && /书面|保留|隐私/.test(question.title));
+  if (!repeated.length || plan.questions.some(question => question.required && !repeated.includes(question))) return plan;
+  return generatedPlanSchema.parse({
+    ...plan,
+    questions: plan.questions.map(question => repeated.includes(question) ? { ...question, required: false, decision: { blocks: 'none', reason: '仅合成数据研发验收；公司制度仍阻断真实资料导入和正式发布', unanswered: question.decision.unanswered } } : question),
+    maturity: { ...plan.maturity, delivery: { clear: true, evidence: '本期受控研发与验收范围已收敛，可进入待审双文档写作；尚未生成的正文由后续节点完成。公司书面治理制度仍是发布阻断项，不得导入真实资料。' } },
+  });
 }
 /** 散列绑定原始需求、轮次、建议与历史，避免旧卡片答案用于新方案。 */
 export function intakeHash(brief: string, intake: Intake): string {

@@ -30,7 +30,7 @@ export function InlineClarificationNode({ questions, questionKey, answers, activ
       <label>补充输入<textarea rows={3} value={supplement} maxLength={4000} placeholder="补充你的判断或边界" onChange={/** 补充与当前问题回答一并保存。 */event => onSupplementChange(event.target.value)} /></label>
     </fieldset>
     <div className="inline-confirmation-actions">
-      <label>确认人（本地标签）<input disabled={disabled} value={reviewer} maxLength={100} onChange={/** 标签不暗示认证身份。 */event => onReviewerChange(event.target.value)} /></label>
+      <p>确认人：{reviewer || '请先登录工作台'}</p>
       {draftPersisted === true && <small role="status">草稿已保存在此标签页，刷新后可恢复。</small>}
       {draftPersisted === false && <small role="status">草稿未能保存到浏览器，请提交后再离开。</small>}
       <p className="run-activity-copy">提交后会检查业务缺口。有缺口时继续澄清，满足条件后生成产品稿。</p>

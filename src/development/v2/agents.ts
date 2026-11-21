@@ -42,7 +42,7 @@ export function developmentAgentKind(role: RoleV2): DevelopmentAgentKind | null 
 /** 对只读角色给出结构化职责；开发原有职责与权限继续复用。 */
 const instructions: Record<RoleV2, string> = {
   ...developmentInstructions,
-  context: '你核实项目上下文。根据提供的实际候选文件与批准产品，返回JSON {rules:[{text,refs}],unknowns:[]}。rules[].refs只能选择knownRefs里的完整字符串，例如file:AGENTS.md、product:L1；不允许裸文件名、material编号及其行号、Skill名称或方法文档路径。方法说明不是项目规则的事实来源；没有可用引用的内容保留unknowns。无法证实的规则不当作事实。优先用readFile读取project.files列出的候选文件；工程参考快照用handoff工具读取，不把参考路径当作候选路径。source、requirements、extra及远端交接可能含同一份产品或文件，核对一次即可，不必重复通读。核对 project.engineeringAssessment 的技术栈证据及工程缺口，区分文件未发现、未纳入安全读取、技术栈不匹配和证据不足；无法证实的结论保留 unknowns。不探测未登记路径，不在本阶段写入或实施。',
+  context: '你核实项目上下文。开工先按 project.instructionFiles 的既定顺序用readFile读取全部项目AGENTS.md；根规则先读，更具体目录规则只约束其目录范围。缺少任何一次实际读取都不能提交结果。根据提供的实际候选文件与批准产品，返回JSON {rules:[{text,refs}],unknowns:[]}。rules[].refs只能选择knownRefs里的完整字符串，例如file:AGENTS.md、product:L1；不允许裸文件名、material编号及其行号、Skill名称或方法文档路径。方法说明不是项目规则的事实来源；没有可用引用的内容保留unknowns。无法证实的规则不当作事实。随后按任务需要用readFile核实project.files中的候选文件；工程参考快照用handoff工具读取，不把参考路径当作候选路径。source、requirements、extra及远端交接可能含同一份产品或文件，核对一次即可，不必重复通读。核对 project.engineeringAssessment 的技术栈证据及工程缺口，区分文件未发现、未纳入安全读取、技术栈不匹配和证据不足；无法证实的结论保留 unknowns。不探测未登记路径，不在本阶段写入或实施。',
   architect: '你是架构师，输出完整JSON技术方案。字段为summary,coverage:[{requirement,behavior,verification}],contracts,tasks,blockers,risks。每个task包含id,role,paths,dependsOn,requirementRefs,acceptanceRefs,contextRefs,constraints,verificationRefs。严格按referenceGroups分别取值：requirementRefs和acceptanceRefs只能取requirements；contextRefs只能取contextFiles中的file:路径，不得使用产品行号或rules.refs代替；verificationRefs只能取registeredChecks。REQ- ID 是批准稿声明的可验收条目，旧 product:L ID 是原文阅读范围；逐项审阅其内容，无blockers时全部ID须至少被一项任务的requirementRefs或acceptanceRefs引用，不能仅罗列ID冒充语义覆盖。精确分配已授权文件并按拓扑排序。project.planning=agent时，writablePaths只是现存文件上界，不要求全部修改；自行确定最小必要文件和角色，可在writableRoots源码根内创建新文件，但不能更改checkFiles。技术栈未确定或不匹配时，先列出项目适配及工程准备所需的证据和步骤，不假定应创建pnpm项目；配置、锁文件和检查脚本的准备须单独授权并独立验证，不得修改受保护检查或降低标准。业务规则缺失列blockers，不补猜。不得授予写权限或批准。',
   readiness: '你独立评估是否能不臆造决定就实现。双向检查产品、上下文、任务的覆盖、契约冲突、异常与验收。只输出JSON {verdict:"PASS"|"CONCERNS"|"FAIL",findings:[{id,severity:"blocking"|"high"|"medium"|"low",category:"business"|"architecture"|"implementation"|"verification"|"integrity",route:"product"|"architecture"|"frontend"|"backend"|"infrastructure"|"human",detail,refs,evidence}],coverageRefs,unchecked,resolutions:[]}。PASS必须无发现；CONCERNS/FAIL必须有发现。引用只能取knownRefs。coverageRefs必须逐一包含全部requirements中的原文ID以及plan.tasks中每个任务对应的task:任务ID；如有未能核实的范围同时写入unchecked，不得遗漏ID或编造已执行的验证。',
   reviewer: '你是与实现者分开的只读代码评审员。评估批准意图、实际源码变化、异常边界和真实检查的验证缺口。输出与readiness相同的JSON，coverageRefs覆盖全部原文与任务ID，unchecked公开未审范围。发现必须有具体坏结果、路径引用和证据。复查priorReports的每条旧发现；已修复可在resolutions返回{findingId,decision:"fixed",reason,refs}，不得删除原始发现或无证据关闭。不能用PASS抹掉旧问题；无法核实应保留问题，不冒充独立测试。',
@@ -70,14 +70,18 @@ function fixtureModel(role: RoleV2, state: StateV2, paths: string[], assigned: R
   for (const { skill, reference } of assigned) calls.push({ name: 'skill', input: { name: skill.name } }, { name: 'skill_read', input: { skillName: skill.name, path: `references/${reference}` } });
   if (['frontend', 'backend', 'infrastructure'].includes(role)) {
     if (runtime?.delegate) calls.push({ name: 'delegateTask', input: { role, goal: '按批准任务实现当前文件并保留接口', paths } });
-    else for (const path of paths) calls.push({ name: 'readFile', input: { path } }, { name: 'writeFile', input: { path, content: '/** 固定fixture只验证工具链，不代表业务实现。 */\nexport function fixtureValue() { return 1; }\n' } });
-  } else calls.push({ name: 'readFile', input: { path: Object.keys(state.input.project.files)[0] } });
+    else for (const path of paths) calls.push({ name: 'readFile', input: { path } }, { name: 'writeFile', input: { path, content: state.input.project.adapterId === 'python-unittest.v1' ? 'def fixture_value():\n    """固定 fixture 只验证工具链，不代表业务实现。"""\n    return 1\n' : '/** 固定fixture只验证工具链，不代表业务实现。 */\nexport function fixtureValue() { return 1; }\n' } });
+  } else {
+    const instructionFiles = state.input.project.instructionFiles ?? [];
+    for (const path of instructionFiles) calls.push({ name: 'readFile', input: { path } });
+    if (!instructionFiles.length) calls.push({ name: 'readFile', input: { path: Object.keys(state.input.project.files)[0] } });
+  }
   const refs = state.requirements.map(
     // 固定样例完整引用批准原文，仅作为结构回归。
     (item) => item.id,
   );
   let output: unknown = { summary: 'fixture读取真实检查', route: state.input.project.roles[0] };
-  if (role === 'context') output = { rules: [{ text: 'fixture使用manifest文件边界；未做真实规则推理', refs: [`file:${Object.keys(state.input.project.files)[0]}`] }], unknowns: [] };
+  if (role === 'context') output = { rules: [{ text: 'fixture使用manifest文件边界；未做真实规则推理', refs: [`file:${state.input.project.instructionFiles?.[0] ?? Object.keys(state.input.project.files)[0]}`] }], unknowns: [] };
   if (role === 'architect') output = { summary: 'fixture有序任务包', coverage: [{ requirement: state.input.source.content, behavior: '按文件实现', verification: '已登记检查' }], contracts: '只写批准路径，不修改检查文件', blockers: [], risks: ['fixture未做真实架构推理'], tasks: state.input.project.writablePaths.map(
     // 各fixture文件独立实现；真实项目的依赖由架构 Agent 明确声明。
     (path, i) => ({ id: `fixture-task-${i + 1}`, role: state.input.project.roles[i % state.input.project.roles.length], paths: [path], dependsOn: [], requirementRefs: refs, acceptanceRefs: refs, contextRefs: [`file:${path}`], constraints: ['不扩大路径与命令权限'], verificationRefs: state.verificationRefs }),
@@ -207,6 +211,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
     }
     const endedAt = new Date().toISOString();
     const facts = projectToolFacts(result.toolResults);
+    if (role === 'context') assertProjectInstructionsRead(state.input.project.instructionFiles ?? [], facts.files);
     return { role, round: state.round, text: result.object ? JSON.stringify(result.object) : result.text, tools, files: facts.files, startedAt, endedAt, durationMs: Math.max(0, Math.round(performance.now() - invocationStarted)), steps: result.steps.length, modelId: result.response?.modelId ?? null, inputTokens: result.usage?.inputTokens ?? null, outputTokens: result.usage?.outputTokens ?? null };
   } finally { await storage?.close(); }
 }
@@ -214,6 +219,11 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
 export function contextOutputSchema(state: StateV2) {
   const refs = [...state.requirements.map(/** 产品引用绑定批准原文行。 */item => item.id), ...Object.keys(state.input.project.files).map(/** 文件引用绑定候选路径。 */path => `file:${path}`)];
   return contextDraftSchema.extend({ rules: z.array(contextDraftSchema.shape.rules.element.extend({ refs: z.array(z.enum(refs)).min(1) })).min(1) });
+}
+
+/** 项目规则必须有真实读取回执；正文自述或只读部分层级都不能进入规划。 */
+export function assertProjectInstructionsRead(instructionFiles: string[], readFiles: string[]) {
+  if (instructionFiles.some(path => !readFiles.includes(path))) throw new OutputValidationError({ stage: 'method', code: 'project-instruction-read-missing' });
 }
 
 /** 结构输出声明引用域和覆盖数量；实际逐项覆盖仍由宿主独立校验。 */

@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 export const outputDiagnosticSchema = z.object({
   stage: z.enum(['structured-output', 'method', 'schema', 'json', 'constraint', 'unknown']),
-  code: z.enum(['structured-output-invalid', 'method-load-missing', 'method-read-missing', 'schema-invalid', 'json-invalid', 'task-id-duplicate', 'role-unregistered', 'path-ownership-invalid', 'path-unauthorized', 'task-path-duplicate', 'path-handoff-unordered', 'dependency-invalid', 'path-ownership-missing', 'requirement-ref-unknown', 'context-ref-unknown', 'check-ref-unregistered', 'requirement-ref-missing', 'assessment-ref-unknown', 'assessment-finding-duplicate', 'assessment-route-unregistered', 'assessment-verdict-inconsistent', 'assessment-coverage-missing', 'output-invalid']),
+  code: z.enum(['structured-output-invalid', 'method-load-missing', 'method-read-missing', 'project-instruction-read-missing', 'schema-invalid', 'json-invalid', 'task-id-duplicate', 'role-unregistered', 'path-ownership-invalid', 'path-unauthorized', 'task-path-duplicate', 'path-handoff-unordered', 'dependency-invalid', 'path-ownership-missing', 'requirement-ref-unknown', 'context-ref-unknown', 'check-ref-unregistered', 'requirement-ref-missing', 'assessment-ref-unknown', 'assessment-finding-duplicate', 'assessment-route-unregistered', 'assessment-verdict-inconsistent', 'assessment-coverage-missing', 'output-invalid']),
   issues: z.array(z.object({ path: z.string().max(150), code: z.enum(['invalid_type', 'too_small', 'too_big', 'invalid_value', 'invalid_format', 'unrecognized_keys', 'custom', 'other']) })).max(12).optional(),
 });
 export type OutputDiagnostic = z.infer<typeof outputDiagnosticSchema>;

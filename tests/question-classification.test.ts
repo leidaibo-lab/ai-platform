@@ -1,7 +1,30 @@
 /** 分类契约与恢复边界：不调用真实模型，不改写历史问题和确认事实。 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generatedPlanSchema, planSchema, validateAnswers, intakeHash, canFinalizePlan, collectConfirmedDecisions } from '../src/intake/contracts.js';
+import { generatedPlanSchema, planSchema, validateAnswers, intakeHash, canFinalizePlan, collectConfirmedDecisions, assessmentHistory, classifyPublicationDependency } from '../src/intake/contracts.js';
+
+test('评估历史只包含显式回答与补充，保留轮次身份且不改写原历史', () => {
+  const question = { id: 'scope', title: '首期范围', reason: '确认范围', required: true, kind: 'single' as const, options: [{ id: 'small', label: '招聘闭环' }], recommendation: '推荐招聘闭环' };
+  const entry = { plan: planSchema.parse({ summary: '摘要', assumptions: [], questions: [question] }), response: { hash: 'a'.repeat(64), action: 'refine' as const, reviewer: '负责人', answers: [{ questionId: 'scope', selected: ['small'], custom: '含多轮面试' }], supplement: '仅合成数据' } };
+  const original = JSON.stringify(entry);
+  const history = assessmentHistory({ enabled: true, ready: false, round: 1, history: [entry] });
+  assert.deepEqual(history, [{ round: 1, reviewer: '负责人', action: 'refine', supplement: '仅合成数据', answers: [{ question: '首期范围', selected: ['招聘闭环'], custom: '含多轮面试' }] }]);
+  assert.equal(JSON.stringify(entry), original);
+  assert.equal(JSON.stringify(history).includes('推荐招聘闭环'), false);
+});
+
+test('已确认仅合成数据时重复治理制度题只阻断发布，其他业务缺口仍阻断产品稿', () => {
+  const governance = { id: 'governance_policy', title: '补充资料生命周期与隐私治理书面规则', reason: '真实数据上线需要制度', required: true, decision: { blocks: 'product', reason: '缺少书面规则', unanswered: '请提供制度' }, kind: 'text', options: [], recommendation: '取得书面规则' };
+  const clear = { clear: true, evidence: '业务范围已明确' };
+  const plan = generatedPlanSchema.parse({ maturity: { decisions: clear, mainFlow: clear, exceptions: clear, delivery: { clear: false, evidence: '正式文档尚未生成' } }, summary: '合成数据开发，真实数据发布阻断', assumptions: [], questions: [governance] });
+  const history = [{ plan, response: { hash: 'a'.repeat(64), action: 'finalize' as const, reviewer: 'test-human', answers: [{ questionId: 'governance_policy', selected: [], custom: '仅合成数据研发验收，真实资料入口关闭，书面制度未取得，法务确认后才正式发布' }], supplement: '' } }];
+  const classified = classifyPublicationDependency(plan, history);
+  assert.equal(classified.questions[0].required, false);
+  assert.equal(canFinalizePlan(classified), true);
+  assert.equal(canFinalizePlan(classifyPublicationDependency(plan, [])), false);
+  const extra = generatedPlanSchema.parse({ ...plan, questions: [governance, { ...governance, id: 'role_scope', title: '确认角色权限' }] });
+  assert.equal(classifyPublicationDependency(extra, history).questions[0].required, true);
+});
 import { generatedBlockerPlanForCount, generatedBlockerPlanSchema, validateBlockerPlan } from '../src/intake/blocker-contracts.js';
 import { createIntakeWorkflow } from '../src/intake/workflow.js';
 import { Mastra } from '@mastra/core';

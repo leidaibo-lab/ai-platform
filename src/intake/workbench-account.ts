@@ -1,5 +1,5 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { registerApiRoute, type ContextWithMastra } from '@mastra/core/server';
@@ -12,18 +12,37 @@ const username = z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,63}$/);
 const credentials = z.object({ username, password: z.string().min(12).max(128) }).strict();
 const storedAccount = z.object({ username, salt: z.string().regex(/^[a-f0-9]{32}$/), hash: z.string().regex(/^[a-f0-9]{128}$/) });
 type Account = z.infer<typeof storedAccount>;
+const storedSessions = z.record(z.string().regex(/^[a-f0-9]{64}$/), z.object({ username, expires: z.number().int().positive() }));
+type Sessions = z.infer<typeof storedSessions>;
 
 /** 仅接收工作台回环页面发出的账号写请求。 */
 function fromWorkbench(context: ContextWithMastra) {
   return context.req.header('origin') === 'http://127.0.0.1:4112';
 }
 
-/** 纠偏提交人取自短期会话，账号文件只保存密码派生值。 */
+/** 工作台身份绑定同一数据目录；只持久化令牌摘要和到期时间。 */
 export function createWorkbenchAccount(databaseUrl: string) {
   const path = databaseUrl === 'file::memory:' ? undefined : `${fileURLToPath(databaseUrl)}.workbench-account.json`;
+  const sessionsPath = path ? `${path}.sessions` : undefined;
   let memoryAccount: Account | undefined;
   let authenticating = false;
-  const sessions = new Map<string, { username: string; expires: number }>();
+  /** 每次读取磁盘事实，多个进程不会各自把旧内存会话当成有效登录。 */
+  function readSessions(): Sessions {
+    if (!sessionsPath) return memorySessions;
+    try { return storedSessions.parse(JSON.parse(readFileSync(sessionsPath, 'utf8'))); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      throw error;
+    }
+  }
+  let memorySessions: Sessions = {};
+  /** 使用同目录原子替换持久化会话表；写失败不得发出有效 Cookie。 */
+  function saveSessions(sessions: Sessions) {
+    if (!sessionsPath) { memorySessions = sessions; return; }
+    const temporary = `${sessionsPath}.${randomBytes(8).toString('hex')}.tmp`;
+    writeFileSync(temporary, JSON.stringify(sessions), { flag: 'wx', mode: 0o600 });
+    renameSync(temporary, sessionsPath);
+  }
 
   /** 读取当前数据目录的唯一账号，缺失时允许首次设置。 */
   function readAccount() {
@@ -44,20 +63,20 @@ export function createWorkbenchAccount(databaseUrl: string) {
   /** 读取尚未过期的身份，不接受请求正文的用户名。 */
   function current(context: ContextWithMastra) {
     const key = sessionKey(context);
-    const session = key && sessions.get(key);
+    const session = key && readSessions()[key];
     if (!session) return undefined;
-    if (session.expires > Date.now()) return session.username;
-    sessions.delete(key);
-    return undefined;
+    return session.expires > Date.now() && session.username === readAccount()?.username ? session.username : undefined;
   }
 
   /** 新会话替换当前浏览器的旧会话，退出时也在服务端撤销。 */
   function setSession(context: ContextWithMastra, name?: string) {
     const previous = sessionKey(context);
-    if (previous) sessions.delete(previous);
-    for (const [key, session] of sessions) if (session.expires <= Date.now()) sessions.delete(key);
+    const sessions = readSessions();
+    if (previous) delete sessions[previous];
+    for (const [key, session] of Object.entries(sessions)) if (session.expires <= Date.now()) delete sessions[key];
     const token = name ? randomBytes(32).toString('hex') : '';
-    if (name) sessions.set(createHash('sha256').update(token).digest('hex'), { username: name, expires: Date.now() + lifetimeSeconds * 1000 });
+    if (name) sessions[createHash('sha256').update(token).digest('hex')] = { username: name, expires: Date.now() + lifetimeSeconds * 1000 };
+    saveSessions(sessions);
     context.header('Set-Cookie', `${cookie}=${token}; HttpOnly; SameSite=Strict; Path=/intake-api; Max-Age=${name ? lifetimeSeconds : 0}`);
   }
 
@@ -102,8 +121,8 @@ export function createWorkbenchAccount(databaseUrl: string) {
       handler: async context => {
         context.header('Cache-Control', 'no-store');
         if (!fromWorkbench(context)) return context.json({ error: '请从本机工作台退出。' }, 403);
-        setSession(context);
-        return context.json({ username: null, setupRequired: false });
+        try { setSession(context); return context.json({ username: null, setupRequired: false }); }
+        catch { return context.json({ error: '退出未完成，请重试。' }, 503); }
       },
     }),
   ];

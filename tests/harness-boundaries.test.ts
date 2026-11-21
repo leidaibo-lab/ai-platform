@@ -117,6 +117,9 @@ test('登记的库存项目从正常工作台入口进入研发和测试，并�
     return execFileSync('git', ['-C', directory, '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   }
   const files = {
+    'AGENTS.md': '# 仓储项目规则\n\n- 开工先读取本文件。\n',
+    'src/AGENTS.md': '# 库存源码规则\n\n- 库存计算保持纯函数。\n',
+    'docs/AGENTS.md': '# 非候选目录规则\n\n- 不应自动进入本次研发上下文。\n',
     'specs/engineering.json': JSON.stringify({ version: 'node-test.v1', sources: ['src/stock.mjs'], writable: ['src/stock.mjs'], checks: [check] }),
     'specs/product-sdd.md': '库存范围以仓内差异为准。',
     'specs/development-sdd.md': '库存计算采用纯函数。',
@@ -131,8 +134,9 @@ test('登记的库存项目从正常工作台入口进入研发和测试，并�
       mkdirSync(dirname(join(directory, path)), { recursive: true });
       writeFileSync(join(directory, path), body);
     }
-    git('add', 'specs', 'src', 'test'); git('commit', '-qm', 'test(spec): 保存库存样例');
+    git('add', 'AGENTS.md', 'docs', 'specs', 'src', 'test'); git('commit', '-qm', 'test(spec): 保存库存样例');
     const revision = git('rev-parse', 'HEAD');
+    writeFileSync(join(directory, 'AGENTS.md'), '# 未提交规则不应进入固定版本\n');
     writeFileSync(join(directory, check), 'throw new Error("未提交的检查");\n');
     const engineeringProject = { id: 'warehouse', label: '仓储盘点', root: directory, origin, revision };
     const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${join(directory, 'workflow.db')}`, engineeringProject };
@@ -156,6 +160,13 @@ test('登记的库存项目从正常工作台入口进入研发和测试，并�
       const catalog = await (await router.request('/intake-api/project')).json();
       assert.equal(catalog.id, 'warehouse');
       assert.equal(catalog.revision, revision);
+      const loaded = loadEngineeringProject(engineeringProject);
+      assert.deepEqual(loaded.candidate.instructionFiles, ['AGENTS.md', 'src/AGENTS.md']);
+      assert.equal(loaded.candidate.files['AGENTS.md'], files['AGENTS.md']);
+      assert.equal(loaded.candidate.files['src/AGENTS.md'], files['src/AGENTS.md']);
+      assert.equal('docs/AGENTS.md' in loaded.candidate.files, false);
+      assert.equal(loaded.candidate.writablePaths.includes('AGENTS.md'), false);
+      assert.deepEqual(loaded.catalog.files.filter(file => file.area === 'rules').map(file => file.path), ['AGENTS.md', 'src/AGENTS.md']);
       for (const [role, path] of [['product', 'product'], ['development', 'development'], ['testing', 'test']] as const) {
         assert.equal(projectSpec(config, role)?.content, files[`specs/${path}-sdd.md`]);
       }
@@ -181,6 +192,11 @@ test('登记的库存项目从正常工作台入口进入研发和测试，并�
       const correlation = deliverySchema.parse(initial.output).correlation;
       assert.equal(correlation?.projectId, 'warehouse');
       assert.equal(correlation?.engineeringRevision, revision);
+      assert.equal(correlation?.adapterId, 'node-test.v1');
+      assert.equal(correlation?.adapterProfileVersion, 'adapter-profile.v2');
+      assert.equal(correlation?.adapterProfileHash, loaded.profile.hash);
+      assert.throws(() => assertProjectCorrelation(config, { ...correlation!, adapterProfileHash: '0'.repeat(64) }), /Adapter 绑定/);
+      assert.doesNotThrow(() => assertProjectCorrelation(config, { ...correlation!, adapterProfileVersion: undefined, adapterProfileHash: loaded.profile.legacyHash }));
       assert.throws(() => assertProjectCorrelation({ ...config, engineeringProject: { ...engineeringProject, id: 'other' } }, correlation), /业务工程绑定/);
       const updatedConfig = { ...config, engineeringProject: { ...engineeringProject, revision: '0'.repeat(40) } };
       assert.throws(() => assertProjectCorrelation(updatedConfig, correlation), /业务工程绑定/);
@@ -195,6 +211,8 @@ test('登记的库存项目从正常工作台入口进入研发和测试，并�
       const store = (await app.storage.getStore('workflows'))!;
       const workflowName = 'product-development';
       const source = (await store.loadWorkflowSnapshot({ workflowName, runId }))!;
+      const contextWork = source.result!.development.work.find((entry: { role: string }) => entry.role === 'context');
+      assert.deepEqual(contextWork?.files?.filter((path: string) => path.endsWith('AGENTS.md')), ['AGENTS.md', 'src/AGENTS.md']);
       const path = 'specs/product-spec.md';
       source.result!.development.input.formalSpecifications = [{ kind: 'product', paths: [path], upstreamCommits: [], handoff: { version: 'remote-handoff.v1', branch: formalRunBranch('stock', runId), commit: revision, files: { [path]: contentHash(files[path]) } } }];
       await store.persistWorkflowSnapshot({ workflowName, runId, snapshot: source });

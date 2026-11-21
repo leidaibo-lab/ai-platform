@@ -7,7 +7,7 @@
 <nav><label>项目<select id="project"></select></label><label>迭代<select id="iteration"></select></label><label>Run<select id="run"></select></label><label>阶段<select id="stage"></select></label><button id="refresh">刷新</button><a id="bundle" class="action">下载筛选结果 · JSON 包</a></nav>
 <div id="status" role="status">正在读取归档清单…</div><div class="grid"><section class="panel"><h2>阶段版本</h2><div id="list"></div></section><section class="panel"><h2 id="title">选择产物版本</h2><div id="meta"></div><a id="studio" hidden>查看 Mastra Run</a><div id="files"></div><a id="download">下载当前文件</a><pre id="preview">归档后可在这里查看产品文档、研发交接、测试用例、报告和发布记录。</pre></section></div></main>
 <script>
-let catalog={runs:[],assets:[]};let selectedId='';let previewRequest=0;
+let catalog={runs:[],assets:[]};let selectedId='';let previewRequest=0;let refreshRequest=0;
 /** 固定页面控件查找。 */
 function el(id){return document.getElementById(id)}
 /** 安全构造选项，所有业务正文都作为纯文本。 */
@@ -15,7 +15,7 @@ function options(id,values,first){const select=el(id);const saved=select.value;s
 // 保留仍存在的筛选项。
 (option)=>option.value===saved))select.value=saved}
 /** 展示文件时重新通过 API 校验完整性，切换版本后丢弃过期响应。 */
-async function preview(asset,name){const request=++previewRequest;el('preview').textContent='正在校验并读取…';el('download').style.display='none';const params=new URLSearchParams({id:asset.id,name});try{const response=await fetch('/delivery-assets/file?'+params);if(!response.ok)throw new Error((await response.json()).error);const content=await response.text();if(request!==previewRequest)return;el('preview').textContent=content;el('download').href='/delivery-assets/file?'+params+'&download=1';el('download').textContent='下载 '+name;el('download').style.display='inline'}catch(error){if(request===previewRequest)el('preview').textContent=error.message}}
+async function preview(asset,name){const request=++previewRequest;el('preview').textContent='正在校验并读取…';el('download').style.display='none';const params=new URLSearchParams({projectId:catalog.projectId,id:asset.id,name});try{const response=await fetch('/delivery-assets/file?'+params);if(!response.ok)throw new Error((await response.json()).error);const content=await response.text();if(request!==previewRequest)return;el('preview').textContent=content;el('download').href='/delivery-assets/file?'+params+'&download=1';el('download').textContent='下载 '+name;el('download').style.display='inline'}catch(error){if(request===previewRequest)el('preview').textContent=error.message}}
 /** 单个不可变版本的关联与文件清单。 */
 function show(asset){selectedId=asset.id;previewRequest++;const m=asset.manifest;el('title').textContent=m.stage+' · '+m.event;el('meta').textContent='项目：'+catalog.projectId+'\n迭代：'+(m.correlation?.iterationId||'未关联历史')+'\nRun：'+m.runId+'\n归档时间：'+(m.createdAt||'旧版未记录')+'\n模式：'+m.mode+'\n内容版本：'+m.projectionHash+'\n位置：'+asset.path+'\n审批信息仅为导出时投影';el('studio').hidden=false;el('studio').href='/workflows/productDevelopmentWorkflow/runs/'+encodeURIComponent(m.runId);el('files').replaceChildren();for(const name of Object.keys(m.files)){const button=document.createElement('button');button.textContent=name;
 // 每个按钮绑定当前清单文件名。
@@ -43,8 +43,8 @@ button.onclick=()=>show(asset);el('list').append(button)}const params=new URLSea
 // 刷新保留仍然可见的版本。
 (asset)=>asset.id===selectedId)||assets[0];if(selected)show(selected);else{previewRequest++;el('title').textContent='暂无归档产物';el('meta').textContent='新 Run 启动时登记迭代；各角色节点完成或暂停后自动归档。现有历史 Run 不会自动迁移。';el('files').replaceChildren();el('studio').hidden=true;el('download').style.display='none';el('preview').textContent='此筛选下还没有已完成的归档清单。'}}
 /** 刷新真实目录；错误时禁用旧目录交互，避免误看缓存。 */
-async function refresh(){el('status').textContent='正在读取归档清单…';try{const response=await fetch('/delivery-assets/catalog');const data=await response.json();if(!response.ok)throw new Error(data.error);catalog=data;options('project',[catalog.projectId],'当前项目');el('project').value=catalog.projectId;options('iteration',catalog.runs.map(
+async function refresh(){const request=++refreshRequest;previewRequest++;selectedId='';catalog={runs:[],assets:[]};render();el('bundle').removeAttribute('href');el('status').textContent='正在读取归档清单…';try{if(!el('project').value){const response=await fetch('/intake-api/projects');if(!response.ok)throw new Error('项目目录不可读取');const data=await response.json();if(request!==refreshRequest)return;options('project',data.projects.map(item=>item.id),'请选择项目');el('project').value=data.projects[0]?.id||''}const response=await fetch('/delivery-assets/catalog?projectId='+encodeURIComponent(el('project').value));const data=await response.json();if(request!==refreshRequest)return;if(!response.ok)throw new Error(data.error);catalog=data;options('iteration',catalog.runs.map(
 // 只列明确登记的迭代。
-(run)=>run.correlation.iterationId),'全部迭代（含未关联历史）');render()}catch(error){catalog={runs:[],assets:[]};render();el('status').textContent=error.message}}
-for(const id of ['iteration','run','stage'])el(id).onchange=render;el('refresh').onclick=refresh;refresh();
+(run)=>run.correlation.iterationId),'全部迭代（含未关联历史）');render()}catch(error){if(request!==refreshRequest)return;catalog={runs:[],assets:[]};render();el('bundle').removeAttribute('href');el('status').textContent=error.message}}
+for(const id of ['iteration','run','stage'])el(id).onchange=render;el('project').onchange=refresh;el('refresh').onclick=refresh;refresh();
 </script></body></html>

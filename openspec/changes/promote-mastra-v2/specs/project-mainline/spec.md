@@ -195,7 +195,19 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 
 ### Requirement: Registered Git projects supply versioned engineering constraints
 
-服务端 SHALL 为每个应用实例绑定一个业务仓库。显式登记的项目 SHALL 使用独立数据目录和固定 Git commit，从该版本读取产品、开发、测试 SDD 与候选文件、可写文件和保护检查。Run SHALL 保存项目标识和工程绑定，跨项目恢复及后继来源 SHALL 被拒绝。历史默认 HRM 保留现有仓库和执行档行为。
+服务端 SHALL 维护可供同一实例并发使用的业务项目注册表。客户端 SHALL 只提交登记项目 ID；Run 初始化 SHALL 冻结项目、仓库根与 origin 的绑定摘要、revision、Adapter 与 profile，原生步骤 SHALL 在资产和执行适配之前按 Run 校验，禁止修改共享配置。产品上下文、候选、归档、同步、恢复、后继与 MR SHALL 使用 Run 绑定。资产文件与交付包 SHALL 显式选择项目，不能仅凭散列跨仓库定位。后继 SHALL 保持来源项目与仓库并可采用该项目新 revision。历史单项目和 HRM 保持兼容。
+
+#### Scenario: Human decisions use the authenticated workbench account
+
+- **WHEN** 用户提交需求澄清、产品审阅、项目交接或后续人工关口决定
+- **THEN** 服务端 SHALL 验证工作台会话并以登录账号记录决定人，不得信任客户端提交的 reviewer/operator
+- **AND** 工作台 SHALL 展示登录账号，不要求重复填写审核人；未登录 SHALL 拒绝写入
+
+#### Scenario: Workbench session survives a service restart
+
+- **WHEN** 工作台账号已登录且服务使用相同数据目录重新启动
+- **THEN** 有效的 HttpOnly Cookie SHALL 对应持久化的令牌摘要并恢复登录身份，原始令牌 SHALL NOT 落盘
+- **AND** 主动退出 SHALL 持久撤销当前会话，过期会话 SHALL 失效
 
 #### Scenario: Registered project enters the normal delivery workflow
 
@@ -204,11 +216,60 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **AND** 页面和 Agent SHALL NOT 提供宿主根路径、替换保护检查或扩大可写范围
 - **AND** Spec 正文 SHALL 作为版本化资料进入角色上下文，权限与批准 SHALL 由平台和团队原有门禁决定
 
+#### Scenario: Development reads applicable project instructions before planning
+
+- **WHEN** 固定工程版本在仓库根目录或已登记源码、检查文件的祖先目录中包含普通文件 `AGENTS.md`
+- **THEN** 项目适配 SHALL 按从根到具体目录的顺序自动发现并冻结这些文件，将其作为只读 `instructionFiles` 纳入研发候选和目录散列
+- **AND** 上下文 Agent SHALL 在生成项目规则前实际读取全部 `instructionFiles`；缺失读取 SHALL 作为可恢复的输出校验失败，不能继续方案生成
+- **AND** 未适用于已登记候选路径的 `AGENTS.md` SHALL NOT 自动进入上下文，项目规则 SHALL NOT 扩大 manifest 的源码写入范围、保护检查或执行权限
+
 #### Scenario: A subsequent Run adopts a newer engineering revision
 
 - **WHEN** a source Run belongs to the same registered project and repository, and its confirmed Git receipts verify
 - **THEN** a subsequent Run SHALL use the currently registered engineering revision and preserve the source specification provenance
 - **AND** resuming an existing Run SHALL require its original engineering revision
+
+### Requirement: Team loops expose a shared envelope and versioned rework port
+
+新建团队 Workflow SHALL 使用 `team-run-envelope.v1` 投影公共运行语义，跨团队返工 SHALL 使用 `rework-request.v1` Port。投影和 Port SHALL NOT 替代 Mastra Workflow/Store 或团队专业状态。
+
+#### Scenario: Testing returns implementation findings to development
+
+- **WHEN** 测试退回研发责任缺陷
+- **THEN** 测试 SHALL 提交绑定研发版本、checkpoint、finding 和证据的版本化请求
+- **AND** 研发 Port SHALL 在校验预算与证据后产生下一研发状态，测试 SHALL NOT 修改研发内部字段
+
+### Requirement: Registered project adapters are selected and frozen per Run
+
+客户端 SHALL 只提交服务端登记项目 ID。Run SHALL 冻结项目、Git revision、Adapter 与 profile hash；Adapter SHALL 生成固定检查计划且不得接受任意命令。
+Adapter profile SHALL 绑定检查实现及运行时身份；Python SHALL 冻结解释器版本和可执行文件摘要，并在执行前拒绝漂移。
+
+#### Scenario: Node and Python projects execute protected checks
+
+- **WHEN** 两类登记项目进入正常流程
+- **THEN** 系统 SHALL 从固定提交装配并运行各自固定检查，保存真实进程与候选未漂移证据
+
+#### Scenario: Concurrent projects and native recovery remain isolated
+
+- **WHEN** 同一实例并发运行两个登记项目，或通过 Studio 原生入口启动、恢复 Run
+- **THEN** 每个原生步骤 SHALL 在资产及执行适配之前校验其 Store 中冻结的项目绑定，并仅使用对应项目的上下文、仓库和候选
+- **AND** 重启恢复 SHALL 重新校验固定 revision、仓库绑定和 Adapter profile，项目篡改 SHALL 被拒绝
+- **AND** 资产文件及交付包查询 SHALL 显式选择登记项目，不能仅凭跨仓库可能相同的资产散列定位文件
+- **AND** 后继 Run SHALL 保持来源项目与仓库，允许采用该项目当前登记的新工程 revision
+
+#### Scenario: Native entry attempts to replace an initialized project
+
+- **WHEN** Studio 或其他原生调用者尝试重新 start 已初始化 Run，或通过 timeTravel 及其上下文替换重新初始化该 Run 的项目
+- **THEN** 系统 SHALL 在框架重写快照、登记资产或执行远端操作之前拒绝请求
+- **AND** 校验 SHALL 同样覆盖原生异步和流式入口，不能仅依赖 HTTP 请求校验
+- **AND** 已保存的项目绑定 SHALL 保持不变，恢复 SHALL 继续由 Mastra 原生 API 和 Store 执行
+
+#### Scenario: Concurrent platform repair notifications reference the same pause
+
+- **WHEN** 多个进程对同一故障和检查点发送平台修复通知
+- **THEN** 接续 SHALL 使用 Mastra Store 的原子执行认领，并在调用原生恢复前确认被认领快照仍包含所通知的暂停版本
+- **AND** 过期通知 SHALL NOT 等待并消费后续人工审批暂停，也 SHALL NOT 将其改写为失败
+- **AND** 只有 Store 保存的当前事件回执所属请求 SHALL 返回已接受；其他同故障通知 SHALL 返回重复或处理中，不能重复执行修复副作用
 
 ### Requirement: Workbench groups execution by responsible team
 
@@ -263,6 +324,10 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 ### Requirement: Product workflow focuses on direction, specification and handoff
 
 默认产品团队 Workflow SHALL 以对齐需求、生成待审规格、独立质量审查、人工审批与交接推进。逐项澄清 SHALL 复用已收敛的方向结论进入规格写作。AI 主动补全 SHALL 先形成可观察的方向建议，再写作。方向判断 SHALL 覆盖目标、用户与场景、范围与非目标、业务决策及假设。独立产品审查 SHALL 保留为规格质量检查。研发交接 SHALL 绑定人工批准的产品版本。
+
+缺少公司人事及法务/隐私负责人书面数据生命周期规则时，产品稿 SHALL 明确仅合成数据可研发验收、真实资料导入及正式发布仍受阻；已收敛的受控开发范围 SHALL 可形成待审规格，不得以虚构期限代替制度或让该发布依赖反复阻塞产品澄清。
+对已明确回答且仅反复出现的外部制度题，需求对齐 SHALL 在其他业务维度均清晰时保留发布待决并允许进入产品写作；尚未生成的文档不作为其自身生成前的门槛，其他必答业务问题保持阻断。
+需求成熟度评估 MAY 使用从原生 Run 历史派生的紧凑证据视图，保留每轮显式回答、补充与审阅身份的可追溯性；不得修改或丢弃原生历史，也不得将未回答的推荐提升为确认事实。正式产品稿仍须读取完整来源材料。
 
 #### Scenario: Product roles use portable Markdown layouts
 
@@ -332,7 +397,14 @@ HRM 的 CIP 基线 SHALL 在确认开发范围时绑定 Git 提交。研发与 Q
 
 ### Requirement: Project workbench keeps review and input in one workspace
 
-工作台 SHALL 将当前实例的需求按服务端已绑定项目展示。新建需求 SHALL 使用位于主栏底部的通用输入区，提交原始描述并生成列表显示标题。当前实例的项目绑定和已有 Run 权限 SHALL 继续由服务端校验。
+工作台 SHALL 按服务端登记项目展示需求；同实例多项目模式 SHALL 提供项目选择，新建需求只提交项目 ID。新建需求 SHALL 使用位于主栏底部的通用输入区，提交原始描述并生成列表显示标题。已有 Run 的冻结项目绑定和权限 SHALL 继续由服务端校验，切换工作台项目 SHALL NOT 更改已有 Run 归属。
+
+#### Scenario: Select a registered project before creating a Run
+
+- **WHEN** 同一实例登记多个项目，用户选择项目并创建需求
+- **THEN** 页面 SHALL 按所选项目展示需求和同步设置，并向创建入口提交已登记 `projectId`
+- **AND** 服务端 SHALL 拒绝缺失或未知项目 ID、客户端仓库路径或版本覆盖，以及复用同一 Run ID 更换项目
+- **AND** 打开已有 Run SHALL 使用其冻结项目显示资料；一个不可恢复或不可读的 Run SHALL NOT 阻断其他项目需求列表
 
 #### Scenario: Review the current decision without leaving the requirement
 

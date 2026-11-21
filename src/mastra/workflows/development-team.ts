@@ -58,7 +58,7 @@ export function executionResolver(config: PracticeConfig, options: { requireExis
 /** 研发团队的唯一边界：负责人规划、动态实施、确定性门禁、独立审查、阻塞澄清和研发交付均在此子 Workflow 内完成。 */
 export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; storage?: MastraCompositeStore } = {}) {
   const resolveExecution = executionResolver(config);
-  const execution = createExecutionScope(resolveExecution, config.mode === 'live' && !!projectRepositoryRoot(config));
+  const execution = createExecutionScope(resolveExecution, config.mode === 'live' && !!(config.engineeringProjects || projectRepositoryRoot(config)));
   const bind = <T extends Step<any, any, any, any, any, any>>(step: T): T => withRepositoryAssets(execution.bind(step), config);
   const scope = createStep({
     id: 'confirm-project-scope',

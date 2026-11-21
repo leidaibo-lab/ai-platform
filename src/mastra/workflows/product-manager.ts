@@ -34,15 +34,19 @@ export function createProductManagerPhases(
   agents: ReturnType<typeof createAgents>,
   mode: Delivery['mode'],
   bind: StepBinder = (step) => step,
-  repositoryRoot?: string,
+  repositoryRoot?: string | (() => string | undefined),
   resolveAgents?: (resources: NacosSnapshot) => Promise<ReturnType<typeof createAgents>>,
-  engineeringSpec?: ReturnType<typeof projectSpec>,
+  engineeringSpec?: ReturnType<typeof projectSpec> | (() => ReturnType<typeof projectSpec>),
   graph: 'flat' | 'native' | 'nested' | 'legacy' = 'flat',
 ) {
   const legacy = graph === 'legacy';
   const inlinePublish = graph === 'flat' || graph === 'native';
   const manager = agents.productManagerAgent;
   const reviewer = agents.productReviewerAgent;
+  /** 每次调用从步骤绑定读取工程资料，避免装配闭包捕获其他项目。 */
+  function currentRoot() { return typeof repositoryRoot === 'function' ? repositoryRoot() : repositoryRoot; }
+  /** SDD 正文仅由当前 Run 固定版本产生。 */
+  function currentSpec() { return typeof engineeringSpec === 'function' ? engineeringSpec() : engineeringSpec; }
 
   /** 产品经理按固定阶段产出中间事实；阶段名用于审计，Agent 身份统一为 product-manager-agent。 */
   function managerPhase(role: typeof productManagerStages[number]) {
@@ -69,7 +73,7 @@ export function createProductManagerPhases(
         const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeManager, JSON.stringify({
           task: 'product-manager-phase',
           phase: role,
-          engineeringSpec,
+          engineeringSpec: currentSpec(),
           phaseInstruction,
           brief: inputData.brief,
           confirmedIntake: inputData.intake,
@@ -79,7 +83,7 @@ export function createProductManagerPhases(
           rework: inputData.productRework,
           priorFeedback: inputData.productReworkHistory?.map(({ round, feedback }) => ({ round, feedback })),
           instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' ? (inputData.productHandoffFormat ? productDocumentsInstruction : inputData.requirementTracking ? acceptanceRequirementsInstruction : '') : ''}`,
-        }), role, mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal));
+        }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal));
         if (attempt.correction) return suspend(attempt.correction);
         const result = attempt.output;
         const content = z.string().trim().min(1).max(100000).parse(result.text);
@@ -130,12 +134,12 @@ export function createProductManagerPhases(
       const activeReviewer = inputData.nacosResources ? (await resolveAgents!(inputData.nacosResources)).productReviewerAgent : reviewer;
       const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeReviewer, JSON.stringify({
         task: 'product-quality-review',
-        engineeringSpec,
+        engineeringSpec: currentSpec(),
         brief: inputData.brief,
         product: artifact.content,
         corrections: productReworkFeedback(inputData),
         instruction: '独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。检查需求文档中的场景是否忠实覆盖确认的业务规则，产品规格中的交付任务是否与需求对应。只输出审查发现与依据，不修改产品稿，不代替人工审批。',
-      }), 'reviewer', mode, repositoryRoot ? { root: repositoryRoot, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, 'review-product-quality'), signal));
+      }), 'reviewer', mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, 'review-product-quality'), signal));
       if (attempt.correction) return suspend(attempt.correction);
       const result = attempt.output;
       const facts = projectToolFacts(result.toolResults);

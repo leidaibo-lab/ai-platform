@@ -16,9 +16,12 @@ import type { PracticeConfig } from '../mastra/config.js';
 import type { createExecutionScope } from '../development/v2/execution-scope.js';
 import { developmentHash } from '../development/contracts.js';
 import { evidenceRefs, stateV2Schema } from '../development/v2/contracts.js';
-import { checksPassedV2, reportV2, validateAssessment, validateIdentityV2 } from '../development/v2/gates.js';
+import { checksPassedV2, validateAssessment, validateIdentityV2 } from '../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
-import { createDevelopmentContinuationV2, reworkDevelopmentV2 } from '../mastra/workflows/development-v2.js';
+import { createDevelopmentContinuationV2 } from '../mastra/workflows/development-v2.js';
+import { requestDevelopmentRework } from '../development/rework-port.js';
+import { reworkRequestSchema, teamRunEnvelopeSchema } from '../team/contracts.js';
+import { decideTeamLoop } from '../team/loop.js';
 import { generateV2, type GeneratorV2 } from '../development/v2/agents.js';
 import { emptyQuality, lifecycleSchema, matchesAcceptancePlan, planApprovalSchema, qualityHash, qualityReviewSchema, type Lifecycle } from './contracts.js';
 import { withRepositoryAssets } from './repository-assets.js';
@@ -243,33 +246,16 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
     },
   });
   const route = createStep({ id: 'route-test-defects', description: '保留测试历史，按缺陷责任及依赖图退回开发并回归', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema,
-    // 用测试报告创建可追溯缺陷，累计预算仍归原开发状态。
+    // 测试只提交版本化返工请求；研发 Port 独占内部状态与累计预算策略。
     execute: async ({ inputData: state }) => {
       if (state.outcome !== 'in-progress' || state.quality.status !== 'rework') return state;
       const review = state.quality.review!;
-      if (review.findings.some(
-        // 业务和完整性缺口不能用代码重试绕过。
-        (finding) => ['business', 'integrity'].includes(finding.category) || ['product', 'human'].includes(finding.route),
-      )) {
-        const business = review.findings.filter(/** 只有产品问题进入澄清；完整性仍停止人工处理。 */finding => finding.category === 'business' || finding.route === 'product');
-        if (!business.length) return { ...state, outcome: 'blocked' as const };
-        const development = state.development;
-        const report = reportV2({ verdict: 'FAIL', findings: review.findings, coverageRefs: [...evidenceRefs(development)], unchecked: ['QA人工缺陷来源，非模型评审'], resolutions: [] }, { ...development, checks: state.quality.checks });
-        const blockers = [...new Set([...(development.plan?.blockers ?? []), ...business.map(finding => `QA业务待决：${finding.detail}`)])];
-        return lifecycleSchema.parse({ ...state, development: { ...development, outcome: 'clarification-required', delivery: null, priorAcceptanceCases: state.quality.approval?.cases.map(/** 只保留修订影响计算需要的历史映射。 */({ id, requirementRefs }) => ({ id, requirementRefs })), codeReviews: [...development.codeReviews, report], plan: { ...development.plan!, blockers } }, developmentHistory: [...state.developmentHistory, development.delivery!], qualityHistory: [...state.qualityHistory, state.quality], quality: emptyQuality(), outcome: 'blocked' });
-      }
       const development = state.development;
-      const assessment = { verdict: 'FAIL' as const, findings: review.findings, coverageRefs: [...evidenceRefs(development)], unchecked: ['QA人工缺陷来源，非模型评审'], resolutions: [] };
-      const report = reportV2(assessment, { ...development, checks: state.quality.checks });
-      const routes = new Set(review.findings.map(
-        // 保留所有责任；新政策在批准团队内联合修复，历史政策回架构。
-        (finding) => finding.route,
-      ));
-      const selected = routes.has('architecture') ? 'architecture' : routes.size === 1 ? review.findings[0].route : development.input.autonomy ? 'all' : 'architecture';
-      if (!['frontend', 'backend', 'infrastructure', 'architecture', 'all'].includes(selected)) throw new Error('未知测试返工路由');
-      const role = selected as 'frontend' | 'backend' | 'infrastructure' | 'architecture' | 'all';
-      const next = reworkDevelopmentV2({ ...development, outcome: 'in-progress', delivery: null, checks: state.quality.checks, codeReviews: [...development.codeReviews, report], recovery: null }, role, role === 'architecture' ? 'prepare-context' : 'implement');
-      return { ...state, development: next, developmentHistory: [...state.developmentHistory, development.delivery!], qualityHistory: [...state.qualityHistory, state.quality], quality: emptyQuality(), outcome: next.outcome === 'rework-exhausted' ? 'rework-exhausted' as const : next.outcome === 'in-progress' ? 'in-progress' as const : 'blocked' as const };
+      const testing = teamRunEnvelopeSchema.parse({ version: 'team-run-envelope.v1', teamId: 'testing', status: 'rework', phase: 'route-test-defects', inputVersion: state.version, budget: { used: state.qualityHistory.length, limit: development.input.maxReworks }, evidence: [...evidenceRefs(development)], blocker: { kind: 'business', detail: '质量审阅要求返工' } });
+      if (decideTeamLoop(testing) !== 'request-rework') throw new Error('测试返工状态不能创建交接请求');
+      const request = reworkRequestSchema.parse({ version: 'rework-request.v1', sourceTeam: 'testing', targetTeam: 'development', targetStateVersion: development.version, targetCheckpointHash: development.checkpointHash, sourceReportHash: state.quality.reportHash, findings: review.findings, evidenceRefs: [...evidenceRefs(development)], acceptanceCases: state.quality.approval?.cases.map(/** 只交接修订影响计算需要的稳定映射。 */({ id, requirementRefs }) => ({ id, requirementRefs })) });
+      const result = requestDevelopmentRework(development, request, { reportHash: qualityHash(state), checks: state.quality.checks });
+      return lifecycleSchema.parse({ ...state, development: result.state, developmentHistory: [...state.developmentHistory, development.delivery!], qualityHistory: [...state.qualityHistory, state.quality], quality: emptyQuality(), outcome: result.disposition === 'exhausted' ? 'rework-exhausted' : result.disposition === 'rework' ? 'in-progress' : 'blocked' });
     },
   });
   const cycle = createWorkflow({ id: 'test-and-regression-cycle', description: '独立测试 → 缺陷修复 → 回归，沿用累计返工预算', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema })

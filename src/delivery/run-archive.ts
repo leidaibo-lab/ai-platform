@@ -1,4 +1,4 @@
-import { engineeringBinding, projectTarget } from '../business-engineering/project.js';
+import { assertProjectCorrelation, createProjectCorrelation, projectCorrelation, projectTarget, selectProjectConfig } from '../business-engineering/project.js';
 /** 生命周期 Observer/文件 Adapter；Mastra Store 继续拥有审批与恢复事实。
  * ADR: docs/decisions/2026-11-09-mastra-run-archive.md
  */
@@ -96,6 +96,7 @@ export async function syncRunArchive(config: PracticeConfig, runId: string, publ
 
 /** 先本地落盘再同步；调用方负责隔离归档失败和业务结果。 */
 export async function recordRunArchive(config: PracticeConfig, observation: ArchiveObservation, publish: typeof publishHandoff = publishHandoff): Promise<void> {
+  if (config.engineeringProjects) config = selectProjectConfig(config, projectCorrelation(observation.value)?.projectId);
   const project = projectTarget(config);
   if (!project) return;
   const root = validateRepository(project.root, project.origin);
@@ -132,22 +133,43 @@ export function runArchiveLifecycle(config: PracticeConfig): WorkflowOptions {
   return {
     /** 首次执行前登记业务创建；失败不能充当执行门禁。 */
     onStart: async info => {
-      const project = projectTarget(config);
-      if (!project) return;
+      if (config.engineeringProjects) {
+        const input = info.getInitData() as { projectId?: string };
+        const selected = selectProjectConfig(config, input.projectId);
+        const store = await info.mastra?.getStorage()?.getStore('workflows');
+        const snapshot = await store?.loadWorkflowSnapshot({ workflowName: 'product-development', runId: info.runId });
+        const initialStep = snapshot?.context?.['initialize-product-development'];
+        const saved = projectCorrelation(initialStep && !Array.isArray(initialStep) && 'output' in initialStep ? initialStep.output : undefined);
+        if (snapshot?.context?.input?.projectId && snapshot.context.input.projectId !== input.projectId) throw new Error('不能重新绑定已有 Run 项目');
+        if (saved) {
+          assertProjectCorrelation(selected, saved);
+          throw new Error('已经初始化的 Run 只能从原生检查点恢复，不能重新 start');
+        }
+      }
       try {
-        const input = z.object({ brief: z.string(), iterationId: assetIdSchema.default('unassigned') }).parse(info.getInitData());
-        const engineering = config.engineeringProject;
-        registerAssetRun(project.root, { projectId: project.id, ...(engineering ? { engineeringBinding: engineeringBinding(engineering), engineeringRevision: engineering.revision } : {}), iterationId: input.iterationId, runId: info.runId, workflowId: 'productDevelopmentWorkflow' }, input.brief, project);
-        await observe(config, { runId: info.runId, scope: 'run', status: 'running', iterationId: input.iterationId });
+        const input = z.object({ projectId: projectIdSchema.optional(), brief: z.string(), iterationId: assetIdSchema.default('unassigned') }).parse(info.getInitData());
+        const selected = selectProjectConfig(config, input.projectId);
+        const project = projectTarget(selected);
+        if (!project) return;
+        const correlation = createProjectCorrelation(selected, input, info.runId);
+        registerAssetRun(project.root, correlation, input.brief, project);
+        await observe(selected, { runId: info.runId, scope: 'run', status: 'running', iterationId: input.iterationId });
       } catch { console.warn('[run-archive] 初始运行档案未保存；原生状态不变。'); }
     },
     /** 记录原生整体状态，错误详情仅留在 Store。 */
     onFinish: async info => {
-      const active = Object.entries(info.steps).find(/** 只提取失败/暂停步骤标识。 */([, step]) => !Array.isArray(step) && ['suspended', 'failed', 'tripwire'].includes(step.status));
-      const input = z.object({ iterationId: assetIdSchema.optional() }).safeParse(info.getInitData());
-      const pending = active && !Array.isArray(active[1]) ? z.object({ kind: z.literal('repository-sync') }).safeParse(active[1].suspendPayload).success : false;
-      const reason = info.status === 'suspended' ? pending ? 'repository-sync' : 'human-or-recovery-gate' : ['failed', 'tripwire'].includes(info.status) ? failureReason(info.error) : undefined;
-      await observe(config, { runId: info.runId, scope: 'run', stage: active?.[0].split('.')[0] ?? info.stepExecutionPath?.at(-1) ?? Object.keys(info.steps).at(-1), status: info.status, reason, iterationId: input.success ? input.data.iterationId : undefined, value: info.result });
+      try {
+        const initial = info.getInitData() as { projectId?: string };
+        const initialStep = info.steps['initialize-product-development'];
+        const correlation = projectCorrelation(initialStep && !Array.isArray(initialStep) && 'output' in initialStep ? initialStep.output : undefined);
+        const selected = selectProjectConfig(config, correlation?.projectId ?? initial?.projectId);
+        if (correlation) assertProjectCorrelation(selected, correlation);
+        const active = Object.entries(info.steps).find(/** 只提取失败/暂停步骤标识。 */([, step]) => !Array.isArray(step) && ['suspended', 'failed', 'tripwire'].includes(step.status));
+        const input = z.object({ iterationId: assetIdSchema.optional() }).safeParse(info.getInitData());
+        const pending = active && !Array.isArray(active[1]) ? z.object({ kind: z.literal('repository-sync') }).safeParse(active[1].suspendPayload).success : false;
+        const reason = info.status === 'suspended' ? pending ? 'repository-sync' : 'human-or-recovery-gate' : ['failed', 'tripwire'].includes(info.status) ? failureReason(info.error) : undefined;
+        await observe(selected, { runId: info.runId, scope: 'run', stage: active?.[0].split('.')[0] ?? info.stepExecutionPath?.at(-1) ?? Object.keys(info.steps).at(-1), status: info.status, reason, iterationId: input.success ? input.data.iterationId : undefined, value: info.result });
+      } catch { console.warn('[run-archive] 运行结束档案未保存；原生状态不变。'); }
     },
   };
 }

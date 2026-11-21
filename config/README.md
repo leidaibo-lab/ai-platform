@@ -1,4 +1,40 @@
-# Workflow 资源衔接清单
+# 运行配置与 Workflow 资源归属
+
+## 运行配置指南
+
+本节承接根 README 的运行细节。应用配置由 `src/mastra/config.ts` 读取；根 `.env` 和进程环境生效，进程环境优先。下文资源盘点 JSON 与接入定义不因此成为运行配置。
+
+### 模式、模型与数据目录
+
+`MASTRA_MODE` 默认 `fixture`；显式设为 `live` 才调用真实模型。live 必须设置 `OPENAI_API_KEY` 与 `MASTRA_MODEL`，可配置 `MASTRA_BASE_URL`。`MASTRA_PORT` 默认 4111，修改需同步工作台代理。`MASTRA_DATA_DIR` 默认 `.data`，可使用相对根目录或绝对路径；fixture/live 使用隔离目录。
+
+按角色覆盖模型的变量为 `MASTRA_PRODUCT_MODEL` 和 `MASTRA_DEVELOPMENT_MODEL`，示例见 [`.env.example`](../.env.example)。产品经理和产品审查使用产品覆盖；研发及评审/委派使用开发覆盖；其他角色和评测裁判使用默认模型。覆盖缺省或为空时回退默认模型，端点与凭据沿用公共配置，代码不内置业务模型名称。配置重启后生效；切换开发模型可能触发旧 Run 执行身份拒绝，不能强行绕过。
+
+真实模型可用性先通过 `npm run smoke:live` 核实终答与真实工具调用，该命令产生费用；随后可用 `MASTRA_MODE=live MASTRA_DATA_DIR=.data/live npm run dev` 启动。服务仅供本机使用；真实模型质量仍需专项验收，不因冒烟通过就放行业务。
+
+### Nacos 产品方法资源
+
+默认启用 Nacos。按 [环境变量样例](../.env.example) 配置 Nacos 3.3 服务、命名空间、只读账号及明确的资源名称和版本，缺配置时启动失败。无资源配置的 fixture 或构建进程可显式设置 `NACOS_RESOURCES_ENABLED=false`，不会替其他进程关闭资源校验。
+
+资源需先在 Nacos 审核发布；应用不负责发布。Run 初始化保存产品 Prompt、Skill 正文、references 和 SHA-256；产品角色从冻结快照装配，不额外叠加整套本地产品方法。调用前复核原服务同版本可访问且内容未变，撤销、下线、注册中心不可用或内容漂移时停止调用，不切换到“最新版本”。远端资源不授予工具和审批权限。
+
+| 配置 | 绑定含义 |
+| --- | --- |
+| `NACOS_REVIEW_PROMPT_NAME` / `NACOS_REVIEW_PROMPT_VERSION` | 为独立产品审查指定 Prompt；缺省共用产品 Prompt |
+| `NACOS_ADDITIONAL_SKILLS` | 额外 Skill 名称与精确版本数组；最多 127 个额外 Skill，冻结内容合计最多 8 MiB |
+| `NACOS_REVIEW_SKILLS` | 审查角色使用的已登记 Skill 名称子集；未配置共享全部，空数组不加载 Skill |
+
+这些资源进入 Run 和审批身份，变更只影响新 Run 的资源选择。旧 Run 无快照时保留本地兼容；有快照时恢复需原服务、原版本和可用凭据，切换地址可能阻断恢复。研发业务阻塞回流调用产品角色仍使用原产品快照；研发、测试等自身方法未全面迁入 Nacos，MCP 暂未接入。
+
+此前本地 113 项产品方法不自动装入新 Run；如需使用，先治理并发布，再配置名称与版本。资源准备和候选清单见 [产品资源](../nacos-resources/product/README.md)与[角色清单](../docs/application/agent-resource-inventory.md)，真实服务记录见 [live 验证](../docs/application/nacos-live-run-findings.md)。候选包/模拟服务验证不能代替目标环境授权与业务质量验收。
+
+### 工程登记与远端同步
+
+`MASTRA_ENGINEERING_PROJECTS` 登记多项目，与 `MASTRA_ENGINEERING_PROJECT` 单项目互斥；客户端只选择 ID，Run 初始化冻结绑定。字段及固定 commit 的文件要求见[项目登记](../docs/application/harness-architecture.md#登记业务工程项目)。未登记时默认 HRM checkout 来自 `MASTRA_HRM_REPOSITORY` 或同级 `hrm`，origin 须匹配配置要求。
+
+远端同步设置按阶段生效；登记项目固定使用自身绑定仓库，历史入口仍使用原目标字典和设置。`MASTRA_REMOTE_SYNC_TARGETS` 仅为历史目标初始字典，不应作为多项目 Run 的仓库回退。管理页不接收凭据，服务器验证 checkout 和 origin。live 同步与 MR 使用明确授权的宿主 Git/GitHub CLI 会话，fixture 不推送真实远端。详细失败重试、分支回执和档案补同步见[数据流说明](../docs/application/artifact-dataflow.md)。
+
+## 资源盘点与运行配置的区别
 
 [workflow-resources.json](./workflow-resources.json)登记当前完整产研流程的资源归属、生产消费关系、版本绑定、代码配置入口和已知缺口。它是当前代码的审计快照，**没有被运行时加载**，修改它不会改变Agent权限、流程、预算或审批。
 

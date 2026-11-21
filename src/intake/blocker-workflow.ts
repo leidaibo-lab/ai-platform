@@ -169,7 +169,7 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
       return inputV2Schema.parse({ ...old.input, formalSpecifications, ...(old.input.requirementTracking || old.priorAcceptanceCases ? { requirementImpact: revisionImpact(inputData) } : {}), source: { ...old.input.source, content: inputData.draft.content, hash: inputData.draft.hash, evidence: inputData.draft.evidence }, project, budgetContinuation: { calls: old.calls, maxCalls: old.maxCalls, ...(old.technicalRecovery ? { technical: { version: old.technicalRecovery.version, limit: old.technicalRecovery.limit, priorAttempts: usedTechnicalAttempts(old.technicalRecovery) } } : {}), ...(old.contextBudgetLevel !== undefined ? { contextBudgetLevel: old.contextBudgetLevel } : {}) }, continuation: { runId: old.input.source.runId, sourceHash: old.input.source.hash, candidateHash: old.checkpointHash, reason: '前端业务澄清及修订产品稿已人工确认；沿用原代码权限继续规划', authority: 'approved-product-version' }, scopeApproval: { reviewer: inputData.review.reviewer, comment: '批准修订产品稿，并在原项目和代码权限内继续技术规划；只读工程资料已关联', productHash: inputData.draft.hash } });
     },
   });
-  const scope = createExecutionScope(resolveExecution, config.mode === 'live' && !!projectRepositoryRoot(config));
+  const scope = createExecutionScope(resolveExecution, config.mode === 'live' && !!(config.engineeringProjects || projectRepositoryRoot(config)));
   const development = createDevelopmentWorkflowV2(config, scope.port, false, generate, { id: 'replanned-development', team: true, bind: scope.bind });
   const collect = createStep({ id: 'collect-replanned-development', inputSchema: stateV2Schema, outputSchema: blockerCycleSchema,
     // 每轮保留原稿、显式答案、新稿及批准记录，下一轮只处理仍存在的阻塞。

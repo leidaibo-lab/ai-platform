@@ -1,4 +1,4 @@
-import { projectTarget } from '../business-engineering/project.js';
+import { projectTarget, selectProjectConfig } from '../business-engineering/project.js';
 /** Mastra 原生只读 API：目录/预览/下载不修改流程与审批。 */
 import { registerApiRoute, type ContextWithMastra } from '@mastra/core/server';
 import { readFileSync } from 'node:fs';
@@ -9,7 +9,7 @@ import { assetIdSchema, projectIdSchema } from './asset-identity.js';
 import { readAssetCatalog, readCatalogFile, type AssetCatalog } from './asset-catalog.js';
 
 const filterSchema = z.object({ projectId: projectIdSchema.optional(), iterationId: assetIdSchema.optional(), runId: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).optional(), stage: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).optional() });
-const fileSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/), download: z.enum(['1']).optional() });
+const fileSchema = z.object({ projectId: projectIdSchema.optional(), id: z.string().regex(/^[a-f0-9]{64}$/), name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/), download: z.enum(['1']).optional() });
 
 /** 用同一筛选规则导出清单及交付包；缺少关联的旧版本不属于任何迭代。 */
 function filteredCatalog(project: { id: string; root: string; origin: string }, query: unknown): AssetCatalog {
@@ -27,9 +27,13 @@ function filteredCatalog(project: { id: string; root: string; origin: string }, 
 
 /** 只在显式绑定业务仓库的 Studio 注册；不增加 CLI 的业务写入。 */
 export function createAssetRoutes(config: PracticeConfig) {
-  const project = projectTarget(config);
-  if (!project) return [];
-  const directory = project.root;
+  if (!config.engineeringProjects && !projectTarget(config)) return [];
+  /** 注册表模式要求显式项目，旧单仓库保留原 URL。 */
+  function selectedProject(projectId?: string) {
+    const project = projectTarget(selectProjectConfig(config, projectId));
+    if (!project) throw new Error('未登记项目');
+    return project;
+  }
   /** 所有错误避免透出绝对路径、模型配置和异常栈。 */
   function failure(c: ContextWithMastra, error: unknown) {
     if (error instanceof z.ZodError) return c.json({ error: '筛选或文件参数格式无效' }, 400);
@@ -48,7 +52,7 @@ export function createAssetRoutes(config: PracticeConfig) {
       // 目录是按需重建的投影，原生 Store 状态不在此接口复制。
       handler: async (c) => {
         c.header('Cache-Control', 'no-store');
-        try { return c.json(filteredCatalog(project, c.req.query())); }
+        try { return c.json(filteredCatalog(selectedProject(c.req.query('projectId')), c.req.query())); }
         catch (error) { return failure(c, error); }
       },
     }),
@@ -59,6 +63,8 @@ export function createAssetRoutes(config: PracticeConfig) {
         c.header('X-Content-Type-Options', 'nosniff');
         try {
           const query = fileSchema.parse(c.req.query());
+          const project = selectedProject(query.projectId);
+          const directory = project.root;
           const asset = readAssetCatalog(directory, project).assets.find(
             // ID 来自清单相对路径的散列，客户端不能指定磁盘路径。
             (entry) => entry.id === query.id,
@@ -75,6 +81,8 @@ export function createAssetRoutes(config: PracticeConfig) {
       handler: async (c) => {
         c.header('Cache-Control', 'no-store');
         try {
+          const project = selectedProject(c.req.query('projectId'));
+          const directory = project.root;
           const catalog = filteredCatalog(project, c.req.query());
           let bytes = 0;
           const artifacts = [];

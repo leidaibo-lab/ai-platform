@@ -5,11 +5,12 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PracticeConfig } from '../mastra/config.js';
 import { validateRepository } from './asset-files.js';
+import { registeredProjects } from '../business-engineering/project.js';
+import { remoteSyncTargetSchema, type RemoteSyncTarget } from '../business-engineering/project-target.js';
+export { remoteSyncTargetSchema, type RemoteSyncTarget } from '../business-engineering/project-target.js';
 
 export const syncPhaseSchema = z.enum(['product', 'architecture', 'development', 'testing', 'release']);
 export type SyncPhase = z.infer<typeof syncPhaseSchema>;
-export const remoteSyncTargetSchema = z.object({ id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/), label: z.string().trim().min(1).max(80), root: z.string().min(1), origin: z.string().url().refine(/** 拒绝携带用户名或密码的远端地址。 */value => { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password; }, '远端地址必须为不含凭据的 HTTPS URL') }).strict();
-export type RemoteSyncTarget = z.infer<typeof remoteSyncTargetSchema>;
 export const targetDictionarySchema = z.object({ version: z.literal('remote-sync-targets.v1'), targets: z.array(remoteSyncTargetSchema).min(1).max(50) }).strict();
 const phaseSettingSchema = z.object({ enabled: z.boolean(), targetId: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/) }).strict();
 export const remoteSyncSettingsSchema = z.object({ version: z.literal('remote-sync-settings.v1'), phases: z.object({ product: phaseSettingSchema, architecture: phaseSettingSchema, development: phaseSettingSchema, testing: phaseSettingSchema, release: phaseSettingSchema }) }).strict();
@@ -17,6 +18,7 @@ export type RemoteSyncSettings = z.infer<typeof remoteSyncSettingsSchema>;
 
 /** 当前实践的初始目标来自服务端环境；字典页首次打开前仍保持现有HRM行为。 */
 function defaultTargets(config: PracticeConfig): RemoteSyncTarget[] {
+  if (config.engineeringProjects) return registeredProjects(config).map(({ revision: _revision, ...target }) => target);
   const configured = config.remoteSyncTargets?.map(/** 环境登记值先做结构校验。 */item => remoteSyncTargetSchema.parse(item)) ?? [];
   if (configured.length) return configured;
   if (config.engineeringProject) {
@@ -49,8 +51,7 @@ export function readRemoteSyncTargets(config: PracticeConfig): RemoteSyncTarget[
 export function writeRemoteSyncTargets(config: PracticeConfig, value: unknown): RemoteSyncTarget[] {
   const targets = uniqueTargets(targetDictionarySchema.parse(value).targets);
   for (const target of targets) validateRepository(target.root, target.origin);
-  const project = config.engineeringProject;
-  if (project && !targets.some(/** 主项目的登记不可从页面改变。 */target => target.id === project.id && target.root === project.root && target.origin === project.origin)) throw new Error('不能替换已绑定的业务工程项目');
+  for (const project of registeredProjects(config)) if (!targets.some(/** 主项目的登记不可从页面改变。 */target => target.id === project.id && target.root === project.root && target.origin === project.origin)) throw new Error('不能替换已绑定的业务工程项目');
   const active = readRemoteSyncSettings(config);
   const ids = new Set(targets.map(/** 用新字典检查现有阶段绑定。 */target => target.id));
   for (const phase of syncPhaseSchema.options) if (active.phases[phase].enabled && !ids.has(active.phases[phase].targetId)) throw new Error('仍有阶段使用该仓库；请先调整阶段同步设置');
@@ -78,12 +79,12 @@ export function syncPhaseForStep(stepId: string): SyncPhase | undefined {
 /** 设置文件属于本实践数据目录，独立于Workflow事实；Run审批不由它保存。 */
 function settingsPath(config: PracticeConfig): string {
   const database = config.databaseUrl.replace(/^file:/, '');
-  return resolve(dirname(database), 'remote-sync-settings.json');
+  return resolve(dirname(database), ...(config.projectRegistrySelection && config.engineeringProject ? ['projects', config.engineeringProject.id] : []), 'remote-sync-settings.json');
 }
 
 /** 初始策略让现有单仓库行为保持不变；无已授权仓库时全部关闭。 */
 function defaults(config: PracticeConfig): RemoteSyncSettings {
-  const targetId = remoteSyncTargets(config)[0]?.id ?? 'unconfigured';
+  const targetId = config.engineeringProject?.id ?? remoteSyncTargets(config)[0]?.id ?? 'unconfigured';
   const enabled = targetId !== 'unconfigured';
   return remoteSyncSettingsSchema.parse({ version: 'remote-sync-settings.v1', phases: Object.fromEntries(syncPhaseSchema.options.map(/** 每个阶段都显式持有开关和目标。 */phase => [phase, { enabled, targetId }])) });
 }

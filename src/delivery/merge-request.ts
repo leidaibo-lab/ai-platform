@@ -56,7 +56,7 @@ export async function openMergeRequest(repository: string, branch: string, commi
 }
 
 /** 绑定 Run 的规格、授权范围、候选文件和通过 QA 的散列。 */
-async function submitReviewedCandidate(config: PracticeConfig, state: Lifecycle, execution: ReturnType<typeof createExecutionScope>['port'], sourceHash: string, reportHash: string) {
+export async function submitReviewedCandidate(config: PracticeConfig, state: Lifecycle, execution: ReturnType<typeof createExecutionScope>['port'], sourceHash: string, reportHash: string, ports: { read: typeof readHandoffFile; publish: typeof publishReviewedCandidate; open: typeof openMergeRequest } = { read: readHandoffFile, publish: publishReviewedCandidate, open: openMergeRequest }) {
   const root = projectRepositoryRoot(config);
   const target = projectTarget(config);
   const correlation = state.development.input.correlation;
@@ -70,7 +70,7 @@ async function submitReviewedCandidate(config: PracticeConfig, state: Lifecycle,
   if (testing.upstreamCommits.join(',') !== [product.handoff.commit, development.handoff.commit].join(',')) throw new Error('交付规格的上游版本不一致');
   const specPaths = [product, development, testing].flatMap(item => {
     if (item.handoff.branch !== branch) throw new Error('规格与 Run 分支不一致');
-    for (const path of item.paths) readHandoffFile(root, { ...item.handoff, commit: testing.handoff.commit }, path);
+    for (const path of item.paths) ports.read(root, { ...item.handoff, commit: testing.handoff.commit }, path);
     return item.paths;
   });
   const candidate: Record<string, string> = {};
@@ -79,12 +79,12 @@ async function submitReviewedCandidate(config: PracticeConfig, state: Lifecycle,
     if (contentHash(content) !== hash) throw new Error('读取候选时源码发生变化');
     candidate[path] = content;
   }
-  const testSpec = confirmedTestSchema.parse(JSON.parse(readHandoffFile(root, testing.handoff, 'specs/test-spec.md')));
+  const testSpec = confirmedTestSchema.parse(JSON.parse(ports.read(root, testing.handoff, 'specs/test-spec.md')));
   if (testSpec.sourceHash !== sourceHash || developmentHash(testSpec.plan) !== developmentHash(state.quality.plan) || developmentHash(testSpec.cases) !== developmentHash(state.quality.approval?.cases)) throw new Error('正式测试规格与通过的 QA 版本不一致');
   const project = state.development.input.project;
   const writable = (state.development.plan?.tasks.flatMap(task => task.paths) ?? []).filter(path => canWriteProjectPath(project, path));
-  const commit = await publishReviewedCandidate(root, testing.handoff, candidate, writable, specPaths, project.engineeringRevision ?? correlation.engineeringRevision);
-  return openMergeRequest(repository, branch, commit, sourceHash, reportHash);
+  const commit = await ports.publish(root, testing.handoff, candidate, writable, specPaths, project.engineeringRevision ?? correlation.engineeringRevision);
+  return ports.open(repository, branch, commit, sourceHash, reportHash);
 }
 
 /** QA 通过后进入交付。远端故障在同一原生节点暂停，重试复用候选和请求。 */

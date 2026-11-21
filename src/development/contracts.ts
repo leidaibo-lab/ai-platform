@@ -13,6 +13,7 @@ export const safePathSchema = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_./()
 );
 export const projectSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
+  adapterId: z.enum(['node-test.v1', 'python-unittest.v1']).optional(),
   executionProfile: z.enum(['hrm-pnpm-docker-v1', cipProfile]).optional(),
   engineeringRevision: engineeringRevisionSchema.optional(),
   planning: z.literal('agent').optional(),
@@ -21,12 +22,19 @@ export const projectSchema = z.object({
   engineeringAssessment: z.object({ stackStatus: z.enum(['matched', 'unknown', 'mismatch', 'ambiguous']), evidence: z.array(z.string().min(1)).max(20), expectedProfile: z.enum(['hrm-pnpm-docker-v1', cipProfile]) }).optional(),
   writableRoots: z.array(safePathSchema).max(5).optional(),
   files: z.record(safePathSchema, z.string().max(100000)),
+  /** 固定工程版本中适用于候选路径的项目规则；只读且最多8份，为方法读取和最终输出保留有界步骤。 */
+  instructionFiles: z.array(safePathSchema.refine(
+    /** 只接受根或目录级 AGENTS.md，避免把普通 Markdown 冒充项目权限契约。 */
+    path => path === 'AGENTS.md' || path.endsWith('/AGENTS.md'),
+    '项目规则文件必须命名为 AGENTS.md',
+  )).max(8).optional(),
   writablePaths: z.array(safePathSchema).max(40),
   checkFiles: z.array(safePathSchema).min(1).max(200),
   roles: z.array(z.enum(['frontend', 'backend', 'infrastructure'])).min(1).max(3),
 }).superRefine(
   // 公开检查必须已存在且不在写入白名单内；角色和文件集合不能含重复项。
   (project, ctx) => {
+    if (project.adapterId === 'python-unittest.v1' && (project.executionProfile || project.writablePaths.some(path => !/^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.py$/.test(path)) || project.checkFiles.some(path => !/^tests\/(?:[a-zA-Z0-9_-]+\/)*test_[a-zA-Z0-9_-]+\.py$/.test(path)))) ctx.addIssue({ code: 'custom', message: 'Python Adapter 的源码或检查路径不合法' });
     if ((!project.writablePaths.length || project.preparationIssues) && project.planning !== 'agent') ctx.addIssue({ code: 'custom', message: '空源码或工程准备缺口仅适用于已登记项目规划' });
     if (project.planning === 'agent' && !project.executionProfile) ctx.addIssue({ code: 'custom', message: '自动技术规划需要已登记项目执行档' });
     if (project.executionProfile && (project.planning !== 'agent' || !project.writableRoots?.length || project.writableRoots.some(/** 全栈档不能把脚本或配置目录变成源码授权根。 */root => !(project.executionProfile === cipProfile ? cipRoots : ['apps/web/app', 'apps/api/src', 'packages/database/src', 'packages/database/prisma']).includes(root)))) ctx.addIssue({ code: 'custom', message: 'HRM源码授权根不合法' });
@@ -34,9 +42,12 @@ export const projectSchema = z.object({
     for (const path of project.checkFiles) {
       if (!(path in project.files) || project.writablePaths.includes(path)) ctx.addIssue({ code: 'custom', message: '检查文件缺失或可写' });
     }
-    if (new Set(project.roles).size !== project.roles.length || new Set(project.writablePaths).size !== project.writablePaths.length)
+    if (new Set(project.roles).size !== project.roles.length || new Set(project.writablePaths).size !== project.writablePaths.length || new Set(project.instructionFiles ?? []).size !== (project.instructionFiles?.length ?? 0))
       ctx.addIssue({ code: 'custom', message: '角色或文件范围重复' });
     for (const path of project.writablePaths) if (!(path in project.files)) ctx.addIssue({ code: 'custom', message: '写入路径须在初始快照声明' });
+    for (const path of project.instructionFiles ?? []) {
+      if (!(path in project.files) || project.writablePaths.includes(path) || project.checkFiles.includes(path)) ctx.addIssue({ code: 'custom', message: '项目规则文件必须存在且保持只读' });
+    }
   },
 );
 export const developmentInputSchema = z.object({

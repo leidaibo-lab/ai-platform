@@ -1,6 +1,6 @@
 import { createWorkbenchAccount } from './workbench-account.js';
 import { readCandidateChanges } from './candidate-changes.js';
-import { assertProjectCorrelation, loadEngineeringProject, projectRepositoryRoot } from '../business-engineering/project.js';
+import { assertProjectCorrelation, loadEngineeringProject, projectRepositoryRoot, registeredProjects, selectProjectConfig, snapshotProjectConfig } from '../business-engineering/project.js';
 import { autonomyPolicySchema } from '../development/v2/contracts.js';
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
 import type { PracticeConfig } from '../mastra/config.js';
@@ -17,21 +17,19 @@ import { deliverySchema } from '../mastra/workflows/delivery.js';
 import { buildSuccessorBaseline, successorSource } from './successor-run.js';
 import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
 import type { WorkflowStreamEvent } from '@mastra/core/workflows';
-const startSchema = z.object({ runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned'), intakeMode: intakeModeSchema.default('clarify') });
+const startSchema = z.object({ projectId: z.string().optional(), runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned'), intakeMode: intakeModeSchema.default('clarify') }).strict();
 const successorRequestSchema = z.object({ runId: z.string().uuid(), artifactKinds: z.array(z.enum(['product', 'development', 'testing'])).min(1).max(3), changeBrief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.optional(), intakeMode: intakeModeSchema.default('clarify') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
 export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | 'live', repositoryRoot?: string, config?: PracticeConfig) {
   const account = createWorkbenchAccount(config?.databaseUrl ?? 'file::memory:');
   const busy = new Set<string>();
   /** 新项目的 Run 只使用启动时登记的 Git 版本。 */
-  function engineering() { return config?.engineeringProject ? loadEngineeringProject(config.engineeringProject) : undefined; }
+  function engineering(selected = config) { return selected?.engineeringProject ? loadEngineeringProject(selected.engineeringProject) : undefined; }
   /** 项目恢复、后继创建和纠偏统一核对原生初始化关联。 */
   async function verifyRunProject(runId: string) {
     if (!config) return;
     const source = await workflow.getWorkflowRunById(runId);
-    const step = source?.steps?.['initialize-product-development'];
-    const parsed = deliverySchema.safeParse(step && !Array.isArray(step) ? step.output : undefined);
-    try { assertProjectCorrelation(config, parsed.data?.correlation); }
+    try { return snapshotProjectConfig(config, source); }
     catch { throw new GateInputError('当前 Run 需要使用创建时绑定的业务工程版本'); }
   }
   /** 校验本机写来源；标签不等于认证身份。 */
@@ -45,6 +43,10 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
   }
   return [
     ...account.routes,
+    registerApiRoute('/intake-api/projects', { method: 'GET',
+      /** 客户端只取得服务端登记的项目 ID 和显示名称。 */
+      handler: async c => c.json({ projects: config?.engineeringProjects ? registeredProjects(config).map(project => ({ id: project.id, title: project.label })) : [{ id: config?.engineeringProject?.id ?? 'hrm', title: config?.engineeringProject?.label ?? 'HRM 项目仓库' }] }),
+    }),
     registerApiRoute('/intake-api/remote-sync-targets', { method: 'GET',
       /** 仓库字典页仅在本机展示已登记目标及其本地checkout，阶段页继续隐藏路径。 */
       handler: async c => {
@@ -65,7 +67,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       /** 只公开目标标签和阶段选择，绝不向浏览器返回本地路径或Git地址。 */
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { return c.json({ settings: readRemoteSyncSettings(config!), targets: remoteSyncTargets(config!).map(/** 页面显示受控远端地址，不泄露本地checkout路径。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
+        try { const selected = selectProjectConfig(config!, c.req.query('projectId')); return c.json({ settings: readRemoteSyncSettings(selected), targets: remoteSyncTargets(selected).filter(target => !selected.engineeringProject || target.id === selected.engineeringProject.id).map(/** 页面显示受控远端地址，不泄露本地checkout路径。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
         catch { return c.json({ error: '远端同步设置暂不可读取，请检查服务端已授权仓库。' }, 409); }
       },
     }),
@@ -73,7 +75,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       /** 设置仅影响后续节点；仓库白名单仍由服务端配置拥有。 */
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { origin(c); return c.json({ settings: writeRemoteSyncSettings(config!, remoteSyncSettingsSchema.parse(await c.req.json())), targets: remoteSyncTargets(config!).map(/** 保存后仍只回传受控远端地址。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
+        try { origin(c); const selected = selectProjectConfig(config!, c.req.query('projectId')); return c.json({ settings: writeRemoteSyncSettings(selected, remoteSyncSettingsSchema.parse(await c.req.json())), targets: remoteSyncTargets(selected).filter(target => !selected.engineeringProject || target.id === selected.engineeringProject.id).map(/** 保存后仍只回传受控远端地址。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
         catch (error) { return c.json({ error: error instanceof z.ZodError ? '设置格式不正确，请检查每个阶段的同步开关和仓库选择。' : error instanceof Error ? error.message : '远端同步设置未保存。' }, 409); }
       },
     }),
@@ -81,7 +83,11 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       // 只读固定配置仓库，不允许客户端切换宿主路径或读取文件内容。
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { return c.json(engineering()?.catalog ?? readRepositoryCatalog(repositoryRoot)); }
+        try {
+          const selected = config ? c.req.query('runId') ? await verifyRunProject(c.req.query('runId')!) : selectProjectConfig(config, c.req.query('projectId')) : undefined;
+          if (selected && c.req.query('projectId') && c.req.query('projectId') !== (selected.engineeringProject?.id ?? 'hrm')) throw new Error('查询项目与 Run 不一致');
+          return c.json(engineering(selected)?.catalog ?? readRepositoryCatalog((selected && projectRepositoryRoot(selected)) ?? repositoryRoot));
+        }
         catch { return c.json({ available: false, reason: '已关联仓库暂不可读，请检查仓库路径及授权。' }, 409); }
       },
     }),
@@ -92,16 +98,18 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         let id: string | undefined; let acquired = false;
         try {
           origin(c); const input = startSchema.parse(await c.req.json()); id = input.runId;
+          if (config) selectProjectConfig(config, input.projectId);
           if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
           if (await workflow.getWorkflowRunById(id)) {
             await verifyRunProject(id);
             const existing = await readIntake(workflow, id, config);
+            if (input.projectId && existing.projectId !== input.projectId) throw new Error('同一标识不能更换项目');
             if (existing.brief !== input.brief) throw new Error('同一标识不能更换需求');
             if (existing.intakeMode && existing.intakeMode !== input.intakeMode) throw new Error('同一标识不能更换需求处理方式');
             return c.json(existing);
           }
           const run = await workflow.createRun({ runId: id });
-          await run.start({ inputData: { brief: input.brief, iterationId: input.iterationId, intakeMode: input.intakeMode, guidedIntake: input.intakeMode === 'clarify' } });
+          await run.start({ inputData: { projectId: input.projectId, brief: input.brief, iterationId: input.iterationId, intakeMode: input.intakeMode, guidedIntake: input.intakeMode === 'clarify' } });
           return c.json(await readIntake(workflow, id, config));
         } catch (error) { return failure(c, error); }
         finally { if (id && acquired) busy.delete(id); }
@@ -114,8 +122,6 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         let id: string | undefined; let acquired = false;
         try {
           origin(c);
-          const root = config && projectRepositoryRoot(config);
-          if (!root) throw new Error('后继 Run 缺少受控项目仓库');
           const sourceRunId = z.string().uuid().parse(c.req.param('sourceRunId'));
           const request = successorRequestSchema.parse(await c.req.json()); id = request.runId;
           if (id === sourceRunId) throw new Error('后继 Run 必须使用新的 Run 标识');
@@ -125,11 +131,14 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
           if (!source || source.status !== 'success') throw new Error('只能基于已结束 Run 创建后继 Run');
           const product = source.steps?.['product-team'];
           const delivery = successorSource(source.result, product && !Array.isArray(product) ? product.output : undefined);
-          if (config) assertProjectCorrelation(config, delivery?.correlation, { allowEarlierRevision: true });
+          const selected = config && selectProjectConfig(config, delivery?.correlation?.projectId);
+          const root = selected && projectRepositoryRoot(selected);
+          if (!root) throw new Error('后继 Run 缺少受控项目仓库');
+          if (selected) assertProjectCorrelation(selected, delivery?.correlation, { allowEarlierRevision: true });
           if (!delivery?.correlation || !delivery.formalSpecifications?.length) throw new Error('来源 Run 不包含已确认并推送的正式规格');
           const baseline = buildSuccessorBaseline(root, sourceRunId, delivery, request.artifactKinds, request.changeBrief);
           const run = await workflow.createRun({ runId: id });
-          await run.start({ inputData: { brief: request.changeBrief, iterationId: request.iterationId ?? delivery.correlation.iterationId, intakeMode: request.intakeMode, guidedIntake: request.intakeMode === 'clarify', successorBaseline: baseline } });
+          await run.start({ inputData: { projectId: delivery.correlation.projectId, brief: request.changeBrief, iterationId: request.iterationId ?? delivery.correlation.iterationId, intakeMode: request.intakeMode, guidedIntake: request.intakeMode === 'clarify', successorBaseline: baseline } });
           return c.json(await readIntake(workflow, id, config));
         } catch (error) { return failure(c, error); }
         finally { if (id && acquired) busy.delete(id); }
@@ -142,7 +151,10 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         try {
           const result = await workflow.listWorkflowRuns({ page: 0, perPage: 30 });
           const runs = [];
-          for (const run of result.runs) runs.push(await readIntake(workflow, run.runId, config));
+          for (const run of result.runs) {
+            try { runs.push(await readIntake(workflow, run.runId, config)); }
+            catch { runs.push({ runId: run.runId, status: 'unavailable', brief: '', unavailable: true }); }
+          }
           return c.json({ runs });
         } catch (error) { return failure(c, error); }
       },
@@ -241,21 +253,26 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         c.header('Cache-Control', 'no-store');
         const id = c.req.param('runId'); let acquired = false;
         try {
-          origin(c); if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
-          await verifyRunProject(id);
+          origin(c);
+          const actor = account.current(c);
+          if (!actor) return c.json({ error: '请登录后提交决定。' }, 401);
+          if (busy.has(id)) throw new Error('处理中'); busy.add(id); acquired = true;
+          const selected = await verifyRunProject(id);
           let input = await c.req.json();
-          if (config?.engineeringProject && input.data?.project) throw new GateInputError('业务工程范围必须通过当前项目目录确认');
+          // 所有人工决定均由短期会话盖章；客户端旧字段不可伪造审阅人。
+          input = { ...input, reviewer: actor, data: input.data ? { ...input.data, reviewer: actor, ...('operator' in input.data ? { operator: actor } : {}) } : input.data };
+          if (selected?.engineeringProject && input.data?.project) throw new GateInputError('业务工程范围必须通过当前项目目录确认');
           if (input.data?.project?.executionProfile && !input.repositoryScope) throw new GateInputError('全栈项目必须通过已关联仓库确认，不能从页面传入源码或执行档');
           if (input.repositoryScope) {
-            const selection = z.object({ catalogHash: z.string().length(64), maxReworks: z.number().int().min(0).max(3).optional(), autonomy: autonomyPolicySchema.optional(), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) }).parse(input.repositoryScope);
+            const selection = z.object({ catalogHash: z.string().length(64), maxReworks: z.number().int().min(0).max(3).optional(), autonomy: autonomyPolicySchema.optional(), comment: z.string().trim().min(1).max(2000) }).parse(input.repositoryScope);
             let project;
             try {
-              const registered = engineering();
+              const registered = engineering(selected);
               if (registered && registered.catalog.catalogHash !== selection.catalogHash) throw new Error('项目目录版本已变化，请刷新后重新确认');
-              project = registered?.candidate ?? assembleRepositoryProject(repositoryRoot, selection.catalogHash);
+              project = registered?.candidate ?? assembleRepositoryProject((selected && projectRepositoryRoot(selected)) ?? repositoryRoot, selection.catalogHash);
             }
             catch (error) { throw new GateInputError(error instanceof Error ? error.message : '仓库配置不可用'); }
-            input = { gateHash: input.gateHash, data: { project, reviewer: selection.reviewer, comment: selection.comment, maxReworks: selection.maxReworks ?? 1, autonomy: selection.autonomy } };
+            input = { gateHash: input.gateHash, data: { project, reviewer: actor, comment: selection.comment, maxReworks: selection.maxReworks ?? 1, autonomy: selection.autonomy } };
           }
           return c.json(await respondIntake(workflow, mode, id, input, config));
         } catch (error) { return failure(c, error); }

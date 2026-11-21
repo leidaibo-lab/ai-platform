@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import type { Mastra } from '@mastra/core';
 import { LocalFilesystem, Workspace, WORKSPACE_TOOLS } from '@mastra/core/workspace';
 import type { PracticeConfig } from './config.js';
-import { projectRepositoryRoot, projectTarget } from '../business-engineering/project.js';
+import { projectRepositoryRoot, projectTarget, registeredProjects, selectProjectConfig } from '../business-engineering/project.js';
 
 /**
  * 工厂/薄适配器：框架拥有文件访问，实践仅定义材料边界和可重建产物。
@@ -28,7 +28,7 @@ export function createRecruitmentWorkspace(rootDir: string, sourceDirectory = re
 
 /** 登记项目通过固定版本 SDD 提供资料，兼容项目仍使用原只读工作区。 */
 export function productWorkspace(config: PracticeConfig) {
-  if (config.engineeringProject) return false as const;
+  if (config.engineeringProject || config.engineeringProjects) return false as const;
   const root = projectRepositoryRoot(config);
   return root ? createRecruitmentWorkspace(config.rootDir, resolve(root, 'product/sources')) : undefined;
 }
@@ -38,11 +38,13 @@ export function registerProjectWorkspaceViews(mastra: Mastra, config: PracticeCo
   const views = [
     { id: 'evaluation-results', name: '研发评测 · 结果（只读）', directory: resolve(config.rootDir, '.data/evaluations') },
   ];
-  const project = projectTarget(config);
-  const repository = projectRepositoryRoot(config);
-  if (repository && project) {
+  for (const selected of config.engineeringProjects ? registeredProjects(config).map(project => selectProjectConfig(config, project.id)) : [config]) {
+    const project = projectTarget(selected);
+    const repository = projectRepositoryRoot(selected);
+    if (repository && project) {
     views.push({ id: `${project.id}-run-archives`, name: `${project.label} · 运行档案`, directory: resolve(repository, 'product/catalog/runs') });
     for (const area of ['product', 'testSet', 'deploy']) views.push({ id: `${project.id}-${area.toLowerCase()}`, name: `${project.label} · ${area}（只读交付资产）`, directory: resolve(repository, area) });
+    }
   }
   for (const view of views) {
     mkdirSync(view.directory, { recursive: true });

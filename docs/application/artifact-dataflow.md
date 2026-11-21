@@ -1,6 +1,8 @@
-# HRM 产物归档、查看与数据流转
+# 项目产物归档、查看与数据流转
 
-项目归属由服务端绑定。显式登记项目从固定 Git 提交读取 SDD、候选源码和保护检查，Run 档案与阶段资产记录项目关联。下面的 HRM 路径和补推动作为默认兼容入口。详见[业务工程登记](./harness-architecture.md#登记业务工程项目)。
+项目归属由服务端绑定。显式登记项目从固定 Git 提交读取 SDD、候选源码、保护检查和适用于候选路径的 `AGENTS.md`；项目规则只读冻结，不能改变写入与执行授权。Run 档案与阶段资产记录项目关联。下面的 HRM 路径和补推动作为默认兼容入口。详见[业务工程登记](./harness-architecture.md#登记业务工程项目)。
+
+当前注册表模式由工作台选择 `projectId`，资产文件、bundle、归档和同步均按 Run 绑定解析，不能回退默认 HRM；详见[多项目数据路由](./team-loop-architecture.md#run-级多项目数据路由)。默认交付已接入 Run 分支提交与 MR 核验，HRM 全栈检查使用兼容执行档；不自动合并或部署。以下早期图片、HRM 示例及带日期的验证是历史资产切片，不代表当前能力上限，也不证明真实业务已验收。
 
 2026-11-07：接通完整产研 Workflow 的项目、迭代、根 Run 与分阶段产物。采用现有 Mastra 原生步骤和 API route，适配不可变文件清单；不新增依赖、服务或审批库。选型及未采用方案见[决策记录](../../docs/decisions/2026-11-07-hrm-asset-catalog.md)。
 
@@ -8,7 +10,7 @@
 
 ![HRM 产物数据流转](../../docs/assets/mastra-hrm-artifact-dataflow.png)
 
-[可编辑 SVG](../../docs/assets/mastra-hrm-artifact-dataflow.svg) · [PNG](../../docs/assets/mastra-hrm-artifact-dataflow.png)。图中当前接线、受限能力及 TODO 分开标注；代码与自动部署接线尚未完成。
+[可编辑 SVG](../../docs/assets/mastra-hrm-artifact-dataflow.svg) · [PNG](../../docs/assets/mastra-hrm-artifact-dataflow.png)。图中接线与 TODO 是 2026-11-07 状态；当前代码交付见[完整流程](./unified-workflow.md#delivery-team--mr-交付)，自动部署仍非默认能力。
 
 ## 一次迭代如何贯穿
 
@@ -21,9 +23,9 @@
 }
 ```
 
-项目固定为 `hrm`，迭代 ID 支持英文字母、数字、下划线和短横线，最长100字符，首字符为字母或数字。未提供时由服务端使用 `unassigned`（未指定业务迭代）；Studio schema 表单可能把默认字段显示为必填，保留默认值即可。Run ID 由 Mastra 提供，客户端不能通过输入声明批准状态或更换归属。
+以上为默认 HRM 兼容输入；注册表模式必须额外提交已登记的 `projectId`，不能通过输入声明仓库路径或批准事实。迭代 ID 支持英文字母、数字、下划线和短横线，最长100字符，首字符为字母或数字。未提供时由服务端使用 `unassigned`（未指定业务迭代）；Studio schema 表单可能把默认字段显示为必填，保留默认值即可。Run ID 由 Mastra 提供，初始化后客户端不能更换归属。
 
-初始化把 `{projectId,iterationId,runId,workflowId}` 保存到产品状态，项目授权时传给开发输入，后续测试、发布使用同一根 Run 关联。内部嵌套 Workflow 不会覆盖根 Run。相同 Run 的迭代或原始需求发生漂移时拒绝覆盖；多个 Run 可以属于同一迭代。`project.id` 仍是开发输入清单中的执行项目标识，不用它替代资产项目 `hrm`。
+初始化把 `{projectId,iterationId,runId,workflowId}` 保存到产品状态，项目授权时传给开发输入，后续测试和交付使用同一根 Run 关联。内部嵌套 Workflow 不会覆盖根 Run。相同 Run 的迭代或原始需求发生漂移时拒绝覆盖；多个 Run 可以属于同一迭代。资产归属取自已验证 correlation，不能以未经校验的开发输入 `project.id` 替代。
 
 ```text
 hrm/
@@ -81,9 +83,9 @@ catalog 和 bundle 支持 `projectId=hrm`、`iterationId`、`runId`、`stage` �
 
 产品角色从 HRM 的 `product/sources` 读取真实材料。`sources-observed-at-export.json` 只说明导出时看见的来源清单；逐 Run 冻结资料和工具实际引用校验待建设，不能声称生成时读过清单全部资料。
 
-代码目标仓库已确定为 HRM，但当前开发执行器仍处理隔离候选目录中的受限 `.mjs`。本次归档研发交接及版本元数据，尚未把候选代码自动写到 HRM 的 `apps/web/apps/api/packages/database`，也未产生 commit/PR。源码基线/分支、代码回库、pnpm 全栈执行与 CI 制品绑定仍待接通。
+2026-11-07 的归档切片仅处理受限 `.mjs` 候选与研发元数据，当时未接通候选回库。此后主线已接入 HRM 兼容 Docker/Compose 全栈检查、登记 Node/Python Adapter 以及同版本候选提交和 MR 核验；目标仓库来自本 Run 绑定，不固定为 HRM。候选提交到 Run 分支不等于自动合入主分支，CI 制品与自动发布仍不在默认能力内。
 
-发布节点保存批准范围和人工回填的外部执行、健康、回滚结果。本轮没有运行实际部署，也没有接入自动 CI/CD 或认证审批身份。大型附件、备份保留、多用户权限和历史补归档需后续建设。
+历史发布节点保存批准范围和人工回填的外部执行、健康、回滚结果，不是当前默认终点。本节历史验证没有运行实际部署或自动 CI/CD；当前本机账号也不等同于所有关口的企业身份治理。大型附件、备份保留、多用户权限和历史补归档需后续建设。
 
 ## 实现与本轮证据
 

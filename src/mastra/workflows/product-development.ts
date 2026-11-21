@@ -1,6 +1,6 @@
 import { architectureDocumentFormat } from '../../development/v2/architecture-document.js';
 import { buildSuccessorBaseline, successorSource } from '../../intake/successor-run.js';
-import { assertProjectCorrelation, engineeringBinding, projectRepositoryRoot, projectTarget } from '../../business-engineering/project.js';
+import { assertProjectCorrelation, bindProjectWorkflow, createProjectCorrelation, scopedProjectConfig, projectRepositoryRoot, projectTarget } from '../../business-engineering/project.js';
 import { runArchiveLifecycle } from '../../delivery/run-archive.js';
 /** 单个原生 Run 串联产品、动态开发团队、独立测试和 MR 交付。
  * ADR: docs/decisions/2026-11-19-merge-request-delivery.md
@@ -27,16 +27,18 @@ import { intakeModeSchema } from '../../intake/contracts.js';
 import { loadNacosSnapshot } from '../nacos-resources.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
 
-const inputSchema = z.object({ intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000), successorBaseline: successorBaselineSchema.optional() });
+const inputSchema = z.object({ projectId: correlationSchema.shape.projectId.optional(), intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000), successorBaseline: successorBaselineSchema.optional() }).strict();
 
 /** 采用 Workflow 嵌套和 foreach；人工批准保持为原生 suspend/resume。 */
 export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; fixtureRequirementTracking?: boolean; fixtureArchitectureDocument?: boolean; storage?: MastraCompositeStore } = {}) {
+  const registryConfig = config;
+  config = scopedProjectConfig(config);
   const initialize = createStep({ id: 'initialize-product-development', description: '从原始需求启动完整产研流程', inputSchema, outputSchema: deliverySchema,
     // 不接受客户端伪造产品稿、批准或模式。
     execute: async ({ inputData, runId, mastra }) => {
       const project = projectTarget(config);
       const engineering = config.engineeringProject;
-      const correlation = correlationSchema.parse({ projectId: project?.id ?? 'hrm', ...(engineering ? { engineeringBinding: engineeringBinding(engineering), engineeringRevision: engineering.revision } : {}), iterationId: inputData.iterationId, runId, workflowId: 'productDevelopmentWorkflow' });
+      const correlation = correlationSchema.parse(createProjectCorrelation(config, inputData, runId));
       const baseline = inputData.successorBaseline;
       if (baseline && (engineering || baseline.projectId)) {
         const storage = options.storage ?? mastra?.getStorage();
@@ -86,8 +88,8 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
   const main = createWorkflow({ options: runArchiveLifecycle(config), id: 'product-development', description: config.legacyDeployment ? '历史试点：产品 → 研发 → 测试 → 部署 → 交付' : '产研主线：产品 → 研发 → 测试 → 交付 MR', inputSchema, outputSchema: z.union([lifecycleSchema, deliverySchema]) })
     .then(withRepositoryAssets(initialize, config)).then(createProductTeamWorkflow(agents, config, options.storage)).then(withRepositoryAssets(routeProductTeamResult, config)).then(developmentTeam.workflow);
   const tested = main.then(withRepositoryAssets(lifecycle, config)).then(createTestingWorkflow(agents, config, developmentTeam.execution, generate));
-  if (config.legacyDeployment) return tested.then(createDeploymentWorkflow(agents, config, developmentTeam.execution)).then(deliveryTeam).commit();
-  return tested.then(createMergeRequestDelivery(config, developmentTeam.execution)).commit();
+  if (config.legacyDeployment) return bindProjectWorkflow(tested.then(createDeploymentWorkflow(agents, config, developmentTeam.execution)).then(deliveryTeam).commit(), registryConfig);
+  return bindProjectWorkflow(tested.then(createMergeRequestDelivery(config, developmentTeam.execution)).commit(), registryConfig);
 }
 
 export { executionResolver } from './development-team.js';

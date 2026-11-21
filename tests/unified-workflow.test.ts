@@ -2,6 +2,8 @@ import { readCandidateChanges } from '../src/intake/candidate-changes.js';
 import { approvalHashV2, validatePlanV2 } from '../src/development/v2/contracts.js';
 import { assertApprovalV2 } from '../src/development/v2/gates.js';
 import { validateQualityReview } from '../src/delivery/testing.js';
+import { requestDevelopmentRework } from '../src/development/rework-port.js';
+import { evidenceRefs } from '../src/development/v2/contracts.js';
 /** 新版完整主链原生持久化回归；所有审批及发布回执均为合成测试数据。 */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -147,6 +149,13 @@ for (const scenario of ['success', 'shared-path-preview', 'stable-requirements',
         assert.equal(evidence.requirements[0]!.cases[0]!.result?.status, 'passed');
       }
       if (scenario === 'success') {
+        const development = result.result.development;
+        const request = { version: 'rework-request.v1' as const, sourceTeam: 'testing' as const, targetTeam: 'development' as const, targetStateVersion: 'development-state.v2' as const, targetCheckpointHash: development.checkpointHash, sourceReportHash: result.result.quality.reportHash, findings: [{ id: 'qa-port', severity: 'medium' as const, category: 'implementation' as const, route: 'backend' as const, detail: '验证返工交接', refs: ['task:fixture-task-2'], evidence: '合成发现' }], evidenceRefs: [...evidenceRefs(development)] };
+        const source = { reportHash: result.result.quality.reportHash, checks: result.result.quality.checks };
+        assert.throws(() => requestDevelopmentRework(development, { ...request, targetCheckpointHash: '0'.repeat(64) }, source), /checkpoint/);
+        assert.throws(() => requestDevelopmentRework(development, { ...request, sourceReportHash: '0'.repeat(64) }, source), /测试报告/);
+        assert.throws(() => requestDevelopmentRework(development, { ...request, evidenceRefs: [...request.evidenceRefs, 'unknown'] }, source), /未知证据/);
+        assert.equal(requestDevelopmentRework({ ...development, round: development.input.maxReworks }, request, source).disposition, 'exhausted');
         assert.equal(result.result.development.delegations.length, 2);
         assert.equal(result.result.quality.status, 'passed');
         assert.deepEqual(visited.slice(-2), ['approve-test-cases', 'review-test-results']);

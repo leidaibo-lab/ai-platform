@@ -37,5 +37,5 @@ class HrmExecution extends DevelopmentExecution {
 }
 /** CLI/fixture沿用原执行器；HRM全栈档才进入固定Docker验证。 */
 export function createDevelopmentExecution(root: string, project: DevelopmentInput['project'], repository?: string): DevelopmentExecution {
-  return project.executionProfile ? new HrmExecution(root, project, repository) : new DevelopmentExecution(root, project.writablePaths, project.checkFiles);
+  return project.executionProfile ? new HrmExecution(root, project, repository) : new DevelopmentExecution(root, project.writablePaths, project.checkFiles, {}, project.adapterId);
 }

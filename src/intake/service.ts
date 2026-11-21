@@ -27,7 +27,7 @@ import { alignmentRetryInput, describeRecovery } from './recovery.js';
 import { describeGate, validateGate, describeDevelopmentProgress, describeTechnicalRecovery } from './gates.js';
 import { intakeSchema, validateAnswers } from './contracts.js';
 import { projectRunTimeline } from './run-timeline.js';
-import { assertProjectCorrelation, projectTarget } from '../business-engineering/project.js';
+import { assertProjectCorrelation, projectTarget, snapshotProjectConfig } from '../business-engineering/project.js';
 /** 仅公开本地业务输入校验，不透出模型或文件系统异常。 */
 export class GateInputError extends Error {}
 export type IntakeWorkflow = ReturnType<typeof createProductDevelopmentWorkflow>;
@@ -78,6 +78,7 @@ function projectProductDocuments(content: string | undefined) {
 export async function readIntake(workflow: IntakeWorkflow, runId: string, config?: PracticeConfig) {
   const snapshot = await workflow.getWorkflowRunById(runId);
   if (!snapshot) throw new Error('Run 不存在');
+  if (config) config = snapshotProjectConfig(config, snapshot, { readOnly: true });
   const initial = snapshot.steps?.['initialize-product-development'];
   const state = initial && !Array.isArray(initial) ? deliverySchema.safeParse(initial.output) : undefined;
   const suspended = Object.entries(snapshot.steps ?? {}).filter(([, step]) => !Array.isArray(step) && step.status === 'suspended' && (step as any).suspendPayload !== undefined).sort(([left], [right]) => right.split('.').length - left.split('.').length)[0];
@@ -164,6 +165,7 @@ export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 
 
 /** 在进程内串行恢复同一 Run，实际权限与版本仍在执行前重新校验。 */
 async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
+  if (config) config = snapshotProjectConfig(config, await workflow.getWorkflowRunById(runId));
   const current = await readIntake(workflow, runId, config);
   if (current.status === 'success' && current.reconfigure && current.mode === mode) {
     if (!config || !input || typeof input !== 'object' || !('reconfigureHash' in input) || input.reconfigureHash !== current.reconfigure.hash) throw new GateInputError('项目重新交接入口已变化，请刷新');
@@ -318,6 +320,7 @@ const continueCorrectionSchema = z.object({ attempt: z.uuid() }).strict();
 
 /** 用原生暂停快照确认反馈已经持久化后续办，支持刷新后继续。 */
 export async function correctIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
+  if (config) config = snapshotProjectConfig(config, await workflow.getWorkflowRunById(runId));
   const request = z.union([correctionRequestSchema, continueCorrectionSchema]).parse(input);
   if (correctionsInFlight.has(runId)) throw new GateInputError('正在处理纠偏，请查看当前状态');
   correctionsInFlight.add(runId);

@@ -25,6 +25,8 @@ import { createProductUnits } from '../../development/v2/product-units.js';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
 import { publishLiveOutput } from '../../intake/live-output.js';
 import { acceptPlatformRepair, matchesPlatformSecret, platformRepairPause, platformRepairProof, platformRecoveryStepId, platformRepairPauseSchema, platformRepairResumeSchema } from '../../development/v2/platform-recovery.js';
+import { developmentEnvelope } from '../../development/rework-port.js';
+import { isTeamLoopTerminal } from '../../team/loop.js';
 
 /** 与团队和独立测试共用同一返工策略；保留既有公开入口。 */
 export function reworkDevelopmentV2(state: StateV2, route: StateV2['route'], phase: StateV2['phase']): StateV2 {
@@ -542,11 +544,11 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
   const iteration = flow.commit() as Step<string, any, StateV2, StateV2, any, any>;
   const workflow = createWorkflow({ id: options.id ?? 'development-execution-v2', description: 'development-team 内部执行｜plan-development → develop-and-check → review-development-quality', inputSchema: inputV2Schema, outputSchema: stateV2Schema }).then(bind(initialize)).dountil(iteration,
     // 原生循环只在有界返工或已确认故障接续后继续。
-    async ({ inputData }) => inputData.outcome !== 'in-progress',
+    async ({ inputData }) => isTeamLoopTerminal(developmentEnvelope(inputData)),
   ).commit();
   const continuation = createWorkflow({ id: `${options.id ?? 'development-execution-v2'}-continuation`, description: '按现有批准、源码检查点及累计预算继续缺陷修复，不重新初始化候选', inputSchema: stateV2Schema, outputSchema: stateV2Schema }).dountil(iteration,
     // QA 返工仍使用开发阶段原有总调用和返工预算。
-    async ({ inputData }) => inputData.outcome !== 'in-progress',
+    async ({ inputData }) => isTeamLoopTerminal(developmentEnvelope(inputData)),
   ).commit();
   return { workflow, continuation };
 }

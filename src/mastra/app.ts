@@ -1,4 +1,4 @@
-import { loadEngineeringProject, projectRepositoryRoot } from '../business-engineering/project.js';
+import { loadEngineeringProject, projectRepositoryRoot, registeredProjects } from '../business-engineering/project.js';
 import { createIntakeVoiceRoute } from '../intake/voice.js';
 import { createIntakeRoutes } from '../intake/routes.js';
 import { createPlatformRecoveryRoutes } from '../intake/platform-recovery.js';
@@ -17,8 +17,8 @@ import { createProductDevelopmentWorkflow } from './workflows/product-developmen
  * ADR: docs/decisions/2026-11-19-three-layer-harness.md
  */
 export function createStudioApplicationOptions(config: PracticeConfig) {
-  const repository = projectRepositoryRoot(config);
-  if (config.engineeringProject) loadEngineeringProject(config.engineeringProject);
+  const repository = config.engineeringProjects ? undefined : projectRepositoryRoot(config);
+  for (const project of registeredProjects(config)) loadEngineeringProject(project);
   const agents = createAgents(config, { workspace: productWorkspace(config) });
   const storage = new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl });
   const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config, undefined, { storage });
