@@ -48,13 +48,13 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 
 ### Requirement: All model-backed team roles provide safe live output
 
-产品、研发、测试和发布团队中实际调用模型的角色 SHALL 通过同一 Workflow watch 与工作台 SSE
+产品、研发和测试团队中实际调用模型的角色 SHALL 通过同一 Workflow watch 与工作台 SSE
 链路提供增量文本及工具生命周期投影。投影 SHALL 是易失的只读展示信息，不能改变或替代
 Mastra Store 中的执行、审批、恢复或交付事实。
 
 #### Scenario: A model-backed role produces streaming output
 
-- **WHEN** 产品、研发上下文、架构、就绪审查、实现、代码审查、测试或发布角色在 live 模式生成内容
+- **WHEN** 产品、研发上下文、架构、就绪审查、实现、代码审查或测试角色在 live 模式生成内容
 - **THEN** 工作台 SHALL 接收带角色和尝试次数的文本增量及工具开始、完成或失败状态
 - **AND** SHALL 使用与产品角色相同的受控 SSE 端点及断线快照回读机制
 - **AND** 并行实现成员 SHALL 以其实际授权角色分别投影，不能共享或伪造其他成员的输出
@@ -91,7 +91,7 @@ Mastra Store 中的执行、审批、恢复或交付事实。
 
 ### Requirement: Late business gaps return through product clarification
 
-测试阶段或历史试点发布阶段发现属于业务规则、验收口径或产品责任的未闭环项时，系统 SHALL 保留该阶段已
+测试阶段发现属于业务规则、验收口径或产品责任的未闭环项时，系统 SHALL 保留该阶段已
 产生的证据并回流至受控产品澄清；不得将该类问题伪装为纯代码返工，也不得只将 Run 停在开发
 入口而不给出澄清路径。
 
@@ -102,12 +102,14 @@ Mastra Store 中的执行、审批、恢复或交付事实。
 - **AND** SHALL 使旧研发交付、测试通过和后续交付授权失效
 - **AND** 在修订产品稿获得人工确认后，SHALL 沿用原 Run 的受限代码权限和累计预算重新规划、实施、测试及交付
 
-#### Scenario: Release health identifies a business gap
+### Requirement: Legacy deployment workflow is retired
 
-- **WHEN** 已完成外部发布回执后的健康确认报告提供 `business` 类或 `product` 路由发现
-- **THEN** 系统 SHALL 先保留发布与健康回执，并在需要时完成既有回滚关口
-- **AND** SHALL 将业务发现送入与测试相同的产品澄清和修订确认链
-- **AND** SHALL NOT 将健康失败自动解释为可由代码重试解决的问题
+主线 SHALL 以 MR 交付结束，不再装配旧部署、健康确认或回滚回执流程。旧部署 Run 不再支持恢复。
+
+#### Scenario: Mainline delivery reaches MR
+
+- **WHEN** 测试质量放行并确认同版本候选
+- **THEN** 系统 SHALL 提交并核验 MR，不进入旧部署流程
 
 ### Requirement: Platform-created delivery branches start from remote main
 
@@ -414,6 +416,9 @@ Run 的 Adapter profile SHALL 绑定实际检查计划实现及运行时身份�
 候选人真实资料的保留期限、删除/脱敏及权利请求等公司制度缺失时，产品团队 SHALL 将其标为真实数据试点和正式发布的外部阻断项，明确仅合成数据可用于研发与验收；当受控研发范围及其验收已确定时，SHALL NOT 将尚未取得的书面制度伪装为产品稿生成的必答业务规则，也 SHALL NOT 因此阻止待审产品规格生成。正式发布门禁不得因此放松。
 当需求对齐模型再次把同一外部制度作为唯一必答项，且历史回答已明确合成数据边界并且其余业务维度均清晰时，需求对齐 SHALL 将该项保留为非阻断的发布待决，不得将尚未生成的正式文档本身作为生成文档前的成熟度缺口；其他业务必答项不得降级。
 需求成熟度评估 MAY 使用从原生 Run 历史派生的紧凑证据视图，保留每轮显式回答、补充与审阅身份的可追溯性；不得修改或丢弃原生历史，也不得将未回答的推荐提升为确认事实。正式产品稿仍须读取完整来源材料。
+当关键决策、主流程和异常均已有明确证据，且没有必答业务问题时，若交付成熟度的唯一不足是待审正式文档尚未生成，需求对齐 SHALL 允许进入文档写作；不得将写作结果本身作为启动写作的前置条件。其余交付缺口或必答业务问题仍应阻断，真实数据发布门禁保持独立。
+服务重启后遗留为运行态的产品写作步骤，只有在超过该步骤的受控总时限、没有输出且没有人工暂停点时，系统 SHALL 允许已登录操作者将同一 Run 标记为可恢复失败并从原保存输入重试；不得将尚在时限内的执行或任意步骤强制重置，也不得重建 Run、丢弃已确认回答或绕过后续人工审阅。
+产品写作 SHALL 在形成待审双文档前，以确认基线逐项核对“已确认决策 → 正文业务规则 → 可观察验收 → 产品规格任务”的承接关系；已确认事实不得再次作为待决项，覆盖不全时应在写作阶段补齐已有依据或回到具体澄清问题。待审双文档 SHALL NOT 包含材料标识、读取范围、Skill 或工具名、执行记录、覆盖自证等内部制作过程内容；发布前应由确定性校验拒绝该类残留，独立审查仍保留其质量职责。
 
 #### Scenario: Product roles use portable Markdown layouts
 

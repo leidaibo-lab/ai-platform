@@ -9,7 +9,13 @@ import { join } from 'node:path';
 import { formalRunBranch, publishFormalSpecification, publishHandoff, publishReviewedCandidate, readHandoffFile } from '../src/delivery/remote-handoff.js';
 import { createTaskContext, contextLimits } from '../src/delivery/task-context.js';
 import { publishProductHandoff, verifyProductHandoff } from '../src/business-engineering/product-handoff.js';
-import { productPaths, readProductDocuments } from '../src/business-engineering/product-documents.js';
+import { productPaths, readProductDocuments, validateProductDraftPresentation } from '../src/business-engineering/product-documents.js';
+
+test('待审双文档拒绝内部制作过程，业务发布门禁可保留', () => {
+  assert.throws(() => validateProductDraftPresentation('# 需求文档\n本稿依据已读取 material-1-aabbccdd。\n# 产品规格\n'), /内部制作过程/);
+  assert.throws(() => validateProductDraftPresentation('# 需求文档\n## 执行记录\n\n# 产品规格\n'), /内部制作过程/);
+  assert.doesNotThrow(() => validateProductDraftPresentation('# 需求文档\n真实资料入口关闭，待书面制度确认后才能发布。\n# 产品规格\n'));
+});
 import { buildSuccessorBaseline } from '../src/intake/successor-run.js';
 
 /** 创建独立工作树与 bare 远端；只使用合成文件。 */

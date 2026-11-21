@@ -1,6 +1,6 @@
-import { productDocumentsInstruction, readProductDocuments } from '../../business-engineering/product-documents.js';
+import { acceptanceRequirementsInstruction, productDocumentsInstruction, readProductDocuments, validateProductDraftPresentation } from '../../business-engineering/product-documents.js';
 import type { projectSpec } from '../../business-engineering/project.js';
-import { acceptanceRequirementsInstruction, readAcceptanceRequirements } from '../../business-engineering/acceptance-requirements.js';
+import { readAcceptanceRequirements } from '../../business-engineering/acceptance-requirements.js';
 import { createHash } from 'node:crypto';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
 import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
@@ -88,7 +88,7 @@ export function createProductManagerPhases(
         const result = attempt.output;
         const content = z.string().trim().min(1).max(100000).parse(result.text);
         if (!inlinePublish && role === 'writing') {
-          if (inputData.productHandoffFormat) readProductDocuments(content);
+          if (inputData.productHandoffFormat) { validateProductDraftPresentation(content); readProductDocuments(content); }
           else if (inputData.requirementTracking) readAcceptanceRequirements(content);
         }
         const facts = projectToolFacts(result.toolResults);
@@ -114,7 +114,7 @@ export function createProductManagerPhases(
   function publishDraft(inputData: Delivery): Delivery {
     const content = inputData.revision?.content ?? inputData.productWork?.entries.at(-1)?.content;
     if (!content) throw new Error('产品写作未产生可审阅正文');
-    if (inputData.productHandoffFormat) readProductDocuments(content);
+    if (inputData.productHandoffFormat) { validateProductDraftPresentation(content); readProductDocuments(content); }
     else if (inputData.requirementTracking) readAcceptanceRequirements(content);
     const hash = createHash('sha256').update(JSON.stringify({ stage: 'product', intake: inputData.intake, brief: inputData.brief, upstream: inputData.artifacts, content, revision: inputData.revision, productRework: inputData.productRework, productWork: inputData.productWork, ...(inputData.nacosResources ? { resources: nacosResourceIdentity(inputData.nacosResources) } : {}) })).digest('hex');
     return { ...inputData, artifacts: [...inputData.artifacts, { stage: 'product' as const, content, hash, evidence: mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const }] };

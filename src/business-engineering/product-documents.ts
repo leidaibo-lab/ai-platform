@@ -1,5 +1,9 @@
 import { assetIdSchema } from '../delivery/asset-identity.js';
-import { acceptanceRequirementsInstruction, readAcceptanceRequirements } from './acceptance-requirements.js';
+import { readAcceptanceRequirements } from './acceptance-requirements.js';
+
+const acceptanceRequirementsInstruction = '增加“可验收需求”清单。每个条目使用独立的一行，格式严格为“- REQ-大写英文或数字标识: 业务规则 | 验收: 可观察的预期结果”。ID 由业务能力命名，例如 REQ-APPLICATION-SUBMIT，不使用行号。同一需求修订、移动时保留原 ID，新增需求分配新 ID，移除需求的 ID 不复用。条目必须覆盖本期可独立验收的业务规则与关键异常，不能引入未经确认的规则。最多100项。';
+
+export { acceptanceRequirementsInstruction };
 
 export const productDocumentsInstruction = `${acceptanceRequirementsInstruction}
 输出同一待审 Markdown 的两份正文，只使用两个一级标题，依次为“# 需求文档”和“# 产品规格”。需求文档写目标、范围和业务规则，按能力保留 Requirement / Scenario（WHEN、THEN）等可观察场景。所有 REQ 条目只在需求文档中声明，放在对应业务规则附近。输入已含可用的 Requirement / Scenario 时，保留其已确认规则与场景，补齐规则已有依据的可观察边界。归档模板中的 TBD Purpose 应改为明确业务目标。
@@ -50,4 +54,16 @@ export function readProductDocuments(content: string) {
   }
   if (coveredIds.size !== requirementIds.size) throw new Error('产品任务须覆盖需求文档中的全部需求 ID');
   return { requirements, specification };
+}
+
+/** 拒绝误入正式双文档的内部制作痕迹；业务发布依赖仍可在正式规则中表达。 */
+export function validateProductDraftPresentation(content: string) {
+  const prohibited = [
+    /\bmaterial-\d+-[a-f0-9]+\b/i,
+    /(?:已读取|未读取).{0,24}(?:材料|正文|offset|分片)/,
+    /\bskill_read\b|\bproduct-pm-[a-z0-9-]+\b/i,
+    /^(?:#{1,6}\s*)?(?:执行记录|需求覆盖检查|制作过程|方法使用记录)\s*$/m,
+    /(?:本稿依据|本稿基于).{0,36}(?:已读取|材料|Skill|工具)/,
+  ];
+  if (prohibited.some(pattern => pattern.test(content))) throw new Error('待审产品稿包含内部制作过程内容，须在写作阶段移出正式双文档');
 }

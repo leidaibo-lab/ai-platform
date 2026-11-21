@@ -60,7 +60,7 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 
 ### Requirement: Late business gaps re-enter controlled clarification
 
-测试或发布阶段发现业务未闭环时，主 Workflow SHALL 保留阶段证据、进入产品澄清和修订确认，
+测试阶段发现业务未闭环时，主 Workflow SHALL 保留阶段证据、进入产品澄清和修订确认，
 并且只在新产品版本确认后重新规划及回归。
 
 #### Scenario: QA returns a business finding
@@ -70,11 +70,14 @@ Workflow 执行、审批和恢复事实 SHALL 由 Mastra Store 持有。时间�
 - **AND** SHALL 将发现转为必须回答的产品澄清项
 - **AND** 修订产品确认后 SHALL 使旧研发、QA 与发布版本失效并重新执行后续阶段
 
-#### Scenario: Release health returns a business finding
+### Requirement: Legacy deployment workflow is retired
 
-- **WHEN** 发布后健康报告带有 `business` 类或 `product` 路由发现
-- **THEN** 系统 SHALL 保留发布和健康证据，并先完成所需回滚关口
-- **AND** SHALL 按与 QA 相同的澄清、确认、重新规划和回归路径继续
+主线 SHALL 以 MR 交付结束，不再装配旧部署、健康确认或回滚回执流程；旧部署 Run 不再支持恢复。
+
+#### Scenario: Mainline delivery reaches MR
+
+- **WHEN** 测试质量放行并确认同版本候选
+- **THEN** 系统 SHALL 提交并核验 MR，不进入旧部署流程
 
 ### Requirement: Platform-created delivery branches start from remote main
 
@@ -328,6 +331,9 @@ Adapter profile SHALL 绑定检查实现及运行时身份；Python SHALL 冻结
 缺少公司人事及法务/隐私负责人书面数据生命周期规则时，产品稿 SHALL 明确仅合成数据可研发验收、真实资料导入及正式发布仍受阻；已收敛的受控开发范围 SHALL 可形成待审规格，不得以虚构期限代替制度或让该发布依赖反复阻塞产品澄清。
 对已明确回答且仅反复出现的外部制度题，需求对齐 SHALL 在其他业务维度均清晰时保留发布待决并允许进入产品写作；尚未生成的文档不作为其自身生成前的门槛，其他必答业务问题保持阻断。
 需求成熟度评估 MAY 使用从原生 Run 历史派生的紧凑证据视图，保留每轮显式回答、补充与审阅身份的可追溯性；不得修改或丢弃原生历史，也不得将未回答的推荐提升为确认事实。正式产品稿仍须读取完整来源材料。
+当关键决策、主流程和异常均已有明确证据，且没有必答业务问题时，若交付成熟度的唯一不足是待审正式文档尚未生成，需求对齐 SHALL 允许进入文档写作；不得将写作结果本身作为启动写作的前置条件。其余交付缺口或必答业务问题仍应阻断，真实数据发布门禁保持独立。
+服务重启后遗留为运行态的产品写作步骤，只有在超过该步骤的受控总时限、没有输出且没有人工暂停点时，系统 SHALL 允许已登录操作者将同一 Run 标记为可恢复失败并从原保存输入重试；不得将尚在时限内的执行或任意步骤强制重置，也不得重建 Run、丢弃已确认回答或绕过后续人工审阅。
+产品写作 SHALL 在形成待审双文档前，以确认基线逐项核对“已确认决策 → 正文业务规则 → 可观察验收 → 产品规格任务”的承接关系；已确认事实不得再次作为待决项，覆盖不全时应在写作阶段补齐已有依据或回到具体澄清问题。待审双文档 SHALL NOT 包含材料标识、读取范围、Skill 或工具名、执行记录、覆盖自证等内部制作过程内容；发布前应由确定性校验拒绝该类残留，独立审查仍保留其质量职责。
 
 #### Scenario: Product roles use portable Markdown layouts
 

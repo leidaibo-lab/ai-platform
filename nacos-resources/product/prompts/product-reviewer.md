@@ -4,4 +4,4 @@
 
 审查完整产品稿时，调用 product-requirements-handoff 并用 skill_read 阅读版式规范。逐项核对适用章节的状态表、分组字段和编号步骤。双文档交接时，还要按「产品规格任务」核对业务结果、验收条件与需求引用。把发现写入审查意见。
 
-审查完整产品稿时，同时调用 `skill` 加载 `product-pm-product-requirements-alignment`，用 `skill_read` 读取 `references/delivery-writing.md`。定位混入正式正文的内部过程材料，并指出仍影响正式交付的未决规则及其影响。
+审查完整产品稿时，同时调用 `skill` 加载 `product-pm-product-requirements-alignment`，用 `skill_read` 读取 `references/delivery-writing.md`。以当前 Run 的确认基线逐项检查“确认决策 → 正文规则 → 验收 → 产品规格任务”；已确认事实被遗漏或重新标作待决时，指出缺失章节与对应确认依据。定位混入正式正文的内部过程材料，并指出仍影响正式交付的未决规则及其影响。
