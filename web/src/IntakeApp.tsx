@@ -4,12 +4,12 @@ import { RunMigration } from './RunMigration';
 import seakoiLogo from './assets/seakoi-logo.webp';
 import { intakeRequest as request, IntakeRequestError, reconcileWrite } from './intake-request';
 import { RepositoryScope } from './RepositoryScope';
-import { ChevronDown, CircleAlert, Clock3, Folder, FolderPlus, GitBranch, Plus, RefreshCw, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Clock3, Folder, FolderPlus, GitBranch, Plus, RefreshCw, X, PanelLeft, PanelTop, PanelRight, RotateCcw } from 'lucide-react';
 import { WorkbenchAccount } from './components/WorkbenchAccount';
 import { WorkbenchUserMenu } from './components/WorkbenchUserMenu';
 import { WorkbenchComposer } from './components/WorkbenchComposer';
 import { WorkbenchRecords, teamLabels } from './components/WorkbenchRecords';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import { TechnicalRecoveryStatus, type TechnicalRecoveryData } from './DevelopmentRecovery';
 import { WorkflowGateForm, WorkflowGateEvidence, type WorkflowGate } from './WorkflowGate';
 import { Markdown } from './components/Markdown';
@@ -97,6 +97,21 @@ export function IntakeApp() {
   const [project, setProject] = useState<{ id?: string; title?: string }>();
   const [projects, setProjects] = useState<Array<{ id: string; title: string }>>([]);
   const [flowOpen, setFlowOpen] = useState(false);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [mainVisible, setMainVisible] = useState(true);
+  const [leftWidth, setLeftWidth] = useState(185);
+  const [rightWidth, setRightWidth] = useState(420);
+  const shellRef = useRef<HTMLDivElement>(null);
+  /** 拖拽分隔线只调整当前页面的栏宽，保留中栏最小空间。 */
+  function resizePanel(side: 'left' | 'right', clientX: number) {
+    const box = shellRef.current?.getBoundingClientRect();
+    if (!box) return;
+    const available = Math.max(160, box.width - (side === 'left' && (materialOpen || changesOpen) ? rightWidth : side === 'right' && sidebarVisible ? leftWidth : 0) - 320);
+    const requested = side === 'left' ? clientX - box.left : box.right - clientX;
+    (side === 'left' ? setLeftWidth : setRightWidth)(Math.max(160, Math.min(requested, available)));
+  }
+  /** 捕获指针使分隔线在快速拖动时仍可连续调整。 */
+  function startResize(event: PointerEvent<HTMLDivElement>) { event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault(); }
   const [material, setMaterial] = useState<Material>();
   const [notes, setNotes] = useState<Record<string, string[]>>({});
   const [messages, setMessages] = useState<Record<string, string>>({});
@@ -165,7 +180,7 @@ export function IntakeApp() {
   const onActiveTeam = selectedTeam === activeTeam;
   const changesOpen = !!id && changesRun === id;
   /** 收起差异栏并将键盘焦点交还入口。 */
-  function closeChanges() { setChangesRun(undefined); changesTrigger.current?.focus(); }
+  function closeChanges() { setMainVisible(true); setChangesRun(undefined); changesTrigger.current?.focus(); }
   useEffect(() => {
     if (!changesOpen) return;
     /** Escape 只收起当前可见的变更栏。 */
@@ -182,7 +197,7 @@ export function IntakeApp() {
     setMaterial(view); setChangesRun(undefined); setFlowOpen(false);
   }
   /** 收起材料并把焦点交还入口。 */
-  function closeMaterial() { setMaterial(undefined); focusMaterial.current?.focus(); }
+  function closeMaterial() { setMainVisible(true); setMaterial(undefined); focusMaterial.current?.focus(); }
   /** 底部输入仅保存草稿或本页记录，人工关口仍通过原表单提交。 */
   function sendNote() {
     const value = currentNote.trim();
@@ -391,12 +406,12 @@ export function IntakeApp() {
     !!document.specifications?.length && 'specifications', document.acceptanceEvidence && 'quality', document.mergeRequest && 'delivery',
   ].filter(Boolean) as Material[] : [];
   const scopedRuns = runs.filter(run => !project?.id || !run.projectId || run.projectId === project.id);
-  return <div className={`intake-shell intake-workbench project-workbench${changesOpen || materialOpen ? ' workbench-inspecting' : ''}`} onKeyDown={event => {
+  return <div ref={shellRef} style={{ '--panel-left': `${leftWidth}px`, '--panel-right': `${rightWidth}px` } as CSSProperties} className={`intake-shell intake-workbench project-workbench${changesOpen || materialOpen ? ' workbench-inspecting' : ''}${!sidebarVisible ? ' sidebar-hidden' : ''}${!mainVisible ? ' main-hidden' : ''}`} onKeyDown={event => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     if (materialOpen) closeMaterial(); else if (flowOpen) setFlowOpen(false);
   }}>
     <header className="workbench-bar"><a className="intake-brand" href="/" aria-label="产研工作台首页"><img className="intake-brand-logo" src={seakoiLogo} alt="Seakoi" /><span>产研工作台</span></a>{document?.mode === 'fixture' && <small>固定样例</small>}
-      <div className="workbench-tools"><button type="button" disabled={navigationLocked} onClick={() => setShowIndependentTeams(true)}>独立团队</button><button type="button" disabled={navigationLocked} title="刷新状态" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw size={15} /></button></div>
+      <div className="workbench-tools"><button type="button" title={sidebarVisible ? '隐藏左栏' : '显示左栏'} aria-label={sidebarVisible ? '隐藏左栏' : '显示左栏'} aria-pressed={sidebarVisible} onClick={() => setSidebarVisible(value => !value)}><PanelLeft size={15} /></button><button type="button" title={mainVisible ? '隐藏中栏' : '显示中栏'} aria-label={mainVisible ? '隐藏中栏' : '显示中栏'} aria-pressed={mainVisible} disabled={!materialOpen && !changesOpen} onClick={() => setMainVisible(value => !value)}><PanelTop size={15} /></button><button type="button" title="打开审查材料" aria-label="打开审查材料" disabled={!availableMaterials.length} onClick={event => { setMainVisible(true); openMaterial(availableMaterials[0], event.currentTarget); }}><PanelRight size={15} /></button><button type="button" title="还原布局" aria-label="还原布局" onClick={() => { setSidebarVisible(true); setMainVisible(true); setLeftWidth(185); setRightWidth(420); }}><RotateCcw size={15} /></button><button type="button" disabled={navigationLocked} onClick={() => setShowIndependentTeams(true)}>独立团队</button><button type="button" disabled={navigationLocked} title="刷新状态" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw size={15} /></button></div>
     </header>
     <aside className="intake-sidebar" aria-label="项目与需求">
       <div className="workbench-sidebar-nav">
@@ -421,6 +436,7 @@ export function IntakeApp() {
         openTeamSettings={() => setShowTeamSettings(true)}
       />
     </aside>
+    {sidebarVisible && <div className="panel-resizer panel-resizer-left" role="separator" aria-label="调整左栏宽度" aria-orientation="vertical" tabIndex={0} onPointerDown={startResize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resizePanel('left', event.clientX); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setLeftWidth(value => Math.max(160, Math.min(500, value + (event.key === 'ArrowRight' ? 16 : -16)))); } }} />}
     <main className="intake-main">
       {id && <header className="workbench-context"><details><summary>{(document?.brief || brief).split(/\n/)[0]?.slice(0, 90) || '原始需求'}</summary><p>{document?.brief || brief}</p><code>{id}</code></details>
         <div className="workbench-tools">
@@ -444,7 +460,7 @@ export function IntakeApp() {
           {savedCorrection ? <button type="button" disabled={correcting} onClick={() => void correctProduct()}>继续纠偏</button>
             : staleCorrection && <button type="button" disabled={correcting} onClick={moveCorrectionToNote}>转为补充草稿</button>}
         </div>}
-        {!!notes[id]?.length && <details className="workbench-local-notes" open><summary>本页补充记录</summary>{notes[id].map((note, index) => <p key={index}>{note}</p>)}</details>}
+        {!!notes[id]?.length && <section className="workbench-local-notes" aria-label="本页补充记录">{notes[id].map((note, index) => <div className="conversation-user" key={index}><small>本页补充 · 未推进流程</small><p>{note}</p></div>)}</section>}
         {!onActiveTeam && <div className="workbench-feedback">当前查看{teamLabels[selectedTeam]}阶段 <button type="button" onClick={() => selectTeam(activeTeam)}>返回当前待办</button></div>}
         {document && ['failed', 'suspended', 'success'].includes(document.status) && <details><summary>历史运行迁移</summary><RunMigration runId={document.runId} completed={choose} /></details>}
         {document?.successor && document.status === 'success' && <section className="intake-card"><div className="intake-eyebrow">后继 Run</div><h2>基于已确认规格创建新 Run</h2><p>旧 Run 的审批、预算、测试与发布回执不会继承。系统会重新校验下列固定 commit 与散列，并让新 Run 从需求澄清开始。</p>{showSuccessor ? <><label>本轮变更说明<textarea value={successorBrief} maxLength={12000} rows={4} onChange={event => setSuccessorBrief(event.target.value)} /></label>{document.successor.artifacts.map(item => <label className="intake-mode-toggle" key={item.kind}><input type="checkbox" checked={successorKinds.includes(item.kind)} onChange={event => setSuccessorKinds(event.target.checked ? [...successorKinds, item.kind] : successorKinds.filter(kind => kind !== item.kind))} /><span><strong>{item.kind === 'product' ? '产品 Spec' : item.kind === 'development' ? '开发 Spec' : '测试 Spec'}</strong><small>{item.branch} · {item.commit.slice(0, 12)}</small></span></label>)}<div className="intake-actions"><button className="primary" disabled={busy || !successorBrief.trim() || !successorKinds.length} onClick={startSuccessor}>校验规格并新建 Run →</button><button disabled={busy} onClick={() => setShowSuccessor(false)}>取消</button></div></> : <button className="primary" disabled={busy || uncertain} onClick={() => { setSuccessorBrief(''); setSuccessorKinds(document.successor!.artifacts.map(item => item.kind)); setShowSuccessor(true); }}>基于已确认版本新建 Run →</button>}</section>}
@@ -498,6 +514,7 @@ export function IntakeApp() {
         disabled={correctionMode ? correcting || staleCorrection || !!savedCorrection || !activeAttempt || activeAttempt.stopping : navigationLocked || (!id && (!project?.id || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)))} />}
       <WorkbenchAccount key={String(accountOpen)} open={accountOpen} signedIn={setAccountName} close={() => setAccountOpen(false)} />
     </main>
+    {(materialOpen || changesOpen) && mainVisible && <div className="panel-resizer panel-resizer-right" role="separator" aria-label="调整右栏宽度" aria-orientation="vertical" tabIndex={0} onPointerDown={startResize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resizePanel('right', event.clientX); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setRightWidth(value => Math.max(160, Math.min(900, value + (event.key === 'ArrowLeft' ? 16 : -16)))); } }} />}
     {materialOpen && document && material && <aside ref={materialPanel} className="workbench-materials" aria-label="审查材料"><header><div className="workbench-tools">{availableMaterials.map(view => <button key={view} type="button" aria-pressed={view === material} onClick={() => setMaterial(view)}>{view === 'gate' && document.gate?.key === 'approve-architecture' ? '架构方案' : view === 'gate' && document.gate?.key === 'approve-test-cases' ? '测试用例' : materialLabels[view]}</button>)}</div><button type="button" aria-label="关闭材料" onClick={closeMaterial}><X size={16} /></button></header>
       <div className="workbench-material-body">
       {material === 'product' && (document.product || document.approvedProduct) && <><small>版本 <code>{(document.product?.artifact.hash ?? document.approvedProduct?.hash)?.slice(0, 12)}</code></small>{document.productDocuments ? <>

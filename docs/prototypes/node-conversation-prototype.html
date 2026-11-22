@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>节点对话流 · 工作台交互原型</title><style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#263d34;background:#f4f7f5;font-size:14px}*{box-sizing:border-box}body{margin:0}button,textarea{font:inherit}button{cursor:pointer}button:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #72ac94;outline-offset:2px}.app{display:grid;grid-template-columns:var(--left-width,224px) 8px minmax(300px,1fr) 8px var(--right-width,245px);height:100vh}.sidebar{background:#edf3ef;border-right:1px solid #dce7e0;padding:24px 16px;display:flex;flex-direction:column;gap:28px}.brand{font-size:16px;font-weight:750;color:#1e4938}.brand span{display:inline-grid;place-items:center;background:#205b4d;color:white;width:29px;height:29px;border-radius:9px;margin-right:8px}.small{font-size:12px;color:#768a7e}.nav-title{font-size:12px;color:#829389;margin:0 10px 10px}.nav-item{padding:11px 10px;border-radius:8px;color:#4d6659}.nav-item.active{background:#dcebe1;color:#225f45;font-weight:650}.nav-bottom{margin-top:auto;border-top:1px solid #dce7e0;padding:18px 8px;color:#587061}.main{min-width:0;display:flex;flex-direction:column;background:#fff}.top{height:66px;border-bottom:1px solid #e9efeb;display:flex;align-items:center;justify-content:space-between;padding:0 30px;gap:12px}.top strong{font-size:15px}.top-actions{display:flex;gap:8px}.ghost{border:1px solid #dbe6df;background:white;color:#456454;border-radius:7px;padding:7px 11px}.body{overflow:auto;flex:1;scroll-behavior:smooth}.conversation{width:100%;margin:0;padding:24px 32px 20px 48px}.intro{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #edf1ee;padding-bottom:18px;margin-bottom:25px}.intro h1{font-size:19px;margin:0 0 6px}.prototype{font-size:12px;color:#8a6c38;background:#fbf4e5;border-radius:5px;padding:5px 8px;white-space:nowrap}.section-date{text-align:center;color:#9aa9a0;font-size:12px;margin:15px 0 26px}.task{margin-left:auto;max-width:78%;background:#edf5f0;border:1px solid #dcebe1;padding:14px 17px;border-radius:14px 14px 3px 14px}.task .label{font-size:12px;color:#528166;margin-bottom:6px;font-weight:650}.task strong{font-size:14px}.task p{margin:7px 0 0;color:#576d60;line-height:1.7}.response{display:flex;gap:12px;margin:22px 0 30px}.avatar{width:29px;height:29px;flex:none;display:grid;place-items:center;background:#205b4d;border-radius:9px;color:#fff;font-size:12px;font-weight:bold}.content{min-width:0;flex:1}.response-head{display:flex;align-items:center;gap:8px;font-weight:650;margin:4px 0 12px}.status{font-size:12px;color:#358263;background:#e8f5ed;border-radius:20px;padding:4px 8px;font-weight:500}.status.live{color:#a17322;background:#fbf4e5}.meta{font-size:12px;color:#8b9a91;font-weight:400;margin-left:auto}.summary{line-height:1.8;color:#344a3e}.summary p{margin:0 0 9px}.summary ul{padding-left:20px;margin:8px 0}.summary li{padding:3px 0}.process{border:1px solid #e1eae4;border-radius:9px;margin:12px 0 16px;background:#fbfcfb}.process summary{cursor:pointer;padding:11px 13px;color:#637a6d;font-size:13px;list-style:none}.process summary::-webkit-details-marker{display:none}.process summary:before{content:'›';display:inline-block;font-size:17px;margin-right:8px;transition:transform .15s}.process[open] summary:before{transform:rotate(90deg)}.process-body{border-top:1px solid #edf1ee;padding:6px 14px 12px;color:#536c5e;line-height:1.8}.process-body p{margin:10px 0}.tool{font-size:12px;color:#8a9a90}.files{border:1px solid #e0eae3;border-radius:9px;overflow:hidden;margin-top:15px}.files-header{background:#f7faf8;padding:10px 13px;display:flex;justify-content:space-between;font-weight:650}.file{display:flex;justify-content:space-between;padding:10px 13px;border-top:1px solid #edf2ee;color:#5b7165;font-size:12px;overflow-wrap:anywhere}.file span:last-child{color:#3b946c;white-space:nowrap;margin-left:12px}.note{font-size:12px;color:#8a9a90;margin-top:10px}.live-content{border-left:2px solid #b4d8c1;padding-left:14px;line-height:1.85;color:#425b4d}.pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ca777;margin-right:6px}.user-message{margin:20px 0 20px auto;background:#e7f0fa;color:#284969;border-radius:14px 14px 3px 14px;max-width:78%;padding:12px 15px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.user-message small{display:block;color:#718ba0;margin-top:5px}.composer-wrap{padding:10px 32px 20px 48px;background:linear-gradient(transparent,#fff 20%)}.composer{width:100%;margin:0;border:1px solid #d8e6dc;box-shadow:0 4px 18px #274d3710;border-radius:12px;padding:12px}.composer textarea{resize:vertical;min-height:55px;max-height:140px;width:100%;border:0;outline:0;color:#294737}.composer-foot{display:flex;justify-content:space-between;align-items:center;gap:10px}.send{border:0;background:#205b4d;color:white;border-radius:8px;padding:9px 15px}.send:disabled{opacity:.5}.hint{font-size:12px;color:#839589}.right{background:#f8faf9;border-left:1px solid #e7eeea;padding:26px 20px;overflow:auto}.right h2{font-size:13px;margin:0 0 20px}.flow-item{display:flex;gap:10px;position:relative;padding-bottom:23px;color:#718479;font-size:13px}.dot{width:17px;height:17px;flex:none;border-radius:50%;border:1px solid #c8d8ce;display:grid;place-items:center;font-size:10px;background:white}.done .dot{background:#e4f2e9;color:#37845c;border-color:#d0e8d8}.current{color:#205b4d;font-weight:650}.current .dot{background:#205b4d;border-color:#205b4d;color:white}.flow-item small{display:block;font-weight:400;margin-top:5px;color:#98a99e}.right hr{border:0;border-top:1px solid #e3ebe6;margin:8px 0 20px}.right p{line-height:1.7;color:#87998e;font-size:12px}.demo-controls{display:flex;gap:5px;flex-wrap:wrap}.demo-controls button{font-size:12px;padding:6px 8px}.demo-controls button[aria-pressed=true]{background:#205b4d;color:white;border-color:#205b4d}.notice{background:#faf6eb;border:1px solid #eee4c7;color:#806e42;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.6;margin:12px 0}.hidden{display:none!important}@media(max-width:650px){.app{height:100vh;overflow-x:auto}.sidebar,.right{overflow:auto}.main{height:100vh}.top{padding:0 16px}.top-actions{display:none}.conversation{padding:22px 18px 22px 30px}.composer-wrap{padding:8px 16px 16px 30px}.task,.user-message{max-width:90%}.meta{display:none}.intro h1{font-size:16px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+
+.app{min-width:320px}.sidebar{grid-column:1;grid-row:1}.resizer[data-resize=left]{grid-column:2;grid-row:1}.main{grid-column:3;grid-row:1}.resizer[data-resize=right]{grid-column:4;grid-row:1}.right{grid-column:5;grid-row:1}.app.middle-hidden{--middle-min:0px;grid-template-columns:var(--left-width,224px) var(--left-divider,8px) 0px var(--right-divider,8px) minmax(0,1fr)}.app.middle-hidden .main{display:none}.app.middle-hidden.right-hidden{grid-template-columns:minmax(0,1fr) 0 0 0 0}.app.middle-hidden.left-hidden{grid-template-columns:0 0 0 0 minmax(0,1fr)}.app.left-hidden{--left-width:0px!important;--left-divider:0px}.app.right-hidden{--right-width:0px!important;--right-divider:0px}.app.left-hidden .sidebar,.app.right-hidden .right{display:none}.app.left-hidden [data-resize=left],.app.right-hidden [data-resize=right]{display:none}.app:not(.middle-hidden){grid-template-columns:var(--left-width,224px) var(--left-divider,8px) minmax(var(--middle-min,300px),1fr) var(--right-divider,8px) var(--right-width,245px)}.resizer{background:#f4f8f5;cursor:col-resize;touch-action:none;position:relative}.resizer:after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent}.resizer:hover:after,.resizer:focus-visible:after,.resizer.dragging:after{background:#72ac94}.restore-layout{white-space:nowrap}.layout-bar{position:fixed;top:8px;right:8px;z-index:20}.layout-bar>span{display:none}.layout-controls{display:flex;gap:3px;align-items:center;padding:3px;background:#fff;border:1px solid #dce7e0;border-radius:8px;box-shadow:0 2px 8px #274d3718}.layout-controls button{width:30px;height:30px;padding:0;display:grid;place-items:center}.app{height:100vh}.top{padding-right:30px}.layout-controls button{padding:7px 9px}.layout-controls button[aria-pressed=false]{color:#899b91;background:#f3f6f4}@media(max-width:650px){.top{gap:5px}.top strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.restore-layout{font-size:12px}}.sidebar,.right{min-width:0;overflow:hidden}.sidebar{padding-left:12px;padding-right:12px}.right{padding-left:14px;padding-right:14px}
+/* 话题导航贴近对话区，刻度对应真实的节点任务和用户补充。 */
+.body{position:relative}.topic-rail{position:sticky;top:32%;float:left;width:36px;margin-right:-36px;z-index:2;display:flex;flex-direction:column;gap:2px;padding:8px 0 8px 8px}.topic-link{position:relative;width:28px;height:16px;border:0;background:transparent;padding:0;text-align:left}.topic-link:before{content:'';display:block;width:8px;height:2px;background:#b8c9bf;border-radius:2px}.topic-link.active:before{background:#267553}.topic-link:hover:before,.topic-link:focus-visible:before{width:20px;background:#267553}.topic-link:before{transition:width .15s ease,background-color .15s ease}.topic-preview{display:none;position:absolute;left:32px;top:50%;transform:translateY(-50%);width:220px;text-align:left;padding:10px 12px;color:#314a3d;background:#fff;border:1px solid #dce8e0;border-radius:9px;box-shadow:0 5px 18px #24463420;line-height:1.5;white-space:normal;z-index:3}.topic-preview strong{display:block;font-size:12px}.topic-preview small{display:block;color:#81958a;margin-top:4px;font-size:12px}.topic-link:hover .topic-preview,.topic-link:focus-visible .topic-preview{display:block}.topic-anchor{scroll-margin-top:22px}@media(max-width:650px){.topic-rail{width:24px;margin-right:-24px;padding-left:3px}.topic-link{width:20px}.topic-preview{left:22px;width:190px}.conversation{padding-left:30px}}
+</style></head><body><header class="layout-bar"><span>协作工作台</span><div class="layout-controls"><button class="ghost" id="toggleLeft" type="button" aria-pressed="true" aria-label="隐藏左侧栏" title="隐藏左侧栏">◧</button><button class="ghost" id="toggleMiddle" type="button" aria-pressed="true" aria-label="隐藏中间栏" title="隐藏中间栏">▣</button><button class="ghost" id="toggleRight" type="button" aria-pressed="true" aria-label="隐藏右侧栏" title="隐藏右侧栏">◨</button><button class="ghost restore-layout" id="restoreLayout" type="button" aria-label="还原三栏" title="还原三栏">↺</button></div></header><div class="app"><aside class="sidebar"><div class="brand"><span>AI</span>协作工作台</div><div><p class="nav-title">项目 / AI 应用平台</p><div class="nav-item">＋ 新建需求</div><div class="nav-item active">工作台实时协作体验</div><div class="nav-item">项目执行与审批流程</div><div class="nav-item">团队方法与配置</div></div><div class="nav-bottom">◉ &nbsp; 产品负责人</div></aside><div class="resizer" role="separator" tabindex="0" aria-label="调整左栏宽度" aria-orientation="vertical" data-resize="left"></div><main class="main"><header class="top"><strong>工作台实时协作体验</strong><div class="top-actions"><button class="ghost" type="button" id="flowBtn">查看流程</button><button class="ghost" type="button" id="materialsBtn">审查材料</button></div></header><div class="body" id="scroll"><nav class="topic-rail" id="topicRail" aria-label="对话话题导航"></nav><div class="conversation"><div class="intro"><div><h1>执行过程</h1><span class="small">产品团队 / 需求分析</span></div><span class="prototype">交互原型 · 示例数据</span></div><div class="section-date">今天 10:24</div><div class="task topic-anchor" data-topic="梳理需求与范围" data-preview="分析问题、整理用户目标与待确认事项"><div class="label">节点任务 · 产品团队</div><strong>梳理需求与范围</strong><p>分析工作台节点信息展示问题，整理用户目标与待确认事项。</p></div><div class="response"><div class="avatar">产</div><div class="content"><div class="response-head">需求分析 <span class="status">已完成</span><span class="meta">用时 2 分 18 秒</span></div><details class="process"><summary>执行过程 · 查看模型输出与工具记录</summary><div class="process-body"><p>先梳理当前工作台的信息结构，识别用户在执行过程中的关注点。</p><p class="tool">✓ 读取需求资料 · 已完成</p><p>需求侧重点包括及时了解进度、补充上下文，以及在完成后快速查看结果。</p><p class="tool">✓ 整理需求范围 · 已完成</p></div></details><div class="summary"><p>已完成需求梳理，识别出三个主要目标：</p><ul><li>运行中及时了解节点的公开输出和工具进展。</li><li>完成后优先查看总结与关联产物，过程可按需展开。</li><li>补充信息时明确告知用户提交范围和生效状态。</li></ul></div><div class="files"><div class="files-header"><span>关联产物 · 2 个文件</span><span class="small">示例</span></div><div class="file"><span>requirements / 需求分析.md</span><span>已生成</span></div><div class="file"><span>requirements / 待确认问题.md</span><span>已生成</span></div></div><div class="note">节点完成不代表产物已审批；文件仅为原型示例。</div></div></div><div class="task topic-anchor" data-topic="整理产品方案" data-preview="形成可审阅的工作台交互方案"><div class="label">节点任务 · 产品团队</div><strong>整理产品方案</strong><p>基于已梳理的需求，形成可审阅的工作台交互方案。</p></div><div class="response"><div class="avatar">产</div><div class="content"><div class="response-head">产品稿写作 <span class="status live" id="liveStatus"><span class="pulse"></span>执行中</span><span class="meta" id="timer">第 1 次尝试 · 进行中</span></div><div id="liveBlock"><div class="live-content"><p>正在整理节点对话流的阅读顺序：先展示节点任务，再呈现该节点的公开输出、操作进展和最终结果。</p><p class="tool">✓ 读取需求分析 · 已完成</p><p>对于运行中补充的内容，需要让用户清楚知道是否已提交、是否影响当前执行。</p><p class="tool">◌ 正在整理方案结构</p></div><div class="note">模型生成片段，内容可能变化；不包含隐藏推理。</div></div><div id="completeBlock" class="hidden"><details class="process"><summary>执行过程 · 查看模型输出与工具记录</summary><div class="process-body"><p>已读取需求分析，并整理节点任务、实时输出与最终结果之间的关系。</p><p class="tool">✓ 读取需求分析 · 已完成</p><p>已整理方案结构，区分补充意见和正式审批。</p></div></details><div class="summary"><p>已形成产品方案初稿，包含节点对话流、过程折叠和运行中补充的交互建议。</p><p>下一步：审阅方案并确认补充信息的处理方式。</p></div><div class="files"><div class="files-header"><span>关联产物 · 1 个文件</span><span class="small">示例</span></div><div class="file"><span>requirements / 产品方案.md</span><span>已生成</span></div></div><div class="note">示例结果，未代表真实产物或审批状态。</div></div><div id="errorBlock" class="hidden"><div class="notice">连接暂时中断，当前显示的是已收到的内容。请等待重连或查看最新运行状态。</div><div class="live-content">正在整理节点对话流的阅读顺序……</div></div></div></div><div id="messages"></div></div></div><div class="composer-wrap"><form class="composer" id="form"><label class="small" for="input">补充内容</label><textarea id="input" placeholder="输入你希望补充的信息或调整建议…"></textarea><div class="composer-foot"><span class="hint">原型演示：提交后模拟停止当前尝试并重新执行</span><button class="send" type="submit">提交意见</button></div></form></div></main><div class="resizer" role="separator" tabindex="0" aria-label="调整右栏宽度" aria-orientation="vertical" data-resize="right"></div><aside class="right"><h2>执行流程</h2><div class="flow-item done"><span class="dot">✓</span><div>梳理需求与范围<small>已完成 · 2 分 18 秒</small></div></div><div class="flow-item current"><span class="dot">•</span><div>整理产品方案<small id="sideStatus">执行中</small></div></div><div class="flow-item"><span class="dot"></span><div>独立审查<small>待执行</small></div></div><div class="flow-item"><span class="dot"></span><div>人工确认<small>待执行</small></div></div><hr><h2>原型状态切换</h2><div class="demo-controls"><button class="ghost" type="button" data-state="live" aria-pressed="true">执行中</button><button class="ghost" type="button" data-state="complete" aria-pressed="false">已完成</button><button class="ghost" type="button" data-state="error" aria-pressed="false">连接中断</button></div><p>用于体验不同状态的展示，不连接真实运行或模型。</p></aside></div><script>
+// 分隔线支持指针拖拽和键盘调整；还原时重置两侧宽度。
+const app=document.querySelector('.app');
+function resizePanel(side,width){
+  const other=document.querySelector(side==='left'?'.right':'.sidebar').getBoundingClientRect().width;
+  const maximum=Math.max(100,app.clientWidth-other-16);
+  if(!app.classList.contains('middle-hidden'))width=Math.min(width,Math.max(100,app.clientWidth-other-316));
+  app.style.setProperty(side==='left'?'--left-width':'--right-width',Math.max(100,Math.min(width,maximum))+'px');
+}
+document.querySelectorAll('.resizer').forEach(handle=>{
+  handle.addEventListener('pointerdown',event=>{
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add('dragging');
+  });
+  handle.addEventListener('pointermove',event=>{
+    if(!handle.hasPointerCapture(event.pointerId))return;
+    const rect=app.getBoundingClientRect();
+    resizePanel(handle.dataset.resize,handle.dataset.resize==='left'?event.clientX-rect.left:rect.right-event.clientX);
+  });
+  handle.addEventListener('pointerup',()=>handle.classList.remove('dragging'));
+  handle.addEventListener('pointercancel',()=>handle.classList.remove('dragging'));
+  handle.addEventListener('keydown',event=>{
+    if(!['ArrowLeft','ArrowRight'].includes(event.key))return;
+    event.preventDefault();
+    const side=handle.dataset.resize;
+    const panel=document.querySelector(side==='left'?'.sidebar':'.right');
+    const direction=event.key==='ArrowRight'?1:-1;
+    resizePanel(side,panel.getBoundingClientRect().width+direction*(side==='left'?1:-1)*16);
+  });
+});
+function setPanelVisible(side,visible){
+  if(!visible && document.querySelectorAll('.app.left-hidden,.app.middle-hidden,.app.right-hidden').length===3)return;
+  const hiddenCount=['left','middle','right'].filter(name=>app.classList.contains(name+'-hidden')).length;
+  if(!visible && hiddenCount>=2)return;
+  app.classList.toggle(side+'-hidden',!visible);
+  const button=document.getElementById(side==='left'?'toggleLeft':side==='right'?'toggleRight':'toggleMiddle');
+  button.setAttribute('aria-pressed',String(visible));
+  const label=(visible?'隐藏':'显示')+(side==='left'?'左侧栏':side==='right'?'右侧栏':'中间栏');
+  button.setAttribute('aria-label',label);
+  button.title=label;
+}
+document.getElementById('toggleMiddle').addEventListener('click',()=>setPanelVisible('middle',app.classList.contains('middle-hidden')));
+document.getElementById('toggleLeft').addEventListener('click',()=>setPanelVisible('left',app.classList.contains('left-hidden')));
+document.getElementById('toggleRight').addEventListener('click',()=>setPanelVisible('right',app.classList.contains('right-hidden')));
+document.getElementById('restoreLayout').addEventListener('click',()=>{
+  app.style.removeProperty('--left-width');
+  app.style.removeProperty('--right-width');
+  setPanelVisible('left',true);
+  setPanelVisible('middle',true);
+  setPanelVisible('right',true);
+});
+// 依据当前对话构建可聚焦的导航，并跟随滚动位置更新选中项。
+const topicRail=document.getElementById('topicRail');
+const scrollArea=document.getElementById('scroll');
+function refreshTopics(){
+  topicRail.replaceChildren();
+  document.querySelectorAll('.topic-anchor').forEach((anchor,index)=>{
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='topic-link';
+    button.setAttribute('aria-label','定位话题：'+anchor.dataset.topic);
+    const preview=document.createElement('span');
+    preview.className='topic-preview';
+    const title=document.createElement('strong');
+    title.textContent=anchor.dataset.topic;
+    const detail=document.createElement('small');
+    detail.textContent=anchor.dataset.preview;
+    preview.append(title,detail);
+    button.append(preview);
+    button.addEventListener('click',()=>{anchor.scrollIntoView({behavior:'smooth',block:'start'});setActiveTopic(index)});
+    topicRail.append(button);
+  });
+  updateTopic();
+}
+function setActiveTopic(index){
+  topicRail.querySelectorAll('button').forEach((button,i)=>{button.classList.toggle('active',i===index);if(i===index)button.setAttribute('aria-current','location');else button.removeAttribute('aria-current')});
+}
+function updateTopic(){
+  const anchors=[...document.querySelectorAll('.topic-anchor')];
+  const threshold=scrollArea.getBoundingClientRect().top+scrollArea.clientHeight*.4;
+  let active=0;
+  anchors.forEach((anchor,index)=>{if(anchor.getBoundingClientRect().top<=threshold)active=index});
+  if(anchors.length)setActiveTopic(active);
+}
+scrollArea.addEventListener('scroll',updateTopic,{passive:true});
+refreshTopics();
+// 初次进入时定位最后一条对话；之后滚动继续反映当前阅读位置。
+requestAnimationFrame(()=>{const anchors=document.querySelectorAll('.topic-anchor');const last=anchors[anchors.length-1];if(last){last.scrollIntoView({block:'start'});setActiveTopic(anchors.length-1)}});
+// 切换示例状态，展示过程展开、完成收起和连接中断。
+function setState(state){document.querySelectorAll('[data-state]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.state===state)));for(const name of ['live','complete','error'])document.getElementById(name+'Block').classList.toggle('hidden',name!==state);const status=document.getElementById('liveStatus');status.classList.toggle('live',state!=='complete');status.textContent=state==='complete'?'已完成':state==='error'?'连接中断':'执行中';document.getElementById('sideStatus').textContent=state==='complete'?'已完成':state==='error'?'连接中断，状态待确认':'执行中';document.getElementById('timer').textContent=state==='complete'?'用时 3 分 06 秒':'第 1 次尝试 · '+(state==='error'?'状态待确认':'进行中')}
+document.querySelectorAll('[data-state]').forEach(button=>button.addEventListener('click',()=>setState(button.dataset.state)));
+// 模拟纠偏状态，所有状态均为本地演示，不连接实际运行。
+const form=document.getElementById('form');
+const input=document.getElementById('input');
+const send=form.querySelector('button');
+let correcting=false;
+form.addEventListener('submit',event=>{
+  event.preventDefault();
+  if(correcting||!input.value.trim())return;
+  correcting=true;
+  setState('live');
+  const message=document.createElement('div');
+  message.className='user-message topic-anchor';
+  message.dataset.topic=input.value.trim().slice(0,30);
+  message.dataset.preview='用户补充 · 纠偏意见';
+  message.append(document.createTextNode(input.value.trim()));
+  const label=document.createElement('small');
+  label.textContent='纠偏意见 · 原型演示';
+  message.append(label);
+  const messages=document.getElementById('messages');
+  messages.append(message);
+  refreshTopics();
+  input.value='';
+  input.disabled=true;
+  send.disabled=true;
+  const response=document.createElement('div');
+  response.className='response';
+  response.innerHTML='<div class="avatar">产</div><div class="content"><div class="response-head">产品稿写作 <span class="status live" id="correctionStatus">正在停止</span><span class="meta" id="correctionAttempt">第 1 次尝试</span></div><div class="live-content" id="correctionContent" role="status">正在请求停止当前生成，等待暂停检查点。</div><div class="note">以下为模拟状态，不会影响真实运行。</div></div>';
+  messages.append(response);
+  const status=document.getElementById('liveStatus');
+  status.textContent='正在停止';
+  document.getElementById('sideStatus').textContent='正在停止';
+  message.scrollIntoView({block:'nearest'});
+  setTimeout(()=>{
+    status.textContent='已停止';
+    document.getElementById('correctionStatus').textContent='反馈已保存';
+    document.getElementById('correctionContent').textContent='已保存反馈，准备重新执行。';
+    document.getElementById('sideStatus').textContent='准备重新执行';
+  },1800);
+  setTimeout(()=>{
+    document.getElementById('correctionStatus').textContent='执行中';
+    document.getElementById('correctionAttempt').textContent='第 2 次尝试 · 进行中';
+    const content=document.getElementById('correctionContent');
+    content.replaceChildren();
+    const applied=document.createElement('p');
+    applied.textContent='反馈已应用，正在结合补充意见重新整理产品方案。';
+    const tool=document.createElement('p');
+    tool.className='tool';
+    tool.textContent='✓ 读取已保存的纠偏意见 · 已完成';
+    const progress=document.createElement('p');
+    progress.textContent='正在更新方案结构，并检查调整对现有需求范围的影响。';
+    content.append(applied,tool,progress);
+    document.getElementById('sideStatus').textContent='执行中 · 第 2 次尝试';
+    input.disabled=false;
+    send.disabled=false;
+    correcting=false;
+    response.scrollIntoView({block:'nearest'});
+  },3800);
+});
+// 原型中的导航入口说明其演示范围。
+for(const id of ['flowBtn','materialsBtn'])document.getElementById(id).addEventListener('click',()=>alert(id==='flowBtn'?'流程示例展示在页面右侧；窄屏时隐藏。':'原型未连接真实审查材料。'));
+</script></body></html>
