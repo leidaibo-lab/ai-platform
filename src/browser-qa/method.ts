@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { developmentHash } from '../development/contracts.js';
-import { loadGovernedSkill } from '../mastra/agents/skills.js';
+import { loadGovernedSkill } from '../mastra/skills.js';
 import { methodSkill } from '../mastra/team-methods.js';
 import type { TeamMethods } from '../mastra/team-method-contracts.js';
 /** 原文和中文适配入口共同进入运行证据绑定。 */

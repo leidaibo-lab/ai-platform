@@ -5,7 +5,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileS
 import { basename, join, relative, resolve } from 'node:path';
 import { validateSkillContent } from '@mastra/core/skills';
 import { z } from 'zod';
-import { productSkillPath, productSkillSelectionSchema } from '../src/mastra/agents/skills.js';
+import { productSkillPath, productSkillSelectionSchema } from '../src/mastra/skills.js';
 
 const root = resolve('nacos-resources/product/skills');
 const versionSchema = z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { PRODUCT_MAX_STEPS } from '../agents/skills.js';
+import { PRODUCT_MAX_STEPS } from '../skills.js';
 import { productGenerationSchema } from '../../delivery/product-generation-contract.js';
 
 /** 产品经理阶段是同一 Agent 的工作切片，不对应独立角色或独立 Agent。 */

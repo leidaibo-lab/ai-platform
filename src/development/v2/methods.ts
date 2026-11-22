@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadGovernedSkill } from '../../mastra/agents/skills.js';
+import { loadGovernedSkill } from '../../mastra/skills.js';
 import type { InputV2, StateV2 } from './contracts.js';
 import { developmentHash } from '../contracts.js';
 import { validateTeamMethods } from '../../mastra/nacos-resources.js';

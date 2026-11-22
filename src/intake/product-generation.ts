@@ -3,7 +3,7 @@ import { createTaskContext } from '../delivery/task-context.js';
 import type { TeamMethods } from '../mastra/team-method-contracts.js';
 /** 产品角色生成 Adapter：写作实时流式读取，其余角色使用同步生成。 */
 import type { createAgents } from '../mastra/agents/index.js';
-import { PRODUCT_MAX_STEPS } from '../mastra/agents/skills.js';
+import { PRODUCT_MAX_STEPS } from '../mastra/skills.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { diagnoseModelFailure } from '../delivery/model-failure.js';
 import { ContextBudgetError } from '../delivery/context-budget.js';

@@ -6,7 +6,7 @@ import { resolveModelId, type PracticeConfig } from '../config.js';
 import { practiceInfoTool } from '../tools/practice-info.js';
 import { createFixtureModel } from './fixture-model.js';
 import { resolve } from 'node:path';
-import { loadProductSkillSelection, PRODUCT_MAX_STEPS } from './skills.js';
+import { loadProductSkillSelection, PRODUCT_MAX_STEPS } from '../skills.js';
 import { productManagerProfile, productReviewerProfile, type ProductAgentRole } from './product-roles.js';
 import type { AnyWorkspace } from '@mastra/core/workspace';
 import type { ToolsInput } from '@mastra/core/agent';
