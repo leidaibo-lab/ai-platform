@@ -1,3 +1,4 @@
+import { decideProductLoop } from '../team/product-loop.js';
 import { platformWait, projectRecoveryMetrics } from './platform-recovery.js';
 import { readProductDocuments } from '../business-engineering/product-documents.js';
 import { successorSource } from './successor-run.js';
@@ -320,7 +321,9 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
 
 /** 将产品团队验证过的返工起点交给 Mastra 原生恢复。 */
 async function restartProduct(workflow: IntakeWorkflow, runId: string, source: Delivery, rework: ProductRework, config?: PracticeConfig) {
-  if (rework.round > maxProductReworks) throw new GateInputError('本次运行已达到产品返工上限');
+  const action = decideProductLoop('human-rework', rework.sourceHash, rework.round > maxProductReworks ? 'stopped' : 'rework', [], { used: rework.round - 1, limit: maxProductReworks });
+  if (action === 'stop') throw new GateInputError('本次运行已达到产品返工上限');
+  if (action !== 'request-rework') throw new GateInputError('产品返工状态无效');
   const route = await planProductRework(source, rework.feedback, async (prompt, options) => {
     if (source.nacosResources && config) return (await (await resolveProductAgents(config, source.nacosResources, workflow.mastra?.getStorage())).productManagerAgent.generate(prompt, options)).object;
     if (source.nacosResources) throw new Error('缺少冻结产品资源配置');

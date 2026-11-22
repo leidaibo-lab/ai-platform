@@ -67,6 +67,12 @@ export function canRetryProductAttempt(attempt: ProductAttempt): boolean {
 /** 失败摘要完全派生自校验后的证据；旧记录没有结束状态时明确说明不可追溯。 */
 export function describeProductFailure(error: unknown, _legacyContextBudgetLevel = 0) {
   const value = error as { name?: unknown; message?: unknown; details?: unknown } | undefined;
+  if (typeof value?.message === 'string' && /^待审产品稿包含内部制作过程内容(?:：第\d+行存在(?:内部材料标识|材料读取过程|内部方法或工具名称|内部执行记录|内部制作依据)|，须在写作阶段移出正式双文档)$/.test(value.message)) {
+    return { reason: value.message, details: ['正式文档不得包含内部材料、方法或执行记录；已确认的业务答案仍保留。'], next: '请检查写作方法与文档校验结果，再从已保存的写作检查点继续。' };
+  }
+  if (typeof value?.message === 'string' && /^(?:产品稿须包含 1 至 100 项带 REQ-ID 和验收预期的需求|第 \d+ 行的可验收需求格式无效|可验收需求 ID 重复：REQ-[A-Z0-9-]+|待审稿须依次包含「# 需求文档」和「# 产品规格」两份正文|需求条目必须声明在需求文档中|产品任务格式无效或 ID 重复|产品任务 TASK-[A-Z0-9-]+ 的需求引用未知或重复|产品任务须覆盖需求文档中的全部需求 ID)$/.test(value.message)) {
+    return { reason: value.message, details: ['产品稿未通过需求与任务结构校验，未进入产品审批。'], next: '请依据具体校验原因修订后从写作检查点继续。' };
+  }
   const parsed = productFailureSchema.safeParse(value?.details);
   if (value?.name === 'ProductGenerationFailure' && parsed.success) {
     const attempts = parsed.data.attempts;

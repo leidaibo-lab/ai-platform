@@ -1,3 +1,4 @@
+import { decideProductLoop } from '../team/product-loop.js';
 import { methodPrompt } from '../mastra/team-methods.js';
 import { z } from 'zod';
 import { describeProductStep, productSteps } from '../mastra/workflows/product-steps.js';
@@ -117,7 +118,7 @@ export function createProductAlignmentStep(agents: ReturnType<typeof createAgent
       const result = await assess(delivery, runId, abortSignal, context[PUBSUB_SYMBOL]);
       if (result.correction) return suspend({ ...result.correction, intake: delivery.intake });
       const intake = result.delivery.intake!;
-      return intake.ready ? result.delivery : suspend(intake);
+      return decideProductLoop('clarification', intake.hash ?? 'legacy', intake.ready ? 'running' : 'blocked') === 'continue' ? result.delivery : suspend(intake);
     },
   }));
 }
@@ -138,7 +139,8 @@ export function createIntakeWorkflow(agents: ReturnType<typeof createAgents>, mo
       const intake = inputData.intake;
       if (!intake?.enabled || intake.ready) return inputData;
       if (inputData.mode !== mode) throw new Error('模型模式变化');
-      if (!resumeData) return suspend(intake);
+      if (!resumeData && decideProductLoop('clarification', intake.hash ?? 'legacy', 'blocked') === 'block') return suspend(intake);
+      if (!resumeData) throw new Error('需求澄清缺少恢复数据');
       return { ...inputData, intake: applyIntakeResponse(intake, resumeData) };
     },
   });

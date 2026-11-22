@@ -40,7 +40,9 @@ flowchart LR
   W --> S[(Mastra Store)]
 ```
 
-公共控制当前已接入研发与测试，产品与交付并未全面接入同一公共 Loop。`team-run-envelope.v1` 只投影 `teamId/status/phase/inputVersion/budget/evidence/blocker/stopReason`。它不单独保存，序列化它也不能成为恢复依据。`rework-request.v1` 是跨团队输入；研发 Port 校验目标团队、研发状态版本、来源 checkpoint、finding、证据引用和剩余返工预算后，才调用研发内部返工策略。
+公共控制已接入产品关键节点、研发与测试；交付团队尚未全面接入同一公共 Loop。`team-run-envelope.v1` 只投影 `teamId/status/phase/inputVersion/budget/evidence/blocker/stopReason`。它不单独保存，序列化它也不能成为恢复依据。`rework-request.v1` 是跨团队输入；研发 Port 校验目标团队、研发状态版本、来源 checkpoint、finding、证据引用和剩余返工预算后，才调用研发内部返工策略。
+
+产品写作的文档校验修订现接入公共信封和纯决策：候选正文散列标识输入，固定校验诊断作为证据，最多一次修订；修订后重新执行完整文档门禁。产品澄清的等待、独立审查的继续、人工审批与反馈返工及预算停止也通过公共决策；专业状态、审查证据和审批语义保持原有约束。交付团队尚未全面接入。信封仅为即时投影，原生 Workflow 和 Store 仍持有权威事实。
 
 项目 Adapter 注册表以不可变 ID 选择预注册实现：
 

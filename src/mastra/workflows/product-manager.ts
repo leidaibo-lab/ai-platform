@@ -1,4 +1,4 @@
-import { acceptanceRequirementsInstruction, productDocumentsInstruction, readProductDocuments, validateProductDraftPresentation } from '../../business-engineering/product-documents.js';
+import { acceptanceRequirementsInstruction, ProductDraftPresentationError, productDocumentsInstruction, readProductDocuments, validateProductDraftPresentation } from '../../business-engineering/product-documents.js';
 import type { projectSpec } from '../../business-engineering/project.js';
 import { readAcceptanceRequirements } from '../../business-engineering/acceptance-requirements.js';
 import { createHash } from 'node:crypto';
@@ -22,6 +22,9 @@ import { correctionPauseSchema, runInterruptibleProductAttempt } from '../../int
 import { productReworkFeedback } from './product-rework.js';
 import { publishLiveOutput } from '../../intake/live-output.js';
 import { describeProductStep, productSteps } from './product-steps.js';
+import { teamRunEnvelopeSchema } from '../../team/contracts.js';
+import { decideProductLoop } from '../../team/product-loop.js';
+import { decideTeamLoop } from '../../team/loop.js';
 
 type StepBinder = <T extends Step<any, any, any, any, any, any>>(step: T) => T;
 
@@ -32,6 +35,35 @@ const managerPhaseInstructions: Record<typeof productManagerStages[number], stri
   'scope-priority': '范围与优先级：明确首期范围、非目标、优先级和可检查验收边界，不代替独立质量审查。',
   writing: '产品稿写作：汇总前序事实、确认结论和范围，生成完整可审阅产品稿。',
 };
+
+/** 从写作尝试投影公共团队信封；Mastra 步骤仍持有运行事实。 */
+function writingLoopDecision(inputVersion: string, used: number, finding: string) {
+  const exhausted = used >= 1;
+  return decideTeamLoop(teamRunEnvelopeSchema.parse({ version: 'team-run-envelope.v1', teamId: 'product', status: exhausted ? 'stopped' : 'rework', phase: 'product-writing', inputVersion, budget: { used, limit: 1 }, evidence: [finding], ...(exhausted ? { stopReason: 'repair-budget' } : {}) }));
+}
+
+/** 通过公共 Loop 对可定位的文档错误修订一次，其他失败原样停止。 */
+export async function repairProductPresentation<T extends { text: string }>(generate: (repair?: { candidate: string; finding: string }) => Promise<T>, enabled: boolean) {
+  let repair: { candidate: string; finding: string } | undefined;
+  for (;;) {
+    const result = await generate(repair);
+    if (!enabled) return { result, repairs: 0 };
+    try { validateProductDraftPresentation(result.text); readProductDocuments(result.text); return { result, repairs: repair ? 1 : 0 }; }
+    catch (error) {
+      if (!productDraftValidationMessage(error)) throw error;
+      const action = writingLoopDecision(createHash('sha256').update(result.text).digest('hex'), repair ? 1 : 0, error.message);
+      if (action !== 'request-rework') throw error;
+      repair = { candidate: result.text, finding: error.message };
+    }
+  }
+}
+
+/** 仅允许本平台固定的文档校验诊断进入模型反馈，不传播任意异常正文。 */
+function productDraftValidationMessage(error: unknown): error is Error {
+  if (error instanceof ProductDraftPresentationError) return true;
+  if (!(error instanceof Error)) return false;
+  return /^(?:产品稿须包含 1 至 100 项带 REQ-ID 和验收预期的需求|第 \d+ 行的可验收需求格式无效|可验收需求 ID 重复：REQ-[A-Z0-9-]+|待审稿须依次包含「# 需求文档」和「# 产品规格」两份正文|需求条目必须声明在需求文档中|产品任务格式无效或 ID 重复|产品任务 TASK-[A-Z0-9-]+ 的需求引用未知或重复|产品任务须覆盖需求文档中的全部需求 ID)$/.test(error.message);
+}
 
 /** 装配产品方向和规格阶段，历史图复用相同的业务执行逻辑。 */
 export function createProductManagerPhases(
@@ -82,7 +114,7 @@ export function createProductManagerPhases(
         const stage = config ? await createStageWorkspace(`product-${runId}`, '产品团队 · 当前材料（只读）', files) : undefined;
         const activeManager = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, mastra, workspace: stage.workspace, workspaceTools: stage.tools }).productManagerAgent : manager;
         try {
-        const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeManager, JSON.stringify({
+        const prompt = {
           task: 'product-manager-phase',
           phase: role,
           engineeringSpec: spec ? { projectId: spec.projectId, revision: spec.revision, path: spec.path } : undefined,
@@ -97,7 +129,13 @@ export function createProductManagerPhases(
           rework: inputData.productRework,
           priorFeedback: inputData.productReworkHistory?.map(({ round, feedback }) => ({ round, feedback })),
           instruction: `你是同一个产品经理 Agent 的当前阶段。${stage ? `先调用 mastra_workspace_read_file 读取 ${spec?.path ?? 'brief.md'}。` : ''}只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' ? (inputData.productHandoffFormat ? productDocumentsInstruction : inputData.requirementTracking ? acceptanceRequirementsInstruction : '') : ''}`,
-        }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal, undefined, tracingContext));
+        };
+        let presentationRepairs = 0;
+        const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, async signal => {
+          const repaired = await repairProductPresentation(repair => generateProductContent(activeManager, JSON.stringify({ ...prompt, ...(repair ? { presentationRepair: repair, instruction: `${prompt.instruction} 请根据校验发现修订完整候选，保留已确认业务规则及需求与任务引用；仅输出完整正式双文档，禁止输出制作过程。` } : {}) }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal, undefined, tracingContext), role === 'writing' && !!inputData.productHandoffFormat && mode === 'live');
+          presentationRepairs = repaired.repairs;
+          return repaired.result;
+        });
         if (attempt.correction) return suspend(attempt.correction);
         const result = attempt.output;
         const content = z.string().trim().min(1).max(100000).parse(result.text);
@@ -118,6 +156,7 @@ export function createProductManagerPhases(
           durationMs: result.generation?.durationMs,
           modelSteps: result.steps.length,
           generation: result.generation,
+          ...(presentationRepairs ? { presentationRepairs } : {}),
           ...(stage ? { workspaceReads: workspaceReadReceipts(result.toolResults, files) } : {}),
         };
         const resultState = { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] } };
@@ -179,6 +218,7 @@ export function createProductManagerPhases(
         generation: result.generation,
         ...(stage ? { workspaceReads: workspaceReadReceipts(result.toolResults, files) } : {}),
       });
+      if (decideProductLoop('quality-review', artifact.hash, 'running', [review.hash]) !== 'continue') throw new Error('产品独立审查无法继续');
       return { ...inputData, productQualityReview: review };
       } finally { await stage?.close(); }
     },
