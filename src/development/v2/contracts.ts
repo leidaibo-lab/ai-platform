@@ -67,6 +67,8 @@ export const technicalRecoverySchema = technicalBudgetSchema.extend({
   }).optional(),
 });
 export const stateV2Schema = z.object({
+  executionCorrelation: correlationSchema.optional(),
+  executionSpecifications: z.array(formalSpecificationReceiptSchema).max(4).optional(),
   technicalRecovery: technicalRecoverySchema.optional(),
   priorAcceptanceCases: z.array(z.object({ id: z.string(), requirementRefs: z.array(z.string()) })).optional(),
   verificationHistory: z.array(verificationRecordSchema).optional(), repairHistory: z.array(repairRecordSchema).optional(),

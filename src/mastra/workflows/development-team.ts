@@ -1,3 +1,4 @@
+import type { AssetCorrelation } from '../../delivery/asset-identity.js';
 import { describeDevelopmentStep, developmentSteps } from './development-steps.js';
 import { verifyProductHandoff } from '../../business-engineering/product-handoff.js';
 import { cipGit } from '../../business-engineering/hrm-cip.js';
@@ -32,11 +33,12 @@ const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), 
 export function executionResolver(config: PracticeConfig, options: { requireExisting?: boolean } = {}) {
   const parent = resolve(dirname(fileURLToPath(config.databaseUrl)), 'development-runs');
   /** 目录名仅由宿主 Run 标识派生，恢复不覆盖现有源码或输入。 */
-  return (input: InputV2): DevelopmentExecution => {
+  return (input: InputV2, binding?: AssetCorrelation): DevelopmentExecution => {
+    if (binding) assertProjectCorrelation(config, binding);
     assertProjectCorrelation(config, input.correlation);
     mkdirSync(parent, { recursive: true, mode: 0o700 });
     if (lstatSync(parent).isSymbolicLink()) throw new Error('运行根目录不能是符号链接');
-    const base = resolve(parent, developmentHash(input.source.runId));
+    const base = resolve(parent, developmentHash(binding?.runId ?? input.source.runId));
     const preparationRoot = resolve(parent, 'preparation');
     const directory = input.continuation ? resolve(base, 'revisions', developmentHash(input)) : input.project.preparationIssues?.length ? resolve(preparationRoot, developmentHash(input)) : base;
     if (input.continuation || input.project.preparationIssues?.length) {

@@ -96,10 +96,10 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       },
     }),
     registerApiRoute('/intake-api/remote-sync-settings', { method: 'GET',
-      /** 只公开目标标签和阶段选择，绝不向浏览器返回本地路径或Git地址。 */
+      /** 只公开项目身份、目标标签和受控远端地址，不返回本地路径。 */
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { const selected = selectProjectConfig(config!, c.req.query('projectId')); return c.json({ settings: readRemoteSyncSettings(selected), targets: remoteSyncTargets(selected).filter(target => !selected.engineeringProject || target.id === selected.engineeringProject.id).map(/** 页面显示受控远端地址，不泄露本地checkout路径。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
+        try { const selected = selectProjectConfig(config!, c.req.query('projectId')); const targets = remoteSyncTargets(selected).filter(target => !selected.engineeringProject || target.id === selected.engineeringProject.id).map(/** 页面显示受控远端地址，不泄露本地checkout路径。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })); return c.json({ settings: readRemoteSyncSettings(selected), routingMode: selected.projectRegistrySelection ? 'project-bound' : 'phase-targets', project: selected.engineeringProject ? { id: selected.engineeringProject.id, label: selected.engineeringProject.label } : undefined, targets }); }
         catch { return c.json({ error: '远端同步设置暂不可读取，请检查服务端已授权仓库。' }, 409); }
       },
     }),
@@ -107,7 +107,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
       /** 设置仅影响后续节点；仓库白名单仍由服务端配置拥有。 */
       handler: async c => {
         c.header('Cache-Control', 'no-store');
-        try { origin(c); const selected = selectProjectConfig(config!, c.req.query('projectId')); return c.json({ settings: writeRemoteSyncSettings(selected, remoteSyncSettingsSchema.parse(await c.req.json())), targets: remoteSyncTargets(selected).filter(target => !selected.engineeringProject || target.id === selected.engineeringProject.id).map(/** 保存后仍只回传受控远端地址。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })) }); }
+        try { origin(c); const selected = selectProjectConfig(config!, c.req.query('projectId')); const targets = remoteSyncTargets(selected).filter(target => !selected.engineeringProject || target.id === selected.engineeringProject.id).map(/** 保存后仍只回传受控远端地址。 */target => ({ id: target.id, label: target.label, repositoryUrl: target.origin })); return c.json({ settings: writeRemoteSyncSettings(selected, remoteSyncSettingsSchema.parse(await c.req.json())), routingMode: selected.projectRegistrySelection ? 'project-bound' : 'phase-targets', project: selected.engineeringProject ? { id: selected.engineeringProject.id, label: selected.engineeringProject.label } : undefined, targets }); }
         catch (error) { return c.json({ error: error instanceof z.ZodError ? '设置格式不正确，请检查每个阶段的同步开关和仓库选择。' : error instanceof Error ? error.message : '远端同步设置未保存。' }, 409); }
       },
     }),

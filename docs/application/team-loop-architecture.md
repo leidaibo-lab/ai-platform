@@ -8,9 +8,9 @@
 
 独立团队运行与回归套件正在按[OpenSpec 变更](../../openspec/changes/add-independent-team-runs/proposal.md)推进。统一 `team-run-input.v1` 输入信封只接纳团队、项目、版本化来源引用和团队专属载荷；从既有 Run 取数时，服务端须重读 Store 与 Git 回执。新增团队入口不得把内部子 Workflow 直接暴露为 HTTP 输入，也不得把来源 Run 的状态复制成新的权威事实。
 
-规范输入的首版 Schema 位于 [`src/team/independent-run-input.ts`](../../src/team/independent-run-input.ts)。它只负责校验与确定性规范化，不代表独立 Workflow/API 已接通，也不把输入散列当作来源证据。正式启动入口需先完成服务端来源解析和冻结绑定，再启动相应 Mastra Workflow。
+规范输入的首版 Schema 位于 [`src/team/independent-run-input.ts`](../../src/team/independent-run-input.ts)。独立产品 Workflow 已登记到 Mastra，当前只接受新需求，复用产品团队及人工审批并输出版本化结果；研发、测试和交付的独立入口、专用 API 和工作台仍未接通。输入散列不替代来源证据，下游正式启动仍需完成服务端来源解析和冻结绑定。
 
-来源解析的初步实现位于 [`src/team/independent-run-source.ts`](../../src/team/independent-run-source.ts)：从主流程 Store 快照读取已完成步骤，校验项目及来源 Run 身份，并在 live 模式读取固定 Git 规格回执。该模块尚未接入运行入口；测试候选复制、来源冻结、跨独立 Run 交接和恢复时重验仍待实现。
+来源解析的初步实现位于 [`src/team/independent-run-source.ts`](../../src/team/independent-run-source.ts)：按来源类型读取主流程或对应独立团队的 Store 快照，校验项目及来源 Run 身份，并在 live 模式读取固定 Git 规格回执；不兼容的来源 Workflow 会在读取前拒绝。fixture 回归已验证从独立产品 Run 读取批准结果；下游独立运行入口、候选复制、来源冻结和恢复时重验仍待实现。
 
 ## 2. Impact
 

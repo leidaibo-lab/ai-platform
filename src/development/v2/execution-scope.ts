@@ -1,12 +1,14 @@
 import { developmentHash } from '../contracts.js';
 /** 按原生步骤装配执行环境，避免共享 Workflow 闭包绑定到某一个 Run。 */
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { projectCorrelation } from '../../business-engineering/project.js';
+import type { AssetCorrelation } from '../../delivery/asset-identity.js';
 import type { Step } from '@mastra/core/workflows';
 import { DevelopmentExecution } from '../../development-execution.js';
 import { inputV2Schema, type InputV2 } from './contracts.js';
 
 export type ExecutionPort = Pick<DevelopmentExecution, 'snapshot' | 'readFile' | 'writeFile' | 'runChecks' | 'workspace'>;
-export type ExecutionResolver = (input: InputV2) => DevelopmentExecution;
+export type ExecutionResolver = (input: InputV2, binding?: AssetCorrelation) => DevelopmentExecution;
 
 /** 从步骤已校验数据取得本轮输入；foreach 的空操作仍携带一份状态。 */
 function executionInput(value: unknown): InputV2 {
@@ -41,7 +43,7 @@ export function createExecutionScope(resolve: ExecutionResolver, captureCandidat
     const execute = step.execute;
     // 原生引擎仍负责持久化、暂停和恢复，装饰器不持有运行事实。
     step.execute = async (context) => {
-      const execution = resolve(executionInput(context.inputData));
+      const execution = resolve(executionInput(context.inputData), projectCorrelation(context.inputData));
       try {
         return await local.run(execution,
           // 让异步工具链继承当前步骤环境，隔离同时运行的其他 Run。

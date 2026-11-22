@@ -77,12 +77,12 @@ export function scopedProjectConfig(config: PracticeConfig): PracticeConfig {
 export function projectCorrelation(value: any): AssetCorrelation | undefined {
   if (Array.isArray(value)) return projectCorrelation(value[0]);
   if (!value || typeof value !== 'object') return undefined;
-  return value.correlation ?? projectCorrelation(value.state) ?? projectCorrelation(value.development) ?? projectCorrelation(value.input) ?? projectCorrelation(value.approvedProduct);
+  return value.executionCorrelation ?? value.correlation ?? projectCorrelation(value.state) ?? projectCorrelation(value.development) ?? projectCorrelation(value.input) ?? projectCorrelation(value.approvedProduct);
 }
 
 /** 已保存初始化是项目恢复的权威来源；新输入不能覆盖原绑定。 */
 export function snapshotProjectConfig(config: PracticeConfig, snapshot: any, options: { readOnly?: boolean } = {}): PracticeConfig {
-  const initial = snapshot?.steps?.['initialize-product-development'] ?? snapshot?.context?.['initialize-product-development'];
+  const initial = snapshot?.steps?.['initialize-team-run'] ?? snapshot?.context?.['initialize-team-run'] ?? snapshot?.steps?.['initialize-product-development'] ?? snapshot?.context?.['initialize-product-development'];
   const correlation = projectCorrelation(initial?.output);
   const input = snapshot?.payload ?? snapshot?.context?.input;
   if (config.engineeringProjects && !correlation && !options.readOnly) throw new Error('Run 缺少已冻结的业务工程绑定');
@@ -108,9 +108,10 @@ export function createProjectCorrelation(config: PracticeConfig, input: { projec
 }
 
 /** 在原生图所有步骤外层装配 Run 作用域，覆盖嵌套、foreach、Studio start/resume/timeTravel。 */
-export function bindProjectWorkflow<T extends { steps: Record<string, any>; stepGraph: any[]; createRun: (...args: any[]) => Promise<any>; mastra?: any }>(workflow: T, config: PracticeConfig): T {
-  if (!config.engineeringProjects) return workflow;
-  if (config.engineeringProjects) {
+export function bindProjectWorkflow<T extends { steps: Record<string, any>; stepGraph: any[]; createRun: (...args: any[]) => Promise<any>; mastra?: any }>(workflow: T, config: PracticeConfig, identity: { workflowId: string; initializeId: string; alwaysGuard?: boolean } = { workflowId: 'product-development', initializeId: 'initialize-product-development' }): T {
+  const { workflowId, initializeId } = identity;
+  if (!config.engineeringProjects && !identity.alwaysGuard) return workflow;
+  if (config.engineeringProjects || identity.alwaysGuard) {
     const createRun = workflow.createRun;
     const guarded = new WeakSet<object>();
     const starting = new Set<string>();
@@ -131,16 +132,16 @@ export function bindProjectWorkflow<T extends { steps: Record<string, any>; step
           try {
             const store = await workflow.mastra?.getStorage()?.getStore('workflows');
             if (!store) throw new Error('Run 工程绑定校验缺少原生 Store');
-            const snapshot = await store.loadWorkflowSnapshot({ workflowName: 'product-development', runId: run.runId });
-            const saved = projectCorrelation(snapshot?.context?.['initialize-product-development']?.output);
+            const snapshot = await store.loadWorkflowSnapshot({ workflowName: workflowId, runId: run.runId });
+            const saved = projectCorrelation(snapshot?.context?.[initializeId]?.output);
             const original = snapshot?.context?.input;
             const supplied = projectCorrelation(request?.inputData);
             const target = typeof request?.step === 'string' ? request.step.split('.')[0] : Array.isArray(request?.step) ? request.step[0]?.id ?? request.step[0] : request?.step?.id;
             if (saved) {
               const selected = selectProjectConfig(config, saved.projectId);
               assertProjectCorrelation(selected, saved);
-              if (method === '_start' || method === '_timeTravel' && target === 'initialize-product-development') throw new Error('已经初始化的 Run 不能重新初始化或更换项目');
-              if (request?.context?.['initialize-product-development'] || request?.context?.input || request?.nestedStepsContext?.['initialize-product-development']) throw new Error('原生恢复不能覆盖 Run 初始化上下文');
+              if (method === '_start' || method === '_timeTravel' && target === initializeId) throw new Error('已经初始化的 Run 不能重新初始化或更换项目');
+              if (request?.context?.[initializeId] || request?.context?.input || request?.nestedStepsContext?.[initializeId]) throw new Error('原生恢复不能覆盖 Run 初始化上下文');
               if (supplied && developmentHash(saved) !== developmentHash(supplied)) throw new Error('原生恢复输入与 Run 项目绑定不一致');
               if (request?.inputData?.projectId && request.inputData.projectId !== saved.projectId) throw new Error('不能更换已冻结的 Run 项目');
             } else if (method === '_start') {
@@ -169,24 +170,24 @@ export function bindProjectWorkflow<T extends { steps: Record<string, any>; step
         const initCorrelation = projectCorrelation(input);
         const store = await context.mastra?.getStorage()?.getStore('workflows');
         const inheritedRoot = rootProjectRun.getStore();
-        let native = inheritedRoot ? { workflowId: 'product-development', runId: inheritedRoot } : context.parentWorkflow ?? { workflowId: context.workflowId, runId: context.runId };
+        let native = inheritedRoot ? { workflowId: workflowId, runId: inheritedRoot } : context.parentWorkflow ?? { workflowId: context.workflowId, runId: context.runId };
         let snapshot;
-        if (config.engineeringProjects) {
+        if (config.engineeringProjects || identity.alwaysGuard) {
           for (let depth = 0; depth < 16; depth++) {
             snapshot = await store?.loadWorkflowSnapshot({ workflowName: native.workflowId, runId: native.runId });
-            if (native.workflowId === 'product-development') break;
+            if (native.workflowId === workflowId) break;
             if (!snapshot?.parentWorkflow) {
-              const root = await store?.loadWorkflowSnapshot({ workflowName: 'product-development', runId: context.runId });
+              const root = await store?.loadWorkflowSnapshot({ workflowName: workflowId, runId: context.runId });
               if (!root) throw new Error('原生步骤缺少根 Run 来源');
-              native = { workflowId: 'product-development', runId: context.runId };
+              native = { workflowId: workflowId, runId: context.runId };
               snapshot = root;
               break;
             }
             native = snapshot.parentWorkflow;
           }
-          if (native.workflowId !== 'product-development') throw new Error('原生项目来源层级无效');
+          if (native.workflowId !== workflowId) throw new Error('原生项目来源层级无效');
         }
-        const saved = projectCorrelation(snapshot?.context?.['initialize-product-development']?.output);
+        const saved = projectCorrelation(snapshot?.context?.[initializeId]?.output);
         const correlation = saved ?? initCorrelation ?? supplied;
         if (initCorrelation && supplied && developmentHash(initCorrelation) !== developmentHash(supplied)) throw new Error('原生步骤的 Run 业务工程绑定与团队输入不一致');
         if (inherited?.engineeringProject && correlation && inherited.engineeringProject.id !== correlation.projectId) throw new Error('嵌套步骤不能切换 Run 项目');
@@ -195,10 +196,10 @@ export function bindProjectWorkflow<T extends { steps: Record<string, any>; step
         if (correlation && input?.projectId && correlation.projectId !== input.projectId) throw new Error('Run 初始化项目与步骤绑定不一致');
         if (saved && snapshot?.context?.input?.projectId && saved.projectId !== snapshot.context.input.projectId) throw new Error('Run 初始化项目已变化');
         const frozenId = saved?.projectId ?? snapshot?.context?.input?.projectId ?? input?.projectId;
-        if (saved && step.id === 'initialize-product-development' && context.inputData.projectId !== saved.projectId) throw new Error('不能替换已冻结的 Run 项目');
+        if (saved && step.id === initializeId && context.inputData.projectId !== saved.projectId) throw new Error('不能替换已冻结的 Run 项目');
         const selected = selectProjectConfig(config, frozenId ?? correlation?.projectId);
         if (correlation) assertProjectCorrelation(selected, correlation);
-        else if (config.engineeringProjects && step.id !== 'initialize-product-development' && !step.steps) throw new Error('原生步骤缺少 Run 工程绑定');
+        else if (config.engineeringProjects && step.id !== initializeId && !step.steps) throw new Error('原生步骤缺少 Run 工程绑定');
         return rootProjectRun.run(native.runId, () => withProjectConfig(selected, () => execute.call(step, context)));
       };
     }
