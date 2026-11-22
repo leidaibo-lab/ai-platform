@@ -223,7 +223,7 @@ export function projectToolFacts(toolResults: unknown): { tools: string[]; files
     const payload = record.payload && typeof record.payload === 'object' ? record.payload as Record<string, unknown> : record;
     const toolName = typeof payload.toolName === 'string' ? payload.toolName : undefined;
     if (!toolName) continue;
-    tools.add(toolName);
+    tools.add(toolName === 'mastra_workspace_read_file' ? 'readFile' : toolName);
     const args = payload.args ?? payload.input ?? record.args ?? record.input;
     if (!args || typeof args !== 'object') continue;
     const path = (args as Record<string, unknown>).path;

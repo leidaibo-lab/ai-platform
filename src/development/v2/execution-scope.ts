@@ -5,7 +5,7 @@ import type { Step } from '@mastra/core/workflows';
 import { DevelopmentExecution } from '../../development-execution.js';
 import { inputV2Schema, type InputV2 } from './contracts.js';
 
-export type ExecutionPort = Pick<DevelopmentExecution, 'snapshot' | 'readFile' | 'writeFile' | 'runChecks'>;
+export type ExecutionPort = Pick<DevelopmentExecution, 'snapshot' | 'readFile' | 'writeFile' | 'runChecks' | 'workspace'>;
 export type ExecutionResolver = (input: InputV2) => DevelopmentExecution;
 
 /** 从步骤已校验数据取得本轮输入；foreach 的空操作仍携带一份状态。 */
@@ -25,6 +25,8 @@ export function createExecutionScope(resolve: ExecutionResolver, captureCandidat
   /** 所有 I/O 必须发生在本步骤的环境作用域内。 */
   function current() { const execution = local.getStore(); if (!execution) throw new Error('开发执行缺少步骤作用域'); return execution; }
   const port: ExecutionPort = {
+    /** 当前隔离候选对应的原生 Workspace。 */
+    get workspace() { return current().workspace; },
     /** 读取本步骤候选快照。 */
     snapshot: () => current().snapshot(),
     /** 读取本步骤候选文件。 */

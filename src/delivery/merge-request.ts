@@ -10,6 +10,7 @@ import type { PracticeConfig } from '../mastra/config.js';
 import { hashSchema, lifecycleSchema, matchesAcceptancePlan, mergeRequestRetrySchema, qualityHash, testPlanSchema, testCaseSchema, type Lifecycle } from './contracts.js';
 import { contentHash, formalRunBranch, publishReviewedCandidate, readHandoffFile } from './remote-handoff.js';
 import { assertCandidate } from './testing.js';
+import { createStageWorkspace } from '../mastra/stage-workspace.js';
 
 const command = promisify(execFile);
 const pullRefSchema = z.object({ ref: z.string(), sha: z.string(), repo: z.object({ full_name: z.string() }) });
@@ -68,23 +69,41 @@ export async function submitReviewedCandidate(config: PracticeConfig, state: Lif
   const repository = githubRepository(target.origin);
   const branch = formalRunBranch(correlation.iterationId, correlation.runId);
   if (testing.upstreamCommits.join(',') !== [product.handoff.commit, development.handoff.commit].join(',')) throw new Error('交付规格的上游版本不一致');
+  const specifications: Record<string, string> = {};
   const specPaths = [product, development, testing].flatMap(item => {
     if (item.handoff.branch !== branch) throw new Error('规格与 Run 分支不一致');
-    for (const path of item.paths) ports.read(root, { ...item.handoff, commit: testing.handoff.commit }, path);
+    for (const path of item.paths) specifications[path] = ports.read(root, { ...item.handoff, commit: testing.handoff.commit }, path);
     return item.paths;
   });
-  const candidate: Record<string, string> = {};
+  const snapshot: Record<string, string> = {};
   for (const [path, hash] of Object.entries(state.development.delivery!.files)) {
     const content = await execution.readFile(path);
     if (contentHash(content) !== hash) throw new Error('读取候选时源码发生变化');
+    snapshot[`candidate/${path}`] = content;
+  }
+  for (const [path, content] of Object.entries(specifications)) snapshot[`specifications/${path}`] = content;
+  snapshot['evidence/quality.json'] = JSON.stringify(state.quality);
+  const stage = await createStageWorkspace(`delivery-${correlation.runId}`, '交付 · 候选与 QA（只读）', snapshot);
+  try {
+  const read = async (path: string) => String(await stage.workspace.filesystem!.readFile(path, { encoding: 'utf8' }));
+  const candidate: Record<string, string> = {};
+  for (const [path, hash] of Object.entries(state.development.delivery!.files)) {
+    const content = await read(`candidate/${path}`);
+    if (contentHash(content) !== hash) throw new Error('交付 Workspace 候选版本不一致');
     candidate[path] = content;
   }
-  const testSpec = confirmedTestSchema.parse(JSON.parse(ports.read(root, testing.handoff, 'specs/test-spec.md')));
+  const savedQuality = JSON.parse(await read('evidence/quality.json'));
+  if (developmentHash(savedQuality) !== developmentHash(state.quality)) throw new Error('交付 Workspace QA 证据漂移');
+  for (const path of specPaths) if (await read(`specifications/${path}`) !== specifications[path]) throw new Error('交付 Workspace 规格漂移');
+  if (testing.paths.length !== 1) throw new Error('交付需要唯一的正式测试规格');
+  const testPath = testing.paths[0]!;
+  const testSpec = confirmedTestSchema.parse(JSON.parse(await read(`specifications/${testPath}`)));
   if (testSpec.sourceHash !== sourceHash || developmentHash(testSpec.plan) !== developmentHash(state.quality.plan) || developmentHash(testSpec.cases) !== developmentHash(state.quality.approval?.cases)) throw new Error('正式测试规格与通过的 QA 版本不一致');
   const project = state.development.input.project;
   const writable = (state.development.plan?.tasks.flatMap(task => task.paths) ?? []).filter(path => canWriteProjectPath(project, path));
   const commit = await ports.publish(root, testing.handoff, candidate, writable, specPaths, project.engineeringRevision ?? correlation.engineeringRevision);
   return ports.open(repository, branch, commit, sourceHash, reportHash);
+  } finally { await stage.close(); }
 }
 
 /** QA 通过后进入交付。远端故障在同一原生节点暂停，重试复用候选和请求。 */

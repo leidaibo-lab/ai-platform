@@ -86,6 +86,8 @@ export async function runDevelopmentNode(config: PracticeConfig, item: Developme
     if (item.role === 'reviewer') state.checks = await engine.runChecks();
     const reads: string[] = [], writes: string[] = [], toolChecks: DevelopmentCheckResult[][] = [];
     const port: ExecutionPort = {
+      /** 单节点评测复用隔离候选的原生 Workspace。 */
+      get workspace() { return engine.workspace; },
       /** 不开放新的快照权威，只转发受限执行器事实。 */
       snapshot: () => engine.snapshot(),
       /** 保留失败的读取尝试，权限被拒绝也不能被后续输出洗掉。 */

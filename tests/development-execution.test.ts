@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
-import { DevelopmentExecution, type DevelopmentExecutionLimits } from '../src/development-execution.js';
+import { DevelopmentExecution, developmentSandboxPolicyVersion, type DevelopmentExecutionLimits } from '../src/development-execution.js';
 
 /** 每例建立独占候选与虚构秘密；不触碰真实仓库配置或密钥。 */
 async function withCandidate(check: (execution: DevelopmentExecution, root: string, parent: string) => Promise<void>, limits: DevelopmentExecutionLimits = {}): Promise<void> {
@@ -40,6 +40,21 @@ test('研发文件工具拒绝路径越界、隐藏文件、符号链接和修�
     await assert.rejects(execution.writeFile('src/other.mjs', ''));
     await assert.rejects(execution.listFiles());
     assert.match(readFileSync(resolve(root, 'smoke.test.mjs'), 'utf8'), /assert.equal/);
+  });
+});
+
+test('Mastra Workspace 将候选文件系统与 OS Sandbox 绑定，模型工具保持最小权限', async () => {
+  await withCandidate(async (execution) => {
+    assert.equal(execution.workspace.filesystem?.basePath, execution.root);
+    assert.equal(execution.workspace.sandbox, (execution as unknown as { sandbox: unknown }).sandbox);
+    assert.equal(execution.workspace.sandbox.isolation, execution.isolation);
+    assert.equal(developmentSandboxPolicyVersion, 'workspace-candidate-sandbox.v1');
+    const tools = execution.workspace.getToolsConfig();
+    assert.equal(tools?.enabled, false);
+    assert.equal(tools?.mastra_workspace_execute_command?.enabled, false);
+    assert.equal(tools?.mastra_workspace_read_file?.enabled, true);
+    assert.equal(await execution.workspace.filesystem?.readFile('src/solution.mjs', { encoding: 'utf8' }), readFileSync(resolve(execution.root, 'src/solution.mjs'), 'utf8'));
+    assert.equal((await execution.runChecks()).at(-1)?.exitCode, 0);
   });
 });
 

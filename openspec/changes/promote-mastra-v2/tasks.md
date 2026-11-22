@@ -58,3 +58,10 @@
 - [x] 以 Node、Python 临时 Git 项目完成装配、真实检查与主流程回归。
 - [x] 验证 Store 重开、注册表逆序、原生初始化与上下文篡改拒绝、同 Run ID 并发启动、同散列资产隔离和新 revision 后继。
 - [x] 修复平台通知的过期暂停恢复竞争，使用原生 Store CAS 和原生恢复；完整测试集以 4 进程并发执行 266/266 通过。
+
+## 10. Mastra Workspace Sandbox 执行验证
+
+- [x] 将独占候选文件系统和已隔离 LocalSandbox 组合为 Mastra Workspace；Agent 使用 Workspace 只读读取工具，任意命令工具保持关闭。
+- [x] 保持精确任务写入 allowlist 与 Adapter 固定检查 argv，并让 Adapter 检查通过同一 Workspace Sandbox 执行。
+- [x] 验证 Sandbox 身份摘要、候选散列、任务隔离、OS 隔离、网络/宿主文件/检查文件拒绝，以及失败后由 Workflow 检查点重建候选并恢复。
+- [x] 以现有 Node/Python Adapter 与真实隔离进程运行专项回归；未支持 OS 隔离的平台必须失败关闭。

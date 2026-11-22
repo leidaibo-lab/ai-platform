@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import type { PracticeConfig } from '../src/mastra/config.js';
 import { developmentExecutionIdentity, developmentHash, developmentInputSchema, developmentStateSchema, type DevelopmentInput } from '../src/development/contracts.js';
+import { developmentSandboxPolicyVersion } from '../src/development/sandbox-policy.js';
 import { developmentStatus, openDevelopment, recoverDevelopment, reviewDevelopment, seedDevelopment, type DevelopmentApplication } from '../src/development-service.js';
 import { generateDevelopment } from '../src/development/agents.js';
 import type { DevelopmentGenerator } from '../src/development/recovery.js';
@@ -54,7 +55,9 @@ test('执行身份归一化端点且不持久化凭据，支持key轮转', () =>
   const config: PracticeConfig = { rootDir: practiceRoot, mode: 'live', databaseUrl: 'file:unused', port: 4111, modelId: 'openai/model', apiKey: 'synthetic-original-key', baseUrl: 'https://EXAMPLE.com:443/v1/' };
   const identity = developmentExecutionIdentity(config);
   assert.deepEqual(identity, developmentExecutionIdentity({ ...config, apiKey: 'synthetic-rotated-key', baseUrl: 'https://example.com/v1' }));
+  assert.equal(identity.sandboxPolicy, developmentSandboxPolicyVersion);
   assert.notEqual(identity.endpointHash, developmentExecutionIdentity({ ...config, baseUrl: 'https://example.com/other' }).endpointHash);
+  assert.notEqual(identity.sandboxPolicy, 'workspace-candidate-sandbox.previous');
   assert.doesNotMatch(JSON.stringify(identity), /synthetic|example\.com|https/);
 });
 

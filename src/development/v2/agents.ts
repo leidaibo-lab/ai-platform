@@ -17,6 +17,7 @@ import { noopLogger } from '@mastra/core/logger';
 import { z } from 'zod';
 import { resolveModelId, type PracticeConfig } from '../../mastra/config.js';
 import type { ExecutionPort } from './execution-scope.js';
+import { createWorkspaceTools } from '@mastra/core/workspace';
 import { developmentInstructions } from '../agents.js';
 import { classifyDevelopmentError, DevelopmentModelError } from '../errors.js';
 import { assessmentSchema, contextDraftSchema, evidenceRefs, planV2Schema, type RoleV2, type StateV2, type EntryV2 } from './contracts.js';
@@ -74,11 +75,11 @@ function fixtureModel(role: RoleV2, state: StateV2, paths: string[], assigned: R
   for (const { skill, reference } of assigned) calls.push({ name: 'skill', input: { name: skill.name } }, { name: 'skill_read', input: { skillName: skill.name, path: `references/${reference}` } });
   if (['frontend', 'backend', 'infrastructure'].includes(role)) {
     if (runtime?.delegate) calls.push({ name: 'delegateTask', input: { role, goal: '按批准任务实现当前文件并保留接口', paths } });
-    else for (const path of paths) calls.push({ name: 'readFile', input: { path } }, { name: 'writeFile', input: { path, content: state.input.project.adapterId === 'python-unittest.v1' ? 'def fixture_value():\n    """固定 fixture 只验证工具链，不代表业务实现。"""\n    return 1\n' : '/** 固定fixture只验证工具链，不代表业务实现。 */\nexport function fixtureValue() { return 1; }\n' } });
+    else for (const path of paths) calls.push({ name: 'mastra_workspace_read_file', input: { path, showLineNumbers: false } }, { name: 'writeFile', input: { path, content: state.input.project.adapterId === 'python-unittest.v1' ? 'def fixture_value():\n    """固定 fixture 只验证工具链，不代表业务实现。"""\n    return 1\n' : '/** 固定fixture只验证工具链，不代表业务实现。 */\nexport function fixtureValue() { return 1; }\n' } });
   } else {
     const instructionFiles = state.input.project.instructionFiles ?? [];
-    for (const path of instructionFiles) calls.push({ name: 'readFile', input: { path } });
-    if (!instructionFiles.length) calls.push({ name: 'readFile', input: { path: Object.keys(state.input.project.files)[0] } });
+    for (const path of instructionFiles) calls.push({ name: 'mastra_workspace_read_file', input: { path, showLineNumbers: false } });
+    if (!instructionFiles.length) calls.push({ name: 'mastra_workspace_read_file', input: { path: Object.keys(state.input.project.files)[0], showLineNumbers: false } });
   }
   const refs = state.requirements.map(
     // 固定样例完整引用批准原文，仅作为结构回归。
@@ -117,14 +118,10 @@ function fixtureArchitectureDocument() {
 }
 
 /** 注册最小只读/写入工具与所需 Skill，方法原文不能改变工具或流程。 */
-export function createAgentV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, state: StateV2, paths: string[], methods: DevelopmentMethods, runtime?: MemberRuntime, storage?: LibSQLStore) {
+export async function createAgentV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, state: StateV2, paths: string[], methods: DevelopmentMethods, runtime?: MemberRuntime, storage?: LibSQLStore) {
   const kind = developmentAgentKind(role);
   if (!kind) throw new Error('development-self-check 必须由 Workflow 执行固定检查，不能创建 Agent');
-  const readFile = createTool({ id: 'development-v2-read', description: '只读当前候选普通文件', inputSchema: z.object({ path: z.string() }),
-    // contained provider 继续负责物理路径边界。
-    execute: async ({ path }) => ({ content: await execution.readFile(path) }),
-  });
-  const tools: ToolsInput = { readFile };
+  const tools: ToolsInput = {};
   if (['frontend', 'backend', 'infrastructure'].includes(role) && !runtime?.delegate) tools.writeFile = createTool({ id: 'development-v2-write', description: '只写当前批准任务的精确路径', inputSchema: z.object({ path: z.string(), content: z.string().max(100000) }),
     // 双重白名单，不给模型任意文件或检查写权限。
     execute: async ({ path, content }) => { if (!paths.includes(path)) throw new Error('当前任务不可写该文件'); await execution.writeFile(path, content); return { written: path }; },
@@ -137,11 +134,13 @@ export function createAgentV2(config: PracticeConfig, execution: ExecutionPort, 
     // 宿主回调校验角色、精确路径和预算，父成员不能自行写入或授予权限。
     execute: async (request) => runtime.delegate!(request),
   });
+  // 动态Agent不在Mastra注册表中，显式装配当前候选Workspace的只读工具。
+  Object.assign(tools, await createWorkspaceTools(execution.workspace));
   const assigned = assignedMethods(role, state, methods);
   const reading = assigned.map(({ skill, reference }) => `调用skill加载${skill.name}，再用skill_read读取references/${reference}。`).join('');
   const documentation = state.input.architectureDocumentFormat && role === 'architect' ? methodPrompt('development.v2.agents.8', state.input.teamMethods) : '';
   const memoryModel = { id: resolveModelId(config, 'development'), apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
-  const agent = new Agent({ ...(config.mode === 'live' ? { memory: createNativeMemory(memoryModel, storage, state.input.teamMethods) } : {}), id: runtime?.memberId ?? kind, name: runtime ? `${kind}：${runtime.memberId}` : kind, instructions: (state.input.teamMethods ? methodPrompt(({ context: 'development.v2.agents.1', architect: 'development.v2.agents.2', readiness: 'development.v2.agents.3', reviewer: 'development.v2.agents.4', frontend: 'development.agents.2', backend: 'development.agents.3', infrastructure: 'development.agents.4', 'self-check': 'development.agents.5' })[role], state.input.teamMethods) : instructions[role]) + (state.input.autonomy ? methodPrompt('development.v2.agents.5', state.input.teamMethods) : '') + (state.technicalRecovery ? methodPrompt('development.v2.agents.6', state.input.teamMethods) : '') + reading + documentation + (runtime?.delegate ? methodPrompt('development.v2.agents.7', state.input.teamMethods) : '') + methodPrompt('development.v2.agents.9', state.input.teamMethods), model: config.mode === 'fixture' ? fixtureModel(role, state, paths, assigned, runtime) : memoryModel, tools, ...(assigned.length ? { skills: assigned.map(({ skill }) => skill) } : {}), maxRetries: 0, maxProcessorRetries: 0 });
+  const agent = new Agent({ ...(config.mode === 'live' ? { memory: createNativeMemory(memoryModel, storage, state.input.teamMethods) } : {}), id: runtime?.memberId ?? kind, name: runtime ? `${kind}：${runtime.memberId}` : kind, instructions: (state.input.teamMethods ? methodPrompt(({ context: 'development.v2.agents.1', architect: 'development.v2.agents.2', readiness: 'development.v2.agents.3', reviewer: 'development.v2.agents.4', frontend: 'development.agents.2', backend: 'development.agents.3', infrastructure: 'development.agents.4', 'self-check': 'development.agents.5' })[role], state.input.teamMethods) : instructions[role]) + (state.input.autonomy ? methodPrompt('development.v2.agents.5', state.input.teamMethods) : '') + (state.technicalRecovery ? methodPrompt('development.v2.agents.6', state.input.teamMethods) : '') + reading + documentation + (runtime?.delegate ? methodPrompt('development.v2.agents.7', state.input.teamMethods) : '') + methodPrompt('development.v2.agents.9', state.input.teamMethods), model: config.mode === 'fixture' ? fixtureModel(role, state, paths, assigned, runtime) : memoryModel, workspace: execution.workspace, tools, ...(assigned.length ? { skills: assigned.map(({ skill }) => skill) } : {}), maxRetries: 0, maxProcessorRetries: 0 });
   agent.__setLogger(noopLogger);
   return agent;
 }
@@ -153,7 +152,8 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
   const storage = config.mode === 'live' ? new LibSQLStore({ id: 'development-context-memory', url: config.databaseUrl }) : undefined;
   try {
     if (state.input.teamMethods) await verifyTeamMethods(config.nacosResources, state.input.teamMethods);
-    const agent = createAgentV2(config, execution, role, state, paths, methods, runtime, storage);
+    await execution.workspace.init();
+    const agent = await createAgentV2(config, execution, role, state, paths, methods, runtime, storage);
     const taskContext = createTaskContext({ engineeringSpec: projectSpec(config, 'development'), repositoryHandoff: state.repositoryHandoff ?? state.input.repositoryHandoff, currentProductApproval: developmentProductApproval(state.input, state.phase), source: state.input.source, project: role === 'context' || state.input.project.executionProfile ? { ...state.input.project, files: Object.fromEntries(Object.entries(state.input.project.files).map(/** 上下文优先从候选工具读原文，避免文件在project与extra中重复装配。 */([path, content]) => [path, role === 'context' || path === 'pnpm-lock.yaml' ? { chars: content.length, hash: developmentHash(content), note: '可通过readFile读取原文' } : content])) } : state.input.project, requirements: state.requirements, hostReferencePolicy: '若工程参考快照包含engineering/repository-observation.json，它是宿主固定Git命令的只读观察；结合docs/decisions和docs/delivery-assets.md原文核对，不要求Agent获得任意Git或shell工具，不得声称候选已自动同步宿主变化。', referenceGroups: {
       requirements: state.requirements.map(
         /** 需求与验收只消费批准原文锚点。 */
@@ -205,6 +205,7 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
       // 工具名来自实际原生结果，而非模型自报。
       (item) => item.payload.toolName,
     );
+    if (paths.length && !runtime?.delegate && !tools.includes('mastra_workspace_read_file')) throw new OutputValidationError({ stage: 'method', code: 'method-read-missing' });
     for (const { skill, reference } of assignedMethods(role, state, methods)) {
       const prefix = JSON.stringify(skill.__referenceContents[reference].slice(0, 80)).slice(1, -1);
       const read = result.toolResults.find(

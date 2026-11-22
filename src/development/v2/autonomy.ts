@@ -41,6 +41,8 @@ export async function runVerification(execution: ExecutionPort, state: StateV2, 
 export function verificationScope(execution: ExecutionPort, input: StateV2, role: RoleV2, paths: string[], allocated?: number) {
   let state = input; let used = 0; let exhausted = false; let queue: Promise<unknown> = Promise.resolve();
   const port: ExecutionPort = {
+    /** 验证视图复用当前候选 Workspace，不创建额外执行边界。 */
+    get workspace() { return execution.workspace; },
     /** 直接读取当前候选快照，不另存文件事实。 */
     snapshot: () => execution.snapshot(),
     /** 保留原Adapter的读取边界。 */

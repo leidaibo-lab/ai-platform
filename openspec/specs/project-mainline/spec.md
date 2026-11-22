@@ -357,6 +357,57 @@ Run 的 Adapter profile SHALL 绑定实际检查计划实现及运行时身份�
 - **AND** 资产文件及交付包查询 SHALL 显式选择登记项目，不能仅凭跨仓库可能相同的资产散列定位文件
 - **AND** 后继 Run SHALL 保持来源项目与仓库，允许采用该项目当前登记的新工程 revision
 
+#### Scenario: Workspace sandbox executes an isolated candidate
+
+- **WHEN** 研发实现 Agent 处理已批准任务，或 Adapter 运行已登记检查
+- **THEN** 宿主 SHALL 为当前 Run、任务与候选检查点创建独占 Mastra Workspace，文件系统和 Sandbox SHALL 只绑定该候选
+- **AND** Agent SHALL 通过 Workspace 只读工具读取候选；宿主 SHALL 仅允许对当前任务精确批准路径写入
+- **AND** Workspace SHALL NOT 向模型开放任意命令执行；Node/Python 固定检查 SHALL 由 Adapter 以固定可执行文件和参数调用同一 Sandbox；HRM/CIP 固定检查 SHALL 使用登记的 Docker 验证器
+- **AND** Sandbox SHALL 禁止网络、凭据环境和候选检查文件写入，且缺少 OS 隔离时 SHALL 失败关闭
+- **AND** 检查前后候选散列 SHALL 一致；Workflow SHALL 继续以保存的候选检查点和 Mastra Store 持有恢复事实
+
+#### Scenario: Workspace sandbox recovery identity changes
+
+- **WHEN** 恢复研发 Run 时项目、Adapter profile、Sandbox 策略摘要或候选检查点与保存身份不一致
+- **THEN** 系统 SHALL 拒绝复用该候选 Sandbox，且不得将其他 Run 或任务的候选目录接入当前 Agent
+- **AND** 已成功完成的任务 SHALL 从原生 Workflow 检查点继续，未完成任务 SHALL 仅在新建且身份重新验证的独占 Sandbox 中恢复
+
+### Requirement: Full lifecycle agents use scoped Mastra Workspaces
+
+Mastra SHALL provide product, development, testing, browser QA, and delivery stages with Workspaces bound to each Run's authorized input and current source version. Each Workspace SHALL expose only stage-required files and SHALL be detached or destroyed when its bound execution step completes.
+
+#### Scenario: Product agents read authorized project materials
+
+- **WHEN** product manager or product reviewer analyzes or writes a product artifact
+- **THEN** the Agent SHALL read authorized source materials and fixed-version product specifications through its Run-scoped read-only Workspace
+- **AND** actual Workspace file-read receipts SHALL be attached to product work evidence
+- **AND** the Agent SHALL NOT receive Workspace write or arbitrary command execution tools
+
+#### Scenario: Testing agent reads the exact development candidate
+
+- **WHEN** the testing Agent prepares an independent test plan or browser QA executes approved cases
+- **THEN** its Workspace SHALL be bound to the exact development checkpoint and approved case assets
+- **AND** actual reads SHALL be recorded and results SHALL remain bound to source, case, method, and project identities
+- **AND** fixed checks SHALL run only through registered Adapter commands in an isolated execution environment; supported Node/Python profiles use Workspace Sandbox, while HRM/CIP retain their registered Docker verifier
+
+#### Scenario: Delivery verifies without acquiring write authority
+
+- **WHEN** the delivery stage validates a QA-approved candidate and its formal specifications
+- **THEN** it SHALL consume a read-only Workspace bound to the candidate and QA report versions
+- **AND** repository mutation and merge-request operations SHALL remain host-owned registered operations
+- **AND** no model-visible arbitrary repository write or command tool SHALL be created
+
+#### Scenario: Workspace stage identity or source drifts
+
+- **WHEN** a stage resumes with a different Run/project binding, source checkpoint, approved case set, or Workspace policy version
+- **THEN** the system SHALL reject the old Workspace and its evidence and require a newly verified stage Workspace
+- **AND** Mastra Store SHALL remain authoritative for approvals, Workflow checkpoints, and recovery facts
+
+#### Scenario: Workspace is unavailable
+
+- **WHEN** a stage requires Workspace materials but the authorized filesystem or required Sandbox cannot be initialized
+- **THEN** the stage SHALL fail closed with a safe diagnostic and SHALL NOT silently fall back to direct untracked Agent filesystem access
+
 #### Scenario: Native entry attempts to replace an initialized project
 
 - **WHEN** Studio 或其他原生调用者尝试重新 start 已初始化 Run，或通过 timeTravel 及其上下文替换重新初始化该 Run 的项目

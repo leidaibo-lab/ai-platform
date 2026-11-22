@@ -30,6 +30,16 @@ function minimalResponse(prompt: readonly { role: string }[]) {
 
 /** 使用官方 Mock 驱动原生 Agent；minimal 强制一次只读工具调用。 */
 export function createFixtureModel(stage: string) {
+  if (stage === 'testing-workspace') return new MastraLanguageModelV2Mock({
+    /** 测试角色先读取候选，再提交固定样例计划。 */
+    doGenerate: async options => {
+      const messages = JSON.stringify(options.prompt);
+      const hasResult = options.prompt.some(message => message.role === 'tool');
+      const match = messages.match(/src\/[a-zA-Z0-9_./()\[\]-]+\.(?:mjs|py|ts|tsx|js)/);
+      if (!match && !hasResult) throw new Error('fixture测试计划缺少候选源码路径');
+      return { content: hasResult ? [{ type: 'text' as const, text: drafts.testing }] : [{ type: 'tool-call' as const, toolCallId: 'fixture-testing-read', toolName: 'mastra_workspace_read_file', input: JSON.stringify({ path: match![0], showLineNumbers: false }) }], finishReason: hasResult ? 'stop' as const : 'tool-calls' as const, usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 }, warnings: [] };
+    },
+  });
   // 产品修订固定返回有差异的样例；只验证流程，不模拟理解确认结论。
   if (stage === 'product' || stage.startsWith('product-')) {
     /** 普通生成和修订共享固定样例，任务标记只决定是否显示修订段落。 */
@@ -50,11 +60,13 @@ export function createFixtureModel(stage: string) {
         // 工具完成事实必须来自原生工具循环，而非测试直接调用。
         (message) => message.role === 'tool',
       );
+      const serialized = JSON.stringify(prompt);
+      const workspacePath = serialized.match(/workspaceFile\\?"\s*:\s*\\?"([^"\\]+)/)?.[1];
+      const hasWorkspaceRead = serialized.includes('fixture-workspace-read');
+      const call = workspacePath && !hasWorkspaceRead ? { type: 'tool-call' as const, toolCallId: 'fixture-workspace-read', toolName: 'mastra_workspace_read_file', input: JSON.stringify({ path: workspacePath, showLineNumbers: false }) } : !hasResult ? { type: 'tool-call' as const, toolCallId: `fixture-${stage}-info`, toolName: 'practiceInfo', input: '{}' } : undefined;
       return {
-        content: hasResult
-          ? [{ type: 'text' as const, text: productText(prompt) }]
-          : [{ type: 'tool-call' as const, toolCallId: `fixture-${stage}-info`, toolName: 'practiceInfo', input: '{}' }],
-        finishReason: hasResult ? 'stop' as const : 'tool-calls' as const,
+        content: call ? [call] : [{ type: 'text' as const, text: productText(prompt) }],
+        finishReason: call ? 'tool-calls' as const : 'stop' as const,
         usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 }, warnings: [],
       };
     }

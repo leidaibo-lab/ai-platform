@@ -38,8 +38,12 @@ test('同实例 Node/Python 并发、Store 重启恢复、原生错绑拒绝和�
   /** 连接同一 Mastra 实例的原生 HTTP 路由。 */
   function routerFor(options: typeof app) { new Mastra(options); const router = new Hono(); for (const route of options.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler); return router; }
   let router = routerFor(app);
+  const login = await router.request('/intake-api/account', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:4112' }, body: JSON.stringify({ username: 'routing-fixture', password: 'synthetic-routing-password-2026' }) });
+  assert.equal(login.status, 200, await login.clone().text());
+  const session = login.headers.get('set-cookie')?.split(';', 1)[0];
+  assert.ok(session);
   /** POST 保留实际响应以便定位流程失败。 */
-  async function post(path: string, body: unknown, expected = 200) { const response = await router.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); assert.equal(response.status, expected, await response.clone().text()); return response.json(); }
+  async function post(path: string, body: unknown, expected = 200) { const response = await router.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: session!, Origin: 'http://127.0.0.1:4112' }, body: JSON.stringify(body) }); assert.equal(response.status, expected, await response.clone().text()); return response.json(); }
   const actor = { reviewer: 'fixture', comment: '核对当前项目固定版本' };
   const ids = projects.map(() => randomUUID());
   /** 同时推进两个原生 Run 的人工关口。 */

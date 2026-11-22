@@ -34,6 +34,8 @@ flowchart TB
 
 上下文 Agent 必须产生适用 `instructionFiles` 的真实读取回执；方法 Skill 与 reference 的必要读取也由宿主核实。实现工具只能写批准路径，`runChecks` 不接收任意命令；自检不调用 Agent，独立评审不写代码。测试退回通过[版本化返工 Port](./team-loop-architecture.md)，不得直接拼装研发状态。
 
+研发实现 Agent 的候选读取通过 Mastra Workspace 原生只读文件工具完成。每个执行步骤将独占候选目录绑定到 LocalFilesystem 与失败关闭的 LocalSandbox；模型不可调用 `execute_command`，写入仍经宿主任务精确路径 allowlist，固定 Adapter argv 由宿主在同一 Sandbox 执行。Sandbox 策略版本参与执行身份，恢复时由 Workflow 检查点重建候选，不把 Workspace 文件当作审批或恢复事实。操作与权限边界见[Workspace 说明](./workspaces.md#研发候选工作区)。
+
 ### 当前边界与历史基线
 
 登记工程支持 Node 与 Python 固定 Adapter，HRM 继续使用兼容 Docker/Compose 执行档。可执行文件和检查计划身份已绑定，但完整环境镜像未冻结；真实业务质量、生产多实例与任意技术栈不在已验收承诺内。预算及故障续办的当前规则见[自主开发与排障](./unified-workflow.md#批准范围内自主开发与排障)及[运行时限与上下文](./unified-workflow.md#运行时限与上下文)。

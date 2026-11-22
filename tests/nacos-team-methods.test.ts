@@ -81,8 +81,8 @@ test('统一目录贯穿真实方法调用、恢复身份与撤权；准备候�
       const state = stateV2Schema.parse(result.result);
       assert.equal(state.methodBundleHash, catalog.sha256);
       assert.equal(state.outcome, 'development-delivered');
-      const tools = Object.keys(await createAgentV2(config, execution, 'reviewer', state, [], loadDevelopmentMethods(root)).listTools());
-      assert.ok(!tools.includes('writeFile') && !tools.includes('runChecks'));
+      const tools = Object.keys(await (await createAgentV2(config, execution, 'reviewer', state, [], loadDevelopmentMethods(root))).listTools());
+      assert.ok(!tools.includes('writeFile') && !tools.includes('runChecks') && !tools.includes('mastra_workspace_execute_command'));
       const browser = await executeBrowserAgent(config, [{ caseId: 'page', caseHash: developmentHash('case'), sourceHash: developmentHash('source'), methodHash: catalog.sha256, files: { 'index.html': '<h1>统一方法</h1>' }, supported: true, browser: { entry: 'index.html', assets: [], actions: [], assertions: [{ selector: 'h1', text: '统一方法' }] } }], catalog);
       assert.equal(browser.receipts[0].status, 'passed', JSON.stringify(browser));
     } finally { await execution.close(); await store.close(); }

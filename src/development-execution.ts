@@ -8,8 +8,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { LocalFilesystem, LocalSandbox, type NativeSandboxConfig } from '@mastra/core/workspace';
+import { LocalFilesystem, LocalSandbox, Workspace, WORKSPACE_TOOLS, type NativeSandboxConfig } from '@mastra/core/workspace';
 import { adapterChecks, pythonIdentity, runtimeDigest, type AdapterCheck } from './business-engineering/adapters.js';
+import { developmentSandboxPolicyVersion } from './development/sandbox-policy.js';
+export { developmentSandboxPolicyVersion } from './development/sandbox-policy.js';
 
 /** 实际进程结果；退出码、超时和输出均来自原生沙箱，不采用模型自述。 */
 export interface DevelopmentCheckResult {
@@ -145,6 +147,7 @@ export class DevelopmentExecution {
   private readonly writablePaths: Set<string>;
   private readonly checkFiles: string[];
   private readonly sandbox: LocalSandbox;
+  readonly workspace: Workspace<LocalFilesystem, LocalSandbox>;
   private readonly resources: string;
   private readonly testTimeoutMs: number;
   private readonly commandTimeoutMs: number;
@@ -192,6 +195,17 @@ export class DevelopmentExecution {
     this.sandbox = new LocalSandbox({
       workingDirectory: this.root, isolation: this.isolation, nativeSandbox, timeout: this.commandTimeoutMs,
       env: { PATH: `${nodeDirectory}:/usr/bin:/bin`, TMPDIR: temporary, NODE_ENV: 'test', OPENSSL_CONF: '/dev/null' },
+    });
+    this.workspace = new Workspace({
+      id: `development-${createHash('sha256').update(this.root).digest('hex').slice(0, 20)}`,
+      name: '隔离研发候选', filesystem: this.filesystem, sandbox: this.sandbox,
+      tools: { enabled: false,
+        [WORKSPACE_TOOLS.FILESYSTEM.READ_FILE]: { enabled: true },
+        [WORKSPACE_TOOLS.FILESYSTEM.LIST_FILES]: { enabled: true },
+        [WORKSPACE_TOOLS.FILESYSTEM.FILE_STAT]: { enabled: true },
+        [WORKSPACE_TOOLS.FILESYSTEM.GREP]: { enabled: true },
+        [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]: { enabled: false },
+      },
     });
   }
 
@@ -304,7 +318,7 @@ export class DevelopmentExecution {
   /** 释放原生沙箱及独占临时数据；候选代码保留给研发交付与外部评测。 */
   async close(): Promise<void> {
     if (this.closed) return;
-    try { await this.sandbox.destroy(); }
+    try { await this.workspace.destroy(); }
     finally {
       this.closed = true;
       rmSync(this.resources, { recursive: true, force: true });

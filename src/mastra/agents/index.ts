@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import { loadProductSkillSelection, PRODUCT_MAX_STEPS } from './skills.js';
 import { productManagerProfile, productReviewerProfile, type ProductAgentRole } from './product-roles.js';
 import type { AnyWorkspace } from '@mastra/core/workspace';
+import type { ToolsInput } from '@mastra/core/agent';
 import { createRecruitmentWorkspace } from '../project-workspaces.js';
 import { createSkill, validateSkillContent } from '@mastra/core/skills';
 import { validateNacosSnapshot, type NacosSnapshot } from '../nacos-resources.js';
@@ -27,6 +28,7 @@ export interface ProductAgentOptions {
   methods?: TeamMethods;
   skillsEnabled?: boolean;
   workspace?: AnyWorkspace | false;
+  workspaceTools?: ToolsInput;
   execution?: (role: ProductAgentRole) => Pick<AgentExecutionOptionsBase<unknown>, 'modelSettings' | 'onStepFinish'>;
   resources?: NacosSnapshot;
   storage?: MastraCompositeStore;
@@ -73,7 +75,7 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
       ...(config.mode === 'live' ? { memory: createNativeMemory(model('product'), options.storage, methods) } : {}),
       ...(workspace ? { workspace } : {}),
       ...(options.skillsEnabled === false ? {} : { skills: frozen ? externalSkills : id === 'product-reviewer-agent' ? productSkills.filter(/** 独立审查只接收清单绑定。 */skill => localSelection?.reviewerSkills.includes(skill.name)) : productSkills }),
-      tools: { practiceInfo: practiceInfoTool },
+      tools: { practiceInfo: practiceInfoTool, ...(options.workspaceTools ?? {}) },
       defaultOptions: { ...options.execution?.(id === 'product-manager-agent' ? 'product-manager' : 'product-reviewer'), maxSteps: PRODUCT_MAX_STEPS },
     });
   }
@@ -81,8 +83,9 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
   function stageAgent(stage: 'testing') {
     return new Agent({
       id: `${stage}-agent`, name: `${stage} 交接助手`,
-      instructions: methodPrompt('mastra.agents.index.1', methods), model: model(stage),
+      instructions: methodPrompt('mastra.agents.index.1', methods), model: model(stage === 'testing' && options.workspaceTools ? 'testing-workspace' : stage),
       ...(config.mode === 'live' ? { memory: createNativeMemory(model(stage), options.storage, methods) } : {}),
+      tools: options.workspaceTools,
     });
   }
   return {

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { developmentSandboxPolicyVersion } from '../development/sandbox-policy.js';
 
 const nodeSource = z.string().regex(/^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.mjs$/).max(200);
 const nodeCheck = z.string().regex(/^test\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.test\.mjs$/).max(200);
@@ -45,7 +46,7 @@ export function pythonIdentity() {
 export function adapterImplementationIdentity(id: AdapterId) {
   const template = adapterChecks(id, ['src/example.' + (id === 'python-unittest.v1' ? 'py' : 'mjs')], [id === 'python-unittest.v1' ? 'tests/test_example.py' : 'test/example.test.mjs'], 25000);
   const runtime = id === 'python-unittest.v1' ? pythonIdentity() : { version: process.version, executable: realpathSync(process.execPath), sha256: createHash('sha256').update(readFileSync(realpathSync(process.execPath))).digest('hex') };
-  return { version: 'adapter-implementation.v1', template, runtime };
+  return { version: 'adapter-implementation.v1', template, runtime, sandboxPolicy: developmentSandboxPolicyVersion };
 }
 
 /** 固定解释器前后的摘要一致性；不依赖 Python 启动后的自述作为唯一依据。 */

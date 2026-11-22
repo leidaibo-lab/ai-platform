@@ -8,6 +8,8 @@ import { executeBrowserAgent } from '../browser-qa/agent.js';
 import { loadBrowserMethod } from '../browser-qa/method.js';
 import { browserCaseSchema } from '../browser-qa/contracts.js';
 import { createTaskContext } from './task-context.js';
+import { createStageWorkspace } from '../mastra/stage-workspace.js';
+import { createFixtureModel } from '../mastra/agents/fixture-model.js';
 /** 独立测试角色：计划、用例确认、真实登记套件、人工质量门及开发修复回归。
  * ADR: docs/decisions/2026-11-07-mastra-full-delivery-lifecycle.md
  */
@@ -144,21 +146,27 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
       await guard(state);
       const files: Record<string, string> = {};
       for (const path of Object.keys(await scope.port.snapshot())) files[path] = await scope.port.readFile(path);
-      const taskContext = createTaskContext({ task: 'independent-test-plan', engineeringSpec: projectSpec(config, 'testing'), product: state.development.input.source, requirements: state.development.requirements, plan: state.development.plan, files, registeredChecks: state.development.verificationRefs, developmentDelivery: state.development.delivery, previousQuality: state.qualityHistory, requirementImpact: state.development.input.requirementImpact, browserSupport: '可批准method=browser用例，提供browser={entry,assets,actions:[{action:click或fill,selector,value}],assertions:[{selector,text}]}；只支持候选内静态HTML、显式资源与文本包含断言。HRM动态全栈暂缺同版本启动Adapter，不能声称可执行。', instruction: methodPrompt('delivery.testing.1', state.development.input.teamMethods) }, config.mode === 'live', projectRepositoryRoot(config) ? { root: projectRepositoryRoot(config)!, receipt: state.repositoryHandoff ?? state.development.repositoryHandoff } : undefined, 0, state.development.input.teamMethods);
+      const stage = await createStageWorkspace(`testing-${state.development.input.correlation?.runId ?? 'run'}`, '测试团队 · 当前研发候选（只读）', files);
+      try {
+      const taskContext = createTaskContext({ task: 'independent-test-plan', engineeringSpec: projectSpec(config, 'testing'), product: state.development.input.source, requirements: state.development.requirements, plan: state.development.plan, candidateFiles: Object.keys(files), registeredChecks: state.development.verificationRefs, developmentDelivery: state.development.delivery, previousQuality: state.qualityHistory, requirementImpact: state.development.input.requirementImpact, browserSupport: '候选源码通过只读 Workspace 按需读取。可批准method=browser用例，提供browser={entry,assets,actions:[{action:click或fill,selector,value}],assertions:[{selector,text}]}；只支持候选内静态HTML、显式资源与文本包含断言。HRM动态全栈暂缺同版本启动Adapter，不能声称可执行。', instruction: methodPrompt('delivery.testing.1', state.development.input.teamMethods) + ' 源码不在提示中展开；先用 Workspace 只读工具按需读取相关文件。' }, config.mode === 'live', projectRepositoryRoot(config) ? { root: projectRepositoryRoot(config)!, receipt: state.repositoryHandoff ?? state.development.repositoryHandoff } : undefined, 0, state.development.input.teamMethods);
       const catalog = state.development.input.teamMethods;
       if (catalog) await verifyTeamMethods(config.nacosResources, catalog);
       const activeAgent = catalog ? createAgents(config, { methods: catalog, workspace: false }).testingAgent : agents.testingAgent;
-      const options = { ...taskContext.options, maxSteps: 8, modelSettings: { maxOutputTokens: 6000 } };
+      const options = { ...taskContext.options, toolsets: { ...taskContext.options.toolsets, workspace: stage.tools }, ...(config.mode === 'fixture' ? { model: createFixtureModel('testing-workspace') } : {}), maxSteps: 8, modelSettings: { maxOutputTokens: 6000 } };
       const response = config.mode === 'live'
         ? await (async () => { const stream = await activeAgent.stream(taskContext.prompt, options); for await (const chunk of stream.fullStream) { const event = projectLiveOutputChunk(chunk, 'testing', 1); if (event) await publishLiveOutput(pubsub, runId, event, 'prepare-test-plan').catch(() => {}); } return stream.getFullOutput(); })()
         : await activeAgent.generate(taskContext.prompt, options);
       if (response.finishReason === 'length') throw new Error('测试计划生成被截断，不能进入用例批准');
       if (response.error || response.finishReason !== 'stop') throw new Error('测试计划模型执行未正常完成，不能进入人工批准');
+      const readReceipts = response.toolResults.filter(item => item.payload.toolName === 'mastra_workspace_read_file' && typeof item.payload.args === 'object' && item.payload.args !== null && typeof item.payload.result === 'string' && !item.payload.result.startsWith('Error:'));
+      const workspaceReads = readReceipts.map(item => String((item.payload.args as { path?: unknown }).path)).filter(path => Object.hasOwn(files, path));
+      if (!workspaceReads.length) throw new Error('测试 Agent 未通过 Workspace 读取候选文件');
       const content = z.string().trim().min(1).max(100000).parse(response.text);
       const binding = { content, sourceHash: state.development.checkpointHash,
         ...(state.development.input.requirementTracking ? { productHash: state.development.input.source.hash, developmentPlanHash: state.development.planHash! } : {}),
-        browserMethodHash: loadBrowserMethod(config.rootDir, state.development.input.teamMethods).hash };
+        browserMethodHash: loadBrowserMethod(config.rootDir, state.development.input.teamMethods).hash, workspaceReads };
       return { ...state, quality: { ...emptyQuality(), plan: { ...binding, hash: developmentHash(binding) } } };
+      } finally { await stage.close(); }
     },
   });
   const approve = createStep({ id: 'approve-test-cases', description: '测试负责人确认用例、预期与检查映射', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema, suspendSchema: z.object({ plan: lifecycleSchema.shape.quality.shape.plan, requirements: stateV2Schema.shape.requirements, registeredChecks: z.array(z.string()), requirementImpact: requirementImpactSchema.optional() }), resumeSchema: planApprovalSchema,
@@ -222,8 +230,16 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
       const cases = state.quality.approval?.cases.filter(/** 无浏览器用例时维持旧流程。 */item => item.method === 'browser') ?? [];
       if (!cases.length) return state;
       await guard(state);
+      const snapshot: Record<string, string> = {};
+      for (const item of cases) for (const path of [item.browser!.entry, ...item.browser!.assets]) snapshot[path] = await scope.port.readFile(path);
+      const stage = await createStageWorkspace(`browser-${state.development.input.correlation?.runId ?? 'run'}`, '浏览器 QA · 已批准资产（只读）', snapshot);
+      try {
       const files: Record<string, string> = {};
-      for (const item of cases) for (const path of [item.browser!.entry, ...item.browser!.assets]) files[path] = await scope.port.readFile(path);
+      for (const path of Object.keys(snapshot)) {
+        const content = await stage.workspace.filesystem!.readFile(path, { encoding: 'utf8' });
+        if (createHash('sha256').update(String(content)).digest('hex') !== state.development.delivery!.files[path]) throw new Error('浏览器 Workspace 资产与候选版本不一致');
+        files[path] = String(content);
+      }
       await guard(state);
       const method = loadBrowserMethod(config.rootDir, state.development.input.teamMethods);
       if (state.quality.plan?.browserMethodHash !== method.hash) throw new Error('批准后浏览器方法版本漂移');
@@ -233,6 +249,7 @@ export function createTestingWorkflow(agents: ReturnType<typeof createAgents>, c
       const next = { ...state, quality: { ...state.quality, browser: evidence, results } };
       validateBrowserEvidence(next);
       return { ...next, quality: { ...next.quality, reportHash: qualityHash(next) } };
+      } finally { await stage.close(); }
     },
   });
   const review = createStep({ id: 'review-test-results', description: '补充人工用例结果，确认质量或提交缺陷退回开发', inputSchema: lifecycleSchema, outputSchema: lifecycleSchema, suspendSchema: z.object({ hash: z.string(), quality: lifecycleSchema.shape.quality }), resumeSchema: qualityReviewSchema,

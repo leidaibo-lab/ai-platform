@@ -260,6 +260,21 @@ Adapter profile SHALL 绑定检查实现及运行时身份；Python SHALL 冻结
 - **AND** 资产文件及交付包查询 SHALL 显式选择登记项目，不能仅凭跨仓库可能相同的资产散列定位文件
 - **AND** 后继 Run SHALL 保持来源项目与仓库，允许采用该项目当前登记的新工程 revision
 
+#### Scenario: Workspace sandbox executes an isolated candidate
+
+- **WHEN** 研发实现 Agent 处理已批准任务，或 Adapter 运行已登记检查
+- **THEN** 宿主 SHALL 为当前 Run、任务与候选检查点创建独占 Mastra Workspace，文件系统和 Sandbox SHALL 只绑定该候选
+- **AND** Agent SHALL 通过 Workspace 只读工具读取候选；宿主 SHALL 仅允许对当前任务精确批准路径写入
+- **AND** Workspace SHALL NOT 向模型开放任意命令执行；固定检查 SHALL 由 Adapter 以固定可执行文件和参数调用同一 Sandbox
+- **AND** Sandbox SHALL 禁止网络、凭据环境和候选检查文件写入，且缺少 OS 隔离时 SHALL 失败关闭
+- **AND** 检查前后候选散列 SHALL 一致；Workflow SHALL 继续以保存的候选检查点和 Mastra Store 持有恢复事实
+
+#### Scenario: Workspace sandbox recovery identity changes
+
+- **WHEN** 恢复研发 Run 时项目、Adapter profile、Sandbox 策略摘要或候选检查点与保存身份不一致
+- **THEN** 系统 SHALL 拒绝复用该候选 Sandbox，且不得将其他 Run 或任务的候选目录接入当前 Agent
+- **AND** 已成功完成的任务 SHALL 从原生 Workflow 检查点继续，未完成任务 SHALL 仅在新建且身份重新验证的独占 Sandbox 中恢复
+
 #### Scenario: Native entry attempts to replace an initialized project
 
 - **WHEN** Studio 或其他原生调用者尝试重新 start 已初始化 Run，或通过 timeTravel 及其上下文替换重新初始化该 Run 的项目

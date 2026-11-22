@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { cipProfile, cipRoots, cipWritable, engineeringRevisionSchema } from '../business-engineering/hrm-cip.js';
 import { resolveModelId, type PracticeConfig } from '../mastra/config.js';
+import { developmentSandboxPolicyVersion } from './sandbox-policy.js';
 
 export const developmentRoleSchema = z.enum(['architect', 'frontend', 'backend', 'infrastructure', 'self-check']);
 export type DevelopmentRole = z.infer<typeof developmentRoleSchema>;
@@ -71,7 +72,7 @@ export const commandEvidenceSchema = z.object({ id: z.string(), command: z.strin
 export const recoveryReviewSchema = z.object({ hash: z.string().length(64), decision: z.enum(['retry', 'stop']), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), additionalCalls: z.number().int().min(1).max(72).optional(), additionalContextLevel: z.number().int().min(1).max(4).optional() });
 export const developmentFaultSchema = z.object({ sequence: z.number().int().positive(), role: developmentRoleSchema, taskId: z.string().nullable(), round: z.number(), attempt: z.number().int().positive(), kind: z.enum(['model-timeout', 'model-network', 'invalid-output', 'model-error']), partialSourceHash: z.string().length(64), checkpointHash: z.string().length(64), restored: z.literal(true), usage: z.literal('unknown') });
 /** 持久化模型执行身份；端点只存 SHA256，凭据不属于批准内容。旧快照缺失时禁止恢复。 */
-export const executionIdentitySchema = z.object({ mode: z.enum(['fixture', 'live']), modelId: z.string().min(1), endpointHash: z.string().length(64) });
+export const executionIdentitySchema = z.object({ mode: z.enum(['fixture', 'live']), modelId: z.string().min(1), endpointHash: z.string().length(64), sandboxPolicy: z.string().optional() });
 export const developmentStateSchema = z.object({
   input: developmentInputSchema, mode: z.enum(['fixture', 'live']),
   executionIdentity: executionIdentitySchema.nullable().default(null),
@@ -104,7 +105,7 @@ export function developmentExecutionIdentity(config: PracticeConfig): z.infer<ty
   endpoint.hash = '';
   endpoint.pathname = endpoint.pathname.replace(/\/+$/, '');
   endpoint.searchParams.sort();
-  return { mode: config.mode, modelId: resolveModelId(config, 'development'), endpointHash: developmentHash(endpoint.toString()) };
+  return { mode: config.mode, modelId: resolveModelId(config, 'development'), endpointHash: developmentHash(endpoint.toString()), sandboxPolicy: developmentSandboxPolicyVersion };
 }
 
 /** 审批、调用与故障接续共用同一身份校验；旧快照不得猜测原模型身份。 */

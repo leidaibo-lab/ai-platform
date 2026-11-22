@@ -131,8 +131,10 @@ test('受控检查工具向实现者开放；执行额度不能被吞掉工具�
   await harness(data, generateV2, /** 完成后利用保存状态单独验证工具，不污染交付证据。 */async (result, execution, config) => {
     const state = stateV2Schema.parse(result.result); const methods = loadDevelopmentMethods(config.rootDir);
     const scope = verificationScope(execution, { ...state, verificationHistory: [] }, 'backend', ['src/a.mjs']);
-    const agent = createAgentV2(config, scope.port, 'backend', state, ['src/a.mjs'], methods);
-    assert.deepEqual(Object.keys(await agent.listTools()).sort(), ['readFile', 'runChecks', 'writeFile']);
+    const agent = await createAgentV2(config, scope.port, 'backend', state, ['src/a.mjs'], methods);
+    const exposed = Object.keys(await agent.listTools());
+    assert.ok(exposed.includes('runChecks') && exposed.includes('writeFile'));
+    assert.ok(!exposed.includes('mastra_workspace_execute_command'));
     const calls = ['runChecks', 'runChecks', 'runChecks']; let i = 0;
     await agent.generate('执行登记检查', { maxSteps: 4, model: new MastraLanguageModelV2Mock({
       /** 第三次返回工具错误，实际进程执行仍只能两次。 */

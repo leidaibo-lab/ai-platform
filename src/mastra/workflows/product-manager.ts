@@ -13,6 +13,10 @@ import { createIntakeWorkflow, createProductAlignmentStep } from '../../intake/w
 import { collectConfirmedDecisions } from '../../intake/contracts.js';
 import { generateProductContent } from '../../intake/product-generation.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
+import { createStageWorkspace, hasWorkspaceRead, readAuthorizedProductSources } from '../stage-workspace.js';
+import { createAgents as assembleAgents } from '../agents/index.js';
+import type { PracticeConfig } from '../config.js';
+import type { MastraCompositeStore } from '@mastra/core/storage';
 import { nacosResourceIdentity, type NacosSnapshot } from '../nacos-resources.js';
 import { correctionPauseSchema, runInterruptibleProductAttempt } from '../../intake/product-interruption.js';
 import { productReworkFeedback } from './product-rework.js';
@@ -38,6 +42,8 @@ export function createProductManagerPhases(
   resolveAgents?: (resources: NacosSnapshot) => Promise<ReturnType<typeof createAgents>>,
   engineeringSpec?: ReturnType<typeof projectSpec> | (() => ReturnType<typeof projectSpec>),
   graph: 'flat' | 'native' | 'nested' | 'legacy' = 'flat',
+  config?: PracticeConfig,
+  storage?: MastraCompositeStore,
 ) {
   const legacy = graph === 'legacy';
   const inlinePublish = graph === 'flat' || graph === 'native';
@@ -69,11 +75,18 @@ export function createProductManagerPhases(
           ? '本次是“AI 主动补全”模式。不要把缺少用户回答当作继续提问的理由；请基于需求目标、常见产品实践和当前上下文主动选择一条最推荐的闭环方案。所有推断、默认值和推荐必须在产品稿中明确标注为“AI 建议”或“待确认”，不能伪装成用户已确认事实；完整产品稿必须包含目标、主流程、异常边界、非目标、指标和验收标准，供产品负责人一次性审阅。'
           : '本次是“逐项澄清”模式。只使用用户已经明确确认的业务规则；不能把推荐或假设升级为事实，关键缺口应保留为待确认项。';
         if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
-        const activeManager = inputData.nacosResources ? (await resolveAgents!(inputData.nacosResources)).productManagerAgent : manager;
+        if (inputData.nacosResources) await resolveAgents!(inputData.nacosResources);
+        const spec = currentSpec();
+        const sources = config && !config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(currentRoot()) : {};
+        const stage = config ? await createStageWorkspace(`product-${runId}`, '产品团队 · 当前材料（只读）', { ...sources, 'brief.md': inputData.brief, ...(spec ? { [spec.path]: spec.content } : {}) }) : undefined;
+        const activeManager = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, workspace: stage.workspace, workspaceTools: stage.tools }).productManagerAgent : manager;
+        try {
         const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeManager, JSON.stringify({
           task: 'product-manager-phase',
           phase: role,
-          engineeringSpec: currentSpec(),
+          engineeringSpec: spec ? { projectId: spec.projectId, revision: spec.revision, path: spec.path } : undefined,
+          workspaceFile: stage ? (spec?.path ?? 'brief.md') : undefined,
+          workspaceSources: Object.keys(sources),
           phaseInstruction,
           brief: inputData.brief,
           confirmedIntake: inputData.intake,
@@ -82,7 +95,7 @@ export function createProductManagerPhases(
           previousWork: inputData.productWork?.entries ?? [],
           rework: inputData.productRework,
           priorFeedback: inputData.productReworkHistory?.map(({ round, feedback }) => ({ round, feedback })),
-          instruction: `你是同一个产品经理 Agent 的当前阶段。只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' ? (inputData.productHandoffFormat ? productDocumentsInstruction : inputData.requirementTracking ? acceptanceRequirementsInstruction : '') : ''}`,
+          instruction: `你是同一个产品经理 Agent 的当前阶段。${stage ? `先调用 mastra_workspace_read_file 读取 ${spec?.path ?? 'brief.md'}。` : ''}只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' ? (inputData.productHandoffFormat ? productDocumentsInstruction : inputData.requirementTracking ? acceptanceRequirementsInstruction : '') : ''}`,
         }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal));
         if (attempt.correction) return suspend(attempt.correction);
         const result = attempt.output;
@@ -92,6 +105,7 @@ export function createProductManagerPhases(
           else if (inputData.requirementTracking) readAcceptanceRequirements(content);
         }
         const facts = projectToolFacts(result.toolResults);
+        if (stage && !hasWorkspaceRead(result.toolResults, spec?.path ?? 'brief.md')) throw new Error('产品 Agent 未读取当前 Workspace 材料');
         const entry = {
           role,
           agent: 'product-manager-agent',
@@ -106,6 +120,7 @@ export function createProductManagerPhases(
         };
         const resultState = { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] } };
         return inlinePublish && role === 'writing' ? publishDraft(resultState) : resultState;
+        } finally { await stage?.close(); }
       },
     });
   }
@@ -131,18 +146,26 @@ export function createProductManagerPhases(
       const artifact = inputData.artifacts.at(-1);
       if (!artifact || artifact.stage !== 'product') throw new Error('产品审查缺少待审产品稿');
       if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
-      const activeReviewer = inputData.nacosResources ? (await resolveAgents!(inputData.nacosResources)).productReviewerAgent : reviewer;
+      if (inputData.nacosResources) await resolveAgents!(inputData.nacosResources);
+      const spec = currentSpec();
+      const sources = config && !config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(currentRoot()) : {};
+      const stage = config ? await createStageWorkspace(`product-review-${runId}`, '产品审查 · 当前材料（只读）', { ...sources, 'product.md': artifact.content, ...(spec ? { [spec.path]: spec.content } : {}) }) : undefined;
+      const activeReviewer = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, workspace: stage.workspace, workspaceTools: stage.tools }).productReviewerAgent : reviewer;
+      try {
       const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeReviewer, JSON.stringify({
         task: 'product-quality-review',
-        engineeringSpec: currentSpec(),
+        engineeringSpec: spec ? { projectId: spec.projectId, revision: spec.revision, path: spec.path } : undefined,
+        workspaceFile: stage ? 'product.md' : undefined,
+        workspaceSources: Object.keys(sources),
         brief: inputData.brief,
         product: artifact.content,
         corrections: productReworkFeedback(inputData),
-        instruction: '独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。检查需求文档中的场景是否忠实覆盖确认的业务规则，产品规格中的交付任务是否与需求对应。只输出审查发现与依据，不修改产品稿，不代替人工审批。',
+        instruction: `${stage ? '先调用 mastra_workspace_read_file 读取 product.md。' : ''}独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。检查需求文档中的场景是否忠实覆盖确认的业务规则，产品规格中的交付任务是否与需求对应。只输出审查发现与依据，不修改产品稿，不代替人工审批。`,
       }), 'reviewer', mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, 'review-product-quality'), signal));
       if (attempt.correction) return suspend(attempt.correction);
       const result = attempt.output;
       const facts = projectToolFacts(result.toolResults);
+      if (stage && !hasWorkspaceRead(result.toolResults, 'product.md')) throw new Error('产品审查未读取当前 Workspace 产品稿');
       const review = productQualityReviewSchema.parse({
         version: 'product-quality-review.v1',
         agent: 'product-reviewer-agent',
@@ -153,6 +176,7 @@ export function createProductManagerPhases(
         generation: result.generation,
       });
       return { ...inputData, productQualityReview: review };
+      } finally { await stage?.close(); }
     },
   });
 

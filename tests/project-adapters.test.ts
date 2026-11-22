@@ -59,9 +59,14 @@ test('Python Adapter 从固定 Git 版本装配并在隔离候选中实际运行
     for (const route of app.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
     const runId = randomUUID();
     const actor = { reviewer: 'fixture', comment: '确认测试项目' };
+    /** 人工决定使用工作台签发的会话，不以请求正文中的 reviewer 冒充登录。 */
+    const login = await router.request('/intake-api/account', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:4112' }, body: JSON.stringify({ username: 'adapter-fixture', password: 'synthetic-test-password-2026' }) });
+    assert.equal(login.status, 200, await login.clone().text());
+    const session = login.headers.get('set-cookie')?.split(';', 1)[0];
+    assert.ok(session, '工作台登录应签发短期测试会话');
     /** 从工作台 HTTP 入口推进真实原生 Workflow 和人工关口。 */
     async function post(path: string, body: unknown) {
-      const response = await router.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const response = await router.request(path, { method: 'POST', headers: new Headers({ 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:4112', Cookie: session! }), body: JSON.stringify(body) });
       assert.equal(response.status, 200, await response.clone().text());
       return response.json();
     }
