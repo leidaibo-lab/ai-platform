@@ -7,7 +7,7 @@ const labels = { pending: '待执行', running: '执行中', completed: '已完�
 type Stream = ProductStreamView & { stepId?: string; taskKey?: string };
 
 /** 展示快照节点与可确定归属的本次连接输出，不将片段视为已批准结果。 */
-export function WorkbenchRecords({ timeline, activity, status, streams }: { timeline?: RunTimelineDocument; activity?: LiveActivity; status: string; streams: Record<string, Stream> }) {
+export function WorkbenchRecords({ timeline, activity, status, streams, connection, recovery }: { timeline?: RunTimelineDocument; activity?: LiveActivity; status: string; streams: Record<string, Stream>; connection: 'connecting' | 'connected' | 'disconnected'; recovery?: React.ReactNode }) {
   const nodes = timeline?.nodes.filter(node => node.status !== 'pending') ?? [];
   const entries = Object.entries(streams);
   const root = useRef<HTMLElement>(null);
@@ -16,7 +16,9 @@ export function WorkbenchRecords({ timeline, activity, status, streams }: { time
   function matchingNode(stream: Stream) {
     if (!stream.stepId || stream.taskKey) return undefined;
     const exact = nodes.filter(node => node.id === stream.stepId);
-    return exact.length === 1 ? exact[0] : undefined;
+    if (exact.length === 1) return exact[0];
+    const nested = nodes.filter(node => node.id.endsWith(`.${stream.stepId}`));
+    return nested.length === 1 ? nested[0] : undefined;
   }
   useEffect(() => {
     const scroller = root.current?.closest('.workbench-content');
@@ -31,7 +33,7 @@ export function WorkbenchRecords({ timeline, activity, status, streams }: { time
     update(); scroller.addEventListener('scroll', update, { passive: true });
     return () => scroller.removeEventListener('scroll', update);
   }, [timeline]);
-  if (!nodes.length && !entries.length && !activity) return <section className="workbench-records" aria-label="执行记录"><h2>执行记录</h2><small>暂无执行记录</small></section>;
+  if (!nodes.length && !entries.length && !activity && status !== 'running') return <section className="workbench-records" aria-label="执行记录"><h2>执行记录</h2><small>暂无执行记录</small></section>;
   return <section ref={root} className="workbench-records conversation-records" aria-label="执行记录">
     <h2>执行记录</h2>
     {nodes.length > 0 && <nav className="conversation-nav" aria-label="节点快捷导航">{nodes.map(node => <button key={node.id} type="button" className={current === node.id ? 'active' : ''} aria-label={`定位到${node.title}，${labels[node.status]}`} aria-current={current === node.id ? 'location' : undefined} onClick={() => root.current?.querySelectorAll<HTMLElement>('[data-record-id]').forEach(item => { if (item.dataset.recordId === node.id) item.scrollIntoView({ block: 'start', behavior: 'smooth' }); })}><span>{node.title} · {labels[node.status]}</span></button>)}</nav>}
@@ -48,7 +50,11 @@ export function WorkbenchRecords({ timeline, activity, status, streams }: { time
         </div>
       </article>;
     })}
-    {status === 'running' && activity && <p role="status" className="conversation-progress">{activity.summary}</p>}
+    {status === 'running' && <div className="conversation-progress" role="status">
+      {activity && <p>{activity.summary}</p>}
+      <p>{connection === 'disconnected' ? '实时连接中断，正在重连；流程状态会继续同步，断线期间的输出无法回放。' : connection === 'connecting' ? '正在连接实时输出…' : entries.length ? '正在接收本次连接的实时输出。' : '已连接，等待当前步骤的公开输出；部分步骤不会产生实时内容。'}</p>
+      {recovery}
+    </div>}
     {entries.filter(([, stream]) => !matchingNode(stream)).map(([key, stream], index, unmatched) => <div key={key} className="conversation-unmatched"><small>本次连接输出 · 节点归属待确认</small><RunActivityFeed timeline={timeline} stream={stream} status={status === 'running' && key === entries.at(-1)?.[0] && index === unmatched.length - 1 ? status : 'saved'} stepLabel={stream.stepId} taskKey={stream.taskKey} /></div>)}
   </section>;
 }

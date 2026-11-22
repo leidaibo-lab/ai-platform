@@ -92,6 +92,7 @@ export function IntakeApp() {
   const [successorBrief, setSuccessorBrief] = useState('');
   const [successorKinds, setSuccessorKinds] = useState<Array<'product' | 'development' | 'testing'>>(['product']);
   const [liveActivity, setLiveActivity] = useState<LiveActivity>();
+  const [streamConnection, setStreamConnection] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [streams, setStreams] = useState<Record<string, ProductStreamView & { stepId?: string; taskKey?: string }>>({});
   const streamRound = useRef(0);
   const [project, setProject] = useState<{ id?: string; title?: string }>();
@@ -267,11 +268,13 @@ export function IntakeApp() {
   useEffect(() => {
     if (!id || (!busy && !correcting && !uncertain && document?.status !== 'running')) return;
     let active = true;
+    setStreamConnection('connecting');
     const source = new EventSource(`/intake-api/runs/${encodeURIComponent(id)}/events`);
     /** 事件只触发权威快照回读，不把 SSE payload 当作执行事实。 */
     source.onmessage = event => {
       try {
-        const payload = JSON.parse(event.data) as { activity?: LiveActivity; output?: ProductStreamEvent; stepId?: string; taskKey?: string };
+        const payload = JSON.parse(event.data) as { type?: string; activity?: LiveActivity; output?: ProductStreamEvent; stepId?: string; taskKey?: string };
+        if (active && payload.type === 'ready') setStreamConnection('connected');
         const output = payload.output;
         if (active && output) {
           const key = JSON.stringify([streamRound.current, payload.stepId, payload.taskKey, output.role, output.attempt]);
@@ -285,7 +288,7 @@ export function IntakeApp() {
       }).catch(() => { /* SSE 断线期间保留当前 UI，轮询会继续尝试。 */ });
     };
     /** 事件流错误不覆盖当前 Run 状态，避免网络抖动伪造失败。 */
-    source.onerror = () => { /* REST fallback remains active. */ };
+    source.onerror = () => { if (active) setStreamConnection('disconnected'); };
     return () => { active = false; source.close(); };
   }, [busy, correcting, document?.status, id, uncertain]);
   /** 超时只代表连接结束；先回读状态，再决定展示运行、失败或输入错误。 */
@@ -454,7 +457,7 @@ export function IntakeApp() {
         <details><summary>需求设置</summary><label>迭代标识 <input value={iterationId} maxLength={100} onChange={event => setIterationId(event.target.value)} /></label><label><input type="checkbox" checked={intakeMode === 'autofill'} onChange={event => setIntakeMode(event.target.checked ? 'autofill' : 'clarify')} /> AI 主动补全需求</label></details>
       </section> : <>
         {document?.successorBaseline && <details><summary>后继 Run 的只读基线</summary><p>{document.successorBaseline.sourceRunId}</p></details>}
-        {document && <WorkbenchRecords timeline={document.timeline} activity={liveActivity} status={document.status} streams={streams} />}
+        {document && <WorkbenchRecords timeline={document.timeline} activity={liveActivity} status={document.status} streams={streams} connection={streamConnection} recovery={selectedTeam === 'product' && onActiveTeam && document.timeline?.nodes.some(node => node.status === 'running' && /(?:^|\.)product-writing$/.test(node.id)) && !document.retry && <details className="conversation-recovery"><summary>写作长时间没有进展？</summary><p>若服务曾重启且写作步骤已超过受控时限，可核对并从同一保存输入恢复。</p><button disabled={busy || uncertain || !accountName} onClick={() => void recoverStaleWriting()}>{busy ? '正在核对并恢复…' : '核对并恢复遗留写作'}</button>{!accountName && <small> 请先登录工作台。</small>}</details>} />}
         {(correcting || activeAttempt?.stopping || savedCorrection || staleCorrection || correctionError) && <div className="workbench-feedback" id={savedCorrection ? 'product-team-action' : undefined}>
           <span role={correctionError ? 'alert' : 'status'}>{correctionError || (correcting || activeAttempt?.stopping ? '正在处理纠偏…' : savedCorrection ? '纠偏已保存，可继续执行。' : '原生成尝试已结束，意见仍在输入框中。')}</span>
           {savedCorrection ? <button type="button" disabled={correcting} onClick={() => void correctProduct()}>继续纠偏</button>
@@ -502,7 +505,7 @@ export function IntakeApp() {
         {onActiveTeam && document && !intake && !document.product && !document.gate && !document.blockage && (!document.progress || document.retry) && (document.retry ? <div id="workflow-recovery"><RequirementWorkspace title="恢复与下一步" panel={<><p>{document.retry.next ?? '从已保存的检查点继续，已确认内容和前序成果保留。'}</p><h3>执行影响</h3><p>{document.retry.impact}</p></>} actions={<button className="primary" disabled={busy || uncertain} onClick={/** 恢复只提交当前服务端版本，不允许客户端指定路径。 */() => void submit({ retryHash: document.retry!.hash })}>{busy ? '正在重试…' : '重试'}</button>}>
           <section className="intake-card requirement-completeness"><div className="intake-eyebrow">当前成果状态</div><h1>已保存的工作与待补结果</h1><p>已保存 {document.retry.savedAnswers} 轮回答。当前停在“{document.retry.title}”，恢复后仍会停在相应的人工确认关口。</p>{document.retry.preserved.length > 0 && <ul className="requirement-preserved">{document.retry.preserved.map(/** 状态由服务端依据保存的角色结果判断，计划句不计作完成交付。 */item => <li key={item.role}><span>{item.label}</span><strong>{item.complete === false ? '仅保存执行计划，未保存检查结果' : '已完成'}</strong></li>)}</ul>}</section>
           <section className="intake-card"><h2>当前需要处理的问题</h2><p><strong>{document.retry.title}：</strong>{document.retry.reason}</p>{document.retry.attemptDetails?.map(/** 保留服务端脱敏后的失败依据，不推断额外故障原因。 */detail => <p key={detail}>{detail}</p>)}<p>{document.retry.message}</p></section>
-        </RequirementWorkspace></div> : document.status === 'running' ? <section className="intake-card" role="status"><h2>产品稿写作状态</h2><p>当前 Run 正在处理。若服务曾重启且写作步骤已超过受控时限，系统会仅从同一保存输入恢复写作。</p><button disabled={busy || uncertain || !accountName} onClick={() => void recoverStaleWriting()}>{busy ? '正在核对并恢复…' : '核对并恢复遗留写作'}</button></section> : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
+        </RequirementWorkspace></div> : document.status === 'running' ? null : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
       </>}
       </div>
       {canUseComposer && <WorkbenchComposer key={`${id || 'create'}:${correctionDraft?.attempt ?? activeAttempt?.attempt ?? 'note'}`}

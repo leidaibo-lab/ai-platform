@@ -10,6 +10,7 @@ import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { readIntake, respondIntake } from '../src/intake/service.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
 import { ContextBudgetError } from '../src/delivery/context-budget.js';
+import { projectLiveOutputFrame } from '../src/intake/run-timeline.js';
 import { createHash } from 'node:crypto';
 
 test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修订、产品批准与重复拒绝', /** 隔离 LibSQL 的主流程，证明 HTTP 所依赖的服务事实。 */async () => {
@@ -370,11 +371,20 @@ for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${fai
   let calls = 0;
   const plan = { maturity: { decisions: { clear: true, evidence: '合成' }, mainFlow: { clear: true, evidence: '合成' }, exceptions: { clear: true, evidence: '合成' }, delivery: { clear: true, evidence: '合成' } }, summary: '受控合成方案', assumptions: [], questions: [] };
   t.mock.method(Agent.prototype, 'generate', (/** 模拟结构化输出与读取回执，仅验证失败恢复控制流。 */async (_input: unknown, options: any) => { assert.ok(options.structuredOutput.schema); assert.equal(options.maxSteps, 24); assert.equal(options.modelSettings.timeout.stepMs, 600000); assert.ok(options.modelSettings.timeout.totalMs > 1790000 && options.modelSettings.timeout.totalMs <= 1800000); if (++calls === 2 || (failureKind === 'invalid-output' && calls === 3)) throw failureKind === 'timeout' ? new DOMException('synthetic timeout', 'TimeoutError') : new SyntaxError('synthetic invalid output'); return { object: plan, toolResults: [{ payload: { toolName: 'mastra_workspace_read_file', args: { path: 'brief.md' }, result: '合成恢复需求' } }] }; }) as any);
+  t.mock.method(Agent.prototype, 'stream', (/** 模拟结构化流及最终校验结果。 */async function (this: Agent, input: any, options: any) { return { fullStream: (async function* () { yield { type: 'text-delta', payload: { text: 'private-structured-content' } }; yield { type: 'tool-call', payload: { toolName: 'readFile', args: { path: 'brief.md', secret: 'private-argument' } } }; yield { type: 'tool-result', payload: { toolName: 'readFile', result: 'private-result' } }; })(), getFullOutput: () => this.generate(input, options) }; }) as any);
   const { createProductDevelopmentWorkflow } = await import('../src/mastra/workflows/product-development.js');
   const workflow = createProductDevelopmentWorkflow(app.agents as any, { ...config, mode: 'live' });
   new Mastra({ ...app, workflows: { productDevelopmentWorkflow: workflow } });
   try {
-    const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成恢复需求', iterationId: 'retry-test', guidedIntake: true } });
+    const run = await workflow.createRun();
+    const events: unknown[] = [];
+    const unwatch = await run.watchAsync(event => { const frame = projectLiveOutputFrame(event); if (frame) events.push(frame); });
+    await run.start({ inputData: { brief: '合成恢复需求', iterationId: 'retry-test', guidedIntake: true } });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await unwatch();
+    assert.deepEqual(events.map((frame: any) => frame.output.state), ['started', 'completed']);
+    assert.ok(events.every((frame: any) => frame.stepId === 'align-product-requirements' && frame.output.role === 'analysis'));
+    assert.doesNotMatch(JSON.stringify(events), /private-/);
     let current = await readIntake(workflow, run.runId);
     current = await respondIntake(workflow, 'live', run.runId, { hash: current.intake!.hash, action: 'refine', reviewer: 'test-human', answers: [], supplement: '真实人工补充（合成测试）' });
     assert.equal(current.status, 'failed'); assert.ok(current.retry); assert.equal(current.retry.savedAnswers, 1);

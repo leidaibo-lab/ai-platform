@@ -65,9 +65,9 @@ export function RunActivityFeed({ timeline, status, liveActivity, progressText, 
   const currentText = live ? liveActivity?.summary ?? progressText : undefined;
   if (!currentText && !nextText && !stream) return null;
   const roles: Record<string, string> = { analysis: '需求分析', clarification: '需求澄清整理', 'scope-priority': '范围与优先级', writing: '产品稿写作', reviewer: '独立审查', context: '研发上下文核实', architect: '技术方案设计', readiness: '实施前就绪审查', frontend: '前端实现', backend: '后端实现', infrastructure: '基础设施实现', testing: '测试计划', operations: '发布计划' };
-  return <details key={live ? 'live' : 'saved'} open={live || undefined} className="intake-card live-model-output" aria-label="节点实时输出">
-    <summary>{stream ? roles[stream.role] ?? stream.role : '当前进展'} · {live ? '实时输出' : '本次连接输出'}{stepLabel && <small title={stepLabel}> · {stepLabel.split('.').at(-1)}</small>}{taskKey && <small title={taskKey}> · 任务 {taskKey.slice(0, 8)}</small>}</summary>
-    {stream && <><p className="live-model-output-note">模型生成片段 · 第 {stream.attempt} 次尝试 · 完成前内容可能变化</p><div ref={outputRef} className="live-model-output-stream" aria-live="off" onScroll={handleOutputScroll}>{stream.entries.map((entry, index) => entry.type === 'text' ? <p className="live-model-output-text" key={index}>{entry.text}</p> : <p className="live-model-output-tool" key={index}>{toolLabel(entry)} · {{ started: '调用中', completed: '已完成', failed: '失败' }[entry.state]}</p>)}</div></>}
+  return <details key={live ? 'live' : 'saved'} open={live || undefined} className="live-model-output" aria-label="节点实时输出">
+    <summary>{stream ? roles[stream.role] ?? stream.role : '当前进展'} · {live ? '实时输出' : '本次连接输出'}{stepLabel && <small className="sr-only"> · 节点 {stepLabel}</small>}{taskKey && <small> · 任务 {taskKey.slice(0, 8)}</small>}</summary>
+    {stream && <><p className="live-model-output-note">第 {stream.attempt} 次尝试 · 生成内容可能变化</p><div ref={outputRef} className="live-model-output-stream" aria-live="off" onScroll={handleOutputScroll}>{stream.entries.map((entry, index) => entry.type === 'text' ? <p className="live-model-output-text" key={index}>{entry.text}</p> : <p className="live-model-output-tool" key={index}>{toolLabel(entry)} · {{ started: '调用中', completed: '已完成', failed: '失败' }[entry.state]}</p>)}</div></>}
     {!stream && currentText && <p className="run-activity-copy" role="status">{currentText}</p>}
     {!stream && live && nextText && <p className="run-activity-copy run-activity-next">{nextText}</p>}
     {!stream && live && <p className="live-model-output-note">等待模型文本或工具调用；部分节点暂未接入实时输出。</p>}

@@ -296,7 +296,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
         const runId = c.req.param('runId');
         const encoder = new TextEncoder();
         let closed = false;
-        let unwatch: (() => void) | undefined;
+        let unwatch: (() => void | Promise<void>) | undefined;
         let finishTimer: ReturnType<typeof setTimeout> | undefined;
         const stream = new ReadableStream<Uint8Array>({
           async start(controller) {
@@ -310,7 +310,7 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
               if (closed) return;
               closed = true;
               if (finishTimer) clearTimeout(finishTimer);
-              unwatch?.();
+              void unwatch?.();
               controller.close();
             }
             /** 将原生 Workflow 事件压缩为可公开的节点变化摘要。 */
@@ -327,15 +327,18 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
               send({ type: 'workflow-event', runId, eventType: event.type, stepId, status, occurredAt, activity: projectWorkflowActivity(event.type, stepId, status, occurredAt) });
               if (event.type === 'workflow-finish' || event.type === 'workflow-canceled') finishTimer = setTimeout(close, 100);
             }
-            send({ type: 'ready', runId, occurredAt: new Date().toISOString() });
             const run = await workflow.createRun({ runId });
-            unwatch = run.watch(observe);
             c.req.raw.signal.addEventListener('abort', close, { once: true });
+            if (c.req.raw.signal.aborted) { close(); return; }
+            const unsubscribe = await run.watchAsync(observe);
+            if (closed) { void unsubscribe(); return; }
+            unwatch = unsubscribe;
+            send({ type: 'ready', runId, occurredAt: new Date().toISOString() });
           },
           cancel() {
             closed = true;
             if (finishTimer) clearTimeout(finishTimer);
-            unwatch?.();
+            void unwatch?.();
           },
         });
         return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' } });

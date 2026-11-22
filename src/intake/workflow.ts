@@ -7,6 +7,8 @@ import { createTaskContext } from '../delivery/task-context.js';
  * ADR: docs/decisions/2026-11-07-mastra-guided-intake.md
  */
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
+import { PUBSUB_SYMBOL } from '@mastra/core/workflows/_constants';
+import { projectLiveOutputChunk, publishLiveOutput } from './live-output.js';
 import type { createAgents } from '../mastra/agents/index.js';
 import { deliverySchema, type Delivery } from '../mastra/workflows/delivery.js';
 import { assessmentHistory, alignmentResumeSchema, intakeSchema, generatedPlanSchema, responseSchema, intakeHash, applyIntakeResponse, canFinalizePlan, classifyPublicationDependency, classifyWritingPrerequisite } from './contracts.js';
@@ -30,7 +32,7 @@ type WorkspaceOptions = { config?: PracticeConfig; storage?: MastraCompositeStor
 function createAssessment(agents: ReturnType<typeof createAgents>, mode: Delivery['mode'], resolveAgents?: ResolveAgents, specSource?: ProductSpec, workspaceOptions?: WorkspaceOptions) {
   const productManager = agents.productManagerAgent;
   /** 根据最新回答判断是否还有关键业务缺口。 */
-  return async function assess(inputData: Delivery, runId: string, abortSignal: AbortSignal) {
+  return async function assess(inputData: Delivery, runId: string, abortSignal: AbortSignal, pubsub?: Parameters<typeof publishLiveOutput>[0], stepId: string = productSteps[0].id) {
     const engineeringSpec = typeof specSource === 'function' ? specSource() : specSource;
     const intake = inputData.intake;
     if (!intake?.enabled || intake.ready) return { delivery: inputData };
@@ -63,7 +65,13 @@ function createAssessment(agents: ReturnType<typeof createAgents>, mode: Deliver
         signal.throwIfAborted();
         try {
           const remaining = Math.max(1, Math.floor(deadline - performance.now()));
-          const result = await manager.generate(taskContext.prompt, { ...taskContext.options, abortSignal: signal, maxSteps: 24, modelSettings: { maxRetries: 0, timeout: { totalMs: remaining, stepMs: Math.min(remaining, 600000) } }, structuredOutput: { schema: generatedPlanSchema } });
+          const stream = await manager.stream(taskContext.prompt, { ...taskContext.options, abortSignal: signal, maxSteps: 24, modelSettings: { maxRetries: 0, timeout: { totalMs: remaining, stepMs: Math.min(remaining, 600000) } }, structuredOutput: { schema: generatedPlanSchema } });
+          for await (const chunk of stream.fullStream) {
+            const event = projectLiveOutputChunk(chunk, 'analysis', attemptNumber);
+            if (event?.type === 'tool') await publishLiveOutput(pubsub, runId, event, stepId).catch(() => {});
+          }
+          const result = await stream.getFullOutput();
+          if (result.error) throw result.error;
           if (stage && !hasWorkspaceRead(result.toolResults, 'brief.md')) throw new Error('需求澄清 Agent 未读取当前 Workspace 需求');
           receipts = workspaceReadReceipts(result.toolResults, files);
           return result.object;
@@ -106,7 +114,7 @@ export function createProductAlignmentStep(agents: ReturnType<typeof createAgent
         }
         delivery = { ...inputData, intake: applyIntakeResponse(intake, resumeData.response) };
       }
-      const result = await assess(delivery, runId, abortSignal);
+      const result = await assess(delivery, runId, abortSignal, context[PUBSUB_SYMBOL]);
       if (result.correction) return suspend({ ...result.correction, intake: delivery.intake });
       const intake = result.delivery.intake!;
       return intake.ready ? result.delivery : suspend(intake);
@@ -119,8 +127,8 @@ export function createIntakeWorkflow(agents: ReturnType<typeof createAgents>, mo
   const assess = createAssessment(agents, mode, resolveAgents, engineeringSpec, workspaceOptions);
   const analyze = createStep({ id: 'analyze-requirements', description: '需求澄清｜product-manager-agent', inputSchema: deliverySchema, outputSchema: deliverySchema, suspendSchema: correctionPauseSchema,
     // 建议不转成事实；模型无效输出明确失败，fixture 明确标识。
-    execute: async ({ inputData, runId, abortSignal, suspend }) => {
-      const result = await assess(inputData, runId, abortSignal);
+    execute: async ({ inputData, runId, abortSignal, suspend, [PUBSUB_SYMBOL]: pubsub }) => {
+      const result = await assess(inputData, runId, abortSignal, pubsub, 'analyze-requirements');
       return result.correction ? suspend(result.correction) : result.delivery;
     },
   });
