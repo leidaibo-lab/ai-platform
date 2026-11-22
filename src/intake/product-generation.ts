@@ -9,13 +9,14 @@ import { diagnoseModelFailure } from '../delivery/model-failure.js';
 import { ContextBudgetError } from '../delivery/context-budget.js';
 import { ProductGenerationFailure, canRetryProductAttempt, classifyProductError, isPlanOnlyProductOutput, safeFinishReason } from './product-failure.js';
 import type { ProductAttempt, ProductFailureKind } from '../delivery/product-generation-contract.js';
+import type { TracingContext } from '@mastra/core/observability';
 import { projectToolFacts } from './run-timeline.js';
 import { projectLiveOutputChunk, type LiveOutputEvent } from './live-output.js';
 export const WRITING_MODEL_SETTINGS = { maxRetries: 0, maxOutputTokens: 16000, timeout: { totalMs: 1800000, stepMs: 600000 } } as const;
 export type ProductStreamEvent = LiveOutputEvent;
 type ProductGenerationAgent = Pick<ReturnType<typeof createAgents>['productManagerAgent'], 'generate' | 'stream'>;
 /** 产品团队统一验证原生结束事实；只读临时故障最多两次，单节点共享30分钟截止时间。 */
-export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, onProgress?: (event: ProductStreamEvent) => Promise<void>, abortSignal?: AbortSignal, methods?: TeamMethods) {
+export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, onProgress?: (event: ProductStreamEvent) => Promise<void>, abortSignal?: AbortSignal, methods?: TeamMethods, tracingContext?: TracingContext) {
   let input: Record<string, unknown>;
   try { input = JSON.parse(prompt); } catch { input = { task: 'product', instruction: prompt }; }
   const attempts: ProductAttempt[] = []; const invocationStarted = performance.now(); const startedAt = new Date().toISOString(); const deadline = invocationStarted + WRITING_MODEL_SETTINGS.timeout.totalMs;
@@ -29,7 +30,7 @@ export async function generateProductContent(agent: ProductGenerationAgent, prom
       context = createTaskContext(input, mode === 'live', remote, budgetLevel, methods);
       const remaining = Math.max(1, Math.floor(deadline - performance.now()));
       abortSignal?.throwIfAborted();
-      const options = { ...context.options, abortSignal, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
+      const options = { ...context.options, abortSignal, tracingContext, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
       let result;
       if (mode === 'live' && onProgress) {
         const stream = await agent.stream(context.prompt, options);

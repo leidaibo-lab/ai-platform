@@ -9,12 +9,12 @@ import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
 
-test('平台修复跨进程接续，重复事件只执行一次并保留方案审批', async () => {
+for (const independent of [false, true]) test(`平台修复跨进程接续，重复事件只执行一次并保留方案审批：${independent ? '独立研发' : '主流程'}`, async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'mastra-platform-repair-'));
   const runId = randomUUID();
   /** 每次请求从独立进程重新打开同一原生 Store。 */
   async function processRequest(command: string, event?: object) {
-    const { stdout } = await execute(process.execPath, ['--import', 'tsx', 'tests/fixtures/platform-repair-process.ts', directory, runId, command, ...(event ? [JSON.stringify(event)] : [])]);
+    const { stdout } = await execute(process.execPath, ['--import', 'tsx', 'tests/fixtures/platform-repair-process.ts', directory, runId, command, event ? JSON.stringify(event) : '', independent ? 'independent' : 'mainline']);
     return JSON.parse(stdout.trim().split('\n').at(-1)!);
   }
   try {

@@ -97,7 +97,7 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
         const revision = resumeData.project.engineeringRevision;
         if (cipGit(projectRepositoryRoot(config)!, ['merge-base', revision, formal.handoff.commit]).trim() !== revision) throw new Error('开发范围必须使用产品规格分支的工程基线');
       }
-      return inputV2Schema.parse({ teamMethods: inputData.nacosResources?.methods, ...(inputData.architectureDocumentFormat ? { architectureDocumentFormat: inputData.architectureDocumentFormat } : {}), productHandoffFormat: inputData.productHandoffFormat, ...(inputData.requirementTracking ? { requirementTracking: inputData.requirementTracking } : {}), repositoryHandoff: inputData.repositoryHandoff, formalSpecifications: inputData.formalSpecifications, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
+      return inputV2Schema.parse({ ...(inputData.migration ? { budgetContinuation: inputData.migration.budget } : {}), teamMethods: inputData.nacosResources?.methods, ...(inputData.architectureDocumentFormat ? { architectureDocumentFormat: inputData.architectureDocumentFormat } : {}), productHandoffFormat: inputData.productHandoffFormat, ...(inputData.requirementTracking ? { requirementTracking: inputData.requirementTracking } : {}), repositoryHandoff: inputData.repositoryHandoff, formalSpecifications: inputData.formalSpecifications, correlation: inputData.correlation, source: { kind: 'approved-product', workflowId: 'product-development', runId, hash: product.hash, content: product.content, evidence: product.evidence }, project: resumeData.project, maxReworks: resumeData.maxReworks, autonomy: resumeData.autonomy, scopeApproval: { reviewer: resumeData.reviewer, comment: resumeData.comment, productHash: product.hash } });
     },
   });
   const development = createDevelopmentWorkflowV2(config, execution.port, false, generate, { id: 'development-execution', team: true, bind: execution.bind });
@@ -108,7 +108,7 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
     // 产品来源由研发团队的输入快照提供，阻塞澄清仍在研发团队边界内回流产品职责。
     execute: async ({ inputData, getInitData }) => blockerCycleSchema.parse({ development: inputData, approvedProduct: getInitData(), round: 1, history: [] }),
   });
-  const clarification = createBlockerClarificationWorkflow(agents, config, resolveExecution, generate, /** 阻塞回流使用原产品 Run 的资源和存储。 */async resources => resolveProductAgents(config, resources, options.storage));
+  const clarification = createBlockerClarificationWorkflow(agents, config, resolveExecution, generate, /** 阻塞回流使用原产品 Run 的资源和存储。 */async resources => resolveProductAgents(config, resources, options.storage), options.storage);
   const main = createWorkflow({ id: 'development-team', description: developmentSteps.map(step => step.title).join(' → '), inputSchema: deliverySchema, outputSchema: stateV2Schema })
     .then(withRepositoryAssets(scope, config))
     .then(development);

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 interface Catalog { available: boolean; reason?: string; id: string; title: string; branch: string; revision: string; catalogHash: string; executionReady: boolean; executionReason: string; preparationIssues?: string[]; engineeringAssessment?: { stackStatus: 'matched' | 'unknown' | 'mismatch' | 'ambiguous'; evidence: string[] }; modules: { id: string; title: string; role: string; count: number }[]; files: { path: string; area: string; bytes: number }[]; checks: { id: string; title: string; command: string; ready: boolean; reason: string }[] }
 /** 用户只确认项目与整体权限，精确文件拆分及实际团队由开发Workflow形成。 */
-export function RepositoryScope({ runId, gateHash, busy, submit }: { runId: string; gateHash: string; busy: boolean; submit: (body: unknown) => Promise<void> }) {
+export function RepositoryScope({ runId, gateHash, busy, submit, projectId }: { projectId?: string; runId: string; gateHash: string; busy: boolean; submit: (body: unknown) => Promise<void> }) {
   const [catalog, setCatalog] = useState<Catalog>();
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
@@ -12,13 +12,13 @@ export function RepositoryScope({ runId, gateHash, busy, submit }: { runId: stri
     const controller = new AbortController(); setConfirm(false); setError(''); setCatalog(undefined);
     /** 检查当前仓库版本与隔离验证环境，不执行项目开发或数据库操作。 */
     async function load() {
-      try { const response = await fetch('/intake-api/project?runId=' + encodeURIComponent(runId), { signal: controller.signal }); if (!response.ok) throw new Error('项目环境读取失败'); const result = await response.json(); if (!controller.signal.aborted) setCatalog(result); }
+      try { const response = await fetch('/intake-api/project?' + (projectId ? 'projectId=' + encodeURIComponent(projectId) : 'runId=' + encodeURIComponent(runId)), { signal: controller.signal }); if (!response.ok) throw new Error('项目环境读取失败'); const result = await response.json(); if (!controller.signal.aborted) setCatalog(result); }
       catch { if (!controller.signal.aborted) setError('项目环境暂时无法读取，请重新检查。'); }
     }
     void load();
     // 关口切换后不再更新旧表单。
     return () => controller.abort();
-  }, [revision, runId]);
+  }, [revision, runId, projectId]);
   /** 确认仅启动上下文、方案与团队规划；不会跳过架构批准直接实施。 */
   function proceed() {
     if (!catalog) return;

@@ -1,3 +1,6 @@
+import { TeamSettings } from './TeamSettings';
+import { IndependentTeams } from './IndependentTeams';
+import { RunMigration } from './RunMigration';
 import seakoiLogo from './assets/seakoi-logo.webp';
 import { intakeRequest as request, IntakeRequestError, reconcileWrite } from './intake-request';
 import { RepositoryScope } from './RepositoryScope';
@@ -82,6 +85,8 @@ export function IntakeApp() {
   const [correctionError, setCorrectionError] = useState('');
   const [approving, setApproving] = useState(false);
   const [showSyncSettings, setShowSyncSettings] = useState(false);
+  const [showTeamSettings, setShowTeamSettings] = useState(false);
+  const [showIndependentTeams, setShowIndependentTeams] = useState(false);
   const [showRepositoryManagement, setShowRepositoryManagement] = useState(false);
   const [showSuccessor, setShowSuccessor] = useState(false);
   const [successorBrief, setSuccessorBrief] = useState('');
@@ -377,6 +382,8 @@ export function IntakeApp() {
     void submit({ role: 'product', artifactHash: document!.product!.artifact.hash, decision, comment });
   }
   if (showRepositoryManagement) return <RepositoryManagement close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowRepositoryManagement(false)} />;
+  if (showTeamSettings) return <TeamSettings close={() => setShowTeamSettings(false)} />;
+  if (showIndependentTeams) return <IndependentTeams projectId={project?.id ?? 'hrm'} close={() => setShowIndependentTeams(false)} />;
   if (showSyncSettings) return <RemoteSyncSettings projectId={project?.id} close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowSyncSettings(false)} />;
   const availableMaterials = document ? [
     (document.product || document.approvedProduct) && 'product',
@@ -389,7 +396,7 @@ export function IntakeApp() {
     if (materialOpen) closeMaterial(); else if (flowOpen) setFlowOpen(false);
   }}>
     <header className="workbench-bar"><a className="intake-brand" href="/" aria-label="产研工作台首页"><img className="intake-brand-logo" src={seakoiLogo} alt="Seakoi" /><span>产研工作台</span></a>{document?.mode === 'fixture' && <small>固定样例</small>}
-      <div className="workbench-tools"><button type="button" disabled={navigationLocked} title="刷新状态" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw size={15} /></button></div>
+      <div className="workbench-tools"><button type="button" disabled={navigationLocked} onClick={() => setShowIndependentTeams(true)}>独立团队</button><button type="button" disabled={navigationLocked} title="刷新状态" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw size={15} /></button></div>
     </header>
     <aside className="intake-sidebar" aria-label="项目与需求">
       <div className="workbench-sidebar-nav">
@@ -411,6 +418,7 @@ export function IntakeApp() {
         settingsDisabled={navigationLocked}
         openAccount={() => setAccountOpen(true)}
         openSettings={() => setShowSyncSettings(true)}
+        openTeamSettings={() => setShowTeamSettings(true)}
       />
     </aside>
     <main className="intake-main">
@@ -438,6 +446,7 @@ export function IntakeApp() {
         </div>}
         {!!notes[id]?.length && <details className="workbench-local-notes" open><summary>本页补充记录</summary>{notes[id].map((note, index) => <p key={index}>{note}</p>)}</details>}
         {!onActiveTeam && <div className="workbench-feedback">当前查看{teamLabels[selectedTeam]}阶段 <button type="button" onClick={() => selectTeam(activeTeam)}>返回当前待办</button></div>}
+        {document && ['failed', 'suspended', 'success'].includes(document.status) && <details><summary>历史运行迁移</summary><RunMigration runId={document.runId} completed={choose} /></details>}
         {document?.successor && document.status === 'success' && <section className="intake-card"><div className="intake-eyebrow">后继 Run</div><h2>基于已确认规格创建新 Run</h2><p>旧 Run 的审批、预算、测试与发布回执不会继承。系统会重新校验下列固定 commit 与散列，并让新 Run 从需求澄清开始。</p>{showSuccessor ? <><label>本轮变更说明<textarea value={successorBrief} maxLength={12000} rows={4} onChange={event => setSuccessorBrief(event.target.value)} /></label>{document.successor.artifacts.map(item => <label className="intake-mode-toggle" key={item.kind}><input type="checkbox" checked={successorKinds.includes(item.kind)} onChange={event => setSuccessorKinds(event.target.checked ? [...successorKinds, item.kind] : successorKinds.filter(kind => kind !== item.kind))} /><span><strong>{item.kind === 'product' ? '产品 Spec' : item.kind === 'development' ? '开发 Spec' : '测试 Spec'}</strong><small>{item.branch} · {item.commit.slice(0, 12)}</small></span></label>)}<div className="intake-actions"><button className="primary" disabled={busy || !successorBrief.trim() || !successorKinds.length} onClick={startSuccessor}>校验规格并新建 Run →</button><button disabled={busy} onClick={() => setShowSuccessor(false)}>取消</button></div></> : <button className="primary" disabled={busy || uncertain} onClick={() => { setSuccessorBrief(''); setSuccessorKinds(document.successor!.artifacts.map(item => item.kind)); setShowSuccessor(true); }}>基于已确认版本新建 Run →</button>}</section>}
         {selectedTeam === 'product' && <>
         {document?.appliedCorrection && <p className="run-activity-copy" role="status">反馈已应用，从「{productReworkLabels[document.appliedCorrection.target]}」重新处理。</p>}

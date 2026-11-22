@@ -67,6 +67,7 @@ export const technicalRecoverySchema = technicalBudgetSchema.extend({
   }).optional(),
 });
 export const stateV2Schema = z.object({
+  upstreamAuthorization: z.object({ sourceRunId: z.string().min(1), input: inputV2Schema }).optional(),
   technicalRecovery: technicalRecoverySchema.optional(),
   priorAcceptanceCases: z.array(z.object({ id: z.string(), requirementRefs: z.array(z.string()) })).optional(),
   verificationHistory: z.array(verificationRecordSchema).optional(), repairHistory: z.array(repairRecordSchema).optional(),
@@ -141,7 +142,16 @@ export function validatePlanV2(plan: z.infer<typeof planV2Schema>, state: StateV
 
 /** 批准同时绑定上下文、任务、方法、就绪和模型身份；不绑定后续正常源码变化。 */
 export function approvalHashV2(state: StateV2): string {
-  return developmentHash({ input: state.input, baselineHash: state.planSourceHash, context: state.context, plan: state.plan, readiness: state.readiness, executionIdentity: state.executionIdentity, methodBundleHash: state.methodBundleHash, ...(state.team ? { team: state.team } : {}) });
+  const original = state.upstreamAuthorization?.input;
+  if (original) {
+    const semanticInput = (input: InputV2) => {
+      const { correlation, repositoryHandoff, formalSpecifications, source, ...rest } = input;
+      const { runId, workflowId, ...product } = source;
+      return { ...rest, source: product };
+    };
+    if (developmentHash(semanticInput(original)) !== developmentHash(semanticInput(state.input))) throw new Error('来源研发批准的业务、预算或工程范围发生变化');
+  }
+  return developmentHash({ input: original ?? state.input, baselineHash: state.planSourceHash, context: state.context, plan: state.plan, readiness: state.readiness, executionIdentity: state.executionIdentity, methodBundleHash: state.methodBundleHash, ...(state.team ? { team: state.team } : {}) });
 }
 
 /** 故障接续绑定失败阶段与完整证据，防止评审故障恢复时重放实现。 */

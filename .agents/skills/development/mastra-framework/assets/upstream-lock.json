@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/mastra-ai/skills",
+  "commit": "045740138738bee82d5c9bbebea2f4373b5ca2dc",
+  "source": "skills/mastra",
+  "version": "2.5.0",
+  "license": "Apache-2.0",
+  "note": "Upstream SKILL.md is preserved as GUIDE.md to avoid an additional skill entry.",
+  "sha256": {
+    "GUIDE.md": "81a4574511f28fae23acf9e1e1e9bb8927dd7cbb3671a878f7da77cbc3b92c8e",
+    "LICENSE": "66e938f244d6647d910ea957a93c028ac573fd19d36fd4446517fa049366f0e8",
+    "references/common-errors.md": "6966cfb7df9a021582762cfbc3ebd394dcf6eca1c85f7445e144b9dbebf4d3eb",
+    "references/core-concepts.md": "422ddcd6d3d170e29a96bbc5c8875b0359867452571df6e9748ffc1aeb9eda57",
+    "references/create-mastra.md": "3cc7a4367f7bc9c010329fa15e506adf606fa290d16fac85b0ce9ea13a5b0277",
+    "references/embedded-docs.md": "8e717351e7f814da3beb347dbe348fd9ad1e48077d69c054d5c5e26f76fd8ceb",
+    "references/feedback.md": "0384d51d7cdb46051ebb6308294255156cd42e8419f71e5f7bf0e65b8e8b3c56",
+    "references/mastra-api.md": "1d455e0c17a191b790ef782413188b26c82b2633088d1b2608a8378a1c034197",
+    "references/migration-guide.md": "5bcc148435e8d444d147fd8096cb7b3c7f051becedec3c13e489a05127b13123",
+    "references/model-selection.md": "f8fac9443b3c0702a5bd6c7eaf65b8223f6d41972658fb67072ce476840e9a1c",
+    "references/platform.md": "5ea4d87cab9740132247263104eee80d950fc8a3543f25e2d0956fbab98ce9ff",
+    "references/remote-docs.md": "d482cbd0e389c0ba6d90487e6886d3b2afa57b8a8ca8bce99e7018c0621b6a9c",
+    "references/trace-query.md": "c425df49a47accc6ddfad8121985cff76766beca90fa2f4ea2d1b28d8f06877f",
+    "scripts/provider-registry.mjs": "c36877b377b55c26aea8ad113a1dedeeacfafd502760dc6d953c6930b69ab74e"
+  }
+}

@@ -22,6 +22,7 @@ export const productWorkSchema = z.object({
     modelSteps: z.number().int().min(1).max(PRODUCT_MAX_STEPS),
     // 旧产物不补造完成证据；后续产物记录正常结束及有界重试事实。
     generation: productGenerationSchema.optional(),
+    workspaceReads: z.array(z.object({ path: z.string(), sourceHash: z.string().length(64) })).optional(),
   })).max(4),
 });
 export type ProductWork = z.infer<typeof productWorkSchema>;
@@ -35,6 +36,7 @@ export const productQualityReviewSchema = z.object({
   toolNames: z.array(z.string().min(1)).max(30),
   files: z.array(z.string().min(1)).max(100).optional(),
   generation: productGenerationSchema.optional(),
+  workspaceReads: z.array(z.object({ path: z.string(), sourceHash: z.string().length(64) })).optional(),
 });
 export type ProductQualityReview = z.infer<typeof productQualityReviewSchema>;
 

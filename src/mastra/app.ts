@@ -13,11 +13,16 @@ import type { PracticeConfig } from './config.js';
 import { createAgents } from './agents/index.js';
 import { productWorkspace } from './project-workspaces.js';
 import { createProductDevelopmentWorkflow } from './workflows/product-development.js';
+import { createIndependentTeamWorkflows } from './workflows/team-runs.js';
+import { createTeamRunRoutes } from '../intake/team-routes.js';
+import { createTeamInputPackageWorkflow } from '../team/input-packages.js';
+import { createLocalObservability } from './local-observability.js';
 
 /** Studio 装配原生 Store、团队 Workflow 与项目资源，公开当前完整产研业务流程。
  * ADR: docs/decisions/2026-11-19-three-layer-harness.md
  */
 export function createStudioApplicationOptions(config: PracticeConfig) {
+  if (config.localTrace && ((!config.databaseUrl.startsWith('file:') && config.databaseUrl !== ':memory:') || (config.databaseUrl.startsWith('file://') && !config.databaseUrl.startsWith('file:///')))) throw new Error('本地 Trace 仅支持本机文件或内存 Store');
   const repository = config.engineeringProjects ? undefined : projectRepositoryRoot(config);
   for (const project of registeredProjects(config)) {
     const candidate = loadEngineeringProject(project).candidate;
@@ -28,12 +33,15 @@ export function createStudioApplicationOptions(config: PracticeConfig) {
   const agents = createAgents(config, { workspace: productWorkspace(config) });
   const storage = new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl });
   const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config, undefined, { storage });
+  const independentTeams = createIndependentTeamWorkflows(agents, config, storage);
+  const teamInputPackage = createTeamInputPackageWorkflow(config);
   return {
     agents: { productManagerAgent: agents.productManagerAgent, productReviewerAgent: agents.productReviewerAgent, testingAgent: agents.testingAgent },
     scorers: createNodeScorers(config),
-    workflows: { productDevelopmentWorkflow, ...createDevelopmentNodeWorkflows(config) },
+    workflows: { productDevelopmentWorkflow, ...independentTeams, teamInputPackage, ...createDevelopmentNodeWorkflows(config) },
     storage,
+    ...(config.localTrace ? { observability: createLocalObservability() } : {}),
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
-    server: { host: '127.0.0.1', port: config.port, apiRoutes: [createIntakeVoiceRoute(config), ...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config), ...createPlatformRecoveryRoutes(productDevelopmentWorkflow, config)] },
+    server: { host: '127.0.0.1', port: config.port, apiRoutes: [...createTeamRunRoutes({ productDevelopmentWorkflow, ...independentTeams, teamInputPackage }, config), createIntakeVoiceRoute(config), ...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config), ...createPlatformRecoveryRoutes(productDevelopmentWorkflow, config)] },
   };
 }

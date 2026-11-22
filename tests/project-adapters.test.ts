@@ -14,6 +14,7 @@ import { Mastra } from '@mastra/core';
 import { Hono, type Handler } from 'hono';
 import { randomUUID } from 'node:crypto';
 import { adapterChecks, adapterImplementationIdentity } from '../src/business-engineering/adapters.js';
+import { assertDeliveryContractMatchesAdapter, defaultContractForAdapter, projectDeliveryContractSchema } from '../src/business-engineering/delivery-contract.js';
 
 test('Python Adapter 从固定 Git 版本装配并在隔离候选中实际运行保护检查', async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'python-adapter-')));
@@ -86,4 +87,14 @@ test('Python Adapter 从固定 Git 版本装配并在隔离候选中实际运行
       assert.equal(current.outcome, 'fixture-completed');
     } finally { await app.storage.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+/** 工程规则与源码共享根目录时不应扩大 Adapter 权限或阻断项目装配。 */
+test('交付契约支持规则与源码同目录并拒绝未覆盖规则', () => {
+  const candidate = { writablePaths: ['src/app.mjs'], checkFiles: ['test/app.test.mjs'], instructionFiles: ['AGENTS.md', 'src/AGENTS.md'] };
+  const contract = defaultContractForAdapter(candidate);
+  assert.equal(contract.paths.engineeringRules, 'src');
+  assert.doesNotThrow(() => assertDeliveryContractMatchesAdapter(contract, candidate));
+  assert.throws(() => assertDeliveryContractMatchesAdapter(contract, { ...candidate, instructionFiles: [...candidate.instructionFiles, 'other/AGENTS.md'] }), /工程规则/);
+  assert.throws(() => projectDeliveryContractSchema.parse({ ...contract, paths: { ...contract.paths, engineeringRules: contract.paths.requirements } }));
 });

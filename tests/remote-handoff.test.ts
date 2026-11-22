@@ -179,6 +179,7 @@ const moduleSelector = `# 需求文档
 - TASK-AM-ELIGIBILITY: 交付确定按钮与穿梭框跳转 | 需求: REQ-AM-CONFIRM`;
 
 test('产品任务须在正文中覆盖有效需求', /** 拒绝不完整或不可追溯的待审稿。 */() => {
+  assert.doesNotThrow(() => readProductDocuments(moduleSelector.replaceAll(' | 验收:', '；验收:').replaceAll(' | 需求:', '；需求:')));
   assert.throws(() => readProductDocuments(moduleSelector.replace(/- TASK-AM-ELIGIBILITY.*/, '')), /全部需求/);
   assert.throws(() => readProductDocuments(moduleSelector.replace('需求: REQ-AM-CONFIRM', '需求: REQ-AM-UNKNOWN')), /未知/);
   assert.throws(() => readProductDocuments(moduleSelector.replace('TASK-AM-ELIGIBILITY', 'TASK-AM-OPTIONS')), /重复/);

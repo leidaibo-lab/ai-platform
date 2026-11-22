@@ -13,7 +13,7 @@ import { createIntakeWorkflow, createProductAlignmentStep } from '../../intake/w
 import { collectConfirmedDecisions } from '../../intake/contracts.js';
 import { generateProductContent } from '../../intake/product-generation.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
-import { createStageWorkspace, hasWorkspaceRead, readAuthorizedProductSources } from '../stage-workspace.js';
+import { createStageWorkspace, hasWorkspaceRead, productWorkspaceSources, readAuthorizedProductSources, workspaceReadReceipts } from '../stage-workspace.js';
 import { createAgents as assembleAgents } from '../agents/index.js';
 import type { PracticeConfig } from '../config.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
@@ -62,7 +62,7 @@ export function createProductManagerPhases(
       inputSchema: deliverySchema,
       outputSchema: deliverySchema,
       suspendSchema: correctionPauseSchema,
-      execute: async ({ inputData, runId, abortSignal, suspend, [PUBSUB_SYMBOL]: pubsub }) => {
+      execute: async ({ inputData, runId, abortSignal, suspend, mastra, tracingContext, [PUBSUB_SYMBOL]: pubsub }) => {
         if (inputData.mode !== mode) throw new Error('模型模式变化，不能跨模式生成产品稿');
         if (inputData.revision) return inlinePublish && role === 'writing' ? publishDraft(inputData) : inputData;
         if (!legacy && role === 'analysis' && inputData.intake?.enabled && inputData.intake.ready) return inputData;
@@ -77,9 +77,10 @@ export function createProductManagerPhases(
         if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
         if (inputData.nacosResources) await resolveAgents!(inputData.nacosResources);
         const spec = currentSpec();
-        const sources = config && !config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(currentRoot()) : {};
-        const stage = config ? await createStageWorkspace(`product-${runId}`, '产品团队 · 当前材料（只读）', { ...sources, 'brief.md': inputData.brief, ...(spec ? { [spec.path]: spec.content } : {}) }) : undefined;
-        const activeManager = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, workspace: stage.workspace, workspaceTools: stage.tools }).productManagerAgent : manager;
+        const sources = { ...(!inputData.productSources && config && !config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(currentRoot()) : {}), ...productWorkspaceSources(inputData, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined) };
+        const files = { ...sources, ...(spec ? { [spec.path]: spec.content } : {}), 'brief.md': inputData.brief };
+        const stage = config ? await createStageWorkspace(`product-${runId}`, '产品团队 · 当前材料（只读）', files) : undefined;
+        const activeManager = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, mastra, workspace: stage.workspace, workspaceTools: stage.tools }).productManagerAgent : manager;
         try {
         const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeManager, JSON.stringify({
           task: 'product-manager-phase',
@@ -96,7 +97,7 @@ export function createProductManagerPhases(
           rework: inputData.productRework,
           priorFeedback: inputData.productReworkHistory?.map(({ round, feedback }) => ({ round, feedback })),
           instruction: `你是同一个产品经理 Agent 的当前阶段。${stage ? `先调用 mastra_workspace_read_file 读取 ${spec?.path ?? 'brief.md'}。` : ''}只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' ? (inputData.productHandoffFormat ? productDocumentsInstruction : inputData.requirementTracking ? acceptanceRequirementsInstruction : '') : ''}`,
-        }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal));
+        }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal, undefined, tracingContext));
         if (attempt.correction) return suspend(attempt.correction);
         const result = attempt.output;
         const content = z.string().trim().min(1).max(100000).parse(result.text);
@@ -117,6 +118,7 @@ export function createProductManagerPhases(
           durationMs: result.generation?.durationMs,
           modelSteps: result.steps.length,
           generation: result.generation,
+          ...(stage ? { workspaceReads: workspaceReadReceipts(result.toolResults, files) } : {}),
         };
         const resultState = { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] } };
         return inlinePublish && role === 'writing' ? publishDraft(resultState) : resultState;
@@ -142,15 +144,16 @@ export function createProductManagerPhases(
     inputSchema: deliverySchema,
     outputSchema: deliverySchema,
     suspendSchema: correctionPauseSchema,
-    execute: async ({ inputData, runId, abortSignal, suspend, [PUBSUB_SYMBOL]: pubsub }) => {
+    execute: async ({ inputData, runId, abortSignal, suspend, mastra, tracingContext, [PUBSUB_SYMBOL]: pubsub }) => {
       const artifact = inputData.artifacts.at(-1);
       if (!artifact || artifact.stage !== 'product') throw new Error('产品审查缺少待审产品稿');
       if (inputData.nacosResources && !resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
       if (inputData.nacosResources) await resolveAgents!(inputData.nacosResources);
       const spec = currentSpec();
-      const sources = config && !config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(currentRoot()) : {};
-      const stage = config ? await createStageWorkspace(`product-review-${runId}`, '产品审查 · 当前材料（只读）', { ...sources, 'product.md': artifact.content, ...(spec ? { [spec.path]: spec.content } : {}) }) : undefined;
-      const activeReviewer = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, workspace: stage.workspace, workspaceTools: stage.tools }).productReviewerAgent : reviewer;
+      const sources = { ...(!inputData.productSources && config && !config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(currentRoot()) : {}), ...productWorkspaceSources(inputData, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined) };
+      const files = { ...sources, ...(spec ? { [spec.path]: spec.content } : {}), 'product.md': artifact.content };
+      const stage = config ? await createStageWorkspace(`product-review-${runId}`, '产品审查 · 当前材料（只读）', files) : undefined;
+      const activeReviewer = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, mastra, workspace: stage.workspace, workspaceTools: stage.tools }).productReviewerAgent : reviewer;
       try {
       const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeReviewer, JSON.stringify({
         task: 'product-quality-review',
@@ -161,7 +164,7 @@ export function createProductManagerPhases(
         product: artifact.content,
         corrections: productReworkFeedback(inputData),
         instruction: `${stage ? '先调用 mastra_workspace_read_file 读取 product.md。' : ''}独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。检查需求文档中的场景是否忠实覆盖确认的业务规则，产品规格中的交付任务是否与需求对应。只输出审查发现与依据，不修改产品稿，不代替人工审批。`,
-      }), 'reviewer', mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, 'review-product-quality'), signal));
+      }), 'reviewer', mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, 'review-product-quality'), signal, undefined, tracingContext));
       if (attempt.correction) return suspend(attempt.correction);
       const result = attempt.output;
       const facts = projectToolFacts(result.toolResults);
@@ -174,6 +177,7 @@ export function createProductManagerPhases(
         toolNames: facts.tools,
         files: facts.files,
         generation: result.generation,
+        ...(stage ? { workspaceReads: workspaceReadReceipts(result.toolResults, files) } : {}),
       });
       return { ...inputData, productQualityReview: review };
       } finally { await stage?.close(); }
@@ -182,10 +186,10 @@ export function createProductManagerPhases(
 
   const writing = bind(managerPhase('writing'));
   if (graph === 'flat') {
-    const align = createProductAlignmentStep(agents, mode, bind, resolveAgents, engineeringSpec, managerPhase('analysis').execute);
+    const align = createProductAlignmentStep(agents, mode, bind, resolveAgents, engineeringSpec, managerPhase('analysis').execute, { config, storage, repositoryRoot });
     return { graph, align, writing, qualityReview: bind(qualityReview) } as const;
   }
-  const intake = createIntakeWorkflow(agents, mode, bind, resolveAgents, engineeringSpec);
+  const intake = createIntakeWorkflow(agents, mode, bind, resolveAgents, engineeringSpec, { config, storage, repositoryRoot });
   const analysis = bind(managerPhase('analysis'));
   if (graph === 'native') {
     const direction = createWorkflow({ id: 'product-direction', description: '对齐方向', inputSchema: deliverySchema, outputSchema: deliverySchema })

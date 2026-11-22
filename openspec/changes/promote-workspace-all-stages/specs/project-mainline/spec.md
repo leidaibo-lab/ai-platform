@@ -11,6 +11,22 @@ Mastra SHALL provide each product, development, testing, browser QA, and deliver
 - **AND** actual Workspace file-read receipts SHALL be attached to the product work evidence
 - **AND** the Agent SHALL NOT receive Workspace write or arbitrary command execution tools
 
+#### Scenario: Guided clarification records each assessment's source
+
+- **WHEN** a configured product Run assesses a clarification round
+- **THEN** its Agent SHALL read the Run's brief from a read-only Workspace before publishing the plan
+- **AND** the saved plan and its version hash SHALL bind the actual read receipt and brief content hash
+- **AND** prior snapshots without receipts SHALL retain their original hash and remain readable
+- **AND** fixture plans SHALL remain explicitly identified as fixture behavior
+
+#### Scenario: Product clarification and revision consume authorized materials
+
+- **WHEN** a Run generates development blocker questions or revises an approved product
+- **THEN** its Agent SHALL read the approved product through a read-only Workspace before publishing its result
+- **AND** authorized materials SHALL include frozen product sources, fixed-version project specifications, predecessor specifications and verified Git handoff files applicable to the stage
+- **AND** successful reads and complete source hashes SHALL be persisted with the question version or revised draft
+- **AND** new Runs SHALL freeze legacy product source files in their initial Store snapshot so that later edits cannot change their authorized inputs
+
 #### Scenario: Testing agent reads the exact development candidate
 
 - **WHEN** the testing Agent prepares an independent test plan or browser QA executes approved cases
@@ -30,6 +46,21 @@ Mastra SHALL provide each product, development, testing, browser QA, and deliver
 - **WHEN** a stage resumes with a different Run/project binding, source checkpoint, approved case set, or Workspace policy version
 - **THEN** the system SHALL reject the old Workspace and its evidence and require a newly verified stage Workspace
 - **AND** Mastra Store SHALL remain authoritative for approvals, Workflow checkpoints, and recovery facts
+
+#### Scenario: Historical Sandbox policy is missing or differs during model rebase
+
+- **WHEN** a suspended development Run lacks a Sandbox policy identity or its policy differs from the current policy
+- **THEN** recovery and read-only model rebase SHALL reject the identity drift without changing the saved checkpoint
+- **AND** the system SHALL NOT infer the historical policy or silently migrate the Run; any migration requires a separately specified and verified procedure
+
+#### Scenario: Explicitly migrate a historical Run through a controlled restart
+
+- **WHEN** an operator requests migration of a stable historical Run with a missing or outdated Sandbox policy
+- **THEN** the server SHALL prepare a versioned migration plan from its Store checkpoint, approved product, project binding and verified existing candidate
+- **AND** confirmation SHALL bind that plan hash and a fresh Run ID
+- **AND** the new Run SHALL save migration lineage, frozen approved source material and inherited consumed development budgets, and SHALL repeat product and architecture approvals under the current policy
+- **AND** the historical Run and candidate SHALL retain their original saved state
+- **AND** source drift, candidate drift, incompatible project binding, duplicate target ownership or stale confirmation SHALL reject migration before starting execution
 
 #### Scenario: Workspace is unavailable
 

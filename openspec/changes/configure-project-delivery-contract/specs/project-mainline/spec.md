@@ -10,6 +10,13 @@
 - **THEN** 系统 SHALL 校验所有落点均为该仓库内受支持的相对路径
 - **AND** SHALL 将配置版本与项目 ID 绑定并向工作台展示仓库身份及接入状态
 
+#### Scenario: Engineering rules coexist with source or test files
+
+- **WHEN** a registered Adapter associates directory-level engineering rules under its source or test directory
+- **THEN** the engineering-rules root MAY equal the source or test root and SHALL cover every associated directory-level rule
+- **AND** the initial contract SHALL derive that root from the registered rule paths when they share one top-level directory
+- **AND** this configuration SHALL NOT grant additional write or check permissions
+
 #### Scenario: A run starts with a delivery contract
 
 - **WHEN** 新 Run 绑定已登记项目

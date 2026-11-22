@@ -80,6 +80,24 @@ flowchart TD
 
 ## 当前实施与验证状态（2026-11-22）
 
-本方案尚未完成全链路推广：产品逐项澄清和研发阻塞回流仍使用既有资料入口；产品写作和审查重新装配 Agent 后，既有恢复和中止故障注入回归未通过，需修复后再判定兼容。浏览器 QA 的执行器为宿主 Playwright，交付为确定性核验节点；不能把它们描述为 Sandbox 中的 Agent。
+本方案尚未完成全链路推广：产品逐项澄清和研发阻塞问题生成仍使用既有资料入口；阻塞回流的产品修订已在只读 Workspace 中读取已批准原稿并保存来源读取回执，其他资料仍沿用既有授权入口；产品写作和审查重新装配 Agent 后，已适配故障注入并通过产品专项恢复和中止回归；历史 Sandbox 策略身份的恢复兼容仍需单独验证。浏览器 QA 的执行器为宿主 Playwright，交付为确定性核验节点；不能把它们描述为 Sandbox 中的 Agent。
 
-已验证 fixture 统一主链与 Store 恢复、Node/Python 项目路由及 Python 固定检查、只读阶段 Workspace 的隔离与工具边界。HRM/CIP 的 Docker 实际执行、真实模型、真实远端 MR 和生产环境尚未在本次验证。旧挂起 Run 缺少新 Sandbox 策略身份时的恢复兼容性仍需单独验证。
+已验证 fixture 统一主链与 Store 恢复、Node/Python 项目路由及 Python 固定检查、只读阶段 Workspace 的隔离与工具边界。HRM/CIP 的 Docker 实际执行、真实模型、真实远端 MR 和生产环境尚未在本次验证。隔离 Store 验证表明，旧挂起 Run 缺少 Sandbox 策略身份时恢复会被拒绝，原暂停载荷保持不变；系统不会推断旧策略或自动迁移。若需继续业务，可基于已核验材料发起新 Run，并按新 Run 的关口重新确认和批准；历史原生状态保留供审计。已实现受控重新启动迁移。工作台“历史运行迁移”先核验 Store 暂停状态、当前产品批准和候选，再展示计划。确认当前散列后创建带 `run-migration.v1` 谱系的新 Run，冻结已批准原稿与显式决定，继承已消费调用与技术接续预算，并重新经过产品和架构审批。原 Run 和候选保留。迁移 HTTP 为 `GET/POST /intake-api/runs/:runId/migration`。
+
+
+## 独立团队候选实现
+
+应用已登记 `productTeamRun`、`developmentTeamRun`、`testingTeamRun`、`deliveryTeamRun`。工作台“独立团队”提供按项目的来源发现、启动、记录和人工关口。API 使用 `/intake-api/teams/:team/sources`、`/runs`、`/runs/:runId` 和 `/runs/:runId/respond`。
+
+规范输入 `team-run-input.v1` 只接受产品原始需求或服务端返回的来源 Run、Workflow 身份与版本散列。来源从 Mastra Store 重读，固定 Git 回执逐文件校验。测试和交付在新 Run 目录复制已交付候选，工具只访问新副本。独立团队的初始化与恢复复核项目和来源，原生上下文覆盖与伪造检查点被拒绝。
+
+现阶段已通过离线团队连续调用及 Store 重开回归。输入包登记与撤销、独立团队多项目并发、live 规格重登记、真实模型、远端 MR 和生产环境仍有待验收。
+
+
+### 独立团队输入包
+
+工作台“独立团队运行”支持登记当前需求或来源、人工确认和撤销。输入包记录在 Mastra `teamInputPackage` Workflow 中，确认后暂停于撤销关口。团队启动可只提交 `{ runId, inputPackage: { runId, hash } }`，服务端重读包内规范输入。撤销后禁止新启动，已有团队在恢复前拒绝执行并保留暂停点。包内容或来源变化应登记新包，不能回退或覆写原记录。
+
+输入包 API：`POST /intake-api/team-input-packages` 登记；`GET /intake-api/team-input-packages/:runId` 回读；`POST /intake-api/team-input-packages/:runId/respond` 提交 `{action: "confirm" | "revoke", hash, comment}`。所有写入要求工作台身份，身份由服务端保存。当前材料类型为原始产品需求或可核验的现有 Store 来源；任意外部源码或手填 QA 不能作为已批准输入导入。
+
+独立团队平台依赖通知使用 `/platform-api/teams/{team}/runs/:runId/dependency-repair`，沿用平台机器凭据与事件格式。原子认领按该团队实际 Workflow 名称读写 Store；原生恢复保护继续检查来源、输入包和项目绑定。该接口不授予额外仓库或模型权限。

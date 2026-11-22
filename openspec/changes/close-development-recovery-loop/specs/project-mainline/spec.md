@@ -1,5 +1,15 @@
 ## ADDED Requirements
 
+### Requirement: Failed tool receipts prevent role completion
+
+研发角色 SHALL 在发布角色产物前检查 Mastra 原生工具失败回执。受控写入或委派越权 SHALL 停止并记录授权缺口，其他工具失败 SHALL 保存固定脱敏诊断并进入既有技术恢复流程。失败工具的参数、原始异常和返回正文 SHALL NOT 写入公开诊断。模型后续声称完成 SHALL NOT 覆盖失败回执。
+
+#### Scenario: A model ignores a failed controlled write
+
+- **WHEN** 当前任务尝试写入未批准路径，且模型继续生成完成说明
+- **THEN** 研发执行 SHALL 拒绝该角色产物并停止于授权待处理状态
+- **AND** 当前任务的部分写入 SHALL 回滚，原生快照 SHALL 保留固定故障分类
+
 ### Requirement: Development routes failures by evidence and responsibility
 
 研发 Workflow SHALL 在上下文核实、方案生成、就绪审查、实施、自检和独立评审中，依据结构化证据及已批准契约确定处理路径。项目适配 SHALL 提供已登记的授权和验收依据。

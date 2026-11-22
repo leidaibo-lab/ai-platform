@@ -19,7 +19,7 @@ import { resolveModelId, type PracticeConfig } from '../../mastra/config.js';
 import type { ExecutionPort } from './execution-scope.js';
 import { createWorkspaceTools } from '@mastra/core/workspace';
 import { developmentInstructions } from '../agents.js';
-import { classifyDevelopmentError, DevelopmentModelError } from '../errors.js';
+import { classifyDevelopmentError, DevelopmentModelError, DevelopmentToolError } from '../errors.js';
 import { assessmentSchema, contextDraftSchema, evidenceRefs, planV2Schema, type RoleV2, type StateV2, type EntryV2 } from './contracts.js';
 import type { DevelopmentMethods } from './methods.js';
 import { projectToolFacts } from '../../intake/run-timeline.js';
@@ -117,6 +117,9 @@ function fixtureArchitectureDocument() {
   };
 }
 
+/** 调用期工具失败只用于停止当前 Agent，不保存审批或恢复事实。 */
+const invocationToolFailures = new WeakMap<Agent, DevelopmentToolError[]>();
+
 /** 注册最小只读/写入工具与所需 Skill，方法原文不能改变工具或流程。 */
 export async function createAgentV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, state: StateV2, paths: string[], methods: DevelopmentMethods, runtime?: MemberRuntime, storage?: LibSQLStore) {
   const kind = developmentAgentKind(role);
@@ -136,12 +139,28 @@ export async function createAgentV2(config: PracticeConfig, execution: Execution
   });
   // 动态Agent不在Mastra注册表中，显式装配当前候选Workspace的只读工具。
   Object.assign(tools, await createWorkspaceTools(execution.workspace));
+  const failures: DevelopmentToolError[] = [];
+  for (const [name, tool] of Object.entries(tools)) {
+    if (!tool || !('execute' in tool) || typeof tool.execute !== 'function') continue;
+    const execute = tool.execute;
+    /** 宿主工具抛错即锁存本次失败，模型后续完成文本不能掩盖拒绝事实。 */
+    (tool as any).execute = async (...args: any[]) => {
+      try { return await (execute as any).apply(tool, args); }
+      catch (error) {
+        // 委派中的模型/结构故障由成员恢复策略处理，不得误标为宿主授权拒绝。
+        if (error instanceof DevelopmentToolError) failures.push(error);
+        else if (name !== 'delegateTask') failures.push(new DevelopmentToolError(name === 'writeFile' ? 'authorization' : name === 'runChecks' ? 'verification' : 'read'));
+        throw error;
+      }
+    };
+  }
   const assigned = assignedMethods(role, state, methods);
   const reading = assigned.map(({ skill, reference }) => `调用skill加载${skill.name}，再用skill_read读取references/${reference}。`).join('');
   const documentation = state.input.architectureDocumentFormat && role === 'architect' ? methodPrompt('development.v2.agents.8', state.input.teamMethods) : '';
   const memoryModel = { id: resolveModelId(config, 'development'), apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
   const agent = new Agent({ ...(config.mode === 'live' ? { memory: createNativeMemory(memoryModel, storage, state.input.teamMethods) } : {}), id: runtime?.memberId ?? kind, name: runtime ? `${kind}：${runtime.memberId}` : kind, instructions: (state.input.teamMethods ? methodPrompt(({ context: 'development.v2.agents.1', architect: 'development.v2.agents.2', readiness: 'development.v2.agents.3', reviewer: 'development.v2.agents.4', frontend: 'development.agents.2', backend: 'development.agents.3', infrastructure: 'development.agents.4', 'self-check': 'development.agents.5' })[role], state.input.teamMethods) : instructions[role]) + (state.input.autonomy ? methodPrompt('development.v2.agents.5', state.input.teamMethods) : '') + (state.technicalRecovery ? methodPrompt('development.v2.agents.6', state.input.teamMethods) : '') + reading + documentation + (runtime?.delegate ? methodPrompt('development.v2.agents.7', state.input.teamMethods) : '') + methodPrompt('development.v2.agents.9', state.input.teamMethods), model: config.mode === 'fixture' ? fixtureModel(role, state, paths, assigned, runtime) : memoryModel, workspace: execution.workspace, tools, ...(assigned.length ? { skills: assigned.map(({ skill }) => skill) } : {}), maxRetries: 0, maxProcessorRetries: 0 });
   agent.__setLogger(noopLogger);
+  invocationToolFailures.set(agent, failures);
   return agent;
 }
 
@@ -195,11 +214,20 @@ export async function generateV2(config: PracticeConfig, execution: ExecutionPor
           ? await agent.generate(prompt, { ...options, abortSignal, structuredOutput: { schema: schema as z.ZodType<unknown>, errorStrategy: 'strict', logger: noopLogger } })
           : await agent.generate(prompt, { ...options, abortSignal });
       } catch (error) {
+        const hostFailure = invocationToolFailures.get(agent)?.[0];
+        if (hostFailure) throw hostFailure;
         if (classifyDevelopmentError(error) === 'invalid-output') throw new OutputValidationError({ stage: 'structured-output', code: 'structured-output-invalid' });
         throw error;
       }
     }
     const result = await runWithDevelopmentDeadline(timeout.totalMs, call);
+    const hostFailure = invocationToolFailures.get(agent)?.[0];
+    if (hostFailure) throw hostFailure;
+    const failedTool = result.toolResults.find(item => item.payload.isError === true);
+    if (failedTool) {
+      const name = failedTool.payload.toolName;
+      throw new DevelopmentToolError(name === 'writeFile' || name === 'delegateTask' ? 'authorization' : name === 'runChecks' ? 'verification' : 'read');
+    }
     if (result.finishReason !== 'stop') throw new DevelopmentModelError(result.finishReason === 'error' ? classifyDevelopmentError(result.error) : 'model-error', diagnoseModelResult(result, developmentMaxSteps));
     const tools = result.toolResults.map(
       // 工具名来自实际原生结果，而非模型自报。

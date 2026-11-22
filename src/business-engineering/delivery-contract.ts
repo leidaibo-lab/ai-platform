@@ -17,8 +17,9 @@ export const projectDeliveryContractSchema = z.object({
     engineeringRules: pathTemplate,
   }).strict(),
 }).strict().superRefine((contract, context) => {
-  const values = Object.values(contract.paths);
-  if (new Set(values).size !== values.length) context.addIssue({ code: 'custom', message: '各类落点不能重复' });
+  const { engineeringRules: _rules, ...otherPaths } = contract.paths;
+  const values = Object.values(otherPaths);
+  if (new Set(values).size !== values.length || [contract.paths.requirements, contract.paths.productSpecification].includes(contract.paths.engineeringRules)) context.addIssue({ code: 'custom', message: '文档与其他落点不能重复' });
   if (!contract.paths.requirements.includes('{iterationId}') || !contract.paths.productSpecification.includes('{iterationId}')) context.addIssue({ code: 'custom', message: '需求与产品规格落点必须包含 {iterationId}' });
   if (contract.paths.developmentSource.includes('{iterationId}') || contract.paths.testingCases.includes('{iterationId}') || contract.paths.engineeringRules.includes('{iterationId}')) context.addIssue({ code: 'custom', message: '代码、测试和工程规则落点必须是稳定目录' });
 });
@@ -27,10 +28,12 @@ export type ProjectDeliveryContract = z.infer<typeof projectDeliveryContractSche
 export const defaultProjectDeliveryContract = projectDeliveryContractSchema.parse({ version: 'project-delivery-contract.v1', paths: { requirements: 'product/{iterationId}/requirements.md', productSpecification: 'product/{iterationId}/product-spec.md', developmentSource: 'src', testingCases: 'test', engineeringRules: 'specs' } });
 
 /** 从已登记项目 Adapter 推导首次使用的源码与测试根目录。 */
-export function defaultContractForAdapter(candidate: { writablePaths: string[]; checkFiles: string[] }): ProjectDeliveryContract {
+export function defaultContractForAdapter(candidate: { writablePaths: string[]; checkFiles: string[]; instructionFiles?: string[] }): ProjectDeliveryContract {
   const source = candidate.writablePaths[0]?.split('/')[0] ?? 'src';
   const tests = candidate.checkFiles[0]?.split('/')[0] ?? 'test';
-  return projectDeliveryContractSchema.parse({ ...defaultProjectDeliveryContract, paths: { ...defaultProjectDeliveryContract.paths, developmentSource: source, testingCases: tests } });
+  const ruleRoots = [...new Set((candidate.instructionFiles ?? []).filter(path => path.includes('/')).map(path => path.split('/')[0]))];
+  const rules = ruleRoots.length === 1 ? ruleRoots[0] : defaultProjectDeliveryContract.paths.engineeringRules;
+  return projectDeliveryContractSchema.parse({ ...defaultProjectDeliveryContract, paths: { ...defaultProjectDeliveryContract.paths, developmentSource: source, testingCases: tests, engineeringRules: rules } });
 }
 
 /** 提取当前 Adapter 登记路径的父目录，供接入页面只读展示。 */

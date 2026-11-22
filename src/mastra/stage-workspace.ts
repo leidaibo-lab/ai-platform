@@ -4,6 +4,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { LocalFilesystem, Workspace, WORKSPACE_TOOLS, createWorkspaceTools } from '@mastra/core/workspace';
+import { contentHash, readHandoffFile, type RemoteHandoff } from '../delivery/remote-handoff.js';
+import type { Delivery } from './workflows/delivery.js';
 
 /** 快照只接受规范相对路径和文本文件，避免绝对路径、隐藏文件与 traversal。 */
 function validateSnapshot(files: Record<string, string>) {
@@ -41,7 +43,25 @@ export function readAuthorizedProductSources(repositoryRoot?: string): Record<st
 
 /** 只将返回文本的原生读取结果视为成功读取。 */
 export function hasWorkspaceRead(results: unknown, path: string): boolean {
-  return Array.isArray(results) && results.some(item => item?.payload?.toolName === 'mastra_workspace_read_file' && item.payload.args?.path === path && typeof item.payload.result === 'string' && !item.payload.result.startsWith('Error:'));
+  return Array.isArray(results) && results.some(item => item?.payload?.toolName === 'mastra_workspace_read_file' && item.payload.args?.path === path && item.payload.isError !== true && typeof item.payload.result === 'string' && !item.payload.result.startsWith('Error:'));
+}
+
+/** 仅投影本次授权快照内实际成功读取的文件，散列绑定完整来源字节。 */
+export function workspaceReadReceipts(results: unknown, files: Record<string, string>) {
+  return Object.entries(files).flatMap(([path, content]) => hasWorkspaceRead(results, path) ? [{ path, sourceHash: contentHash(content) }] : []);
+}
+
+/** 已冻结产品材料与固定 Git 回执共同构成本次可读集合，命名空间避免覆盖阶段主输入。 */
+export function productWorkspaceSources(delivery: Delivery, remote?: { root: string; receipt?: RemoteHandoff }): Record<string, string> {
+  const files = { ...delivery.productSources };
+  for (const artifact of delivery.successorBaseline?.artifacts ?? []) files[`baseline/${artifact.kind}/${artifact.path}`] = artifact.content;
+  if (remote?.receipt) {
+    for (const path of Object.keys(remote.receipt.files)) {
+      if (path.endsWith('/manifest.json') || path.endsWith('/event.json') || path.endsWith('/sources-observed-at-export.json')) continue;
+      files[`handoff/${path}`] = readHandoffFile(remote.root, remote.receipt, path);
+    }
+  }
+  return files;
 }
 
 /** 将宿主已授权快照复制到独占只读目录并返回原生 Workspace 读取工具。 */

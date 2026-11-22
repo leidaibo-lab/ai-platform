@@ -50,7 +50,7 @@ export function readProductDocuments(content: string) {
     if (index <= specificationHeading.line) continue;
     if (/^\s*[-*+]\s+(?:\*\*)?REQ-/i.test(line)) throw new Error('需求条目必须声明在需求文档中');
     if (!/^\s*[-*+]\s+(?:\*\*)?TASK-/i.test(line)) continue;
-    const task = /^- (TASK-[A-Z0-9]+(?:-[A-Z0-9]+)*):\s*(.+?)\s*\|\s*需求[:：]\s*(.+)$/.exec(line.trim());
+    const task = /^- (TASK-[A-Z0-9]+(?:-[A-Z0-9]+)*):\s*(.+?)\s*[|；;]\s*需求[:：]\s*(.+)$/.exec(line.trim());
     if (!task || !task[2]!.trim() || taskIds.has(task[1]!)) throw new Error('产品任务格式无效或 ID 重复');
     taskIds.add(task[1]!);
     const refs = task[3]!.split(/[,，]/).map(/** 去除模型输出中的分隔空白。 */ref => ref.trim());

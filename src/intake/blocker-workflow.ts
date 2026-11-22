@@ -13,14 +13,16 @@ import { createTaskContext } from '../delivery/task-context.js';
 import { withRepositoryAssets } from '../delivery/repository-assets.js';
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
-import type { createAgents } from '../mastra/agents/index.js';
+import { createAgents } from '../mastra/agents/index.js';
+import type { MastraCompositeStore } from '@mastra/core/storage';
+import { createStageWorkspace, hasWorkspaceRead, productWorkspaceSources, workspaceReadReceipts } from '../mastra/stage-workspace.js';
 import type { PracticeConfig } from '../mastra/config.js';
 import { blockerCycleSchema, blockerPlanSchema, generatedBlockerPlanSchema, generatedBlockerPlanForCount, blockerAnswerSchema, revisedProductReviewSchema, blockerHash, validateBlockerPlan, validateBlockerAnswers, splitBlockers, developmentBlockers, businessGapFindings } from './blocker-contracts.js';
 import { readEngineeringReferences } from './engineering-references.js';
 import { generateProductContent } from './product-generation.js';
 import { developmentExecutionIdentity, developmentHash, projectSchema } from '../development/contracts.js';
 import { stateV2Schema, inputV2Schema } from '../development/v2/contracts.js';
-import { validateIdentityV2 } from '../development/v2/gates.js';
+import { canRebaseClarificationModel, validateIdentityV2 } from '../development/v2/gates.js';
 import { loadDevelopmentMethods } from '../development/v2/methods.js';
 import { DevelopmentModelError, classifyDevelopmentError } from '../development/errors.js';
 import { diagnoseModelFailure, developmentTimeoutPolicy } from '../development/v2/model-diagnostic.js';
@@ -41,7 +43,7 @@ async function routeBusinessGap(state: z.infer<typeof blockerCycleSchema>) {
 }
 
 /** 复用原有产品角色和开发执行器，子流程本身只拥有版本与人工确认事实。 */
-export function createBlockerClarificationWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, resolveExecution: ExecutionResolver, generate: GeneratorV2 = generateV2, resolveAgents?: (resources: NacosSnapshot) => Promise<ReturnType<typeof createAgents>>) {
+export function createBlockerClarificationWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, resolveExecution: ExecutionResolver, generate: GeneratorV2 = generateV2, resolveAgents?: (resources: NacosSnapshot) => Promise<ReturnType<typeof createAgents>>, storage?: MastraCompositeStore) {
   const methods = loadDevelopmentMethods(config.rootDir);
   /** 老 Run 继续原路径；新 Run 必须使用并验证冻结资源。 */
   async function productAgent(state: z.infer<typeof blockerCycleSchema>) {
@@ -50,11 +52,21 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
     if (!resolveAgents) throw new Error('缺少冻结资源 Agent 装配器');
     return (await resolveAgents(resources)).productManagerAgent;
   }
+  /** 已批准原稿、冻结材料和当前 Run 绑定的固定规格共同构成只读输入。 */
+  function workspaceFiles(state: z.infer<typeof blockerCycleSchema>) {
+    const root = projectRepositoryRoot(config);
+    const spec = projectSpec(config, 'product');
+    return {
+      ...productWorkspaceSources(state.approvedProduct, root ? { root, receipt: state.repositoryHandoff ?? state.development.repositoryHandoff } : undefined),
+      ...Object.fromEntries(Object.entries(state.references).map(([path, content]) => [`engineering/${path}`, content])),
+      ...(spec ? { [`project/${spec.path}`]: spec.content } : {}),
+      'product.md': state.development.input.source.content,
+    };
+  }
   /** 只读澄清节点可受控换模型；源码、模式、端点、方法和未实施状态仍必须一致。 */
   async function guard(state: z.infer<typeof blockerCycleSchema>, allowModelRebase = false) {
     const current = developmentExecutionIdentity(config);
-    const prior = state.development.executionIdentity;
-    const canRebase = allowModelRebase && state.development.mode === config.mode && state.development.methodBundleHash === methods.hashFor(state.development.input, state.development.methodBundleHash) && prior.mode === current.mode && prior.endpointHash === current.endpointHash && prior.modelId !== current.modelId && state.development.outcome === 'clarification-required' && state.development.completedTasks.length === 0 && !state.development.approvedHash && !state.development.delivery;
+    const canRebase = allowModelRebase && canRebaseClarificationModel(state.development, config, methods.hashFor(state.development.input, state.development.methodBundleHash));
     if (!canRebase) validateIdentityV2(state.development, config, methods.hashFor(state.development.input, state.development.methodBundleHash));
     const execution = resolveExecution(state.development.input);
     try { if (developmentHash(await execution.snapshot()) !== state.development.checkpointHash) throw new Error('澄清期间源码检查点发生变化'); }
@@ -63,13 +75,22 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
   }
   const analyze = createStep({ id: 'analyze-blocker-questions', inputSchema: blockerCycleSchema, outputSchema: blockerCycleSchema,
     // 工程资料自动读取；业务建议必须绑定实际阻塞，不能把推荐当成用户答案。
-    execute: async ({ inputData }) => {
+    execute: async ({ inputData, runId, abortSignal }) => {
       const guarded = await guard(inputData, true);
       const separated = splitBlockers(developmentBlockers(guarded.development));
       const references = config.engineeringProject ? { files: { 'specs/development-sdd.md': projectSpec(config, 'development')!.content }, note: '使用 Run 绑定的开发 SDD。' } : readEngineeringReferences(config.hrmRepositoryRoot);
       const state = { ...guarded, ...separated, references: references.files, referenceNote: references.note, productReworkDecision: await routeBusinessGap(guarded) };
+      await productAgent(state);
+      const files = workspaceFiles(state);
+      const stage = await createStageWorkspace(`blocker-questions-${runId}`, '业务阻塞澄清 · 已批准材料（只读）', files);
+      try {
+      const manager = createAgents(config, { resources: state.approvedProduct.nacosResources, storage, workspace: stage.workspace, workspaceTools: stage.tools }).productManagerAgent;
+      let receipts: ReturnType<typeof workspaceReadReceipts> = [];
       let plan: z.infer<typeof blockerPlanSchema>;
       if (config.mode === 'fixture') {
+        const result = await generateProductContent(manager, JSON.stringify({ task: 'blocker-question-materials', workspaceFile: 'product.md', instruction: '读取已批准产品原稿。固定样例仅验证读取和交互，不代表业务分析。' }), 'analysis', config.mode, undefined, 0, undefined, abortSignal);
+        if (!hasWorkspaceRead(result.toolResults, 'product.md')) throw new Error('阻塞澄清 Agent 未读取当前 Workspace 原稿');
+        receipts = workspaceReadReceipts(result.toolResults, files);
         const groups: typeof state.business[] = [];
         const size = Math.max(1, Math.ceil(state.business.length / 16));
         for (let index = 0; index < state.business.length; index += size) groups.push(state.business.slice(index, index + size));
@@ -78,16 +99,19 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
         const timeout = developmentTimeoutPolicy('architect');
         const outputSchema = generatedBlockerPlanForCount(state.business.length);
         try {
-          const taskContext = createTaskContext({ task: 'development-blocker-clarification', engineeringSpec: projectSpec(config, 'product'), currentProductApproval: blockerProductApproval(inputData.approvedProduct, inputData.development.input.source.hash), product: inputData.development.input.source.content, priorConfirmedAnswers: inputData.approvedProduct.intake?.history, businessBlockers: state.business, productReworkDecision: state.productReworkDecision, engineeringHandledByHost: state.engineering, previousRevisions: inputData.history, instruction: methodPrompt('product.question-decision', inputData.development.input.teamMethods) + methodPrompt('intake.blocker-workflow.1', inputData.development.input.teamMethods) }, true, projectRepositoryRoot(config) ? { root: projectRepositoryRoot(config)!, receipt: inputData.repositoryHandoff ?? inputData.development.repositoryHandoff } : undefined, 0, inputData.development.input.teamMethods);
-          const stream = await (await productAgent(inputData)).stream(taskContext.prompt, { ...taskContext.options, maxSteps: 12, modelSettings: { maxRetries: 0, maxOutputTokens: 8000, timeout: { stepMs: timeout.stepMs, totalMs: timeout.totalMs } }, structuredOutput: { schema: outputSchema } });
+          const taskContext = createTaskContext({ task: 'development-blocker-clarification', workspaceFile: 'product.md', workspaceSources: Object.keys(files), currentProductApproval: blockerProductApproval(inputData.approvedProduct, inputData.development.input.source.hash), priorConfirmedAnswers: inputData.approvedProduct.intake?.history, businessBlockers: state.business, productReworkDecision: state.productReworkDecision, engineeringHandledByHost: state.engineering, previousRevisions: inputData.history, instruction: '先调用 mastra_workspace_read_file 读取 product.md，并按需读取 Workspace 中的授权材料。' + methodPrompt('product.question-decision', inputData.development.input.teamMethods) + methodPrompt('intake.blocker-workflow.1', inputData.development.input.teamMethods) }, true, undefined, 0, inputData.development.input.teamMethods);
+          const stream = await manager.stream(taskContext.prompt, { ...taskContext.options, abortSignal, maxSteps: 12, modelSettings: { maxRetries: 0, maxOutputTokens: 8000, timeout: { stepMs: timeout.stepMs, totalMs: timeout.totalMs } }, structuredOutput: { schema: outputSchema } });
           const result = await stream.getFullOutput();
           if (result.error) throw result.error;
           if (result.finishReason !== 'stop') throw new Error('问题整理尚未完整生成，未发布部分卡片');
+          if (!hasWorkspaceRead(result.toolResults, 'product.md')) throw new Error('阻塞澄清 Agent 未读取当前 Workspace 原稿');
+          receipts = workspaceReadReceipts(result.toolResults, files);
           plan = outputSchema.parse(result.object);
         } catch (error) { throw new DevelopmentModelError(classifyDevelopmentError(error), diagnoseModelFailure(error)); }
       }
       validateBlockerPlan(plan, state);
-      return { ...state, plan, answer: undefined, draft: undefined, review: undefined };
+      return { ...state, plan, workspaceReads: receipts, answer: undefined, draft: undefined, review: undefined };
+      } finally { await stage.close(); }
     },
   });
   const answer = createStep({ id: 'confirm-blocker-answers', inputSchema: blockerCycleSchema, outputSchema: blockerCycleSchema,
@@ -101,18 +125,26 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
   });
   const revise = createStep({ id: 'write-revised-product', inputSchema: blockerCycleSchema, outputSchema: blockerCycleSchema,
     // 仅修改显式决定影响的规则，其他有效内容保留，完整新稿仍需人工确认。
-    execute: async ({ inputData }) => {
+    execute: async ({ inputData, runId }) => {
       await guard(inputData);
       const confirmedDecisions = inputData.plan!.questions.map(/** 选项ID转换为当时版本的文字，不让模型自行推断用户选择。 */question => {
         const response = inputData.answer!.answers.find(/** 以卡片ID精确关联回答。 */item => item.questionId === question.id);
         return { question: question.title, choices: response?.selected.map(/** 引用服务端选项，推荐不是答案。 */id => question.options.find(/** 查找提交时真实选项。 */option => option.id === id)!.label), custom: response?.custom ?? '' };
       });
       let content: string;
+      await productAgent(inputData);
+      const files = workspaceFiles(inputData);
+      const stage = await createStageWorkspace(`blocker-revision-${runId}`, '产品修订 · 已批准原稿（只读）', files);
+      let receipts: ReturnType<typeof workspaceReadReceipts> = [];
       try {
-        const result = await generateProductContent(await productAgent(inputData), JSON.stringify({ task: 'revision-task', engineeringSpec: projectSpec(config, 'product'), originalContent: inputData.development.input.source.content, productReworkDecision: inputData.productReworkDecision, confirmedDecisions, optionContext: { summary: inputData.plan!.summary, ruleProposals: inputData.plan!.assumptions }, supplement: inputData.answer!.supplement, priorReviewFeedback: inputData.history.at(-1)?.review, requirementInstructions: inputData.development.input.productHandoffFormat ? methodPrompt('product.paired-documents', inputData.development.input.teamMethods) : inputData.development.input.requirementTracking ? methodPrompt('product.acceptance-requirements', inputData.development.input.teamMethods) : undefined, instruction: methodPrompt('intake.blocker-workflow.2', inputData.development.input.teamMethods) }), 'writing', config.mode, projectRepositoryRoot(config) ? { root: projectRepositoryRoot(config)!, receipt: inputData.repositoryHandoff ?? inputData.development.repositoryHandoff } : undefined, 0, undefined, undefined, inputData.development.input.teamMethods);
+        const manager = createAgents(config, { resources: inputData.approvedProduct.nacosResources, storage, workspace: stage.workspace, workspaceTools: stage.tools }).productManagerAgent;
+        const result = await generateProductContent(manager, JSON.stringify({ task: 'revision-task', workspaceFile: 'product.md', workspaceSources: Object.keys(files), productReworkDecision: inputData.productReworkDecision, confirmedDecisions, optionContext: { summary: inputData.plan!.summary, ruleProposals: inputData.plan!.assumptions }, supplement: inputData.answer!.supplement, priorReviewFeedback: inputData.history.at(-1)?.review, requirementInstructions: inputData.development.input.productHandoffFormat ? methodPrompt('product.paired-documents', inputData.development.input.teamMethods) : inputData.development.input.requirementTracking ? methodPrompt('product.acceptance-requirements', inputData.development.input.teamMethods) : undefined, instruction: '先调用 mastra_workspace_read_file 读取 product.md，并按需读取 Workspace 中的授权材料。' + methodPrompt('intake.blocker-workflow.2', inputData.development.input.teamMethods) }), 'writing', config.mode, undefined, 0, undefined, undefined, inputData.development.input.teamMethods);
+        if (!hasWorkspaceRead(result.toolResults, 'product.md')) throw new Error('产品修订 Agent 未读取当前 Workspace 原稿');
+        receipts = workspaceReadReceipts(result.toolResults, files);
         content = config.mode === 'fixture' ? `${result.text}\n\n固定测试输入回读（不是业务理解）：\n${JSON.stringify(confirmedDecisions)}` : result.text;
       } catch (error) { throw new DevelopmentModelError(classifyDevelopmentError(error), diagnoseModelFailure(error)); }
-      const draft = { stage: 'product' as const, content: z.string().trim().min(1).max(100000).parse(content), hash: developmentHash({ source: inputData.development.input.source.hash, answers: inputData.answer, content }), evidence: config.mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const };
+      finally { await stage.close(); }
+      const draft = { stage: 'product' as const, content: z.string().trim().min(1).max(100000).parse(content), hash: developmentHash({ source: inputData.development.input.source.hash, answers: inputData.answer, content, workspaceReads: receipts }), workspaceReads: receipts, evidence: config.mode === 'fixture' ? 'fixture' as const : 'model-proposal' as const };
       if (inputData.development.input.productHandoffFormat) readProductDocuments(draft.content);
       else if (inputData.development.input.requirementTracking) readAcceptanceRequirements(draft.content);
       return { ...inputData, draft };
@@ -134,7 +166,7 @@ export function createBlockerClarificationWorkflow(agents: ReturnType<typeof cre
       await guard(inputData);
       if (!resumeData) return suspend({ hash: inputData.draft!.hash, draft: inputData.draft!, originalContent: inputData.development.input.source.content, plan: inputData.plan!, answer: inputData.answer!, referenceNote: inputData.referenceNote, ...(inputData.development.input.requirementTracking || inputData.development.priorAcceptanceCases ? { requirementImpact: revisionImpact(inputData) } : {}) });
       if (resumeData.hash !== inputData.draft!.hash) throw new Error('修订产品稿版本发生变化');
-      const record = { sourceHash: inputData.development.input.source.hash, plan: inputData.plan!, answer: inputData.answer!, draft: inputData.draft!, review: resumeData };
+      const record = { sourceHash: inputData.development.input.source.hash, plan: inputData.plan!, answer: inputData.answer!, draft: inputData.draft!, review: resumeData, ...(inputData.workspaceReads ? { workspaceReads: inputData.workspaceReads } : {}) };
       const state = { ...inputData, review: resumeData, history: [...inputData.history, record] };
       if (resumeData.decision === 'stop') return bail({ ...state, stopped: true, development: { ...state.development, outcome: 'rejected' as const } });
       if (resumeData.decision === 'revise') return bail({ ...state, round: state.round + 1 });

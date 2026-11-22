@@ -4,6 +4,15 @@ import type { DevelopmentState } from './contracts.js';
 
 type FaultKind = DevelopmentState['faults'][number]['kind'];
 
+/** 工具故障只携带宿主固定分类，原始参数与异常不进入状态。 */
+export class DevelopmentToolError extends Error {
+  /** 写入或委派失败要求重新核对授权，其余失败进入技术待处理。 */
+  constructor(readonly category: 'authorization' | 'read' | 'verification') {
+    super('研发受控工具执行未完成');
+    this.name = 'DevelopmentToolError';
+  }
+}
+
 /** 白名单分类同时处理 SDK 抛错与 finishReason=error 返回的异常。 */
 export function classifyDevelopmentError(error: unknown): FaultKind {
   let current = error;

@@ -45,3 +45,9 @@ test('无验收预期、重复 ID 或只有代码示例的产品稿无法成为�
   assert.throws(() => readAcceptanceRequirements('- REQ-TITLE: 校验标题'), /格式无效/);
   assert.throws(() => readAcceptanceRequirements(`\`\`\`md\n${item}\n\`\`\``), /须包含/);
 });
+
+test('中文和英文分号分隔的验收条目与竖线格式保持相同需求身份', () => {
+  const variants = ['|', '；', ';'].map(separator => readAcceptanceRequirements(`- REQ-TITLE-TYPE: 非字符串输入返回类型错误${separator}验收: null 返回 TYPE`)[0]);
+  assert.equal(new Set(variants.map(item => item!.hash)).size, 1);
+  assert.throws(() => readAcceptanceRequirements('- REQ-TITLE: 规则；验收: '), /格式无效/);
+});

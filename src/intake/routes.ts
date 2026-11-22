@@ -1,3 +1,5 @@
+import { teamSettingsSchema, writeTeamSettings } from '../mastra/team-settings.js';
+import { teamConfigurationView } from './team-configuration-view.js';
 import { createWorkbenchAccount } from './workbench-account.js';
 import { readCandidateChanges } from './candidate-changes.js';
 import { assertProjectCorrelation, loadEngineeringProject, projectRepositoryRoot, registeredProjects, selectProjectConfig, snapshotProjectConfig } from '../business-engineering/project.js';
@@ -18,6 +20,7 @@ import { deliverySchema } from '../mastra/workflows/delivery.js';
 import { buildSuccessorBaseline, successorSource } from './successor-run.js';
 import { readRemoteSyncSettings, readRemoteSyncTargets, remoteSyncSettingsSchema, remoteSyncTargets, targetDictionarySchema, writeRemoteSyncSettings, writeRemoteSyncTargets } from '../delivery/remote-sync-settings.js';
 import type { WorkflowStreamEvent } from '@mastra/core/workflows';
+import { prepareRunMigration } from './run-migration.js';
 const startSchema = z.object({ projectId: z.string().optional(), runId: z.string().uuid(), brief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.default('unassigned'), intakeMode: intakeModeSchema.default('clarify') }).strict();
 const successorRequestSchema = z.object({ runId: z.string().uuid(), artifactKinds: z.array(z.enum(['product', 'development', 'testing'])).min(1).max(3), changeBrief: z.string().trim().min(1).max(12000), iterationId: assetIdSchema.optional(), intakeMode: intakeModeSchema.default('clarify') });
 /** 注册与 Studio 相同实例的主 Workflow，避免新旧业务入口脱节。 */
@@ -44,6 +47,65 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
   }
   return [
     ...account.routes,
+    registerApiRoute('/intake-api/runs/:runId/migration', { method: 'GET',
+      /** 迁移计划仅由原生状态及已有候选准备，不消耗模型调用。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try { return c.json((await prepareRunMigration(workflow, config!, c.req.param('runId'))).plan); }
+        catch { return c.json({ error: '当前 Run 无法准备迁移，请核对历史身份、产品批准和候选检查点。' }, 409); }
+      },
+    }),
+    registerApiRoute('/intake-api/runs/:runId/migration', { method: 'POST',
+      /** 账号确认当前计划后创建新 Run，重复请求只对账相同目标谱系。 */
+      handler: async c => {
+        let id: string | undefined; let acquired = false;
+        try {
+          origin(c);
+          const reviewer = account.current(c);
+          if (!reviewer) return c.json({ error: '请登录后确认迁移。' }, 401);
+          const request = z.object({ runId: z.uuid(), planHash: z.string().length(64) }).strict().parse(await c.req.json());
+          id = request.runId;
+          const sourceRunId = z.uuid().parse(c.req.param('runId'));
+          if (id === sourceRunId || busy.has(id)) throw new Error('迁移目标不可用');
+          busy.add(id); acquired = true;
+          const existing = await workflow.getWorkflowRunById(id);
+          if (existing) {
+            const initial = existing.steps?.['initialize-product-development'];
+            const migration = initial && !Array.isArray(initial) ? deliverySchema.safeParse(initial.output).data?.migration : undefined;
+            if (migration?.sourceRunId !== sourceRunId || migration.planHash !== request.planHash) throw new Error('迁移目标归属不一致');
+          } else {
+            const { plan, product } = await prepareRunMigration(workflow, config!, sourceRunId);
+            if (plan.hash !== request.planHash) throw new Error('迁移计划已变化');
+            const run = await workflow.createRun({ runId: id });
+            await run.start({ inputData: { projectId: plan.projectId, iterationId: plan.iterationId, brief: product.brief, intakeMode: 'clarify', migration: { sourceRunId, planHash: plan.hash, reviewer } } });
+          }
+          return c.json(await readIntake(workflow, id, config));
+        } catch (error) { return failure(c, error); }
+        finally { if (id && acquired) busy.delete(id); }
+      },
+    }),
+    registerApiRoute('/intake-api/team-configuration', { method: 'GET',
+      /** 只向已登录工作台返回白名单配置。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        if (!account.current(c)) return c.json({ error: '请先登录工作台。' }, 401);
+        try { return c.json(teamConfigurationView(config!)); }
+        catch { return c.json({ error: '团队配置暂不可读取，请检查服务端配置。' }, 409); }
+      },
+    }),
+    registerApiRoute('/intake-api/team-configuration', { method: 'PUT',
+      /** 保存前核对本机来源、会话和完整的白名单设置。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try {
+          if (c.req.header('origin') !== 'http://127.0.0.1:4112') return c.json({ error: '请从本机工作台提交。' }, 403);
+          if (!account.current(c)) return c.json({ error: '请先登录工作台。' }, 401);
+          const input = teamSettingsSchema.parse(await c.req.json());
+          writeTeamSettings(config!, input);
+          return c.json(teamConfigurationView(config!));
+        } catch { return c.json({ error: '团队配置未保存，请检查来源、输入范围和数据目录。' }, 409); }
+      },
+    }),
     registerApiRoute('/intake-api/projects', { method: 'GET',
       /** 客户端只取得服务端登记的项目 ID 和显示名称。 */
       handler: async c => c.json({ projects: config?.engineeringProjects ? registeredProjects(config).map(project => ({ id: project.id, title: project.label })) : [{ id: config?.engineeringProject?.id ?? 'hrm', title: config?.engineeringProject?.label ?? 'HRM 项目仓库' }] }),

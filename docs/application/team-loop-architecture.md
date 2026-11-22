@@ -8,7 +8,7 @@
 
 独立团队运行与回归套件正在按[OpenSpec 变更](../../openspec/changes/add-independent-team-runs/proposal.md)推进。统一 `team-run-input.v1` 输入信封只接纳团队、项目、版本化来源引用和团队专属载荷；从既有 Run 取数时，服务端须重读 Store 与 Git 回执。新增团队入口不得把内部子 Workflow 直接暴露为 HTTP 输入，也不得把来源 Run 的状态复制成新的权威事实。
 
-规范输入、服务端来源解析和冻结绑定仍待实施。测试候选复制、跨独立 Run 交接和恢复时重验也尚未接入；具体任务见[任务清单](../../openspec/changes/add-independent-team-runs/tasks.md)。
+本地候选已接入规范输入、Store 来源解析和冻结绑定、测试候选复制、跨独立 Run 交接及恢复时重验。独立产品人工退回通过服务端精确授权进入原生 timeTravel，直接伪造恢复输入仍被拒绝。输入包登记、确认与撤销已通过原生 Workflow 接入；任意外部候选材料导入、跨项目专项和真实远端验证尚待完成；具体任务见[任务清单](../../openspec/changes/add-independent-team-runs/tasks.md)。
 
 ## 2. Impact
 

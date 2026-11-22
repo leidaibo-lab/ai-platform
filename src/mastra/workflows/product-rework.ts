@@ -1,6 +1,8 @@
 import { methodPrompt } from '../team-methods.js';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { developmentHash } from '../../development/contracts.js';
 import { deliverySchema, type Delivery } from './delivery.js';
 import { correctionPauseSchema } from '../../intake/product-interruption.js';
 import { nativeInvocationMemory } from '../context-memory.js';
@@ -19,6 +21,18 @@ type ClassifyRework = (prompt: string, options: {
 
 export type ProductReworkRoute = z.infer<typeof productReworkRouteSchema>;
 export const productReworkMethod = 'product-rework.v1';
+const restartAuthorization = new AsyncLocalStorage<{ runId: string; step: string; hash: string }>();
+
+/** 仅在已验证人工反馈的服务端调用期间授权精确返工请求，不持有新的恢复事实。 */
+export function withProductRestart<T>(runId: string, restart: { step: string[]; input: unknown }, execute: () => Promise<T>): Promise<T> {
+  return restartAuthorization.run({ runId, step: restart.step.join('.'), hash: developmentHash(restart.input) }, execute);
+}
+
+/** 原生入口核对调用期授权，禁止客户端借返工更换任意检查点输入。 */
+export function isAuthorizedProductRestart(runId: string, step: string, input: unknown): boolean {
+  const authorization = restartAuthorization.getStore();
+  return !!authorization && authorization.runId === runId && authorization.step === step && authorization.hash === developmentHash(input);
+}
 
 export const downstreamProductReworkSchema = productReworkRouteSchema.extend({
   target: z.literal('guided-requirements'),

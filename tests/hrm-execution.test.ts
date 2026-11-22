@@ -111,8 +111,11 @@ test('产品资料项目可先规划，工程缺口不能误送产品澄清，�
     const productHash = current.product!.artifact.hash;
     current = await respondIntake(workflow, 'fixture', run.runId, { role: 'product', artifactHash: productHash, decision: 'approve', reviewer: 'test', comment: '批准合成产品' });
     const catalog = await (await router.request('/intake-api/project')).json();
-    const response = await router.request(`/intake-api/runs/${run.runId}/respond`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ gateHash: current.gate!.gateHash, repositoryScope: { catalogHash: catalog.catalogHash, reviewer: 'test', comment: '先规划，工程准备未齐' } }) });
-    assert.equal(response.status, 200); current = await response.json();
+    const login = await router.request('/intake-api/account', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4112' }, body: JSON.stringify({ username: 'test', password: 'fixture-local-account-password' }) });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie')!.split(';')[0];
+    const response = await router.request(`/intake-api/runs/${run.runId}/respond`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4112', cookie }, body: JSON.stringify({ gateHash: current.gate!.gateHash, repositoryScope: { catalogHash: catalog.catalogHash, reviewer: 'test', comment: '先规划，工程准备未齐' } }) });
+    assert.equal(response.status, 200, await response.clone().text()); current = await response.json();
     assert.equal(current.status, 'success'); assert.equal(current.outcome, 'blocked');
     assert.equal(current.blockage?.preparationRequired, true); assert.equal(current.blockage?.taskCount, 0);
     assert.ok(current.blockage?.blockers.some((item: string) => item.includes('尚未识别项目技术栈')));

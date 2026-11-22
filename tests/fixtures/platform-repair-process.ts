@@ -10,8 +10,11 @@ import { createPlatformRecoveryRoutes } from '../../src/intake/platform-recovery
 import { readIntake, respondIntake } from '../../src/intake/service.js';
 import { generateV2, type GeneratorV2 } from '../../src/development/v2/agents.js';
 import { publishHandoff } from '../../src/delivery/remote-handoff.js';
+import { createIndependentTeamWorkflows } from '../../src/mastra/workflows/team-runs.js';
+import { resolveTeamSource } from '../../src/team/runs.js';
 
 const [directory, runId, command, event] = process.argv.slice(2);
+const independent = process.argv[6] === 'independent';
 const token = 'synthetic-platform-repair-token-12345';
 const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}`, platformRepairToken: token };
 /** 同一个交接请求可在另一个进程回查本地 bare 远端。 */
@@ -28,20 +31,32 @@ const generate: GeneratorV2 = async (...args) => {
   return generateV2(...args);
 };
 const app = createStudioApplicationOptions(config);
-const workflow = createProductDevelopmentWorkflow(app.agents as any, config, generate);
-new Mastra({ workflows: { productDevelopmentWorkflow: workflow }, storage: app.storage, logger: false });
+const teams = createIndependentTeamWorkflows(app.agents as any, config, app.storage, generate);
+const workflow = independent ? teams.developmentTeamRun as ReturnType<typeof createProductDevelopmentWorkflow> : createProductDevelopmentWorkflow(app.agents as any, config, generate);
+const mastra = new Mastra({ workflows: { ...teams, productDevelopmentWorkflow: workflow }, storage: app.storage, logger: false });
 const router = new Hono();
-for (const route of createPlatformRecoveryRoutes(workflow, config)) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
+for (const route of createPlatformRecoveryRoutes(workflow, config, independent ? { workflowName: 'team-development' } : {})) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
 const path = `/platform-api/runs/${runId}/dependency-repair`;
 const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
 try {
   await app.storage.init();
   if (command === 'start') {
-    const run = await workflow.createRun({ runId });
-    await run.start({ inputData: { brief: '合成依赖修复回归', intakeMode: 'autofill', iterationId: 'platform-repair-fixture' } });
-    let current = await readIntake(workflow, runId);
     const actor = { reviewer: 'fixture', comment: '合成批准' };
-    current = await respondIntake(workflow, 'fixture', runId, { ...actor, role: 'product', artifactHash: current.product!.artifact.hash, decision: 'approve' });
+    const run = await workflow.createRun({ runId });
+    if (independent) {
+      const product = teams.productTeamRun as ReturnType<typeof createProductDevelopmentWorkflow>;
+      const source = await product.createRun();
+      await source.start({ inputData: { version: 'team-run-input.v1', team: 'product', projectId: 'hrm', brief: '合成依赖修复回归', intakeMode: 'autofill', iterationId: 'platform-repair-fixture' } as any });
+      const pending = await readIntake(product, source.runId);
+      await respondIntake(product, 'fixture', source.runId, { ...actor, role: 'product', artifactHash: pending.product!.artifact.hash, decision: 'approve' });
+      const approved = await resolveTeamSource(mastra, config, 'development', { workflow: 'productTeamRun', runId: source.runId });
+      await run.start({ inputData: { version: 'team-run-input.v1', team: 'development', projectId: 'hrm', iterationId: 'platform-repair-fixture', source: { workflow: 'productTeamRun', runId: source.runId, hash: approved.hash } } as any });
+    } else {
+      await run.start({ inputData: { brief: '合成依赖修复回归', intakeMode: 'autofill', iterationId: 'platform-repair-fixture' } });
+      const pending = await readIntake(workflow, runId);
+      await respondIntake(workflow, 'fixture', runId, { ...actor, role: 'product', artifactHash: pending.product!.artifact.hash, decision: 'approve' });
+    }
+    let current = await readIntake(workflow, runId);
     current = await respondIntake(workflow, 'fixture', runId, { gateHash: current.gate!.gateHash, data: { ...actor, project: { id: 'synthetic', files: { 'src/a.mjs': 'export const a=0;', 'check.mjs': 'export const check=1;' }, writablePaths: ['src/a.mjs'], checkFiles: ['check.mjs'], roles: ['backend'] } } });
     const waiting = await router.request(path, { headers });
     console.log(JSON.stringify({ status: current.status, gate: current.gate?.key, waiting: (await waiting.json()).waiting, awaitingPlatform: current.technicalRecovery?.awaitingPlatform }));

@@ -20,6 +20,7 @@ test('阶段 Workspace 隔离、只读和清理', async () => {
 test('读取回执必须来自成功的 Workspace 读取', () => {
   assert.equal(hasWorkspaceRead([{ payload: { toolName: 'mastra_workspace_read_file', args: { path: 'a' }, result: 'ok' } }], 'a'), true);
   assert.equal(hasWorkspaceRead([{ payload: { toolName: 'mastra_workspace_read_file', args: { path: 'a' }, result: { error: 'failed' } } }], 'a'), false);
+  assert.equal(hasWorkspaceRead([{ payload: { toolName: 'mastra_workspace_read_file', args: { path: 'a' }, result: 'failed', isError: true } }], 'a'), false);
   assert.equal(hasWorkspaceRead([{ payload: { toolName: 'other', args: { path: 'a' }, result: 'ok' } }], 'a'), false);
 });
 

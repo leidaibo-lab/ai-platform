@@ -1,3 +1,4 @@
+import { readTeamSettings } from '../team-settings.js';
 import { architectureDocumentPath, architectureMarkdown } from '../../development/v2/architecture-document.js';
 import { describeDevelopmentStep, developmentSteps } from './development-steps.js';
 import { projectRepositoryRoot } from '../../business-engineering/project.js';
@@ -69,7 +70,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       if (inputData.requirementImpact && inputData.requirementImpact.productHash !== inputData.source.hash) throw new Error('需求修订影响与当前产品版本不匹配');
       const technicalRecovery = options.legacySequential || config.legacyDevelopmentWorkflow
         ? undefined
-        : { ...(inputData.budgetContinuation?.technical ?? { version: 'technical-recovery.v1' as const, limit: config.developmentContinuationLimit ?? 4 }), attempts: [] };
+        : { ...(inputData.budgetContinuation?.technical ?? { version: 'technical-recovery.v1' as const, limit: readTeamSettings(config).developmentContinuationLimit }), attempts: [] };
       return stateV2Schema.parse({ version: 'development-state.v2', input: inputData, mode: config.mode, executionIdentity: developmentExecutionIdentity(config), methodBundleHash: methods.hashFor(inputData), phase: 'prepare-context', requirements, verificationRefs: registeredChecks(inputData), context: null, plan: null, planHash: null, planSourceHash: null, approvalHash: null, approvedHash: null, readiness: null, readinessHistory: [], findingsReviews: [], codeReviews: [], reviews: [], resolutions: [], checkpointHash: developmentHash(files), completedTasks: [], round: 0, route: 'all', ...(inputData.budgetContinuation?.contextBudgetLevel !== undefined ? { contextBudgetLevel: inputData.budgetContinuation.contextBudgetLevel } : {}), calls: inputData.budgetContinuation?.calls ?? 0, maxCalls: inputData.budgetContinuation?.maxCalls ?? 72, work: [], faults: [], recovery: null, recoveries: [], checks: [], checkedSourceHash: null, gates: [], outcome: 'in-progress', delivery: null, ...(technicalRecovery ? { technicalRecovery } : {}) });
     },
   });

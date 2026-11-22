@@ -3,7 +3,7 @@ import { readProductDocuments } from '../business-engineering/product-documents.
 import { successorSource } from './successor-run.js';
 import { waitForWorkflowToSettle } from '../mastra/platform/workflow-recovery.js';
 import { correctionPauseSchema, correctionRequestSchema, interruptProductAttempt, productCorrectionCapability } from './product-interruption.js';
-import { appliedProductRework, planProductRework, prepareProductRework, readProductCorrectionCheckpoint } from '../mastra/workflows/product-rework.js';
+import { appliedProductRework, planProductRework, prepareProductRework, readProductCorrectionCheckpoint, withProductRestart } from '../mastra/workflows/product-rework.js';
 import { maxProductReworks, type ProductRework } from '../mastra/workflows/product-contract.js';
 import { resolveProductAgents } from '../mastra/workflows/product-team.js';
 import type { Delivery } from '../mastra/workflows/delivery.js';
@@ -80,7 +80,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
   const snapshot = await workflow.getWorkflowRunById(runId);
   if (!snapshot) throw new Error('Run 不存在');
   if (config) config = snapshotProjectConfig(config, snapshot, { readOnly: true });
-  const initial = snapshot.steps?.['initialize-product-development'];
+  const initial = snapshot.steps?.['initialize-team-run'] ?? snapshot.steps?.['initialize-product-development'];
   const state = initial && !Array.isArray(initial) ? deliverySchema.safeParse(initial.output) : undefined;
   const suspended = Object.entries(snapshot.steps ?? {}).filter(([, step]) => !Array.isArray(step) && step.status === 'suspended' && (step as any).suspendPayload !== undefined).sort(([left], [right]) => right.split('.').length - left.split('.').length)[0];
   const path = suspended?.[0];
@@ -330,7 +330,7 @@ async function restartProduct(workflow: IntakeWorkflow, runId: string, source: D
   });
   const restart = prepareProductRework(source, rework, route);
   const run = await workflow.createRun({ runId });
-  await run.timeTravel({ step: restart.step, inputData: restart.input });
+  await withProductRestart(runId, restart, () => run.timeTravel({ step: restart.step, inputData: restart.input }));
 }
 
 const continueCorrectionSchema = z.object({ attempt: z.uuid() }).strict();
