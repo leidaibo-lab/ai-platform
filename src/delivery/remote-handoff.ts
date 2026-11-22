@@ -96,7 +96,7 @@ export async function publishHandoff(root: string, runId: string, files: Record<
   if (!/^[a-zA-Z0-9_-]{1,200}$/.test(runId) || !Object.keys(files).length) throw new Error('非法远端交付');
   const hashes: Record<string, string> = {};
   for (const [path, text] of Object.entries(files)) {
-    if (!/^(product|testSet|deploy|specs)\/[a-zA-Z0-9_./-]+$/.test(path) || path.split('/').some(/** 禁止点段和隐藏路径。 */part => !part || part.startsWith('.'))) throw new Error('非法交付文件路径');
+    if (!/^[a-zA-Z0-9_./-]+$/.test(path) || path.split('/').some(/** 禁止点段和隐藏路径。 */part => !part || part.startsWith('.'))) throw new Error('非法交付文件路径');
     hashes[path] = contentHash(text);
   }
   const origin = git(root, ['remote', 'get-url', '--all', 'origin']);
@@ -207,9 +207,10 @@ export async function publishReviewedCandidate(root: string, specification: Remo
 }
 
 /** 人工确认后发布正式规格；能力和提交标题均由宿主固定，不接受页面传值。 */
-export async function publishFormalSpecification(root: string, runId: string, capability: string, files: Record<string, string>, message: string, baseCommit?: string): Promise<RemoteHandoff> {
+export async function publishFormalSpecification(root: string, runId: string, capability: string, files: Record<string, string>, message: string, baseCommit?: string, allowedPaths?: readonly string[]): Promise<RemoteHandoff> {
   const iteration = assetIdSchema.parse(capability);
-  if (!Object.keys(files).every(/** 产品路径必须与宿主登记的迭代标识匹配。 */path => formalSpecificationPathPattern.test(path) && (path.startsWith('specs/') || path.startsWith(`product/${iteration}/`)))) throw new Error('正式规格只能写入当前需求的受控路径');
+  const allowed = new Set(allowedPaths ?? []);
+  if (!Object.keys(files).every(/** 产品交接可传入 Run 冻结契约的精确路径；历史规格仍使用既有目录白名单。 */path => formalSpecificationPathPattern.test(path) && (allowed.has(path) || path.startsWith('specs/') || path.startsWith(`product/${iteration}/`)))) throw new Error('正式规格只能写入当前 Run 的受控路径');
   return publishHandoff(root, runId, files, { branch: formalRunBranch(capability, runId), message: `${message}\n`, baseCommit });
 }
 

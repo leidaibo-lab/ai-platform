@@ -15,6 +15,11 @@ export function productPaths(iterationId: string) {
   return { requirements: `${directory}/requirements.md`, specification: `${directory}/product-spec.md` };
 }
 
+/** Resolve configured project-owned requirement and product paths for one iteration. */
+export function configuredProductPaths(iterationId: string, templates: { requirements: string; productSpecification: string }) {
+  return { requirements: templates.requirements.replaceAll('{iterationId}', assetIdSchema.parse(iterationId)), specification: templates.productSpecification.replaceAll('{iterationId}', assetIdSchema.parse(iterationId)) };
+}
+
 /** 从同一审批正文拆出两份文件，先校验任务和需求的对应关系。 */
 export function readProductDocuments(content: string) {
   const lines = content.split(/\r?\n/);

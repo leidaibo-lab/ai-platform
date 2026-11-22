@@ -24,6 +24,7 @@ import { withRepositoryAssets } from '../../delivery/repository-assets.js';
 import { readHandoffFile } from '../../delivery/remote-handoff.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
 import { resolveProductAgents } from './product-team.js';
+import { deliveryContractForRun } from '../../business-engineering/delivery-contract.js';
 
 const scopeReviewSchema = z.object({ autonomy: autonomyPolicySchema.optional(), project: projectSchema, reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000), maxReworks: z.number().int().min(0).max(3).default(1) });
 
@@ -78,10 +79,14 @@ export function createDevelopmentTeamWorkflow(agents: ReturnType<typeof createAg
         const correlation = inputData.correlation;
         const formal = inputData.formalSpecifications?.find(/** 读取当前 Run 的产品回执。 */item => item.kind === 'product');
         if (!root || !correlation || !formal) throw new Error('开发缺少已发布的产品交接版本');
-        if (inputData.productHandoffFormat) verifyProductHandoff(root, correlation.runId, correlation.iterationId, formal, product.content);
+        const contract = correlation.deliveryContractHash ? deliveryContractForRun(config, correlation).contract : undefined;
+        const paths = contract?.paths ?? { requirements: 'specs/requirements.md', productSpecification: 'specs/product-spec.md' };
+        if (inputData.productHandoffFormat) verifyProductHandoff(root, correlation.runId, correlation.iterationId, formal, product.content, contract ? { requirements: paths.requirements, productSpecification: paths.productSpecification } : undefined);
         else {
-          if (!formal.paths.includes('specs/requirements.md') || !formal.paths.includes('specs/product-spec.md')) throw new Error('开发缺少已推送的需求文档或产品规格');
-          const remoteProduct = readHandoffFile(root, formal.handoff, 'specs/product-spec.md');
+          const requirementsPath = paths.requirements.replaceAll('{iterationId}', correlation.iterationId);
+          const productPath = paths.productSpecification.replaceAll('{iterationId}', correlation.iterationId);
+          if (!formal.paths.includes(requirementsPath) || !formal.paths.includes(productPath)) throw new Error('开发缺少已推送的需求文档或产品规格');
+          const remoteProduct = readHandoffFile(root, formal.handoff, productPath);
           if (remoteProduct !== `${product.content.endsWith('\n') ? product.content : `${product.content}\n`}`) throw new Error('已推送产品规格与当前人工批准版本不一致');
         }
       }

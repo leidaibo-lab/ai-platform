@@ -54,7 +54,7 @@ export function WorkbenchUserMenu({ username, settingsDisabled, openAccount, ope
         <UserRound size={15} aria-hidden="true" />{username ? '工作台账号' : '登录或设置账号'}
       </button>
       <button type="button" disabled={settingsDisabled} onClick={() => select(openSettings)}>
-        <Settings2 size={15} aria-hidden="true" />远端同步设置
+        <Settings2 size={15} aria-hidden="true" />业务工程接入
       </button>
     </div>}
   </div>;

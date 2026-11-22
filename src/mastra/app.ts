@@ -1,4 +1,5 @@
 import { loadEngineeringProject, projectRepositoryRoot, registeredProjects } from '../business-engineering/project.js';
+import { assertDeliveryContractMatchesAdapter, defaultContractForAdapter, readProjectDeliveryContract } from '../business-engineering/delivery-contract.js';
 import { createIntakeVoiceRoute } from '../intake/voice.js';
 import { createIntakeRoutes } from '../intake/routes.js';
 import { createPlatformRecoveryRoutes } from '../intake/platform-recovery.js';
@@ -18,7 +19,12 @@ import { createProductDevelopmentWorkflow } from './workflows/product-developmen
  */
 export function createStudioApplicationOptions(config: PracticeConfig) {
   const repository = config.engineeringProjects ? undefined : projectRepositoryRoot(config);
-  for (const project of registeredProjects(config)) loadEngineeringProject(project);
+  for (const project of registeredProjects(config)) {
+    const candidate = loadEngineeringProject(project).candidate;
+    const selected = { ...config, engineeringProject: project };
+    const contract = readProjectDeliveryContract(selected, undefined, defaultContractForAdapter(candidate));
+    assertDeliveryContractMatchesAdapter(contract.contract, candidate);
+  }
   const agents = createAgents(config, { workspace: productWorkspace(config) });
   const storage = new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl });
   const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config, undefined, { storage });

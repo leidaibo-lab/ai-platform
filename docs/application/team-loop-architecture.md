@@ -47,7 +47,7 @@ manifest 只声明文件集合，不声明可执行命令。Adapter 生成固定
 
 服务端通过 `MASTRA_ENGINEERING_PROJECTS` 登记项目数组，与历史 `MASTRA_ENGINEERING_PROJECT` 互斥。注册表模式共用一个 Mastra Store；客户端从 `/intake-api/projects` 获取 ID 和名称，创建 Run 时必须显式提交 `projectId`。未知项目、重复 ID、不同 ID 指向同一真实仓库根均拒绝。旧 HRM 和单项目模式保持原入口及同步设置路径。
 
-初始化的 correlation 由 Mastra Store 保存，冻结 root/origin 的绑定摘要、revision 和 Adapter profile；浏览器不能提供 root、revision 或命令。原生 Run 入口在框架修改快照前校验绑定，步骤包装在资产和执行适配外层再次校验。异步作用域只传播已验证的项目配置及根 Run 标识，不保存审批或恢复事实。条件分支可能丢失框架父级元数据时，内部步骤继承外层已验证来源；缺乏权威来源时拒绝，不按输入猜测归属。
+初始化的 correlation 由 Mastra Store 保存，冻结 root/origin 的绑定摘要、revision、Adapter profile 和项目交付契约摘要；浏览器不能提供 root、revision 或命令。项目交付落点按项目 ID 保存在平台项目数据目录，版本文件不可变；新 Run 冻结当前摘要，恢复继续读取该版本。需求和产品规格交接必需，失败时下游停在可恢复点。原生 Run 入口在框架修改快照前校验绑定，步骤包装在资产和执行适配外层再次校验。异步作用域只传播已验证的项目配置及根 Run 标识，不保存审批或恢复事实。条件分支可能丢失框架父级元数据时，内部步骤继承外层已验证来源；缺乏权威来源时拒绝，不按输入猜测归属。
 
 资产目录、文件和 bundle 在注册表模式必须提供项目 ID；远端阶段策略按项目隔离，MR 的仓库从同一 Run 绑定解析。后继 Run 从来源项目的固定 Git 回执读取规格，可采用该项目当前登记 revision，不继承审批。活动 Run 恢复仍要求原绑定；旧成功 Run 可只读查看并作为后继来源。
 

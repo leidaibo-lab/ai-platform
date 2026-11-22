@@ -7,6 +7,24 @@
 
 ## Requirements
 
+### Requirement: Registered projects use a versioned delivery contract
+
+多项目工作台 SHALL 从服务端登记的项目中选择业务工程。项目仓库身份由项目注册表提供；项目配置页面 SHALL 展示绑定仓库并配置需求、产品规格、开发代码、测试用例和工程规则的仓库内落点，不得要求对同一项目的每个阶段重复登记 Git 地址。
+
+新 Run SHALL 冻结项目交付契约版本摘要，并在正式交接、下游读取和恢复时使用该版本。配置更新只影响之后创建的 Run。正式需求与产品规格 Git 交接 SHALL 是必需门禁，失败时 SHALL 阻止下游并保留可恢复点，页面不得提供关闭交接的开关。
+
+#### Scenario: Configure a registered business project
+
+- **WHEN** 操作者为已登记项目保存仓库内交付落点
+- **THEN** 页面 SHALL 展示注册表绑定的 Git 地址并保存经过服务端校验的相对路径
+- **AND** 后续新 Run SHALL 冻结该配置版本，既有 Run SHALL 保留原绑定
+
+#### Scenario: Product Git handoff is unavailable
+
+- **WHEN** 产品批准后的必需 Git 交接失败
+- **THEN** Workflow SHALL 停留在可恢复交接点并阻止研发继续
+- **AND** SHALL NOT 允许同步设置关闭或绕过该门禁
+
 ### Requirement: Root defaults to the complete Mastra application
 
 仓库根目录 SHALL 以完整 Mastra 应用作为默认开发、测试、构建和工作台入口，并保留远端
@@ -203,7 +221,7 @@ Run 标识而非客户端提交的任意 Git ref。每个需求 Run 使用独立
 #### Scenario: Workbench user opens the account menu
 
 - **WHEN** 用户悬停在工作台左侧栏底部的账号入口，或通过点击、键盘展开入口
-- **THEN** 工作台 SHALL 显示包含账号操作和远端同步设置的悬浮菜单
+- **THEN** 工作台 SHALL 显示包含账号操作和业务工程接入的悬浮菜单
 
 #### Scenario: Local account session authenticates correction requests
 
@@ -484,6 +502,7 @@ Run 的 Adapter profile SHALL 绑定实际检查计划实现及运行时身份�
 
 - **WHEN** 同一实例登记多个项目，用户选择项目并创建需求
 - **THEN** 页面 SHALL 按所选项目展示需求和同步设置，并向创建入口提交已登记 `projectId`
+- **AND** 项目配置 SHALL 展示注册表绑定仓库并允许设置经服务端校验的业务落点；正式需求与产品规格 Git 交接 SHALL 必需且不可关闭
 - **AND** 服务端 SHALL 拒绝缺失或未知项目 ID、客户端仓库路径或版本覆盖，以及复用同一 Run ID 更换项目
 - **AND** 打开已有 Run SHALL 使用其冻结项目显示资料；一个不可恢复或不可读的 Run SHALL NOT 阻断其他项目需求列表
 

@@ -11,6 +11,7 @@ import { remoteSyncTargetSchema, type RemoteSyncTarget } from './project-target.
 import { developmentHash, projectSchema } from '../development/contracts.js';
 import type { PracticeConfig } from '../mastra/config.js';
 import { adapterImplementationIdentity, parseProjectManifest } from './adapters.js';
+import { assertDeliveryContractMatchesAdapter, defaultContractForAdapter, readProjectDeliveryContract } from './delivery-contract.js';
 
 const hrmOrigin = 'https://github.com/leidaibo-lab/hrm.git';
 const revisionSchema = z.string().regex(/^[a-f0-9]{40}$/);
@@ -100,7 +101,10 @@ export function createProjectCorrelation(config: PracticeConfig, input: { projec
   const selected = selectProjectConfig(config, input.projectId);
   const engineering = selected.engineeringProject;
   const profile = engineering ? loadEngineeringProject(engineering).profile : undefined;
-  return { projectId: engineering?.id ?? 'hrm', ...(engineering ? { engineeringBinding: engineeringBinding(engineering), engineeringRevision: engineering.revision, adapterId: profile!.adapterId, adapterProfileVersion: 'adapter-profile.v2' as const, adapterProfileHash: profile!.hash } : {}), iterationId: input.iterationId, runId, workflowId: 'productDevelopmentWorkflow' };
+  const candidate = engineering ? loadEngineeringProject(engineering).candidate : undefined;
+  const contract = candidate ? readProjectDeliveryContract(selected, undefined, defaultContractForAdapter(candidate)) : undefined;
+  if (contract && candidate) assertDeliveryContractMatchesAdapter(contract.contract, candidate);
+  return { projectId: engineering?.id ?? 'hrm', ...(engineering ? { engineeringBinding: engineeringBinding(engineering), engineeringRevision: engineering.revision, adapterId: profile!.adapterId, adapterProfileVersion: 'adapter-profile.v2' as const, adapterProfileHash: profile!.hash, deliveryContractVersion: 'project-delivery-contract.v1' as const, deliveryContractHash: contract!.hash } : {}), iterationId: input.iterationId, runId, workflowId: 'productDevelopmentWorkflow' };
 }
 
 /** 在原生图所有步骤外层装配 Run 作用域，覆盖嵌套、foreach、Studio start/resume/timeTravel。 */
@@ -251,6 +255,11 @@ export function assertProjectCorrelation(config: PracticeConfig, correlation: As
     const profile = loadEngineeringProject({ ...project, revision }).profile;
     const hash = correlation.adapterProfileVersion === 'adapter-profile.v2' ? profile.hash : profile.legacyHash;
     if (correlation.adapterId !== profile.adapterId || correlation.adapterProfileHash !== hash) throw new Error('Run 的业务工程 Adapter 绑定已变化');
+  }
+  if (correlation.deliveryContractVersion || correlation.deliveryContractHash) {
+    const contract = readProjectDeliveryContract(config, correlation.deliveryContractHash);
+    if (correlation.deliveryContractVersion !== 'project-delivery-contract.v1' || contract.hash !== correlation.deliveryContractHash) throw new Error('Run 的项目交付契约绑定已变化');
+    assertDeliveryContractMatchesAdapter(contract.contract, loadEngineeringProject({ ...project, revision: correlation.engineeringRevision ?? project.revision }).candidate);
   }
 }
 

@@ -2,6 +2,7 @@ import { createWorkbenchAccount } from './workbench-account.js';
 import { readCandidateChanges } from './candidate-changes.js';
 import { assertProjectCorrelation, loadEngineeringProject, projectRepositoryRoot, registeredProjects, selectProjectConfig, snapshotProjectConfig } from '../business-engineering/project.js';
 import { autonomyPolicySchema } from '../development/v2/contracts.js';
+import { adapterDeliveryRoots, assertDeliveryContractMatchesAdapter, defaultContractForAdapter, projectDeliveryContractSchema, readProjectDeliveryContract, writeProjectDeliveryContract } from '../business-engineering/delivery-contract.js';
 /** HTTP Adapter 仅转换业务请求；本地互斥不承担跨实例协调。 */
 import type { PracticeConfig } from '../mastra/config.js';
 import { registerApiRoute, type ContextWithMastra } from '@mastra/core/server';
@@ -46,6 +47,37 @@ export function createIntakeRoutes(workflow: IntakeWorkflow, mode: 'fixture' | '
     registerApiRoute('/intake-api/projects', { method: 'GET',
       /** 客户端只取得服务端登记的项目 ID 和显示名称。 */
       handler: async c => c.json({ projects: config?.engineeringProjects ? registeredProjects(config).map(project => ({ id: project.id, title: project.label })) : [{ id: config?.engineeringProject?.id ?? 'hrm', title: config?.engineeringProject?.label ?? 'HRM 项目仓库' }] }),
+    }),
+    registerApiRoute('/intake-api/project-delivery-contract', { method: 'GET',
+      /** 返回已登记项目身份、绑定仓库和当前落点契约，不接受客户端仓库地址。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try {
+          const selected = selectProjectConfig(config!, c.req.query('projectId'));
+          const project = selected.engineeringProject;
+          if (!project) throw new Error('必须选择已登记项目');
+          const candidate = loadEngineeringProject(project).candidate;
+          const current = readProjectDeliveryContract(selected, undefined, defaultContractForAdapter(candidate));
+          assertDeliveryContractMatchesAdapter(current.contract, candidate);
+          return c.json({ project: { id: project.id, label: project.label, repositoryUrl: project.origin }, adapterRoots: adapterDeliveryRoots(candidate), contract: current.contract, hash: current.hash });
+        } catch { return c.json({ error: '项目交付配置暂不可读取，请选择已登记业务工程。' }, 409); }
+      },
+    }),
+    registerApiRoute('/intake-api/project-delivery-contract', { method: 'PUT',
+      /** 仅本机页面可更新项目落点；项目仓库身份仍由服务端注册表解析。 */
+      handler: async c => {
+        c.header('Cache-Control', 'no-store');
+        try {
+          origin(c);
+          const selected = selectProjectConfig(config!, c.req.query('projectId'));
+          if (!selected.engineeringProject) throw new Error('必须选择已登记项目');
+          const contract = projectDeliveryContractSchema.parse(await c.req.json());
+          const candidate = loadEngineeringProject(selected.engineeringProject).candidate;
+          assertDeliveryContractMatchesAdapter(contract, candidate);
+          const saved = writeProjectDeliveryContract(selected, contract);
+          return c.json({ project: { id: selected.engineeringProject.id, label: selected.engineeringProject.label, repositoryUrl: selected.engineeringProject.origin }, adapterRoots: adapterDeliveryRoots(candidate), ...saved });
+        } catch (error) { return c.json({ error: error instanceof z.ZodError ? '落点配置不符合要求，请检查安全相对路径和迭代变量。' : error instanceof Error ? error.message : '项目交付配置未保存。' }, 409); }
+      },
     }),
     registerApiRoute('/intake-api/remote-sync-targets', { method: 'GET',
       /** 仓库字典页仅在本机展示已登记目标及其本地checkout，阶段页继续隐藏路径。 */

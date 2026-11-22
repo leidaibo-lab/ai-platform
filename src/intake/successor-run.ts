@@ -1,5 +1,4 @@
 import { architectureDocumentPath } from '../development/v2/architecture-document.js';
-import { productPaths } from '../business-engineering/product-documents.js';
 import { lifecycleSchema } from '../delivery/contracts.js';
 import { z } from 'zod';
 import { readHandoffFile } from '../delivery/remote-handoff.js';
@@ -31,9 +30,8 @@ export function buildSuccessorBaseline(root: string, sourceRunId: string, source
   const artifacts = selected.flatMap(kind => {
     const receipt = delivery.formalSpecifications!.find(/** 只取已登记的对应角色回执。 */item => item.kind === kind);
     if (!receipt) throw new Error(`来源 Run 不包含已确认的${kind}规格`);
-    const scoped = delivery.correlation && productPaths(delivery.correlation.iterationId);
     const paths = kind === 'product'
-      ? (scoped && receipt.paths.includes(scoped.specification) ? [scoped.requirements, scoped.specification] : ['specs/product-spec.md'])
+      ? (receipt.paths.length === 2 && receipt.paths.every(path => Object.hasOwn(receipt.handoff.files, path)) ? receipt.paths : ['specs/product-spec.md'])
       : kind === 'development' ? ['specs/development-spec.md', ...receipt.paths.filter(path => path === architectureDocumentPath)] : ['specs/test-spec.md'];
     return paths.map(/** 校验每份固定 Git 文件；产品基线同时包含业务规则与交付任务。 */path => {
       if (!receipt.paths.includes(path)) throw new Error(`来源 Run 不包含已确认的${kind}规格`);

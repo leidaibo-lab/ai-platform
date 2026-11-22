@@ -1,6 +1,7 @@
 import { describeProductStep, productSteps } from './product-steps.js';
 import { publishProductHandoff } from '../../business-engineering/product-handoff.js';
 import { projectRepositoryRoot, projectSpec } from '../../business-engineering/project.js';
+import { deliveryContractForRun } from '../../business-engineering/delivery-contract.js';
 import { createStep, createWorkflow, type Step } from '@mastra/core/workflows';
 import { createAgents } from '../agents/index.js';
 import { productWorkspace } from '../project-workspaces.js';
@@ -47,14 +48,19 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
       if (!root || !correlation) throw new Error('产品确认后缺少受控项目仓库或主要能力标识，不能提交正式规格');
       const { iterationId: capability, engineeringRevision } = correlation;
       if (inputData.productHandoffFormat) {
-        const receipt = await publishProductHandoff(root, correlation.runId, capability, pending.artifact.content, engineeringRevision);
+        const contract = deliveryContractForRun(config, correlation).contract;
+        const receipt = await publishProductHandoff(root, correlation.runId, capability, pending.artifact.content, engineeringRevision, { requirements: contract.paths.requirements, productSpecification: contract.paths.productSpecification });
         return { ...next, formalSpecifications: [...(next.formalSpecifications ?? []), receipt] };
       }
-      const handoff = await publishFormalSpecification(root, runId, capability, {
-        'specs/requirements.md': inputData.brief.endsWith('\n') ? inputData.brief : `${inputData.brief}\n`,
-        'specs/product-spec.md': pending.artifact.content.endsWith('\n') ? pending.artifact.content : `${pending.artifact.content}\n`,
-      }, 'docs(spec): 提交已确认需求与产品规格', engineeringRevision);
-      const receipt: FormalSpecificationReceipt = { kind: 'product', handoff, paths: ['specs/requirements.md', 'specs/product-spec.md'], upstreamCommits: [] };
+      const paths = correlation.deliveryContractHash
+        ? deliveryContractForRun(config, correlation).contract.paths
+        : { requirements: 'specs/requirements.md', productSpecification: 'specs/product-spec.md' };
+      const files = {
+        [paths.requirements.replaceAll('{iterationId}', capability)]: inputData.brief.endsWith('\n') ? inputData.brief : `${inputData.brief}\n`,
+        [paths.productSpecification.replaceAll('{iterationId}', capability)]: pending.artifact.content.endsWith('\n') ? pending.artifact.content : `${pending.artifact.content}\n`,
+      };
+      const handoff = await publishFormalSpecification(root, runId, capability, files, 'docs(spec): 提交已确认需求与产品规格', engineeringRevision, Object.keys(files));
+      const receipt: FormalSpecificationReceipt = { kind: 'product', handoff, paths: Object.keys(handoff.files), upstreamCommits: [] };
       return { ...next, formalSpecifications: [...(next.formalSpecifications ?? []), receipt] };
     },
   });
