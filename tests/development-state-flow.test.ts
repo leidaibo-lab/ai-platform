@@ -206,7 +206,7 @@ for (const legacy of [false, true]) test(legacy ? '历史恢复节点在新条�
 
 test('停止保留检查点且不运行后续阶段；运行与失败提示从原生状态读取', /** 业务停止不是自动批准或继续实施。 */async () => {
   /** 合成架构超时用于进入决定页面。 */
-  const generate: GeneratorV2 = async (...args) => { if (args[2] === 'architect') throw Object.assign(new Error('synthetic'), { name: 'MastraTimeoutError' }); return generateV2(...args); };
+  const generate: GeneratorV2 = async (...args) => { if (args[2] === 'architect') throw Object.assign(new Error('synthetic-private-diagnostic'), { name: 'MastraTimeoutError' }); return generateV2(...args); };
   const setup = fixture(generate); const app = setup.open();
   try {
     const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
@@ -243,6 +243,12 @@ test('主流程遇到未知开发故障会保留证据并停止下游', /** 使�
     assert.equal(current.technicalRecovery?.blocked?.fault?.phase, '技术方案生成');
     assert.equal(current.technicalRecovery?.blocked?.reason, 'diagnosis-required');
     const snapshot = await workflow.getWorkflowRunById(run.runId);
+    const persisted = stateV2Schema.parse((snapshot!.result as any).development);
+    const fault = persisted.faults.find(item => item.id === persisted.technicalRecovery?.blocked?.faultId)!;
+    assert.ok(fault);
+    assert.equal(current.technicalRecovery?.blocked?.fault?.checkpointHash, fault.checkpointHash);
+    assert.equal(current.technicalRecovery?.blocked?.owner, persisted.technicalRecovery?.blocked?.owner);
+    assert.equal(JSON.stringify(current.technicalRecovery).includes('synthetic-private-diagnostic'), false);
     for (const key of ['test-team', 'deployment-team', 'delivery-team']) assert.notEqual((snapshot!.steps![key] as any)?.status, 'success');
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
