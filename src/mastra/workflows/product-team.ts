@@ -1,3 +1,4 @@
+import { decideProductLoop } from '../../team/product-loop.js';
 import { describeProductStep, productSteps } from './product-steps.js';
 import { publishProductHandoff } from '../../business-engineering/product-handoff.js';
 import { projectRepositoryRoot, projectSpec } from '../../business-engineering/project.js';
@@ -37,10 +38,13 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
     execute: async ({ inputData, resumeData, suspend, bail, runId }) => {
       if (inputData.mode !== config.mode) throw new Error('产品运行模式发生变化');
       const pending = pendingSchema.parse({ role: 'product', artifact: inputData.artifacts.at(-1), productReworkRound: inputData.productRework?.round ?? 0 });
-      if (!resumeData) return suspend(pending);
+      if (!resumeData && decideProductLoop('human-review', pending.artifact.hash, 'blocked') === 'block') return suspend(pending);
+      if (!resumeData) throw new Error('产品审批缺少恢复数据');
       const decision = validateReview(pending, resumeData);
       const next = { ...inputData, reviews: [...inputData.reviews, decision] };
-      if (decision.decision !== 'approve') return bail({ ...next, outcome: decision.decision === 'reject' ? 'rejected' as const : 'rework-requested' as const });
+      const action = decideProductLoop('human-review', pending.artifact.hash, decision.decision === 'approve' ? 'completed' : decision.decision === 'reject' ? 'stopped' : 'rework');
+      if (action === 'stop' || action === 'request-rework') return bail({ ...next, outcome: action === 'stop' ? 'rejected' as const : 'rework-requested' as const });
+      if (action !== 'complete') throw new Error('产品审批状态无效');
       // 只有人工确认后的需求文档和产品 Spec 才能进入正式 Run 分支；fixture 不接触远端。
       if (config.mode !== 'live') return next;
       const root = projectRepositoryRoot(config);

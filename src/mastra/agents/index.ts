@@ -6,7 +6,7 @@ import { resolveModelId, type PracticeConfig } from '../config.js';
 import { practiceInfoTool } from '../tools/practice-info.js';
 import { createFixtureModel } from './fixture-model.js';
 import { resolve } from 'node:path';
-import { loadProductSkillSelection, PRODUCT_MAX_STEPS } from './skills.js';
+import { loadProductSkillSelection, PRODUCT_MAX_STEPS } from '../skills.js';
 import { productManagerProfile, productReviewerProfile, type ProductAgentRole } from './product-roles.js';
 import type { AnyWorkspace } from '@mastra/core/workspace';
 import type { ToolsInput } from '@mastra/core/agent';
@@ -14,6 +14,7 @@ import { createRecruitmentWorkspace } from '../project-workspaces.js';
 import { createSkill, validateSkillContent } from '@mastra/core/skills';
 import { validateNacosSnapshot, type NacosSnapshot } from '../nacos-resources.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
+import type { Mastra } from '@mastra/core';
 
 const instructions = {
   product: methodPrompt('mastra.agents.index.5', undefined),
@@ -32,6 +33,7 @@ export interface ProductAgentOptions {
   execution?: (role: ProductAgentRole) => Pick<AgentExecutionOptionsBase<unknown>, 'modelSettings' | 'onStepFinish'>;
   resources?: NacosSnapshot;
   storage?: MastraCompositeStore;
+  mastra?: Mastra;
 }
 
 /** 工厂只组合框架原生 Agent；fixture/live 的变化位于模型边界。 */
@@ -57,7 +59,7 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
   /** 为各 Agent 选择官方测试模型或原生 OpenAI-compatible 模型配置。 */
   function model(stage: string) {
     if (config.mode === 'fixture') return createFixtureModel(stage);
-    return { id: resolveModelId(config, stage === 'product' || stage.startsWith('product-') ? 'product' : stage === 'development' ? 'development' : undefined), apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
+    return { id: resolveModelId(config, stage === 'product' || stage.startsWith('product-') ? 'product' : stage === 'development' ? 'development' : stage === 'testing' || stage.startsWith('testing-') ? 'testing' : undefined), apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
   }
   /** 创建统一产品经理/独立产品审查 Agent；同一逻辑 Agent 可被多个 Workflow 阶段复用。 */
   function specializedProductAgent(profile: typeof productManagerProfile | typeof productReviewerProfile, id: string, stage: string, resources?: NacosSnapshot) {
@@ -69,6 +71,7 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
     }) : [];
     return new Agent({
       id,
+      ...(options.mastra ? { mastra: options.mastra } : {}),
       name: profile.name,
       instructions: frozen ? `当前角色：${profile.name}。${productTask}按当前任务需要可调用已注册的版本化 Skill。角色方法：${id === 'product-reviewer-agent' ? (frozen.reviewerPrompt ?? frozen.prompt).content : frozen.prompt.content}\n${methodPrompt('mastra.agents.index.2', methods)}${workspaceInstructions}` : `${profile.instructions}${productTask}${instructions.product}当前任务优先方法：${profile.preferredSkills.join('、')}。${productBoundaries}${workspaceInstructions}`,
       model: model(stage),

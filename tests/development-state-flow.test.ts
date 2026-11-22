@@ -17,6 +17,7 @@ import { applyRecoveryDecision } from '../src/development/v2/recovery-policy.js'
 import { createDevelopmentWorkflowV2 } from '../src/mastra/workflows/development-v2.js';
 import { recoverDevelopmentV2 } from '../src/development-v2-service.js';
 import { describeGate, validateGate, describeDevelopmentProgress } from '../src/intake/gates.js';
+import { DevelopmentToolError } from '../src/development/errors.js';
 
 /** 固定Node项目只验证控制流，检查脚本不依赖模型输出。 */
 function fixture(generate: GeneratorV2, historical = true) {
@@ -35,6 +36,56 @@ function fixture(generate: GeneratorV2, historical = true) {
   }
   return { open, directory, parent };
 }
+
+test('受控写入失败记录故障并停止授权接续，部分源码回滚', async () => {
+  /** 仅在实现角色写入部分结果后模拟宿主授权拒绝。 */
+  const generate: GeneratorV2 = async (...args) => {
+    if (args[2] === 'backend') {
+      await args[1].writeFile(args[4][0]!, 'export const partial=1;');
+      throw new DevelopmentToolError('authorization');
+    }
+    return generateV2(...args);
+  };
+  const setup = fixture(generate, false); const app = setup.open();
+  try {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    const before = await app.workflow.getWorkflowRunById(run.runId);
+    const entry = before!.steps!['development-iteration-v2.approve-architecture'] as any;
+    const result = await run.resume({ step: ['development-iteration-v2', 'approve-architecture'], resumeData: { hash: entry.suspendPayload.hash, decision: 'approve', reviewer: 'fixture', comment: '合成授权', resolutions: [] } });
+    assert.equal(result.status, 'success');
+    if (result.status !== 'success') throw new Error('实现工具故障未形成受控停止');
+    const state = stateV2Schema.parse(result.result);
+    assert.equal(state.stopReason, 'authorization-required');
+    assert.equal(state.outcome, 'manual-attention');
+    assert.equal(state.delivery, null);
+    assert.ok(state.faults.length);
+    assert.equal(await app.execution.readFile('src/solution.mjs'), app.input.project.files['src/solution.mjs']);
+  } finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
+});
+
+test('原生 Agent 忽略工具写入失败仍被 Workflow 停止，不接受模型完成声明', async () => {
+  const setup = fixture(generateV2, false); const app = setup.open();
+  const originalWrite = app.execution.writeFile.bind(app.execution);
+  /** 模拟真实受控写工具在写入部分源码后抛错，fixture 模型仍会输出完成文本。 */
+  app.execution.writeFile = async (path, content) => {
+    if (content.includes('固定fixture')) {
+      await originalWrite(path, 'export const partial=1;');
+      throw new Error('fixture host authorization denied');
+    }
+    return originalWrite(path, content);
+  };
+  try {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    const snapshot = await app.workflow.getWorkflowRunById(run.runId);
+    const entry = snapshot!.steps!['development-iteration-v2.approve-architecture'] as any;
+    const result = await run.resume({ step: ['development-iteration-v2', 'approve-architecture'], resumeData: { hash: entry.suspendPayload.hash, decision: 'approve', reviewer: 'fixture', comment: '合成授权', resolutions: [] } });
+    if (result.status !== 'success') throw new Error('实现工具故障未形成受控停止');
+    const state = stateV2Schema.parse(result.result);
+    assert.equal(state.stopReason, 'authorization-required');
+    assert.equal(state.delivery, null);
+    assert.equal(await app.execution.readFile('src/solution.mjs'), app.input.project.files['src/solution.mjs']);
+  } finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
+});
 
 test('超过300非空行的批准原文可进入开发上下文且保留原文定位', async () => {
   const setup = fixture(generateV2); const app = setup.open();
@@ -444,4 +495,48 @@ test('共享写入接受间接依赖，拒绝未排序写入、重复路径与�
   const documentInput = inputV2Schema.parse({ ...input, architectureDocumentFormat: 'architecture-markdown.v1' });
   assert.equal(methods.hashFor(documentInput, historicalDocumentHash), historicalDocumentHash);
   assert.notEqual(methods.hashFor(documentInput), historicalDocumentHash);
+});
+
+test('缺少 Sandbox 身份的历史原生暂停快照跨 Store 重开后拒绝恢复且不改写', async () => {
+  /** 让就绪阶段以无效输出暂停，避免触发真实模型或仓库。 */
+  const generate: GeneratorV2 = async (...args) => {
+    if (args[2] === 'readiness') throw new SyntaxError('synthetic historical output');
+    return generateV2(...args);
+  };
+  const setup = fixture(generate); let app = setup.open();
+  try {
+    const run = await app.workflow.createRun(); await run.start({ inputData: app.input });
+    const store = (await app.storage.getStore('workflows'))!;
+    const workflowName = 'development-execution-v2';
+    const snapshot = (await store.loadWorkflowSnapshot({ workflowName, runId: run.runId }))!;
+    assert.ok(snapshot);
+    let changed = 0;
+    /** 只改隔离 fixture 的快照，模拟旧版本从未写入该身份字段。 */
+    function removePolicy(value: unknown): void {
+      if (!value || typeof value !== 'object') return;
+      if (Array.isArray(value)) { value.forEach(removePolicy); return; }
+      const object = value as Record<string, unknown>;
+      if ('sandboxPolicy' in object) { delete object.sandboxPolicy; changed++; }
+      Object.values(object).forEach(removePolicy);
+    }
+    removePolicy(snapshot);
+    assert.ok(changed > 0);
+    await store.persistWorkflowSnapshot({ workflowName, runId: run.runId, snapshot });
+    const nestedRunId = (snapshot.context['development-iteration-v2'] as any).metadata?.nestedRunId ?? run.runId;
+    const nestedName = 'development-iteration-v2';
+    const nested = (await store.loadWorkflowSnapshot({ workflowName: nestedName, runId: nestedRunId }))!;
+    assert.ok(nested);
+    removePolicy(nested);
+    await store.persistWorkflowSnapshot({ workflowName: nestedName, runId: nestedRunId, snapshot: nested });
+    await app.execution.close(); await app.storage.close(); app = setup.open();
+    const before = await app.workflow.getWorkflowRunById(run.runId);
+    assert.equal(before!.status, 'suspended');
+    const paused = before!.steps!['development-iteration-v2.assess-readiness'] as any;
+    assert.equal(paused.suspendPayload.recoveryState.executionIdentity.sandboxPolicy, undefined);
+    const hash = paused.suspendPayload.recoveryState.recovery.hash;
+    await assert.rejects(recoverDevelopmentV2(app, run.runId, { hash, decision: 'retry', reviewer: 'test', comment: '验证旧身份' }), /漂移/);
+    const after = await app.workflow.getWorkflowRunById(run.runId);
+    assert.equal(after!.status, 'suspended');
+    assert.deepEqual((after!.steps!['development-iteration-v2.assess-readiness'] as any).suspendPayload, paused.suspendPayload);
+  } finally { await app.execution.close(); await app.storage.close(); rmSync(setup.parent, { recursive: true, force: true }); }
 });

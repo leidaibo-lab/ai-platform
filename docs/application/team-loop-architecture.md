@@ -8,9 +8,7 @@
 
 独立团队运行与回归套件正在按[OpenSpec 变更](../../openspec/changes/add-independent-team-runs/proposal.md)推进。统一 `team-run-input.v1` 输入信封只接纳团队、项目、版本化来源引用和团队专属载荷；从既有 Run 取数时，服务端须重读 Store 与 Git 回执。新增团队入口不得把内部子 Workflow 直接暴露为 HTTP 输入，也不得把来源 Run 的状态复制成新的权威事实。
 
-规范输入的首版 Schema 位于 [`src/team/independent-run-input.ts`](../../src/team/independent-run-input.ts)。独立产品 Workflow 已登记到 Mastra，当前只接受新需求，复用产品团队及人工审批并输出版本化结果；研发、测试和交付的独立入口、专用 API 和工作台仍未接通。输入散列不替代来源证据，下游正式启动仍需完成服务端来源解析和冻结绑定。
-
-来源解析的初步实现位于 [`src/team/independent-run-source.ts`](../../src/team/independent-run-source.ts)：按来源类型读取主流程或对应独立团队的 Store 快照，校验项目及来源 Run 身份，并在 live 模式读取固定 Git 规格回执；不兼容的来源 Workflow 会在读取前拒绝。fixture 回归已验证从独立产品 Run 读取批准结果；下游独立运行入口、候选复制、来源冻结和恢复时重验仍待实现。
+本地候选已接入规范输入、Store 来源解析和冻结绑定、测试候选复制、跨独立 Run 交接及恢复时重验。独立产品人工退回通过服务端精确授权进入原生 timeTravel，直接伪造恢复输入仍被拒绝。输入包登记、确认与撤销已通过原生 Workflow 接入；任意外部候选材料导入、跨项目专项和真实远端验证尚待完成；具体任务见[任务清单](../../openspec/changes/add-independent-team-runs/tasks.md)。
 
 ## 2. Impact
 
@@ -42,7 +40,9 @@ flowchart LR
   W --> S[(Mastra Store)]
 ```
 
-公共控制当前已接入研发与测试，产品与交付并未全面接入同一公共 Loop。`team-run-envelope.v1` 只投影 `teamId/status/phase/inputVersion/budget/evidence/blocker/stopReason`。它不单独保存，序列化它也不能成为恢复依据。`rework-request.v1` 是跨团队输入；研发 Port 校验目标团队、研发状态版本、来源 checkpoint、finding、证据引用和剩余返工预算后，才调用研发内部返工策略。
+公共控制已接入产品关键节点、研发与测试；交付团队尚未全面接入同一公共 Loop。`team-run-envelope.v1` 只投影 `teamId/status/phase/inputVersion/budget/evidence/blocker/stopReason`。它不单独保存，序列化它也不能成为恢复依据。`rework-request.v1` 是跨团队输入；研发 Port 校验目标团队、研发状态版本、来源 checkpoint、finding、证据引用和剩余返工预算后，才调用研发内部返工策略。
+
+产品写作的文档校验修订现接入公共信封和纯决策：候选正文散列标识输入，固定校验诊断作为证据，最多一次修订；修订后重新执行完整文档门禁。产品澄清的等待、独立审查的继续、人工审批与反馈返工及预算停止也通过公共决策；专业状态、审查证据和审批语义保持原有约束。交付团队尚未全面接入。信封仅为即时投影，原生 Workflow 和 Store 仍持有权威事实。
 
 项目 Adapter 注册表以不可变 ID 选择预注册实现：
 

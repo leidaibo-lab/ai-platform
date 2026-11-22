@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { MastraLanguageModelV2Mock } from '@mastra/core/test-utils/llm-mock';
 import { createAgents } from '../src/mastra/agents/index.js';
-import { loadGovernedSkill, loadProductSkills } from '../src/mastra/agents/skills.js';
+import { loadGovernedSkill, loadProductSkills } from '../src/mastra/skills.js';
 import { productManagerProfile, productReviewerProfile } from '../src/mastra/agents/product-roles.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));

@@ -20,14 +20,17 @@ export function generatedBlockerPlanForCount(count: number) {
 }
 export const blockerAnswerSchema = z.object({ hash: z.string().length(64), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(16), supplement: z.string().trim().max(4000) });
 export const revisedProductReviewSchema = z.object({ hash: z.string().length(64), decision: z.enum(['approve', 'revise', 'stop']), reviewer: z.string().trim().min(1).max(100), comment: z.string().trim().min(1).max(2000) });
+const workspaceReadSchema = z.object({ path: z.string().min(1), sourceHash: z.string().length(64) });
+const revisedArtifactSchema = artifactSchema.extend({ workspaceReads: z.array(workspaceReadSchema).optional() });
 export const blockerCycleSchema = z.object({ repositoryHandoff: remoteHandoffSchema.optional(),
   development: stateV2Schema, approvedProduct: deliverySchema,
-  round: z.number().int().positive(), plan: blockerPlanSchema.optional(), answer: blockerAnswerSchema.optional(), draft: artifactSchema.optional(), review: revisedProductReviewSchema.optional(),
+  round: z.number().int().positive(), plan: blockerPlanSchema.optional(), answer: blockerAnswerSchema.optional(), draft: revisedArtifactSchema.optional(), review: revisedProductReviewSchema.optional(),
   references: z.record(z.string(), z.string()).default({}), referenceNote: z.string().default(''),
   business: z.array(z.object({ id: z.string(), text: z.string() })).default([]), engineering: z.array(z.string()).default([]),
   productReworkDecision: downstreamProductReworkSchema.optional(),
+  workspaceReads: z.array(workspaceReadSchema).optional(),
   nextInput: inputV2Schema.optional(), stopped: z.boolean().default(false),
-  history: z.array(z.object({ sourceHash: z.string(), plan: blockerPlanSchema, answer: blockerAnswerSchema, draft: artifactSchema, review: revisedProductReviewSchema })).default([]),
+  history: z.array(z.object({ sourceHash: z.string(), plan: blockerPlanSchema, answer: blockerAnswerSchema, draft: revisedArtifactSchema, review: revisedProductReviewSchema, workspaceReads: z.array(workspaceReadSchema).optional() })).default([]),
 });
 export type BlockerCycle = z.infer<typeof blockerCycleSchema>;
 /** 只有明确的仓库资料缺口由工程侧补齐，其余阻塞默认进入业务澄清。 */
@@ -72,7 +75,7 @@ export function validateBlockerPlan(plan: z.infer<typeof blockerPlanSchema>, sta
   if (covered.size !== ids.size) throw new Error('问题卡片遗漏业务阻塞');
 }
 /** 绑定当前产品、方案与问题；工程资料观察也参与版本，避免旧表单污染新稿。 */
-export function blockerHash(state: BlockerCycle): string { return developmentHash({ sourceHash: state.development.input.source.hash, planHash: state.development.planHash, readinessHash: state.development.readiness?.hash, business: state.business, engineering: state.engineering, round: state.round, plan: state.plan, references: state.references, referenceNote: state.referenceNote, history: state.history, productReworkDecision: state.productReworkDecision }); }
+export function blockerHash(state: BlockerCycle): string { return developmentHash({ sourceHash: state.development.input.source.hash, planHash: state.development.planHash, readinessHash: state.development.readiness?.hash, business: state.business, engineering: state.engineering, round: state.round, plan: state.plan, references: state.references, referenceNote: state.referenceNote, history: state.history, productReworkDecision: state.productReworkDecision, ...(state.workspaceReads ? { workspaceReads: state.workspaceReads } : {}) }); }
 /** 服务端恢复前和原生节点内都校验，未知问题/选项及必答缺失不消耗暂停点。 */
 export function validateBlockerAnswers(state: BlockerCycle, input: unknown) {
   const answer = blockerAnswerSchema.parse(input);

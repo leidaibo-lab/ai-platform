@@ -1,3 +1,4 @@
+/** 本地受治理 Skill 的统一装配入口；团队冻结方法见 team-methods.ts。 */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createSkill, validateSkillContent } from '@mastra/core/skills';

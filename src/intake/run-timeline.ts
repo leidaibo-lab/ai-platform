@@ -61,7 +61,8 @@ export function projectLiveOutputFrame(value: unknown): { output: LiveOutputEven
       if (data.type === 'text' && typeof data.text === 'string' && data.text.length <= 16384) output = { type: 'text', text: data.text, role: data.role, attempt };
       if (data.type === 'tool' && ['skill.load', 'skill.read', 'skill.search', 'handoff.locate', 'handoff.read', 'file.read', 'file.write', 'checks.run', 'task.delegate', 'platform.info', 'tool.invoke'].includes(String(data.action)) && (data.state === 'started' || data.state === 'completed' || data.state === 'failed')) {
         const object = typeof data.object === 'string' && data.object.length <= 500 ? data.object : undefined;
-        output = { type: 'tool', action: data.action as ToolAction, ...(object ? { object } : {}), state: data.state, role: data.role, attempt };
+        const callId = typeof data.callId === 'string' && /^[a-f0-9]{24}$/.test(data.callId) ? data.callId : undefined;
+        output = { type: 'tool', action: data.action as ToolAction, ...(object ? { object } : {}), ...(callId ? { callId } : {}), state: data.state, role: data.role, attempt };
       }
       if (!output) return undefined;
       const stepId = typeof record.stepId === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(record.stepId) ? record.stepId : undefined;

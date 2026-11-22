@@ -26,8 +26,11 @@ import { intakeModeSchema } from '../../intake/contracts.js';
 import { loadNacosSnapshot } from '../nacos-resources.js';
 import type { MastraCompositeStore } from '@mastra/core/storage';
 import { assertCompleteMethods } from '../team-methods.js';
+import { readAuthorizedProductSources } from '../stage-workspace.js';
+import { migrationReferenceSchema } from '../../intake/migration-contracts.js';
+import { resolveRunMigration } from '../../intake/run-migration.js';
 
-const inputSchema = z.object({ projectId: correlationSchema.shape.projectId.optional(), intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000), successorBaseline: successorBaselineSchema.optional() }).strict();
+const inputSchema = z.object({ migration: migrationReferenceSchema.optional(), projectId: correlationSchema.shape.projectId.optional(), intakeMode: intakeModeSchema.optional(), guidedIntake: z.boolean().optional(), iterationId: assetIdSchema.default('unassigned'), brief: z.string().trim().min(1).max(12000), successorBaseline: successorBaselineSchema.optional() }).strict();
 
 /** 采用 Workflow 嵌套和 foreach；人工批准保持为原生 suspend/resume。 */
 export function createProductDevelopmentWorkflow(agents: ReturnType<typeof createAgents>, config: PracticeConfig, generate: GeneratorV2 = generateV2, options: { legacyBlocked?: boolean; fixtureRequirementTracking?: boolean; fixtureArchitectureDocument?: boolean; storage?: MastraCompositeStore } = {}) {
@@ -39,6 +42,8 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       const project = projectTarget(config);
       const engineering = config.engineeringProject;
       const correlation = correlationSchema.parse(createProjectCorrelation(config, inputData, runId));
+      const migrated = inputData.migration ? await resolveRunMigration(mastra!.getWorkflow('productDevelopmentWorkflow'), config, inputData.migration) : undefined;
+      if (migrated && (migrated.lineage.sourceRunId === runId || migrated.product.correlation?.projectId !== correlation.projectId || inputData.brief !== migrated.product.brief || inputData.successorBaseline)) throw new Error('迁移目标与来源项目、需求或版本不一致');
       const baseline = inputData.successorBaseline;
       if (baseline && (engineering || baseline.projectId)) {
         const storage = options.storage ?? mastra?.getStorage();
@@ -57,7 +62,7 @@ export function createProductDevelopmentWorkflow(agents: ReturnType<typeof creat
       if (config.mode === 'live' && config.nacosResources && !config.nacosResources.methods) throw new Error('新 live Run 必须配置完整 Nacos 团队方法目录');
       const nacosResources = config.nacosResources ? await loadNacosSnapshot(config.nacosResources) : undefined;
       if (nacosResources?.methods) assertCompleteMethods(nacosResources.methods);
-      return { ...(!config.legacyDevelopmentWorkflow && (config.mode === 'live' || options.fixtureArchitectureDocument) ? { architectureDocumentFormat } as const : {}), ...(config.mode === 'live' || options.fixtureRequirementTracking ? { requirementTracking: true as const, productHandoffFormat: 'paired-markdown.v1' as const } : {}), ...(!config.legacyProductWorkflow ? { productFlow: config.nestedProductWorkflow ? 'three-stage' as const : config.nativeThreeStageProductWorkflow ? 'native-three-stage' as const : 'four-step' as const } : {}), nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, successorBaseline: inputData.successorBaseline, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' as const };
+      return { ...(migrated ? { migration: migrated.lineage } : {}), productSources: migrated?.files ?? (!config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(projectRepositoryRoot(config)) : {}), ...(!config.legacyDevelopmentWorkflow && (config.mode === 'live' || options.fixtureArchitectureDocument) ? { architectureDocumentFormat } as const : {}), ...(config.mode === 'live' || options.fixtureRequirementTracking ? { requirementTracking: true as const, productHandoffFormat: 'paired-markdown.v1' as const } : {}), ...(!config.legacyProductWorkflow ? { productFlow: config.nestedProductWorkflow ? 'three-stage' as const : config.nativeThreeStageProductWorkflow ? 'native-three-stage' as const : 'four-step' as const } : {}), nacosResources, intake: { intakeMode, enabled: intakeMode === 'clarify', ready: intakeMode === 'autofill', round: 0, history: [] }, intakeMode, brief: inputData.brief, successorBaseline: inputData.successorBaseline, correlation, mode: config.mode, contextBudgetLevel: 0, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' as const };
     },
   });
   const developmentTeam = createDevelopmentTeamWorkflow(agents, config, generate, options);

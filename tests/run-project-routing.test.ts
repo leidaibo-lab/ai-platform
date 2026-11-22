@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { Mastra } from '@mastra/core';
 import { Hono, type Handler } from 'hono';
 import { createStudioApplicationOptions } from '../src/mastra/app.js';
@@ -42,8 +42,10 @@ test('同实例 Node/Python 并发、Store 重启恢复、原生错绑拒绝和�
   assert.equal(login.status, 200, await login.clone().text());
   const session = login.headers.get('set-cookie')?.split(';', 1)[0];
   assert.ok(session);
+  /** 按需记录测试阶段，便于区分耗时请求与无进展。 */
+  function trace(message: string) { if (process.env.ROUTING_TEST_TRACE) appendFileSync(process.env.ROUTING_TEST_TRACE, `${new Date().toISOString()} ${message}\n`); }
   /** POST 保留实际响应以便定位流程失败。 */
-  async function post(path: string, body: unknown, expected = 200) { const response = await router.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: session!, Origin: 'http://127.0.0.1:4112' }, body: JSON.stringify(body) }); assert.equal(response.status, expected, await response.clone().text()); return response.json(); }
+  async function post(path: string, body: unknown, expected = 200) { trace(`开始 ${path}`); const response = await router.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: session!, Origin: 'http://127.0.0.1:4112' }, body: JSON.stringify(body) }); assert.equal(response.status, expected, await response.clone().text()); trace(`完成 ${path}`); return response.json(); }
   const actor = { reviewer: 'fixture', comment: '核对当前项目固定版本' };
   const ids = projects.map(() => randomUUID());
   /** 同时推进两个原生 Run 的人工关口。 */

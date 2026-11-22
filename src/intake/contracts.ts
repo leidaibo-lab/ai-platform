@@ -34,7 +34,8 @@ export const generatedPlanSchema = planSchema.safeExtend({ maturity: maturitySch
 });
 export const answerSchema = z.object({ questionId: text, selected: z.array(text).max(8), custom: z.string().trim().max(4000) });
 export const responseSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), action: z.enum(['refine', 'finalize']), reviewer: z.string().trim().min(1).max(100), answers: z.array(answerSchema).max(8), supplement: z.string().trim().max(4000) });
-export const intakeSchema = z.object({ intakeMode: intakeModeSchema.optional(), enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema })) });
+const workspaceReadSchema = z.object({ path: z.string().min(1), sourceHash: z.string().regex(/^[a-f0-9]{64}$/) });
+export const intakeSchema = z.object({ intakeMode: intakeModeSchema.optional(), enabled: z.boolean(), ready: z.boolean(), round: z.number().int().min(0), plan: planSchema.optional(), hash: z.string().optional(), workspaceReads: z.array(workspaceReadSchema).optional(), history: z.array(z.object({ plan: planSchema, response: responseSchema, workspaceReads: z.array(workspaceReadSchema).optional() })) });
 /** 恢复输入同时保存服务端核对过的暂停版本，供模型失败后使用。 */
 export const alignmentResumeSchema = z.object({ intake: intakeSchema, response: responseSchema });
 export type Intake = z.infer<typeof intakeSchema>;
@@ -111,7 +112,7 @@ export function classifyWritingPrerequisite(plan: z.infer<typeof generatedPlanSc
 }
 /** 散列绑定原始需求、轮次、建议与历史，避免旧卡片答案用于新方案。 */
 export function intakeHash(brief: string, intake: Intake): string {
-  return createHash('sha256').update(JSON.stringify({ brief, round: intake.round, plan: intake.plan, history: intake.history })).digest('hex');
+  return createHash('sha256').update(JSON.stringify({ brief, round: intake.round, plan: intake.plan, history: intake.history, ...(intake.workspaceReads ? { workspaceReads: intake.workspaceReads } : {}) })).digest('hex');
 }
 /** 在恢复前和节点内双重校验，所有必答项必须有显式答案；推荐不算确认。 */
 export function validateAnswers(intake: Intake, value: unknown) {
@@ -132,5 +133,5 @@ export function validateAnswers(intake: Intake, value: unknown) {
 /** 校验并记录本轮人工决定，补充内容交由同一方向步骤重新评估。 */
 export function applyIntakeResponse(intake: Intake, value: unknown): Intake {
   const response = validateAnswers(intake, value);
-  return { ...intake, ready: response.action === 'finalize' && canFinalizePlan(intake.plan!) && !response.answers.length && !response.supplement, history: [...intake.history, { plan: intake.plan!, response }] };
+  return { ...intake, ready: response.action === 'finalize' && canFinalizePlan(intake.plan!) && !response.answers.length && !response.supplement, history: [...intake.history, { plan: intake.plan!, response, ...(intake.workspaceReads ? { workspaceReads: intake.workspaceReads } : {}) }] };
 }

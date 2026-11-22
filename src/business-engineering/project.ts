@@ -12,6 +12,7 @@ import { developmentHash, projectSchema } from '../development/contracts.js';
 import type { PracticeConfig } from '../mastra/config.js';
 import { adapterImplementationIdentity, parseProjectManifest } from './adapters.js';
 import { assertDeliveryContractMatchesAdapter, defaultContractForAdapter, readProjectDeliveryContract } from './delivery-contract.js';
+import { isAuthorizedProductRestart } from '../mastra/workflows/product-rework.js';
 
 const hrmOrigin = 'https://github.com/leidaibo-lab/hrm.git';
 const revisionSchema = z.string().regex(/^[a-f0-9]{40}$/);
@@ -22,7 +23,7 @@ export const engineeringProjectSchema = remoteSyncTargetSchema.extend({ revision
 export type EngineeringProject = z.infer<typeof engineeringProjectSchema>;
 
 const projectScope = new AsyncLocalStorage<PracticeConfig>();
-const rootProjectRun = new AsyncLocalStorage<string>();
+const rootProjectRun = new AsyncLocalStorage<{ workflowId: string; runId: string }>();
 
 /** 校验服务端注册表；附加同步目标不能成为可执行项目。 */
 export function registeredProjects(config: PracticeConfig): EngineeringProject[] {
@@ -77,7 +78,7 @@ export function scopedProjectConfig(config: PracticeConfig): PracticeConfig {
 export function projectCorrelation(value: any): AssetCorrelation | undefined {
   if (Array.isArray(value)) return projectCorrelation(value[0]);
   if (!value || typeof value !== 'object') return undefined;
-  return value.executionCorrelation ?? value.correlation ?? projectCorrelation(value.state) ?? projectCorrelation(value.development) ?? projectCorrelation(value.input) ?? projectCorrelation(value.approvedProduct);
+  return value.correlation ?? projectCorrelation(value.state) ?? projectCorrelation(value.development) ?? projectCorrelation(value.input) ?? projectCorrelation(value.approvedProduct);
 }
 
 /** 已保存初始化是项目恢复的权威来源；新输入不能覆盖原绑定。 */
@@ -100,18 +101,20 @@ export function withProjectConfig<T>(config: PracticeConfig, operation: () => T)
 export function createProjectCorrelation(config: PracticeConfig, input: { projectId?: string; iterationId: string }, runId: string): AssetCorrelation {
   const selected = selectProjectConfig(config, input.projectId);
   const engineering = selected.engineeringProject;
-  const profile = engineering ? loadEngineeringProject(engineering).profile : undefined;
-  const candidate = engineering ? loadEngineeringProject(engineering).candidate : undefined;
+  const loaded = engineering ? loadEngineeringProject(engineering) : undefined;
+  const profile = loaded?.profile;
+  const candidate = loaded?.candidate;
   const contract = candidate ? readProjectDeliveryContract(selected, undefined, defaultContractForAdapter(candidate)) : undefined;
   if (contract && candidate) assertDeliveryContractMatchesAdapter(contract.contract, candidate);
   return { projectId: engineering?.id ?? 'hrm', ...(engineering ? { engineeringBinding: engineeringBinding(engineering), engineeringRevision: engineering.revision, adapterId: profile!.adapterId, adapterProfileVersion: 'adapter-profile.v2' as const, adapterProfileHash: profile!.hash, deliveryContractVersion: 'project-delivery-contract.v1' as const, deliveryContractHash: contract!.hash } : {}), iterationId: input.iterationId, runId, workflowId: 'productDevelopmentWorkflow' };
 }
 
 /** 在原生图所有步骤外层装配 Run 作用域，覆盖嵌套、foreach、Studio start/resume/timeTravel。 */
-export function bindProjectWorkflow<T extends { steps: Record<string, any>; stepGraph: any[]; createRun: (...args: any[]) => Promise<any>; mastra?: any }>(workflow: T, config: PracticeConfig, identity: { workflowId: string; initializeId: string; alwaysGuard?: boolean } = { workflowId: 'product-development', initializeId: 'initialize-product-development' }): T {
-  const { workflowId, initializeId } = identity;
-  if (!config.engineeringProjects && !identity.alwaysGuard) return workflow;
-  if (config.engineeringProjects || identity.alwaysGuard) {
+export function bindProjectWorkflow<T extends { steps: Record<string, any>; stepGraph: any[]; createRun: (...args: any[]) => Promise<any>; mastra?: any }>(workflow: T, config: PracticeConfig, options: { workflowId?: string; initializeId?: string; validateSource?: (value: unknown, mastra: any) => Promise<void> } = {}): T {
+  if (!config.engineeringProjects && !options.workflowId) return workflow;
+  const workflowId = options.workflowId ?? 'product-development';
+  const initializeId = options.initializeId ?? 'initialize-product-development';
+  {
     const createRun = workflow.createRun;
     const guarded = new WeakSet<object>();
     const starting = new Set<string>();
@@ -144,6 +147,18 @@ export function bindProjectWorkflow<T extends { steps: Record<string, any>; step
               if (request?.context?.[initializeId] || request?.context?.input || request?.nestedStepsContext?.[initializeId]) throw new Error('原生恢复不能覆盖 Run 初始化上下文');
               if (supplied && developmentHash(saved) !== developmentHash(supplied)) throw new Error('原生恢复输入与 Run 项目绑定不一致');
               if (request?.inputData?.projectId && request.inputData.projectId !== saved.projectId) throw new Error('不能更换已冻结的 Run 项目');
+              if (options.workflowId) {
+                if (request?.context || request?.nestedStepsContext) throw new Error('独立团队恢复不能覆盖保存的执行上下文');
+                const initialized = snapshot?.context?.[initializeId]?.output;
+                if (developmentHash(initialized?.teamRun?.input) !== developmentHash(original)) throw new Error('独立团队初始化输入已变化');
+                await options.validateSource?.(initialized, workflow.mastra);
+                if (method === '_timeTravel' && request?.inputData) {
+                  const current = await (workflow as any).getWorkflowRunById(run.runId);
+                  const path = typeof request.step === 'string' ? request.step : request.step?.map((item: any) => typeof item === 'string' ? item : item.id).join('.');
+                  const entry = current?.steps?.[path];
+                  if ((!entry || Array.isArray(entry) || developmentHash(entry.payload) !== developmentHash(request.inputData)) && !isAuthorizedProductRestart(run.runId, path, request.inputData)) throw new Error('独立团队只能从保存的检查点恢复');
+                }
+              }
             } else if (method === '_start') {
               selectProjectConfig(config, request?.inputData?.projectId);
               if (original?.projectId && developmentHash(original) !== developmentHash(request.inputData)) throw new Error('已有 Run 初始化输入不能替换');
@@ -170,16 +185,16 @@ export function bindProjectWorkflow<T extends { steps: Record<string, any>; step
         const initCorrelation = projectCorrelation(input);
         const store = await context.mastra?.getStorage()?.getStore('workflows');
         const inheritedRoot = rootProjectRun.getStore();
-        let native = inheritedRoot ? { workflowId: workflowId, runId: inheritedRoot } : context.parentWorkflow ?? { workflowId: context.workflowId, runId: context.runId };
+        let native = inheritedRoot ?? context.parentWorkflow ?? { workflowId: context.workflowId, runId: context.runId };
         let snapshot;
-        if (config.engineeringProjects || identity.alwaysGuard) {
+        if (config.engineeringProjects || options.workflowId) {
           for (let depth = 0; depth < 16; depth++) {
             snapshot = await store?.loadWorkflowSnapshot({ workflowName: native.workflowId, runId: native.runId });
             if (native.workflowId === workflowId) break;
             if (!snapshot?.parentWorkflow) {
               const root = await store?.loadWorkflowSnapshot({ workflowName: workflowId, runId: context.runId });
               if (!root) throw new Error('原生步骤缺少根 Run 来源');
-              native = { workflowId: workflowId, runId: context.runId };
+              native = { workflowId, runId: context.runId };
               snapshot = root;
               break;
             }
@@ -200,7 +215,7 @@ export function bindProjectWorkflow<T extends { steps: Record<string, any>; step
         const selected = selectProjectConfig(config, frozenId ?? correlation?.projectId);
         if (correlation) assertProjectCorrelation(selected, correlation);
         else if (config.engineeringProjects && step.id !== initializeId && !step.steps) throw new Error('原生步骤缺少 Run 工程绑定');
-        return rootProjectRun.run(native.runId, () => withProjectConfig(selected, () => execute.call(step, context)));
+        return rootProjectRun.run(native, () => withProjectConfig(selected, () => execute.call(step, context)));
       };
     }
     for (const child of Object.values(step.steps ?? {})) visit(child);
@@ -252,15 +267,17 @@ export function assertProjectCorrelation(config: PracticeConfig, correlation: As
   if (!revision || correlation?.projectId !== project.id || correlation.engineeringRevision !== revision || correlation.engineeringBinding !== engineeringBinding({ ...project, revision })) {
     throw new Error('Run 的业务工程绑定已变化');
   }
+  const loaded = correlation.adapterId || correlation.adapterProfileHash || correlation.deliveryContractVersion || correlation.deliveryContractHash
+    ? loadEngineeringProject({ ...project, revision }) : undefined;
   if (correlation.adapterId || correlation.adapterProfileHash) {
-    const profile = loadEngineeringProject({ ...project, revision }).profile;
+    const profile = loaded!.profile;
     const hash = correlation.adapterProfileVersion === 'adapter-profile.v2' ? profile.hash : profile.legacyHash;
     if (correlation.adapterId !== profile.adapterId || correlation.adapterProfileHash !== hash) throw new Error('Run 的业务工程 Adapter 绑定已变化');
   }
   if (correlation.deliveryContractVersion || correlation.deliveryContractHash) {
     const contract = readProjectDeliveryContract(config, correlation.deliveryContractHash);
     if (correlation.deliveryContractVersion !== 'project-delivery-contract.v1' || contract.hash !== correlation.deliveryContractHash) throw new Error('Run 的项目交付契约绑定已变化');
-    assertDeliveryContractMatchesAdapter(contract.contract, loadEngineeringProject({ ...project, revision: correlation.engineeringRevision ?? project.revision }).candidate);
+    assertDeliveryContractMatchesAdapter(contract.contract, loaded!.candidate);
   }
 }
 

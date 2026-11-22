@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { projectLiveOutputChunk, publishLiveOutput } from '../src/intake/live-output.js';
 import { generateProductContent } from '../src/intake/product-generation.js';
 import { projectLiveOutputEvent, projectLiveOutputFrame, projectProductStreamEvent } from '../src/intake/run-timeline.js';
+import { appendProductStream, type ProductStreamView } from '../web/src/components/product-stream.js';
 
 test('模型文本和工具事件经原生 Workflow watch 投影，隐藏参数不进入事件', async () => {
   const events: unknown[] = [];
@@ -61,4 +62,20 @@ test('工具实时输出仅提取白名单对象字段，不携带搜索词、�
   assert.deepEqual(project('handoff_read', { id: 'material-1-abcdef123456', offset: 0, length: 100 }), { type: 'tool', action: 'handoff.read', state: 'started', role: 'writing', attempt: 1 });
   assert.deepEqual(project('writeFile', { path: 'src/private.ts', content: 'private source' }), { type: 'tool', action: 'file.write', object: 'private.ts', state: 'started', role: 'writing', attempt: 1 });
   assert.doesNotMatch(JSON.stringify([project('skill_search', { query: 'private search term' }), project('writeFile', { path: 'src/private.ts', content: 'private source' })]), /private search term|private source/);
+});
+
+test('同一工具调用合并生命周期，保留名称相同的独立调用', () => {
+  const chunk = (type: string, toolCallId: string) => ({ type, payload: { toolCallId, toolName: 'skill', args: { name: 'product-requirements-handoff', secret: 'private' } } });
+  const first = projectLiveOutputChunk(chunk('tool-call', 'call-private-1'), 'analysis', 1)!;
+  const finish = projectLiveOutputChunk(chunk('tool-result', 'call-private-1'), 'analysis', 1)!;
+  const second = projectLiveOutputChunk(chunk('tool-call', 'call-private-2'), 'analysis', 1)!;
+  let view: ProductStreamView | undefined;
+  for (const event of [first, first, finish, finish, first, second]) {
+    const projected = projectLiveOutputEvent({ type: 'live-output.v1', data: event });
+    assert.ok(projected);
+    view = appendProductStream(view, projected);
+  }
+  assert.equal(view!.entries.length, 2);
+  assert.deepEqual(view!.entries.map(entry => entry.type === 'tool' && entry.state), ['completed', 'started']);
+  assert.doesNotMatch(JSON.stringify(view), /call-private|secret/);
 });

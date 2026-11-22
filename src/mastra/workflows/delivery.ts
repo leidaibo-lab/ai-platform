@@ -7,6 +7,7 @@ import { maxProductReworks, productQualityReviewSchema, productReworkSchema, pro
 import { correlationSchema, formalSpecificationPathPattern, projectIdSchema } from '../../delivery/asset-identity.js';
 import { maxContextBudgetLevel } from '../../delivery/context-budget.js';
 import { nacosSnapshotSchema } from '../nacos-resources.js';
+import { migrationLineageSchema } from '../../intake/migration-contracts.js';
 
 /** 后继 Run 只继承经校验的规格正文与来源，不继承审批、预算、测试或发布事实。 */
 export const successorBaselineSchema = z.object({
@@ -31,10 +32,13 @@ export const reviewSchema = z.object({
 export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
+  migration: migrationLineageSchema.optional(),
   architectureDocumentFormat: z.literal(architectureDocumentFormat).optional(),
   productHandoffFormat: z.literal('paired-markdown.v1').optional(),
   requirementTracking: z.literal(true).optional(),
   nacosResources: nacosSnapshotSchema.optional(),
+  /** 新 Run 初始化时冻结授权资料，后续阶段及恢复只读该 Store 快照。 */
+  productSources: z.record(z.string(), z.string().max(262144)).optional(),
   intake: intakeSchema.optional(),
   productFlow: z.enum(['three-stage', 'native-three-stage', 'four-step']).optional(),
   // 顶层保留入口策略，便于恢复和页面投影不依赖当前暂停点。

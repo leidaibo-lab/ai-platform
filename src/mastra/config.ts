@@ -1,3 +1,4 @@
+import { applyTeamModelSettings } from './team-settings.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,9 +17,11 @@ export interface PracticeConfig {
   port: number;
   modelId: `openai/${string}`;
   /** 角色组覆盖；未提供或显式留空时回退默认模型，由装配层只读消费。 */
-  roleModels?: Partial<Record<'product' | 'development', `openai/${string}`>>;
+  roleModels?: Partial<Record<'product' | 'development' | 'testing', `openai/${string}`>>;
   /** 在后端桌面会话显示独立的浏览器 QA 窗口。 */
   browserQaHeaded?: boolean;
+  /** 显式启用仅写入本地 Store 的最小化 Trace。 */
+  localTrace?: boolean;
   /** 使用收敛前的研发执行图恢复历史 Run。 */
   legacyDevelopmentWorkflow?: true;
   /** 新研发 Run 的技术接续预算。 */
@@ -63,6 +66,7 @@ export function readConfig(): PracticeConfig {
   if (baseUrl) z.url().parse(baseUrl);
   const nacosResources = readNacosConfig(process.env);
   const browserQaHeaded = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_BROWSER_QA_HEADED) === 'true';
+  const localTrace = readLocalTraceConfig(process.env);
   if (process.env.MASTRA_LEGACY_DEPLOYMENT === 'true') throw new Error('旧部署流程已退役，请移除 MASTRA_LEGACY_DEPLOYMENT');
   const legacyDevelopmentWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_LEGACY_DEVELOPMENT_WORKFLOW) === 'true';
   const developmentContinuationLimit = z.coerce.number().int().min(0).max(72).default(4).parse(process.env.MASTRA_DEVELOPMENT_CONTINUATION_LIMIT);
@@ -72,7 +76,12 @@ export function readConfig(): PracticeConfig {
   const nestedProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NESTED_PRODUCT_WORKFLOW) === 'true';
   const nativeThreeStageProductWorkflow = z.enum(['true', 'false']).default('false').parse(process.env.MASTRA_NATIVE_THREE_STAGE_PRODUCT_WORKFLOW) === 'true';
   if ([legacyProductWorkflow, nestedProductWorkflow, nativeThreeStageProductWorkflow].filter(Boolean).length > 1) throw new Error('只能选择一种历史产品流程图');
-  return { rootDir: root, mode, port, browserQaHeaded, developmentContinuationLimit, platformRepairToken, ...(legacyDevelopmentWorkflow ? { legacyDevelopmentWorkflow: true } : {}), ...(nativeThreeStageProductWorkflow ? { nativeThreeStageProductWorkflow: true } : {}), ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` };
+  return applyTeamModelSettings({ rootDir: root, mode, port, browserQaHeaded, localTrace, developmentContinuationLimit, platformRepairToken, ...(legacyDevelopmentWorkflow ? { legacyDevelopmentWorkflow: true } : {}), ...(nativeThreeStageProductWorkflow ? { nativeThreeStageProductWorkflow: true } : {}), ...(nestedProductWorkflow ? { nestedProductWorkflow: true } : {}), ...(legacyProductWorkflow ? { legacyProductWorkflow: true } : {}), modelId, roleModels, apiKey, baseUrl, nacosResources, databaseUrl: `file:${resolve(dataDir, 'mastra.db')}` });
+}
+
+/** 本地 Trace 默认开启；非法配置失败关闭。 */
+export function readLocalTraceConfig(env: Record<string, string | undefined>): boolean {
+  return z.enum(['true', 'false']).default('true').parse(env.MASTRA_LOCAL_TRACE) === 'true';
 }
 
 /** 默认启用注册中心；只有明确关闭才允许本地兼容路径。 */
@@ -120,6 +129,6 @@ export function readModelConfig(env: Record<string, string | undefined>): Pick<P
 }
 
 /** 统一解析角色实际模型；旧调用者未提供覆盖时保持默认模型语义。 */
-export function resolveModelId(config: Pick<PracticeConfig, 'modelId' | 'roleModels'>, role?: 'product' | 'development'): PracticeConfig['modelId'] {
+export function resolveModelId(config: Pick<PracticeConfig, 'modelId' | 'roleModels'>, role?: 'product' | 'development' | 'testing'): PracticeConfig['modelId'] {
   return (role ? config.roleModels?.[role] : undefined) ?? config.modelId;
 }

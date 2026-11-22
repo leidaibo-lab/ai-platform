@@ -79,6 +79,7 @@ export async function notifyPlatformRepair(
   workflow: Pick<IntakeWorkflow, 'getWorkflowRunById' | 'createRun' | 'mastra'>,
   runId: string, input: z.infer<typeof platformRepairEventSchema>, secret: string,
   verify: (state: StateV2) => Promise<void>,
+  workflowName = 'product-development',
 ) {
   /** 对当前 Run 的快照回读同一故障或重复事件。 */
   function receipt(snapshot: Snapshot) {
@@ -99,24 +100,24 @@ export async function notifyPlatformRepair(
     const run = await workflow.createRun({ runId });
     const store = await workflow.mastra?.getStorage()?.getStore('workflows');
     if (!store?.supportsConcurrentUpdates()) throw new Error('平台恢复要求原生 Store 原子认领');
-    const before = await store.loadWorkflowSnapshot({ workflowName: 'product-development', runId });
+    const before = await store.loadWorkflowSnapshot({ workflowName, runId });
     const current = await workflow.getWorkflowRunById(runId);
     const currentPause = current && platformWait(current);
     if (!before || !currentPause || currentPause.path !== pause.path || currentPause.faultId !== input.faultId || currentPause.checkpoint !== input.checkpoint) return current && receipt(current) ? 'duplicate' : current?.status === 'running' ? 'processing' : 'stale';
-    const claimed = await store.updateWorkflowState({ workflowName: 'product-development', runId, opts: { status: 'running', expectedStatus: 'suspended' } });
+    const claimed = await store.updateWorkflowState({ workflowName, runId, opts: { status: 'running', expectedStatus: 'suspended' } });
     if (!claimed) return 'processing';
     // CAS 只比较状态，必须再比较返回的原上下文；旧通知不能认领后继的同名团队暂停。
     const { status: _beforeStatus, ...beforeIdentity } = before;
     const { status: _claimedStatus, ...claimedIdentity } = claimed;
     if (developmentHash(claimedIdentity) !== developmentHash(beforeIdentity)) {
-      await store.updateWorkflowState({ workflowName: 'product-development', runId, opts: { status: 'suspended', expectedStatus: 'running' } });
+      await store.updateWorkflowState({ workflowName, runId, opts: { status: 'suspended', expectedStatus: 'running' } });
       return 'stale';
     }
     let started = false;
     try {
       await run.resumeClaimed({ claimedSnapshot: claimed, step: currentPause.path.split('.'), resumeData: { ...input, proof: platformRepairProof(secret, input) }, onExecutionStarted: () => { started = true; } });
     } finally {
-      if (!started) await store.updateWorkflowState({ workflowName: 'product-development', runId, opts: { status: 'suspended', expectedStatus: 'running' } });
+      if (!started) await store.updateWorkflowState({ workflowName, runId, opts: { status: 'suspended', expectedStatus: 'running' } });
     }
   } catch {
     // 多实例由 Mastra 获取原生执行所有权。失败和竞争都按实际状态回读。
@@ -131,10 +132,10 @@ export async function notifyPlatformRepair(
 }
 
 /** 平台机器接口与工作台人工决定入口独立授权。 */
-export function createPlatformRecoveryRoutes(workflow: IntakeWorkflow, config: PracticeConfig) {
+export function createPlatformRecoveryRoutes(workflow: IntakeWorkflow, config: PracticeConfig, options: { workflowName?: string; path?: string } = {}) {
   const secret = config.platformRepairToken;
   if (!secret) return [];
-  const path = '/platform-api/runs/:runId/dependency-repair';
+  const path = options.path ?? '/platform-api/runs/:runId/dependency-repair';
   /** 平台通知使用单独凭据且不回传候选和原生恢复证明。 */
   function authorize(c: ContextWithMastra) {
     c.header('Cache-Control', 'no-store');
@@ -171,7 +172,7 @@ export function createPlatformRecoveryRoutes(workflow: IntakeWorkflow, config: P
         const message = platformRepairEventSchema.safeParse(await c.req.json().catch(() => undefined));
         if (!runId.success || !message.success) return c.json({ error: '平台修复事件格式无效' }, 400);
         try {
-          const status = await notifyPlatformRepair(workflow, runId.data, message.data, secret, validateCandidate);
+          const status = await notifyPlatformRepair(workflow, runId.data, message.data, secret, validateCandidate, options.workflowName);
           return c.json({ status }, status === 'processing' ? 202 : status === 'stale' ? 409 : status === 'missing' ? 404 : 200);
         } catch { return c.json({ error: '候选版本或运行环境无法核验' }, 409); }
       },

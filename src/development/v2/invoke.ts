@@ -10,7 +10,7 @@ import { diagnoseOutput } from './output-diagnostic.js';
 import type { PracticeConfig } from '../../mastra/config.js';
 import type { ExecutionPort } from './execution-scope.js';
 import { developmentHash } from '../contracts.js';
-import { classifyDevelopmentError } from '../errors.js';
+import { classifyDevelopmentError, DevelopmentToolError } from '../errors.js';
 import { recoveryHashV2, type StateV2, type RoleV2 } from './contracts.js';
 import { generateV2, type GeneratorV2 } from './agents.js';
 import type { DevelopmentMethods } from './methods.js';
@@ -66,6 +66,7 @@ export async function invokeV2(config: PracticeConfig, execution: ExecutionPort,
       const diagnostic = kind === 'invalid-output' ? diagnoseOutput(error) : undefined;
       const fault = { sequence: state.faults.length + 1, ...(state.technicalRecovery ? { id: randomUUID(), origin } : {}), phase: state.phase, role, taskId, kind, ...(budget ? { budget } : {}), attempt, ...(diagnostic ? { diagnostic } : {}), modelCall, checkpointHash: state.checkpointHash, partialSourceHash, restored: true as const };
       state = { ...state, faults: [...state.faults, fault] };
+      if (error instanceof DevelopmentToolError && error.category === 'authorization') return { state: stopAutonomy(state, 'authorization-required'), entry: null };
       if (state.technicalRecovery) {
         const action = technicalAction(fault);
         if (!action) return { state: blockTechnicalRecovery(state, fault, 'diagnosis-required'), entry: null };

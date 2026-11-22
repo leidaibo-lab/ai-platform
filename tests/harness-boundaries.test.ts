@@ -146,9 +146,10 @@ test('登记的库存项目从正常工作台入口进入研发和测试，并�
     for (const route of app.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
     const runId = randomUUID();
     const actor = { reviewer: 'test', comment: '验证库存项目授权' };
+    let cookie = '';
     /** 使用正常工作台请求推进原生 Run。 */
     function post(body: unknown, start = false) {
-      return router.request(`/intake-api/runs${start ? '' : `/${runId}/respond`}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return router.request(`/intake-api/runs${start ? '' : `/${runId}/respond`}`, { method: 'POST', headers: { 'Content-Type': 'application/json', origin: 'http://127.0.0.1:4112', cookie }, body: JSON.stringify(body) });
     }
     /** 业务成功时读取当前关口，失败保留真实响应。 */
     async function accepted(body: unknown, start = false) {
@@ -157,6 +158,8 @@ test('登记的库存项目从正常工作台入口进入研发和测试，并�
       return response.json();
     }
     try {
+      const login = await router.request('/intake-api/account', { method: 'POST', headers: { 'Content-Type': 'application/json', origin: 'http://127.0.0.1:4112' }, body: JSON.stringify({ username: actor.reviewer, password: 'fixture-local-account-password' }) });
+      assert.equal(login.status, 200); cookie = login.headers.get('set-cookie')!.split(';')[0];
       const catalog = await (await router.request('/intake-api/project')).json();
       assert.equal(catalog.id, 'warehouse');
       assert.equal(catalog.revision, revision);

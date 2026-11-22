@@ -7,7 +7,7 @@ export { acceptanceRequirementsInstruction };
 
 export const productDocumentsInstruction = `${acceptanceRequirementsInstruction}
 输出同一待审 Markdown 的两份正文，只使用两个一级标题，依次为“# 需求文档”和“# 产品规格”。需求文档写目标、范围和业务规则，按能力保留 Requirement / Scenario（WHEN、THEN）等可观察场景。所有 REQ 条目只在需求文档中声明，放在对应业务规则附近。输入已含可用的 Requirement / Scenario 时，保留其已确认规则与场景，补齐规则已有依据的可观察边界。归档模板中的 TBD Purpose 应改为明确业务目标。
-产品规格按可独立复核的业务结果拆分任务，写出作用对象、关键条件和可观察的交付结果，并引用需求 ID。技能使用记录放入审查意见或执行记录。每个任务独立占一行，格式为“- TASK-大写英文或数字标识: 任务及预期交付结果 | 需求: REQ-标识, REQ-标识”。任务 ID 唯一，每项需求至少被一个任务覆盖。产品任务不给出实现文件或技术选型，不复制需求正文。输出不要用代码围栏包裹。`;
+产品规格按可独立复核的业务结果拆分任务，写出作用对象、关键条件和可观察的交付结果，并引用需求 ID。正式正文禁止包含材料标识、Skill 名称、工具名、读取过程和方法使用记录；这些内容属于独立执行记录。每个任务独立占一行，格式为“- TASK-大写英文或数字标识: 任务及预期交付结果 | 需求: REQ-标识, REQ-标识”。任务 ID 唯一，每项需求至少被一个任务覆盖。产品任务不给出实现文件或技术选型，不复制需求正文。输出不要用代码围栏包裹。`;
 
 /** 使用未经缩写的迭代标识归集文档，避免不同需求路径因分支名归一化而重合。 */
 export function productPaths(iterationId: string) {
@@ -50,7 +50,7 @@ export function readProductDocuments(content: string) {
     if (index <= specificationHeading.line) continue;
     if (/^\s*[-*+]\s+(?:\*\*)?REQ-/i.test(line)) throw new Error('需求条目必须声明在需求文档中');
     if (!/^\s*[-*+]\s+(?:\*\*)?TASK-/i.test(line)) continue;
-    const task = /^- (TASK-[A-Z0-9]+(?:-[A-Z0-9]+)*):\s*(.+?)\s*\|\s*需求[:：]\s*(.+)$/.exec(line.trim());
+    const task = /^- (TASK-[A-Z0-9]+(?:-[A-Z0-9]+)*):\s*(.+?)\s*[|；;]\s*需求[:：]\s*(.+)$/.exec(line.trim());
     if (!task || !task[2]!.trim() || taskIds.has(task[1]!)) throw new Error('产品任务格式无效或 ID 重复');
     taskIds.add(task[1]!);
     const refs = task[3]!.split(/[,，]/).map(/** 去除模型输出中的分隔空白。 */ref => ref.trim());
@@ -63,12 +63,23 @@ export function readProductDocuments(content: string) {
 
 /** 拒绝误入正式双文档的内部制作痕迹；业务发布依赖仍可在正式规则中表达。 */
 export function validateProductDraftPresentation(content: string) {
-  const prohibited = [
-    /\bmaterial-\d+-[a-f0-9]+\b/i,
-    /(?:已读取|未读取).{0,24}(?:材料|正文|offset|分片)/,
-    /\bskill_read\b|\bproduct-pm-[a-z0-9-]+\b/i,
-    /^(?:#{1,6}\s*)?(?:执行记录|需求覆盖检查|制作过程|方法使用记录)\s*$/m,
-    /(?:本稿依据|本稿基于).{0,36}(?:已读取|材料|Skill|工具)/,
+  const prohibited: Array<[RegExp, string]> = [
+    [/\bmaterial-\d+-[a-f0-9]+\b/i, '内部材料标识'],
+    [/(?:已读取|未读取).{0,24}(?:材料|正文|offset|分片)/, '材料读取过程'],
+    [/\bskill_read\b|\bproduct-pm-[a-z0-9-]+\b/i, '内部方法或工具名称'],
+    [/^(?:#{1,6}\s*)?(?:执行记录|需求覆盖检查|制作过程|方法使用记录)\s*$/, '内部执行记录'],
+    [/(?:本稿依据|本稿基于).{0,36}(?:已读取|材料|Skill|工具)/, '内部制作依据'],
   ];
-  if (prohibited.some(pattern => pattern.test(content))) throw new Error('待审产品稿包含内部制作过程内容，须在写作阶段移出正式双文档');
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
+    const match = prohibited.find(([pattern]) => pattern.test(line));
+    if (match) throw new ProductDraftPresentationError(match[1], index + 1);
+  }
+}
+
+/** 仅保存固定类别和行号，不将正文或材料内容写入异常。 */
+export class ProductDraftPresentationError extends Error {
+  constructor(category: string, line: number) {
+    super(`待审产品稿包含内部制作过程内容：第${line}行存在${category}`);
+    this.name = 'ProductDraftPresentationError';
+  }
 }

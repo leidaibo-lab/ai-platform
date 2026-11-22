@@ -1,9 +1,10 @@
+import { decideProductLoop } from '../team/product-loop.js';
 import { platformWait, projectRecoveryMetrics } from './platform-recovery.js';
 import { readProductDocuments } from '../business-engineering/product-documents.js';
 import { successorSource } from './successor-run.js';
 import { waitForWorkflowToSettle } from '../mastra/platform/workflow-recovery.js';
 import { correctionPauseSchema, correctionRequestSchema, interruptProductAttempt, productCorrectionCapability } from './product-interruption.js';
-import { appliedProductRework, planProductRework, prepareProductRework, readProductCorrectionCheckpoint } from '../mastra/workflows/product-rework.js';
+import { appliedProductRework, planProductRework, prepareProductRework, readProductCorrectionCheckpoint, withProductRestart } from '../mastra/workflows/product-rework.js';
 import { maxProductReworks, type ProductRework } from '../mastra/workflows/product-contract.js';
 import { resolveProductAgents } from '../mastra/workflows/product-team.js';
 import type { Delivery } from '../mastra/workflows/delivery.js';
@@ -80,7 +81,7 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
   const snapshot = await workflow.getWorkflowRunById(runId);
   if (!snapshot) throw new Error('Run 不存在');
   if (config) config = snapshotProjectConfig(config, snapshot, { readOnly: true });
-  const initial = snapshot.steps?.['initialize-product-development'];
+  const initial = snapshot.steps?.['initialize-team-run'] ?? snapshot.steps?.['initialize-product-development'];
   const state = initial && !Array.isArray(initial) ? deliverySchema.safeParse(initial.output) : undefined;
   const suspended = Object.entries(snapshot.steps ?? {}).filter(([, step]) => !Array.isArray(step) && step.status === 'suspended' && (step as any).suspendPayload !== undefined).sort(([left], [right]) => right.split('.').length - left.split('.').length)[0];
   const path = suspended?.[0];
@@ -320,7 +321,9 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
 
 /** 将产品团队验证过的返工起点交给 Mastra 原生恢复。 */
 async function restartProduct(workflow: IntakeWorkflow, runId: string, source: Delivery, rework: ProductRework, config?: PracticeConfig) {
-  if (rework.round > maxProductReworks) throw new GateInputError('本次运行已达到产品返工上限');
+  const action = decideProductLoop('human-rework', rework.sourceHash, rework.round > maxProductReworks ? 'stopped' : 'rework', [], { used: rework.round - 1, limit: maxProductReworks });
+  if (action === 'stop') throw new GateInputError('本次运行已达到产品返工上限');
+  if (action !== 'request-rework') throw new GateInputError('产品返工状态无效');
   const route = await planProductRework(source, rework.feedback, async (prompt, options) => {
     if (source.nacosResources && config) return (await (await resolveProductAgents(config, source.nacosResources, workflow.mastra?.getStorage())).productManagerAgent.generate(prompt, options)).object;
     if (source.nacosResources) throw new Error('缺少冻结产品资源配置');
@@ -330,7 +333,7 @@ async function restartProduct(workflow: IntakeWorkflow, runId: string, source: D
   });
   const restart = prepareProductRework(source, rework, route);
   const run = await workflow.createRun({ runId });
-  await run.timeTravel({ step: restart.step, inputData: restart.input });
+  await withProductRestart(runId, restart, () => run.timeTravel({ step: restart.step, inputData: restart.input }));
 }
 
 const continueCorrectionSchema = z.object({ attempt: z.uuid() }).strict();

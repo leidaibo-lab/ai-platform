@@ -1,12 +1,15 @@
+import { TeamSettings } from './TeamSettings';
+import { IndependentTeams } from './IndependentTeams';
+import { RunMigration } from './RunMigration';
 import seakoiLogo from './assets/seakoi-logo.webp';
 import { intakeRequest as request, IntakeRequestError, reconcileWrite } from './intake-request';
 import { RepositoryScope } from './RepositoryScope';
-import { ChevronDown, CircleAlert, Clock3, Folder, FolderPlus, GitBranch, Plus, RefreshCw, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Clock3, Folder, FolderPlus, GitBranch, Plus, RefreshCw, X, PanelLeft, PanelTop, PanelRight, RotateCcw } from 'lucide-react';
 import { WorkbenchAccount } from './components/WorkbenchAccount';
 import { WorkbenchUserMenu } from './components/WorkbenchUserMenu';
 import { WorkbenchComposer } from './components/WorkbenchComposer';
 import { WorkbenchRecords, teamLabels } from './components/WorkbenchRecords';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import { TechnicalRecoveryStatus, type TechnicalRecoveryData } from './DevelopmentRecovery';
 import { WorkflowGateForm, WorkflowGateEvidence, type WorkflowGate } from './WorkflowGate';
 import { Markdown } from './components/Markdown';
@@ -82,16 +85,34 @@ export function IntakeApp() {
   const [correctionError, setCorrectionError] = useState('');
   const [approving, setApproving] = useState(false);
   const [showSyncSettings, setShowSyncSettings] = useState(false);
+  const [showTeamSettings, setShowTeamSettings] = useState(false);
+  const [showIndependentTeams, setShowIndependentTeams] = useState(false);
   const [showRepositoryManagement, setShowRepositoryManagement] = useState(false);
   const [showSuccessor, setShowSuccessor] = useState(false);
   const [successorBrief, setSuccessorBrief] = useState('');
   const [successorKinds, setSuccessorKinds] = useState<Array<'product' | 'development' | 'testing'>>(['product']);
   const [liveActivity, setLiveActivity] = useState<LiveActivity>();
+  const [streamConnection, setStreamConnection] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [streams, setStreams] = useState<Record<string, ProductStreamView & { stepId?: string; taskKey?: string }>>({});
   const streamRound = useRef(0);
   const [project, setProject] = useState<{ id?: string; title?: string }>();
   const [projects, setProjects] = useState<Array<{ id: string; title: string }>>([]);
   const [flowOpen, setFlowOpen] = useState(false);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [mainVisible, setMainVisible] = useState(true);
+  const [leftWidth, setLeftWidth] = useState(185);
+  const [rightWidth, setRightWidth] = useState(420);
+  const shellRef = useRef<HTMLDivElement>(null);
+  /** 拖拽分隔线只调整当前页面的栏宽，保留中栏最小空间。 */
+  function resizePanel(side: 'left' | 'right', clientX: number) {
+    const box = shellRef.current?.getBoundingClientRect();
+    if (!box) return;
+    const available = Math.max(160, box.width - (side === 'left' && (materialOpen || changesOpen) ? rightWidth : side === 'right' && sidebarVisible ? leftWidth : 0) - 320);
+    const requested = side === 'left' ? clientX - box.left : box.right - clientX;
+    (side === 'left' ? setLeftWidth : setRightWidth)(Math.max(160, Math.min(requested, available)));
+  }
+  /** 捕获指针使分隔线在快速拖动时仍可连续调整。 */
+  function startResize(event: PointerEvent<HTMLDivElement>) { event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault(); }
   const [material, setMaterial] = useState<Material>();
   const [notes, setNotes] = useState<Record<string, string[]>>({});
   const [messages, setMessages] = useState<Record<string, string>>({});
@@ -160,7 +181,7 @@ export function IntakeApp() {
   const onActiveTeam = selectedTeam === activeTeam;
   const changesOpen = !!id && changesRun === id;
   /** 收起差异栏并将键盘焦点交还入口。 */
-  function closeChanges() { setChangesRun(undefined); changesTrigger.current?.focus(); }
+  function closeChanges() { setMainVisible(true); setChangesRun(undefined); changesTrigger.current?.focus(); }
   useEffect(() => {
     if (!changesOpen) return;
     /** Escape 只收起当前可见的变更栏。 */
@@ -177,7 +198,7 @@ export function IntakeApp() {
     setMaterial(view); setChangesRun(undefined); setFlowOpen(false);
   }
   /** 收起材料并把焦点交还入口。 */
-  function closeMaterial() { setMaterial(undefined); focusMaterial.current?.focus(); }
+  function closeMaterial() { setMainVisible(true); setMaterial(undefined); focusMaterial.current?.focus(); }
   /** 底部输入仅保存草稿或本页记录，人工关口仍通过原表单提交。 */
   function sendNote() {
     const value = currentNote.trim();
@@ -247,11 +268,13 @@ export function IntakeApp() {
   useEffect(() => {
     if (!id || (!busy && !correcting && !uncertain && document?.status !== 'running')) return;
     let active = true;
+    setStreamConnection('connecting');
     const source = new EventSource(`/intake-api/runs/${encodeURIComponent(id)}/events`);
     /** 事件只触发权威快照回读，不把 SSE payload 当作执行事实。 */
     source.onmessage = event => {
       try {
-        const payload = JSON.parse(event.data) as { activity?: LiveActivity; output?: ProductStreamEvent; stepId?: string; taskKey?: string };
+        const payload = JSON.parse(event.data) as { type?: string; activity?: LiveActivity; output?: ProductStreamEvent; stepId?: string; taskKey?: string };
+        if (active && payload.type === 'ready') setStreamConnection('connected');
         const output = payload.output;
         if (active && output) {
           const key = JSON.stringify([streamRound.current, payload.stepId, payload.taskKey, output.role, output.attempt]);
@@ -265,7 +288,7 @@ export function IntakeApp() {
       }).catch(() => { /* SSE 断线期间保留当前 UI，轮询会继续尝试。 */ });
     };
     /** 事件流错误不覆盖当前 Run 状态，避免网络抖动伪造失败。 */
-    source.onerror = () => { /* REST fallback remains active. */ };
+    source.onerror = () => { if (active) setStreamConnection('disconnected'); };
     return () => { active = false; source.close(); };
   }, [busy, correcting, document?.status, id, uncertain]);
   /** 超时只代表连接结束；先回读状态，再决定展示运行、失败或输入错误。 */
@@ -377,6 +400,8 @@ export function IntakeApp() {
     void submit({ role: 'product', artifactHash: document!.product!.artifact.hash, decision, comment });
   }
   if (showRepositoryManagement) return <RepositoryManagement close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowRepositoryManagement(false)} />;
+  if (showTeamSettings) return <TeamSettings close={() => setShowTeamSettings(false)} />;
+  if (showIndependentTeams) return <IndependentTeams projectId={project?.id ?? 'hrm'} close={() => setShowIndependentTeams(false)} />;
   if (showSyncSettings) return <RemoteSyncSettings projectId={project?.id} close={/** 返回同一需求页面，不改变当前Run选择。 */() => setShowSyncSettings(false)} />;
   const availableMaterials = document ? [
     (document.product || document.approvedProduct) && 'product',
@@ -384,12 +409,12 @@ export function IntakeApp() {
     !!document.specifications?.length && 'specifications', document.acceptanceEvidence && 'quality', document.mergeRequest && 'delivery',
   ].filter(Boolean) as Material[] : [];
   const scopedRuns = runs.filter(run => !project?.id || !run.projectId || run.projectId === project.id);
-  return <div className={`intake-shell intake-workbench project-workbench${changesOpen || materialOpen ? ' workbench-inspecting' : ''}`} onKeyDown={event => {
+  return <div ref={shellRef} style={{ '--panel-left': `${leftWidth}px`, '--panel-right': `${rightWidth}px` } as CSSProperties} className={`intake-shell intake-workbench project-workbench${changesOpen || materialOpen ? ' workbench-inspecting' : ''}${!sidebarVisible ? ' sidebar-hidden' : ''}${!mainVisible ? ' main-hidden' : ''}`} onKeyDown={event => {
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     if (materialOpen) closeMaterial(); else if (flowOpen) setFlowOpen(false);
   }}>
     <header className="workbench-bar"><a className="intake-brand" href="/" aria-label="产研工作台首页"><img className="intake-brand-logo" src={seakoiLogo} alt="Seakoi" /><span>产研工作台</span></a>{document?.mode === 'fixture' && <small>固定样例</small>}
-      <div className="workbench-tools"><button type="button" disabled={navigationLocked} title="刷新状态" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw size={15} /></button></div>
+      <div className="workbench-tools"><button type="button" title={sidebarVisible ? '隐藏左栏' : '显示左栏'} aria-label={sidebarVisible ? '隐藏左栏' : '显示左栏'} aria-pressed={sidebarVisible} onClick={() => setSidebarVisible(value => !value)}><PanelLeft size={15} /></button><button type="button" title={mainVisible ? '隐藏中栏' : '显示中栏'} aria-label={mainVisible ? '隐藏中栏' : '显示中栏'} aria-pressed={mainVisible} disabled={!materialOpen && !changesOpen} onClick={() => setMainVisible(value => !value)}><PanelTop size={15} /></button><button type="button" title="打开审查材料" aria-label="打开审查材料" disabled={!availableMaterials.length} onClick={event => { setMainVisible(true); openMaterial(availableMaterials[0], event.currentTarget); }}><PanelRight size={15} /></button><button type="button" title="还原布局" aria-label="还原布局" onClick={() => { setSidebarVisible(true); setMainVisible(true); setLeftWidth(185); setRightWidth(420); }}><RotateCcw size={15} /></button><button type="button" disabled={navigationLocked} onClick={() => setShowIndependentTeams(true)}>独立团队</button><button type="button" disabled={navigationLocked} title="刷新状态" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw size={15} /></button></div>
     </header>
     <aside className="intake-sidebar" aria-label="项目与需求">
       <div className="workbench-sidebar-nav">
@@ -411,8 +436,10 @@ export function IntakeApp() {
         settingsDisabled={navigationLocked}
         openAccount={() => setAccountOpen(true)}
         openSettings={() => setShowSyncSettings(true)}
+        openTeamSettings={() => setShowTeamSettings(true)}
       />
     </aside>
+    {sidebarVisible && <div className="panel-resizer panel-resizer-left" role="separator" aria-label="调整左栏宽度" aria-orientation="vertical" tabIndex={0} onPointerDown={startResize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resizePanel('left', event.clientX); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setLeftWidth(value => Math.max(160, Math.min(500, value + (event.key === 'ArrowRight' ? 16 : -16)))); } }} />}
     <main className="intake-main">
       {id && <header className="workbench-context"><details><summary>{(document?.brief || brief).split(/\n/)[0]?.slice(0, 90) || '原始需求'}</summary><p>{document?.brief || brief}</p><code>{id}</code></details>
         <div className="workbench-tools">
@@ -430,14 +457,15 @@ export function IntakeApp() {
         <details><summary>需求设置</summary><label>迭代标识 <input value={iterationId} maxLength={100} onChange={event => setIterationId(event.target.value)} /></label><label><input type="checkbox" checked={intakeMode === 'autofill'} onChange={event => setIntakeMode(event.target.checked ? 'autofill' : 'clarify')} /> AI 主动补全需求</label></details>
       </section> : <>
         {document?.successorBaseline && <details><summary>后继 Run 的只读基线</summary><p>{document.successorBaseline.sourceRunId}</p></details>}
-        {document && <WorkbenchRecords timeline={document.timeline} activity={liveActivity} status={document.status} streams={streams} />}
+        {document && <WorkbenchRecords timeline={document.timeline} activity={liveActivity} status={document.status} streams={streams} connection={streamConnection} recovery={selectedTeam === 'product' && onActiveTeam && document.timeline?.nodes.some(node => node.status === 'running' && /(?:^|\.)product-writing$/.test(node.id)) && !document.retry && <details className="conversation-recovery"><summary>写作长时间没有进展？</summary><p>若服务曾重启且写作步骤已超过受控时限，可核对并从同一保存输入恢复。</p><button disabled={busy || uncertain || !accountName} onClick={() => void recoverStaleWriting()}>{busy ? '正在核对并恢复…' : '核对并恢复遗留写作'}</button>{!accountName && <small> 请先登录工作台。</small>}</details>} />}
         {(correcting || activeAttempt?.stopping || savedCorrection || staleCorrection || correctionError) && <div className="workbench-feedback" id={savedCorrection ? 'product-team-action' : undefined}>
           <span role={correctionError ? 'alert' : 'status'}>{correctionError || (correcting || activeAttempt?.stopping ? '正在处理纠偏…' : savedCorrection ? '纠偏已保存，可继续执行。' : '原生成尝试已结束，意见仍在输入框中。')}</span>
           {savedCorrection ? <button type="button" disabled={correcting} onClick={() => void correctProduct()}>继续纠偏</button>
             : staleCorrection && <button type="button" disabled={correcting} onClick={moveCorrectionToNote}>转为补充草稿</button>}
         </div>}
-        {!!notes[id]?.length && <details className="workbench-local-notes" open><summary>本页补充记录</summary>{notes[id].map((note, index) => <p key={index}>{note}</p>)}</details>}
+        {!!notes[id]?.length && <section className="workbench-local-notes" aria-label="本页补充记录">{notes[id].map((note, index) => <div className="conversation-user" key={index}><small>本页补充 · 未推进流程</small><p>{note}</p></div>)}</section>}
         {!onActiveTeam && <div className="workbench-feedback">当前查看{teamLabels[selectedTeam]}阶段 <button type="button" onClick={() => selectTeam(activeTeam)}>返回当前待办</button></div>}
+        {document && ['failed', 'suspended', 'success'].includes(document.status) && <details><summary>历史运行迁移</summary><RunMigration runId={document.runId} completed={choose} /></details>}
         {document?.successor && document.status === 'success' && <section className="intake-card"><div className="intake-eyebrow">后继 Run</div><h2>基于已确认规格创建新 Run</h2><p>旧 Run 的审批、预算、测试与发布回执不会继承。系统会重新校验下列固定 commit 与散列，并让新 Run 从需求澄清开始。</p>{showSuccessor ? <><label>本轮变更说明<textarea value={successorBrief} maxLength={12000} rows={4} onChange={event => setSuccessorBrief(event.target.value)} /></label>{document.successor.artifacts.map(item => <label className="intake-mode-toggle" key={item.kind}><input type="checkbox" checked={successorKinds.includes(item.kind)} onChange={event => setSuccessorKinds(event.target.checked ? [...successorKinds, item.kind] : successorKinds.filter(kind => kind !== item.kind))} /><span><strong>{item.kind === 'product' ? '产品 Spec' : item.kind === 'development' ? '开发 Spec' : '测试 Spec'}</strong><small>{item.branch} · {item.commit.slice(0, 12)}</small></span></label>)}<div className="intake-actions"><button className="primary" disabled={busy || !successorBrief.trim() || !successorKinds.length} onClick={startSuccessor}>校验规格并新建 Run →</button><button disabled={busy} onClick={() => setShowSuccessor(false)}>取消</button></div></> : <button className="primary" disabled={busy || uncertain} onClick={() => { setSuccessorBrief(''); setSuccessorKinds(document.successor!.artifacts.map(item => item.kind)); setShowSuccessor(true); }}>基于已确认版本新建 Run →</button>}</section>}
         {selectedTeam === 'product' && <>
         {document?.appliedCorrection && <p className="run-activity-copy" role="status">反馈已应用，从「{productReworkLabels[document.appliedCorrection.target]}」重新处理。</p>}
@@ -477,7 +505,7 @@ export function IntakeApp() {
         {onActiveTeam && document && !intake && !document.product && !document.gate && !document.blockage && (!document.progress || document.retry) && (document.retry ? <div id="workflow-recovery"><RequirementWorkspace title="恢复与下一步" panel={<><p>{document.retry.next ?? '从已保存的检查点继续，已确认内容和前序成果保留。'}</p><h3>执行影响</h3><p>{document.retry.impact}</p></>} actions={<button className="primary" disabled={busy || uncertain} onClick={/** 恢复只提交当前服务端版本，不允许客户端指定路径。 */() => void submit({ retryHash: document.retry!.hash })}>{busy ? '正在重试…' : '重试'}</button>}>
           <section className="intake-card requirement-completeness"><div className="intake-eyebrow">当前成果状态</div><h1>已保存的工作与待补结果</h1><p>已保存 {document.retry.savedAnswers} 轮回答。当前停在“{document.retry.title}”，恢复后仍会停在相应的人工确认关口。</p>{document.retry.preserved.length > 0 && <ul className="requirement-preserved">{document.retry.preserved.map(/** 状态由服务端依据保存的角色结果判断，计划句不计作完成交付。 */item => <li key={item.role}><span>{item.label}</span><strong>{item.complete === false ? '仅保存执行计划，未保存检查结果' : '已完成'}</strong></li>)}</ul>}</section>
           <section className="intake-card"><h2>当前需要处理的问题</h2><p><strong>{document.retry.title}：</strong>{document.retry.reason}</p>{document.retry.attemptDetails?.map(/** 保留服务端脱敏后的失败依据，不推断额外故障原因。 */detail => <p key={detail}>{detail}</p>)}<p>{document.retry.message}</p></section>
-        </RequirementWorkspace></div> : document.status === 'running' ? <section className="intake-card" role="status"><h2>产品稿写作状态</h2><p>当前 Run 正在处理。若服务曾重启且写作步骤已超过受控时限，系统会仅从同一保存输入恢复写作。</p><button disabled={busy || uncertain || !accountName} onClick={() => void recoverStaleWriting()}>{busy ? '正在核对并恢复…' : '核对并恢复遗留写作'}</button></section> : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
+        </RequirementWorkspace></div> : document.status === 'running' ? null : <section className="intake-card"><h2>{busy || uncertain ? operation.label : document.status === 'failed' ? '流程遇到问题' : document.status === 'success' ? '本轮流程已结束' : '流程正在处理'}</h2><p>{busy || uncertain ? '正在处理已保存的信息，完成后会自动更新本页，无需重新填写。' : document.status === 'failed' ? '已保存的记录仍可查看。当前失败不支持直接恢复，请核对结果后处理。' : document.status === 'success' ? ({'fixture-completed':'固定样例流程已走完，所有执行与回执均为合成验证。','delivery-confirmed':'本轮交付已确认，执行证据与人工决定已保存。','rejected':'本轮已拒绝并结束。','blocked':'本轮已停止，仍有需要处理的阻塞。','rolled-back':'本轮发布已回滚。','manual-attention':'本轮需要人工处理。'}[document.outcome ?? ''] ?? '已保存本轮结果与决定。') : '请刷新查看进展，后续需要你确认的内容会在本页显示。'}</p></section>)}
       </>}
       </div>
       {canUseComposer && <WorkbenchComposer key={`${id || 'create'}:${correctionDraft?.attempt ?? activeAttempt?.attempt ?? 'note'}`}
@@ -489,6 +517,7 @@ export function IntakeApp() {
         disabled={correctionMode ? correcting || staleCorrection || !!savedCorrection || !activeAttempt || activeAttempt.stopping : navigationLocked || (!id && (!project?.id || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(iterationId)))} />}
       <WorkbenchAccount key={String(accountOpen)} open={accountOpen} signedIn={setAccountName} close={() => setAccountOpen(false)} />
     </main>
+    {(materialOpen || changesOpen) && mainVisible && <div className="panel-resizer panel-resizer-right" role="separator" aria-label="调整右栏宽度" aria-orientation="vertical" tabIndex={0} onPointerDown={startResize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resizePanel('right', event.clientX); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setRightWidth(value => Math.max(160, Math.min(900, value + (event.key === 'ArrowLeft' ? 16 : -16)))); } }} />}
     {materialOpen && document && material && <aside ref={materialPanel} className="workbench-materials" aria-label="审查材料"><header><div className="workbench-tools">{availableMaterials.map(view => <button key={view} type="button" aria-pressed={view === material} onClick={() => setMaterial(view)}>{view === 'gate' && document.gate?.key === 'approve-architecture' ? '架构方案' : view === 'gate' && document.gate?.key === 'approve-test-cases' ? '测试用例' : materialLabels[view]}</button>)}</div><button type="button" aria-label="关闭材料" onClick={closeMaterial}><X size={16} /></button></header>
       <div className="workbench-material-body">
       {material === 'product' && (document.product || document.approvedProduct) && <><small>版本 <code>{(document.product?.artifact.hash ?? document.approvedProduct?.hash)?.slice(0, 12)}</code></small>{document.productDocuments ? <>

@@ -23,7 +23,7 @@ export function readAcceptanceRequirements(content: string) {
       continue;
     }
     if (fence || !/^\s*[-*+]\s+(?:\*\*)?REQ-/i.test(line)) continue;
-    const item = line.match(/^\s*-\s+(REQ-[A-Z0-9-]+)\s*[:：]\s*(.+?)\s*\|\s*验收\s*[:：]\s*(.+?)\s*$/);
+    const item = line.match(/^\s*-\s+(REQ-[A-Z0-9-]+)\s*[:：]\s*(.+?)\s*[|；;]\s*验收\s*[:：]\s*(.+?)\s*$/);
     if (!item || !idPattern.test(item[1]!) || item[1]!.length > 80 || !item[2]!.trim() || !item[3]!.trim()) throw new Error(`第 ${index + 1} 行的可验收需求格式无效`);
     const [, id, rule, expected] = item as [string, string, string, string];
     if (ids.has(id)) throw new Error(`可验收需求 ID 重复：${id}`);

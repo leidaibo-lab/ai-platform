@@ -10,6 +10,8 @@ import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { readIntake, respondIntake } from '../src/intake/service.js';
 import type { PracticeConfig } from '../src/mastra/config.js';
 import { ContextBudgetError } from '../src/delivery/context-budget.js';
+import { projectLiveOutputFrame } from '../src/intake/run-timeline.js';
+import { createHash } from 'node:crypto';
 
 test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修订、产品批准与重复拒绝', /** 隔离 LibSQL 的主流程，证明 HTTP 所依赖的服务事实。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-intake-'));
@@ -24,6 +26,8 @@ test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修�
     let current = await readIntake(workflow, run.runId);
     assert.equal(current.step, 'guided-requirements', JSON.stringify(current));
     assert.ok(current.intake, JSON.stringify(result));
+    const receipt = [{ path: 'brief.md', sourceHash: createHash('sha256').update('合成招聘需求').digest('hex') }];
+    assert.deepEqual(current.intake.workspaceReads, receipt);
     const originalHash = current.intake.hash!;
     const answer = { hash: originalHash, action: 'refine', reviewer: 'test-human', supplement: '', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }] };
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { ...answer, answers: [] }));
@@ -36,6 +40,8 @@ test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修�
     assert.equal(current.intake?.round, 2);
     assert.equal(current.intake?.history.length, 1);
     assert.equal(current.intake?.history[0].response.reviewer, 'test-human');
+    assert.deepEqual(current.intake?.history[0].workspaceReads, receipt);
+    assert.deepEqual(current.intake?.workspaceReads, receipt);
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, answer));
     for (let round = 2; round <= 6; round++) {
       const previousHash = current.intake!.hash;
@@ -67,6 +73,20 @@ test('需求闭环：暂停、非法答案不消耗、重新装配恢复、修�
     assert.equal(current.step, 'confirm-project-scope');
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, review));
   } finally { void mastra; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('逐项澄清缺少 Workspace 读取回执时不发布问题', /** 人为移除回执，验证失败关闭；正常读取由需求闭环测试覆盖。 */async t => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'guided-no-read-'));
+  const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
+  t.mock.method(Agent.prototype, 'generate', (async () => ({ toolResults: [] })) as any);
+  new Mastra(app);
+  try {
+    const run = await app.workflows.productDevelopmentWorkflow.createRun();
+    const result = await run.start({ inputData: { brief: '合成需求', iterationId: 'no-read', guidedIntake: true } });
+    assert.equal(result.status, 'failed');
+    const state = await readIntake(app.workflows.productDevelopmentWorkflow, run.runId);
+    assert.equal(state.intake, undefined);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('AI主动补全模式：跳过逐项澄清，直接生成待审产品稿', /** 自动补全只替用户完成方案初稿，仍停在产品人工审阅，不自动批准。 */async () => {
@@ -159,7 +179,7 @@ test('产品 Harness 按审阅意见从写作重做并保留上游结论', async
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复执行', async () => {
+test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复执行', async t => {
   const directory = mkdtempSync(resolve(tmpdir(), 'product-active-correction-'));
   const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   const app = createStudioApplicationOptions(config);
@@ -168,15 +188,14 @@ test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复�
   const router = new Hono();
   for (const route of app.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
   const generate = Agent.prototype.generate;
-  const originalGenerate = Agent.prototype.generate;
   let enterWriting!: () => void;
   const writing = new Promise<void>(resolve => { enterWriting = resolve; });
   let stopped = false;
   let held = false;
-  Agent.prototype.generate = new Proxy(generate, {
+  t.mock.method(Agent.prototype, 'generate', new Proxy(generate, {
     /** 首次写作保留在模型调用中，直到真实请求发出中止信号。 */
     async apply(target, receiver, args) {
-      if ((receiver as Agent).id === 'product-manager-agent' && !held && String(args[0]).includes('"phase":"writing"')) {
+      if (!held && String(args[0]).includes('"phase":"writing"')) {
         held = true;
         const signal: AbortSignal = args[1].abortSignal;
         await new Promise<void>((_resolve, reject) => {
@@ -186,7 +205,7 @@ test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复�
       }
       return Reflect.apply(target, receiver, args);
     },
-  });
+  }) as typeof generate);
   try {
     const run = await workflow.createRun();
     const initial = run.start({ inputData: { brief: '合成生成中纠偏需求', iterationId: 'active-correction', intakeMode: 'autofill' } });
@@ -235,18 +254,11 @@ test('产品 Harness 中止旧生成后按范围反馈重跑，并拒绝重复�
     assert.equal((await post({ attempt }, cookie)).status, 401);
     assert.equal((await login({ ...credentials, password: 'incorrect-fixture-password' })).status, 401);
     assert.equal((await login()).status, 200);
-  } finally { Agent.prototype.generate = originalGenerate; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 import { Hono, type Handler } from 'hono';
 import { randomUUID } from 'node:crypto';
-
-/** 通过真实账号路由取得隔离测试会话。 */
-async function loginFixtureAccount(router: Hono) {
-  const response = await router.request('/intake-api/account', { method: 'POST', headers: { 'Content-Type': 'application/json', origin: 'http://127.0.0.1:4112' }, body: JSON.stringify({ username: 'test-human', password: 'fixture-local-account-password' }) });
-  assert.equal(response.status, 200);
-  return response.headers.get('set-cookie')!.split(';')[0];
-}
 
 test('需求 HTTP：同源、固定标识创建、坏答案与完整稿版本门禁', /** 使用生产注册 handler 和隔离模型运行库。 */async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-http-'));
@@ -257,9 +269,10 @@ test('需求 HTTP：同源、固定标识创建、坏答案与完整稿版本门
   /** 模拟浏览器 JSON 请求，不传可替换正文或步骤。 */
   function post(path: string, data: unknown, origin = 'http://127.0.0.1:4112') { return router.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', origin, cookie }, body: JSON.stringify(data) }); }
   try {
-    cookie = await loginFixtureAccount(router);
     const input = { runId: randomUUID(), brief: 'HTTP 合成需求', iterationId: 'http-test' };
     assert.equal((await post('/intake-api/runs', input, 'https://untrusted.example')).status, 409);
+    const login = await post('/intake-api/account', { username: 'test', password: 'fixture-local-account-password' });
+    assert.equal(login.status, 200); cookie = login.headers.get('set-cookie')!.split(';')[0];
     assert.equal((await post('/intake-api/runs', { ...input, brief: '' })).status, 409);
     const started = await post('/intake-api/runs', input); assert.equal(started.status, 200);
     const current = await started.json();
@@ -309,13 +322,14 @@ test('业务前端接口连续推进至 MR，非法输入保留暂停点', /** �
   const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, legacyProductWorkflow: true, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   new Mastra(app); const router = new Hono();
   for (const route of app.server.apiRoutes) if ('handler' in route) router.on(route.method, route.path, route.handler as Handler);
+  let cookie = '';
   const runId = randomUUID(); const actor = { reviewer: 'test-human', comment: '仅合成测试，不代表真实业务授权' };
   const project = { id: 'ui-test', files: { 'src/a.mjs': 'export const initial=0;', 'src/b.mjs': 'export const initial=0;', 'check.mjs': 'import {test} from "node:test"; import assert from "node:assert/strict"; import {fixtureValue as a} from "./src/a.mjs"; import {fixtureValue as b} from "./src/b.mjs"; test("two modules",/** 合成检查。 */()=>{assert.equal(a(),1);assert.equal(b(),1)});' }, writablePaths: ['src/a.mjs', 'src/b.mjs'], checkFiles: ['check.mjs'], roles: ['frontend', 'backend'] };
-  let cookie = '';
   /** 与页面相同的同源提交，不调用原生 resume 绕过业务服务。 */
   async function post(body: unknown, start = false) { return router.request(`/intake-api/runs${start ? '' : `/${runId}/respond`}`, { method: 'POST', headers: { 'Content-Type': 'application/json', origin: 'http://127.0.0.1:4112', cookie }, body: JSON.stringify(body) }); }
   try {
-    cookie = await loginFixtureAccount(router);
+    const login = await router.request('/intake-api/account', { method: 'POST', headers: { 'Content-Type': 'application/json', origin: 'http://127.0.0.1:4112' }, body: JSON.stringify({ username: actor.reviewer, password: 'fixture-local-account-password' }) });
+    assert.equal(login.status, 200); cookie = login.headers.get('set-cookie')!.split(';')[0];
     let current = await (await post({ runId, brief: '合成全流程', iterationId: 'ui-test' }, true)).json();
     current = await (await post({ hash: current.intake.hash, action: 'finalize', reviewer: actor.reviewer, supplement: '', answers: [{ questionId: 'scope', selected: ['minimal'], custom: '' }] })).json();
     assert.equal(current.step, 'guided-requirements');
@@ -350,18 +364,27 @@ test('业务前端接口连续推进至 MR，非法输入保留暂停点', /** �
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${failureKind}后保留回答，仅恢复生成而不结束澄清`, /** 注入结构化输出失败，验证真实快照恢复而不重填答案。 */async () => {
+for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${failureKind}后保留回答，仅恢复生成而不结束澄清`, /** 注入结构化输出失败，验证真实快照恢复而不重填答案。 */async t => {
   const directory = mkdtempSync(resolve(tmpdir(), 'guided-retry-'));
   const config: PracticeConfig = { rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
   const app = createStudioApplicationOptions(config);
   let calls = 0;
   const plan = { maturity: { decisions: { clear: true, evidence: '合成' }, mainFlow: { clear: true, evidence: '合成' }, exceptions: { clear: true, evidence: '合成' }, delivery: { clear: true, evidence: '合成' } }, summary: '受控合成方案', assumptions: [], questions: [] };
-  app.agents.productManagerAgent.generate = (/** 产品经理 Agent 的需求澄清结构化输出；第二次模拟格式失败。 */async (_input: unknown, options: any) => { assert.ok(options.structuredOutput.schema); assert.equal(options.maxSteps, 24); assert.equal(options.modelSettings.timeout.stepMs, 600000); assert.ok(options.modelSettings.timeout.totalMs > 1790000 && options.modelSettings.timeout.totalMs <= 1800000); if (++calls === 2 || (failureKind === 'invalid-output' && calls === 3)) throw failureKind === 'timeout' ? new DOMException('synthetic timeout', 'TimeoutError') : new SyntaxError('synthetic invalid output'); return { object: plan }; }) as any;
+  t.mock.method(Agent.prototype, 'generate', (/** 模拟结构化输出与读取回执，仅验证失败恢复控制流。 */async (_input: unknown, options: any) => { assert.ok(options.structuredOutput.schema); assert.equal(options.maxSteps, 24); assert.equal(options.modelSettings.timeout.stepMs, 600000); assert.ok(options.modelSettings.timeout.totalMs > 1790000 && options.modelSettings.timeout.totalMs <= 1800000); if (++calls === 2 || (failureKind === 'invalid-output' && calls === 3)) throw failureKind === 'timeout' ? new DOMException('synthetic timeout', 'TimeoutError') : new SyntaxError('synthetic invalid output'); return { object: plan, toolResults: [{ payload: { toolName: 'mastra_workspace_read_file', args: { path: 'brief.md' }, result: '合成恢复需求' } }] }; }) as any);
+  t.mock.method(Agent.prototype, 'stream', (/** 模拟结构化流及最终校验结果。 */async function (this: Agent, input: any, options: any) { return { fullStream: (async function* () { yield { type: 'text-delta', payload: { text: 'private-structured-content' } }; yield { type: 'tool-call', payload: { toolName: 'readFile', args: { path: 'brief.md', secret: 'private-argument' } } }; yield { type: 'tool-result', payload: { toolName: 'readFile', result: 'private-result' } }; })(), getFullOutput: () => this.generate(input, options) }; }) as any);
   const { createProductDevelopmentWorkflow } = await import('../src/mastra/workflows/product-development.js');
   const workflow = createProductDevelopmentWorkflow(app.agents as any, { ...config, mode: 'live' });
   new Mastra({ ...app, workflows: { productDevelopmentWorkflow: workflow } });
   try {
-    const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成恢复需求', iterationId: 'retry-test', guidedIntake: true } });
+    const run = await workflow.createRun();
+    const events: unknown[] = [];
+    const unwatch = await run.watchAsync(event => { const frame = projectLiveOutputFrame(event); if (frame) events.push(frame); });
+    await run.start({ inputData: { brief: '合成恢复需求', iterationId: 'retry-test', guidedIntake: true } });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await unwatch();
+    assert.deepEqual(events.map((frame: any) => frame.output.state), ['started', 'completed']);
+    assert.ok(events.every((frame: any) => frame.stepId === 'align-product-requirements' && frame.output.role === 'analysis'));
+    assert.doesNotMatch(JSON.stringify(events), /private-/);
     let current = await readIntake(workflow, run.runId);
     current = await respondIntake(workflow, 'live', run.runId, { hash: current.intake!.hash, action: 'refine', reviewer: 'test-human', answers: [], supplement: '真实人工补充（合成测试）' });
     assert.equal(current.status, 'failed'); assert.ok(current.retry); assert.equal(current.retry.savedAnswers, 1);
@@ -372,12 +395,12 @@ for (const failureKind of ['invalid-output', 'timeout']) test(`需求分析${fai
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('产品写作 Time travel：方向判断不重跑、旧令牌拒绝、恢复后重新待审', /** 使用原生嵌套快照与真实业务服务，不对用户 Run 提交决定。 */async () => {
+test('产品写作 Time travel：方向判断不重跑、旧令牌拒绝、恢复后重新待审', /** 使用原生嵌套快照与真实业务服务，不对用户 Run 提交决定。 */async t => {
   const directory = mkdtempSync(resolve(tmpdir(), 'product-writing-retry-'));
   const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   const calls: Record<string, number> = {};
-  const originalGenerate = Agent.prototype.generate; let managerCalls = 0;
-  Agent.prototype.generate = (/** 在实际阶段 Agent 注入故障，仍保留 Workspace 与原生执行。 */async function (this: Agent, ...args: any[]) { if (this.id === 'product-manager-agent') { managerCalls++; if (managerCalls === 2) { calls.writing = (calls.writing ?? 0) + 1; throw new Error('synthetic upstream failure'); } if (managerCalls > 2) calls.writing = (calls.writing ?? 0) + 1; } return (originalGenerate as any).apply(this, args); }) as any;
+  const originalManager = Agent.prototype.generate; let managerCalls = 0;
+  t.mock.method(Agent.prototype, 'generate', (async function (this: Agent, ...args: any[]) { if (this.id === 'product-manager-agent') { managerCalls++; if (managerCalls === 2) { calls.writing = (calls.writing ?? 0) + 1; throw new Error('synthetic upstream failure'); } if (managerCalls > 2) calls.writing = (calls.writing ?? 0) + 1; } return (originalManager as any).apply(this, args); }) as typeof originalManager);
   new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成产品写作故障', iterationId: 'writing-recovery' } });
@@ -397,15 +420,16 @@ test('产品写作 Time travel：方向判断不重跑、旧令牌拒绝、恢�
     const snapshot = await workflow.getWorkflowRunById(run.runId);
     const writing = snapshot!.steps!['product-team.product-writing'] as any;
     assert.equal(writing.output.productWork.entries.length, 2); assert.equal(writing.output.reviews.length, 0);
-  } finally { Agent.prototype.generate = originalGenerate; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('历史产品预算失败无需升档恢复且不重跑前序角色', /** 旧预算门槛已移除，只恢复失败节点且保留权限与人工关口。 */async () => {
+test('历史产品预算失败无需升档恢复且不重跑前序角色', /** 旧预算门槛已移除，只恢复失败节点且保留权限与人工关口。 */async t => {
   const directory = mkdtempSync(resolve(tmpdir(), 'product-budget-recovery-'));
   const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   const counts: Record<string, number> = {};
-  const originalGenerate = Agent.prototype.generate; let managerCalls = 0;
-  Agent.prototype.generate = (/** 在实际阶段 Agent 注入历史预算故障。 */async function (this: Agent, ...args: any[]) { if (this.id === 'product-manager-agent') { managerCalls++; if (managerCalls === 2) { counts.writing = (counts.writing ?? 0) + 1; throw new ContextBudgetError('read', 50000, 48000); } if (managerCalls > 2) counts.writing = (counts.writing ?? 0) + 1; } return (originalGenerate as any).apply(this, args); }) as any;
+  const original = Agent.prototype.generate;
+  let managerCalls = 0;
+  t.mock.method(Agent.prototype, 'generate', (async function (this: Agent, ...args: any[]) { if (this.id === 'product-manager-agent') { managerCalls++; if (managerCalls === 2) { counts.writing = (counts.writing ?? 0) + 1; throw new ContextBudgetError('read', 50000, 48000); } if (managerCalls > 2) counts.writing = (counts.writing ?? 0) + 1; } return (original as any).apply(this, args); }) as typeof original);
   new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成产品预算恢复', iterationId: 'budget-recovery' } });
@@ -418,7 +442,7 @@ test('历史产品预算失败无需升档恢复且不重跑前序角色', /** �
     const snapshot = await workflow.getWorkflowRunById(run.runId);
     assert.equal((snapshot!.steps!['product-team.product-writing'] as any).output.contextBudgetLevel, 0);
     assert.equal((snapshot!.steps!['product-team.review-product'] as any).status, 'suspended');
-  } finally { Agent.prototype.generate = originalGenerate; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 import { describeRecovery } from '../src/intake/recovery.js';
@@ -442,11 +466,11 @@ test('旧产品快照中的闭环执行计划不显示为已完成检查', /** �
   assert.deepEqual(retry.preserved.map(item => 'complete' in item ? item.complete : undefined), [true, true, false]);
 });
 
-test('产品质量审查失败后从原检查点恢复并保留产品稿', async () => {
+test('产品质量审查失败后从原检查点恢复并保留产品稿', async t => {
   const directory = mkdtempSync(resolve(tmpdir(), 'product-quality-retry-'));
   const app = createStudioApplicationOptions({ rootDir: resolve('.'), mode: 'fixture', modelId: 'openai/fixture', port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` });
   const originalGenerate = Agent.prototype.generate; let managerCalls = 0; let reviewerCalls = 0;
-  Agent.prototype.generate = (/** 对独立审查的实际阶段 Agent 注入一次故障。 */async function (this: Agent, ...args: any[]) { if (this.id === 'product-manager-agent') managerCalls++; if (this.id === 'product-reviewer-agent' && ++reviewerCalls === 1) throw new Error('synthetic failure'); return (originalGenerate as any).apply(this, args); }) as any;
+  t.mock.method(Agent.prototype, 'generate', (async function (this: Agent, ...args: any[]) { if (this.id === 'product-manager-agent') managerCalls++; if (this.id === 'product-reviewer-agent' && ++reviewerCalls === 1) throw new Error('synthetic failure'); return (originalGenerate as any).apply(this, args); }) as typeof originalGenerate);
   new Mastra(app); const workflow = app.workflows.productDevelopmentWorkflow;
   try {
     const run = await workflow.createRun(); await run.start({ inputData: { brief: '合成审查故障', iterationId: 'quality-recovery' } });
@@ -462,5 +486,5 @@ test('产品质量审查失败后从原检查点恢复并保留产品稿', async
     assert.equal(after.status, 'suspended'); assert.equal(after.step, 'review-product'); assert.equal(after.product?.artifact.hash, saved.hash);
     assert.equal(managerCalls, 2); assert.equal(reviewerCalls, 2);
     await assert.rejects(respondIntake(workflow, 'fixture', run.runId, { retryHash: before.retry!.hash }));
-  } finally { Agent.prototype.generate = originalGenerate; await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });

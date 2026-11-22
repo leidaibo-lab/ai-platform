@@ -9,6 +9,16 @@ export function validateIdentityV2(state: StateV2, config: PracticeConfig, metho
   if (developmentHash(state.executionIdentity) !== developmentHash(developmentExecutionIdentity(config)) || state.mode !== config.mode || state.methodBundleHash !== methodHash) throw new Error('v2模型、模式或方法发生漂移');
 }
 
+/** 只允许未实施的业务澄清单独更换模型，其他执行身份必须完全一致。 */
+export function canRebaseClarificationModel(state: StateV2, config: PracticeConfig, methodHash: string): boolean {
+  const current = developmentExecutionIdentity(config);
+  const prior = state.executionIdentity;
+  return state.mode === config.mode && state.methodBundleHash === methodHash && prior.mode === current.mode
+    && prior.endpointHash === current.endpointHash && prior.sandboxPolicy === current.sandboxPolicy
+    && prior.modelId !== current.modelId && state.outcome === 'clarification-required'
+    && state.completedTasks.length === 0 && !state.approvedHash && !state.delivery;
+}
+
 /** 报告必须带真实覆盖和可定位证据，不能把空报告或非法PASS当作无问题。 */
 export function validateAssessment(assessment: AssessmentV2, state: StateV2): void {
   const refs = evidenceRefs(state);

@@ -111,7 +111,7 @@ export function reworkState(state: StateV2, route: StateV2['route'], phase: Stat
   if (state.outcome !== 'in-progress') return state;
   if (state.round >= state.input.maxReworks) return state.input.autonomy || state.technicalRecovery ? stopAutonomy(state, 'repair-budget') : { ...state, outcome: 'rework-exhausted' };
   const invalid = repairTasks(state, route);
-  return { ...state, round: state.round + 1, route, phase, completedTasks: state.completedTasks.filter(
+  return { ...state, round: state.round + 1, route, phase, ...(route === 'architecture' ? { upstreamAuthorization: undefined } : {}), completedTasks: state.completedTasks.filter(
     // 独立任务保持完成证据，避免并行返工重放无关变更。
     (id) => !invalid.has(id),
   ), checks: [], checkedSourceHash: null, ...(route === 'architecture' ? { plan: null, planHash: null, approvedHash: null, approvalHash: null, readiness: null, context: null, team: undefined } : {}) };

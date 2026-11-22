@@ -6,10 +6,11 @@ interface Props {
   settingsDisabled: boolean;
   openAccount: () => void;
   openSettings: () => void;
+  openTeamSettings: () => void;
 }
 
 /** 侧栏底部的账号菜单支持鼠标悬停、触屏点击和键盘操作。 */
-export function WorkbenchUserMenu({ username, settingsDisabled, openAccount, openSettings }: Props) {
+export function WorkbenchUserMenu({ username, settingsDisabled, openAccount, openSettings, openTeamSettings }: Props) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -53,6 +54,7 @@ export function WorkbenchUserMenu({ username, settingsDisabled, openAccount, ope
       <button type="button" onClick={() => select(openAccount)}>
         <UserRound size={15} aria-hidden="true" />{username ? '工作台账号' : '登录或设置账号'}
       </button>
+      <button type="button" disabled={settingsDisabled} onClick={() => select(openTeamSettings)}><Settings2 size={15} aria-hidden="true" />团队配置</button>
       <button type="button" disabled={settingsDisabled} onClick={() => select(openSettings)}>
         <Settings2 size={15} aria-hidden="true" />业务工程接入
       </button>

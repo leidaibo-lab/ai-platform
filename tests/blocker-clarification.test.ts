@@ -5,10 +5,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Mastra } from '@mastra/core';
+import { Agent } from '@mastra/core/agent';
 import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { createProductDevelopmentWorkflow, executionResolver } from '../src/mastra/workflows/product-development.js';
 import { generateV2, type GeneratorV2 } from '../src/development/v2/agents.js';
 import { readIntake, respondIntake } from '../src/intake/service.js';
+import { canRebaseClarificationModel, validateIdentityV2 } from '../src/development/v2/gates.js';
+import { createBlockerClarificationWorkflow } from '../src/intake/blocker-workflow.js';
+import { contentHash } from '../src/delivery/remote-handoff.js';
 
 const project = { id: 'blocker-cycle', files: { 'src/a.mjs': 'export const initial=0;', 'check.mjs': 'export const check=1;' }, writablePaths: ['src/a.mjs'], checkFiles: ['check.mjs'], roles: ['backend'] };
 const actor = { reviewer: 'test-human', comment: '合成明确确认' };
@@ -54,7 +58,8 @@ for (const legacy of [false, true]) test(legacy ? '旧blocked同Run接续，回�
     });
     const { blockerHash } = await import('../src/intake/blocker-contracts.js');
     const paused = clarificationStep.payload;
-    const { productReworkDecision, ...historical } = paused;
+    const { productReworkDecision, workspaceReads, ...historical } = paused;
+    assert.deepEqual(workspaceReads, [{ path: 'product.md', sourceHash: contentHash(paused.development.input.source.content) }]);
     const { development, business, engineering, round, plan, references, referenceNote, history } = historical;
     const { developmentHash } = await import('../src/development/contracts.js');
     assert.equal(blockerHash(historical), developmentHash({ sourceHash: development.input.source.hash, planHash: development.planHash, readinessHash: development.readiness?.hash, business, engineering, round, plan, references, referenceNote, history }));
@@ -68,6 +73,7 @@ for (const legacy of [false, true]) test(legacy ? '旧blocked同Run接续，回�
     const revisedHash = doc.gate!.fixed.hash;
     await assert.rejects(respondIntake(app.workflow, 'fixture', runId, { gateHash: doc.gate!.gateHash, data: { hash: originalHash, decision: 'approve', ...actor } }, fixture.config), /版本/);
     const snapshot = await app.workflow.getWorkflowRunById(runId); const pending = Object.values(snapshot!.steps!).find(/** 当前真实暂停载荷拥有旧开发基线。 */step => !Array.isArray(step) && step.status === 'suspended') as any;
+    assert.deepEqual(pending.payload.draft.workspaceReads, [{ path: 'product.md', sourceHash: contentHash(pending.payload.development.input.source.content) }]);
     const oldInput = pending.payload.development.input; const oldCalls = pending.payload.development.calls;
     await app.storage.close(); app = fixture.open();
     doc = await respondIntake(app.workflow, 'fixture', runId, { gateHash: doc.gate!.gateHash, data: { hash: revisedHash, decision: 'approve', ...actor } }, fixture.config);
@@ -80,6 +86,32 @@ for (const legacy of [false, true]) test(legacy ? '旧blocked同Run接续，回�
   } finally { await app.storage.close(); rmSync(fixture.directory, { recursive: true, force: true }); }
 });
 
+
+test('历史缺失或漂移 Sandbox 身份不能借模型切换绕过澄清门禁', /** 从真实暂停点取状态，只在内存中构造历史与漂移身份。 */async () => {
+  const fixture = setup(); const app = fixture.open();
+  try {
+    const { runId } = await fixture.start(app);
+    const snapshot = await app.workflow.getWorkflowRunById(runId);
+    const paused = Object.values(snapshot!.steps!).find(/** 读取真实业务澄清暂停载荷。 */step => !Array.isArray(step) && step.status === 'suspended') as any;
+    const state = paused.payload.development;
+    const changed = { ...fixture.config, modelId: 'openai/other-fixture' as const };
+    const { sandboxPolicy, ...historicalIdentity } = state.executionIdentity;
+    assert.ok(sandboxPolicy);
+    assert.equal(canRebaseClarificationModel(state, changed, state.methodBundleHash), true);
+    const blocker = createBlockerClarificationWorkflow(app.agents as any, changed, executionResolver(changed));
+    const analyze = (blocker as any).steps['blocker-round'].steps['analyze-blocker-questions'];
+    for (const identity of [historicalIdentity, { ...state.executionIdentity, sandboxPolicy: 'workspace-candidate-sandbox.old' }]) {
+      const drift = { ...state, executionIdentity: identity };
+      assert.equal(canRebaseClarificationModel(drift, changed, state.methodBundleHash), false);
+      assert.throws(/** 既不能按当前模型恢复，也不能通过更换模型接续。 */() => validateIdentityV2(drift, fixture.config, state.methodBundleHash), /漂移/);
+      assert.throws(() => validateIdentityV2(drift, changed, state.methodBundleHash), /漂移/);
+      await assert.rejects(analyze.execute({ inputData: { ...paused.payload, development: drift } }), /漂移/);
+    }
+    const after = await readIntake(app.workflow, runId);
+    assert.equal(after.gate!.key, 'confirm-blocker-answers');
+  } finally { await app.storage.close(); rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
 for (const decision of ['revise', 'stop'] as const) test(`修订产品稿可以${decision}，不会自动批准或实施`, /** 返回选择保留历史，停止则不放行任何开发。 */async () => {
   const fixture = setup(); const app = fixture.open();
   try {
@@ -87,6 +119,28 @@ for (const decision of ['revise', 'stop'] as const) test(`修订产品稿可以$
     doc = await respondIntake(app.workflow, 'fixture', started.runId, { gateHash: doc.gate!.gateHash, data: { ...doc.gate!.fixed, decision, ...actor } }, fixture.config);
     if (decision === 'revise') { assert.equal(doc.status, 'suspended'); assert.equal(doc.gate!.key, 'confirm-blocker-answers'); assert.ok(doc.gate!.evidence.previousAnswers); }
     else { assert.equal(doc.status, 'success'); assert.equal(doc.outcome, 'blocked'); assert.equal(doc.gate, undefined); }
+  } finally { await app.storage.close(); rmSync(fixture.directory, { recursive: true, force: true }); }
+});
+
+test('产品修订缺少成功读取回执时保留回答并拒绝交付草稿', async t => {
+  const fixture = setup(); const app = fixture.open();
+  try {
+    const started = await fixture.start(app);
+    const original = Agent.prototype.generate;
+    t.mock.method(Agent.prototype, 'generate', (async function (this: Agent, ...args: any[]) {
+      const result = await (original as any).apply(this, args);
+      if (this.id === 'product-manager-agent' && String(args[0]).includes('revision-task')) return { ...result, toolResults: [] };
+      return result;
+    }) as typeof original);
+    const after = await respondIntake(app.workflow, 'fixture', started.runId, fixture.answers(started.doc), fixture.config);
+    assert.equal(after.status, 'failed');
+    assert.equal(after.retry!.title, '产品稿修订');
+    assert.equal(after.retry!.preserved.at(-1)!.role, 'answers');
+    assert.equal(after.gate, undefined);
+    const snapshot = await app.workflow.getWorkflowRunById(started.runId);
+    const failure = snapshot!.steps![after.retry!.step] as any;
+    assert.ok(failure.payload.answer);
+    assert.equal(failure.payload.draft, undefined);
   } finally { await app.storage.close(); rmSync(fixture.directory, { recursive: true, force: true }); }
 });
 

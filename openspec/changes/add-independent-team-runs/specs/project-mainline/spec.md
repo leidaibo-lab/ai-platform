@@ -37,38 +37,45 @@
 - **WHEN** 独立团队 Run 恢复时其冻结来源、项目 revision、Adapter 或输入散列发生漂移
 - **THEN** 系统 SHALL 拒绝执行，并保留原生 Store 中已保存的输入和恢复事实
 
+#### Scenario: Product rework preserves the trusted boundary
+
+- **WHEN** 用户在独立产品团队的当前产品审批关口退回产品稿
+- **THEN** 服务端 SHALL 校验当前产物版本并派生返工输入，通过原生 timeTravel 重做
+- **AND** 原生入口 SHALL 只接受当前服务端调用授权的 Run、目标步骤与输入散列，拒绝直接提交伪造返工输入
+
+#### Scenario: Independent team resumes after platform dependency repair
+
+- **WHEN** 独立团队在平台依赖暂停点收到经过身份校验的修复通知
+- **THEN** 平台 SHALL 在该团队实际 Workflow 身份下原子认领原生快照并恢复
+- **AND** 来源、输入包、项目和候选版本 SHALL 在执行前再次核验，重复事件 SHALL 只回读已保存回执
+
+#### Scenario: Independent candidate and specification ownership
+
+- **WHEN** 测试或交付团队从已完成的来源 Run 启动
+- **THEN** 服务端 SHALL 校验来源检查点并复制候选到新 Run 的独占执行目录
+- **AND** 固定检查和审批事实 SHALL 绑定原候选散列，测试返工只修改新 Run 的候选
+- **AND** 正式规格 SHALL 在新 Run 分支按原回执重读后重新登记，上游关系 SHALL 随新回执重新绑定
+- **AND** 初始化中断后重试 SHALL 校验已存在副本并拒绝覆盖漂移内容
+- **AND** 测试和交付 SHALL 保存来源研发批准所绑定的原输入，批准散列 SHALL 继续绑定该输入和原方案
+- **AND** 仅候选所有者、项目关联和重新登记的 Git 回执可重绑定，业务正文、方法、预算和工程范围改变时 SHALL 拒绝继承批准
+
 ### Requirement: Team regression suites are independently executable
 
 产品、研发、测试和交付 SHALL 各自拥有可独立执行的团队级回归套件，覆盖专业规则、权限边界、输入输出契约、暂停/停止与版本绑定。全链路回归 SHALL 继续覆盖团队间交接、返工和端到端终态；团队级回归通过不得替代全链路或真实远端交付证据。
 
-### Requirement: Pluggable teams expose validated results and isolated execution
+#### Scenario: Independent team regression records its environment
 
-平台 SHALL 通过版本化团队注册描述声明四个团队的 Workflow、输入来源和输出类型。独立入口 SHALL 复用团队专业 Workflow；主流程的历史图和输入保持兼容。`team-run-output.v1` SHALL 包含规范输入散列、来源散列、当前 Run 关联、公共团队状态与经团队 Schema 校验的专业结果；完成必须由专业质量门决定。
+- **WHEN** 团队独立回归运行完成
+- **THEN** 报告 SHALL 记录实际 Workflow、来源版本、执行环境与结果
+- **AND** fixture、真实模型、真实远端 MR 和生产验收 SHALL 分别记录
 
-独立测试和交付 SHALL 从服务端来源候选复制经散列复核的源码到当前 Run 独占目录，保留上游研发输入、批准与累计预算，不修改来源 Run。当前执行关联和正式规格副本 SHALL 与上游批准输入分开保存，不得伪造新的研发批准。恢复 SHALL 在原生入口修改状态前重验冻结项目、来源和输入；禁止重初始化或注入替代上下文。
+### Requirement: Registered input packages use native approval facts
 
-预先提供的产品材料 SHALL 经独立的原生输入接入 Workflow 保存并人工确认；产品输入包只提供需求，研发产品输入包必须经过产品版本批准。测试输入包 SHALL 引用可验证的研发来源，不能上传自称通过的研发或 QA 状态。交付 SHALL 仅接受权威 QA 来源。
+输入包 SHALL 由服务端把原始产品需求或已核验的团队来源引用规范化后登记为 Mastra Workflow Run。确认 SHALL 记录工作台身份与当前版本；撤销 SHALL 使用同一 Workflow 的原生暂停关口。客户端 SHALL 只使用输入包 Run ID 和散列启动团队，不得借输入包注入批准、QA 或候选正文。输入包被撤销、模式或项目绑定变化、来源漂移时 SHALL 拒绝新启动与恢复。
 
-#### Scenario: Teams exchange canonical results
+#### Scenario: Confirm and revoke a registered input package
 
-- **WHEN** 一个团队独立完成本职工作
-- **THEN** 系统 SHALL 输出带团队标识、状态、版本和证据的规范结果
-- **AND** 后继团队 SHALL 按来源类型从 Store 重读结果，拒绝错团队、跨项目、漂移或未完成的来源
-
-#### Scenario: Source workflow matches its artifact
-
-- **WHEN** 下游请求指定已有来源 Workflow 和产物类型
-- **THEN** 服务端 SHALL 只接受主流程，或与该产物对应的独立上游团队 Workflow
-- **AND** SHALL 使用所指定的 Workflow ID 从 Store 读取，不得静默回退到主流程
-
-#### Scenario: Independent QA repairs its own candidate
-
-- **WHEN** 独立测试要求研发返工
-- **THEN** 研发返工 Port SHALL 仅操作本轮独占候选并沿用累计预算
-- **AND** 来源 Run 的快照、候选和批准 SHALL 保持原版本
-
-#### Scenario: Input package requires explicit confirmation
-
-- **WHEN** 用户提交预先准备的材料
-- **THEN** 接入 Workflow SHALL 校验团队、项目和材料结构并停在人工确认
-- **AND** 未确认包、旧版本确认或手工 QA 通过声明 SHALL 被拒绝
+- **WHEN** 用户登记输入包、明确确认后启动适用团队，再撤销该输入包
+- **THEN** Store SHALL 保存准备、确认和撤销的原生步骤事实
+- **AND** 团队启动 SHALL 只消费服务器重读的规范输入
+- **AND** 撤销后的新启动与已有团队恢复 SHALL 在执行前拒绝
