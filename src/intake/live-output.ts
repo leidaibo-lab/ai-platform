@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 /** 工作台实时输出只允许正文增量和工具生命周期，绝不携带参数、结果或推理。 */
 export type LiveOutputEvent =
   | { type: 'text'; text: string; role: string; attempt: number }
-  | { type: 'tool'; action: ToolAction; object?: string; state: 'started' | 'completed' | 'failed'; role: string; attempt: number };
+  | { type: 'tool'; action: ToolAction; object?: string; callId?: string; state: 'started' | 'completed' | 'failed'; role: string; attempt: number };
 
 /** 浏览器只接收标准化操作码，不接收模型或工具提供的原始名称。 */
 export type ToolAction = 'skill.load' | 'skill.read' | 'skill.search' | 'handoff.locate' | 'handoff.read' | 'file.read' | 'file.write' | 'checks.run' | 'task.delegate' | 'platform.info' | 'tool.invoke';
@@ -46,7 +47,8 @@ export function projectLiveOutputChunk(chunk: any, role: string, attempt: number
   if ((chunk?.type === 'tool-call' || chunk?.type === 'tool-result') && typeof chunk.payload?.toolName === 'string') {
     const projection = projectTool(chunk.payload.toolName, chunk.payload);
     const state = chunk.type === 'tool-call' ? 'started' : chunk.payload.isError ? 'failed' : 'completed';
-    return { type: 'tool', ...projection, state, role, attempt };
+    const callId = typeof chunk.payload.toolCallId === 'string' && chunk.payload.toolCallId.length <= 500 ? createHash('sha256').update(chunk.payload.toolCallId).digest('hex').slice(0, 24) : undefined;
+    return { type: 'tool', ...projection, ...(callId ? { callId } : {}), state, role, attempt };
   }
   return undefined;
 }

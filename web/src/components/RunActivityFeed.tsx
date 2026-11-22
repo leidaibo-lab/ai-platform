@@ -12,19 +12,9 @@ export interface LiveActivity {
   occurredAt: string;
 }
 
-export type ProductStreamEvent = { type: 'text'; text: string; role: string; attempt: number } | { type: 'tool'; action: string; object?: string; state: 'started' | 'completed' | 'failed'; role: string; attempt: number };
-export interface ProductStreamView { role: string; attempt: number; entries: Array<{ type: 'text'; text: string } | { type: 'tool'; action: string; object?: string; state: 'started' | 'completed' | 'failed' }>; }
-
-/** 将同一节点的文本增量合并；切换角色或重试时从新片段开始。 */
-export function appendProductStream(previous: ProductStreamView | undefined, event: ProductStreamEvent): ProductStreamView {
-  const entries = previous?.role === event.role && previous.attempt === event.attempt ? [...previous.entries] : [];
-  if (event.type === 'text') {
-    const last = entries.at(-1);
-    if (last?.type === 'text') entries[entries.length - 1] = { type: 'text', text: (last.text + event.text).slice(-30000) };
-    else entries.push({ type: 'text', text: event.text.slice(-30000) });
-  } else entries.push({ type: 'tool', action: event.action, ...(event.object ? { object: event.object } : {}), state: event.state });
-  return { role: event.role, attempt: event.attempt, entries: entries.slice(-100) };
-}
+export { appendProductStream } from './product-stream';
+export type { ProductStreamEvent, ProductStreamView } from './product-stream';
+import type { ProductStreamView } from './product-stream';
 
 interface RunActivityFeedProps {
   timeline?: RunTimelineDocument;
