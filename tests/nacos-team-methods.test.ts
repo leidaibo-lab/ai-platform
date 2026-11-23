@@ -26,7 +26,7 @@ import { readNacosConfig, type PracticeConfig } from '../src/mastra/config.js';
 test('统一目录贯穿真实方法调用、恢复身份与撤权；准备候选不发布', async () => {
   const root = resolve('.'); const temp = mkdtempSync(join(tmpdir(), 'team-nacos-')); const output = join(temp, 'candidate');
   const manifest = await prepareTeamMethods(root, output, '1.0.0');
-  assert.equal(manifest.skills.length, 6); assert.ok(manifest.prompts.length >= 44);
+  assert.equal(manifest.skills.length, 8); assert.ok(manifest.prompts.length >= 44);
   await assert.rejects(prepareTeamMethods(root, output, '1.0.0'), /拒绝覆盖/);
   assert.equal(manifest.status, 'prepared-not-reviewed-or-published');
   const prompts = new Map(manifest.prompts.map(prompt => [prompt.name, readFileSync(prompt.source, 'utf8')]));

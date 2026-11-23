@@ -10,7 +10,7 @@ import { loadNacosSnapshot, verifyNacosAccess } from '../src/mastra/nacos-resour
 import { createAgents } from '../src/mastra/agents/index.js';
 import { readNacosConfig } from '../src/mastra/config.js';
 
-test('6 项真实产品 Skill 包可全部通过版本读取、快照和原生 Agent 装配', /** 本地 HTTP 只模拟注册中心协议，不代表远端发布或质量审批。 */async () => {
+test('产品 Skill 包可全部通过版本读取、快照和原生 Agent 装配', /** 本地 HTTP 只模拟注册中心协议，不代表远端发布或质量审批。 */async () => {
   const directory = mkdtempSync(join(tmpdir(), 'nacos-product-suite-'));
   const destination = join(directory, 'export');
   const { version } = JSON.parse(readFileSync('nacos-resources/product/manifest.json', 'utf8')) as { version: string };
@@ -21,7 +21,7 @@ test('6 项真实产品 Skill 包可全部通过版本读取、快照和原生 A
     reviewerSkills: string[];
     skills: { name: string; version: string; archive: string; files: { path: string; sha256: string }[] }[];
   };
-  const expectedSkills = ['product-pm-product-requirements-alignment', 'product-requirements-handoff', 'product-pm-create-prd', 'product-pm-user-stories', 'product-pm-test-scenarios', 'product-pm-strategy-red-team'];
+  const expectedSkills = ['product-pm-product-requirements-alignment', 'product-requirements-handoff', 'product-pm-create-prd', 'product-pm-user-stories', 'product-pm-test-scenarios', 'product-pm-strategy-red-team', 'product-pm-gstack-discovery'];
   const expectedReviewerSkills = ['product-pm-product-requirements-alignment', 'product-requirements-handoff', 'product-pm-test-scenarios', 'product-pm-strategy-red-team'];
   assert.deepEqual(manifest.skills.map(/** 对照候选包中实际打包的资源。 */skill => skill.name), expectedSkills);
   assert.deepEqual(manifest.reviewerSkills, expectedReviewerSkills);

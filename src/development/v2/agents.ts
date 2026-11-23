@@ -65,6 +65,9 @@ function assignedMethods(role: RoleV2, state: StateV2, methods: DevelopmentMetho
   if (state.input.architectureDocumentFormat && (role === 'architect' || role === 'readiness')) {
     assigned.push({ skill: state.input.teamMethods ? methodSkill(state.input.teamMethods, 'architectureDocument') : methods.skills.architectureDocument, reference: 'document-layout.md' });
   }
+  // 历史冻结目录没有新增方法时保留原语义；不回退到当前本地资源。
+  const extra = role === 'architect' || role === 'readiness' || ['frontend', 'backend', 'infrastructure'].includes(role) ? 'engineeringReview' : role === 'reviewer' ? 'gstackCodeReview' : null;
+  if (extra && state.input.teamMethods?.skills[extra]) assigned.push({ skill: methodSkill(state.input.teamMethods, extra), reference: 'method.md' });
   return assigned;
 }
 

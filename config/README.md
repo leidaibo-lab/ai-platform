@@ -40,7 +40,7 @@ Nacos 是经治理 Prompt / Skill 的**版本化分发与发现服务**，不是
 
 此前本地 113 项产品方法不自动装入新 Run；如需使用，先治理并发布，再配置名称与版本。资源准备和候选清单见 [产品资源](../nacos-resources/product/README.md)与[角色清单](../docs/application/agent-resource-inventory.md)，真实服务记录见 [live 验证](../docs/application/nacos-live-run-findings.md)。候选包/模拟服务验证不能代替目标环境授权与业务质量验收。
 
-当前本机产品候选基线为 `1.5.0`，由 `nacos-resources/product/manifest.json` 定义并在本机 Nacos 逐项读回核验；这只是本机资源可读证据，不代表生产 Nacos、跨机器发布、真实模型质量或业务上线验收。已启动的历史 Run 按启动时冻结的版本继续，不能改用该候选版本。
+本机已核验产品资源基线为 `1.5.0`；`nacos-resources/product/manifest.json` 定义的新 `1.6.0` 候选增加 gstack 产品探索方法，尚需审查、发布和目标 Nacos 读回核验。新团队目录也需发布工程方案与代码审查两个新增槽位。已启动的历史 Run 按冻结版本继续；这些候选不代表真实模型质量或业务上线验收。
 
 ### 工程登记与远端同步
 

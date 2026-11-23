@@ -13,6 +13,8 @@ export const teamSkillSources = {
   architectureDocument: { path: 'development/architecture-document', name: 'development-architecture-document' },
   review: { path: 'development/bmad-code-review', name: 'development-bmad-code-review' },
   browser: { path: 'testing/gstack-browser-qa', name: 'testing-gstack-browser-qa' },
+  engineeringReview: { path: 'development/gstack-engineering-review', name: 'development-gstack-engineering-review' },
+  gstackCodeReview: { path: 'development/gstack-code-review', name: 'development-gstack-code-review' },
 } as const;
 
 /** 发布版本由配置明确选择，不查询 latest。 */

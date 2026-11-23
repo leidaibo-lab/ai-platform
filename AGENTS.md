@@ -41,6 +41,7 @@
 - 工作台页面设计、样式与交互使用 `.agents/skills/workbench/ui-design/`，结合现有组件和实际浏览器验证。
 - 研发架构送审 Skill：`.agents/skills/development/architecture-document/`。研发负责人生成正文和图，就绪审查核对其与任务包的一致性。
 - Mastra 框架设计、开发、评审或排障使用 `.agents/skills/development/mastra-framework/`，先核实已安装版本的原生能力与 API，再结合项目契约实施。
+- gstack 工程方案与只读代码审查方法见 `.agents/skills/development/gstack-engineering-review/` 和 `.agents/skills/development/gstack-code-review/`；产品探索见 `nacos-resources/product/skills/product-pm/gstack-discovery/`，工具权限仍由宿主决定。
 - 产品 Skill 位于 `nacos-resources/product/skills/`。正式需求写作与复核见 `product-pm/product-requirements-alignment`，平台版式与双文档追踪见 `product/requirements-handoff`。本地与 Nacos 候选绑定统一由 `nacos-resources/product/manifest.json` 定义。
 - Nacos 是经治理团队 Prompt / Skill 的版本化分发与发现服务，不保存业务数据、审批或 Run 状态，也不授予工具、仓库或部署权限。团队 Prompt 源资产位于 `nacos-resources/teams/prompts.json`；研发及浏览器 QA Skill 沿用 `.agents/skills/` 的受治理源。新 live Run 从 Nacos 冻结完整方法目录，历史快照按原身份恢复；修改方法须同步资源绑定与验证。
 - Mastra 操作文档：`docs/application/`

@@ -31,13 +31,13 @@ export function createStudioApplicationOptions(config: PracticeConfig) {
     const contract = readProjectDeliveryContract(selected, undefined, defaultContractForAdapter(candidate));
     assertDeliveryContractMatchesAdapter(contract.contract, candidate);
   }
-  const agents = createAgents(config, { workspace: productWorkspace(config) });
   const storage = new LibSQLStore({ id: 'native-practice-storage', url: config.databaseUrl });
+  const agents = createAgents(config, { workspace: productWorkspace(config), storage });
   const productDevelopmentWorkflow = createProductDevelopmentWorkflow(agents, config, undefined, { storage });
   const independentTeams = createIndependentTeamWorkflows(agents, config, storage);
   const teamInputPackage = createTeamInputPackageWorkflow(config);
   return {
-    agents: { productManagerAgent: agents.productManagerAgent, productReviewerAgent: agents.productReviewerAgent, testingAgent: agents.testingAgent },
+    agents: { productManagerAgent: agents.productManagerAgent, productReviewerAgent: agents.productReviewerAgent, testingAgent: agents.testingAgent, developmentLeadAgent: agents.developmentLeadAgent, developmentImplementerAgent: agents.developmentImplementerAgent, developmentReviewerAgent: agents.developmentReviewerAgent },
     scorers: createNodeScorers(config),
     workflows: { productDevelopmentWorkflow, ...independentTeams, teamInputPackage, ...createDevelopmentNodeWorkflows(config) },
     storage,

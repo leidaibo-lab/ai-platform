@@ -1,0 +1,8 @@
+[
+  {"id":"product-discovery","role":"product","prompt":"虚构场景：小团队希望做请假申请。已确认：直属主管审批、审批前员工可撤回；审批后是否撤销、主管缺席是否代理均未决。使用 product-pm-gstack-discovery 探索问题、挑战前提，给出备选和需要人工确认的关键问题，区分事实与建议，不得编造访谈或审批。"},
+  {"id":"lead-undecided","role":"lead","prompt":"虚构需求：REQ-1 仅直属主管可审批待审批申请；REQ-2 员工审批前可撤回；审批后是否撤销未决。TypeScript、PostgreSQL，现有文件和接口未知。使用架构文档和任务交接方法给出方案、需求追踪、图、任务与验证。不得把未决规则写成已确认验收。"},
+  {"id":"implement-undecided","role":"implementer","prompt":"虚构任务：REQ-1 员工审批前可撤回；审批后是否撤销未决。代码 async function withdraw(id,user){ return db.update(id,{status:'withdrawn'}) }。TypeScript、PostgreSQL，其他接口未知。使用实现提案方法给出伪代码、需求与测试映射，区分确定规则和待决规则。"},
+  {"id":"implement-confirmed","role":"implementer","prompt":"虚构任务：REQ-1 员工审批前可撤回；REQ-2 已批准申请明确禁止员工撤销，必须返回失败且状态不变。代码 async function withdraw(id,user){ return db.update(id,{status:'withdrawn'}) }。TypeScript、PostgreSQL，其他接口未知。使用实现提案方法给出伪代码与测试映射，不得将已确认规则标为待决。"},
+  {"id":"review-defect","role":"reviewer","prompt":"虚构已批准需求：仅直属主管可审批 pending，重复审批拒绝。代码 leave.ts:1 async function approve(id,user){const x=await db.get(id);if(x.status==='pending') await db.update(id,{status:'approved'});return {ok:true}}。只提供格式检查通过证据。使用代码审查方法报告真实可定位问题、影响和未验证项。"},
+  {"id":"review-clean","role":"reviewer","prompt":"虚构已批准需求：函数 trimTitle 返回字符串去除首尾空白后的结果。完整变更文件 title.ts:1 export function trimTitle(value: string): string { return value.trim(); }。无其他业务需求，无检查执行证据。使用代码审查方法，只有能由代码和需求证明的缺陷才报告；未验证项单独列出。"}
+]

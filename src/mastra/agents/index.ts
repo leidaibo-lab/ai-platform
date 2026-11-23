@@ -6,7 +6,7 @@ import { resolveModelId, type PracticeConfig } from '../config.js';
 import { practiceInfoTool } from '../tools/practice-info.js';
 import { createFixtureModel } from './fixture-model.js';
 import { resolve } from 'node:path';
-import { loadProductSkillSelection, PRODUCT_MAX_STEPS } from '../skills.js';
+import { loadGovernedSkill, loadProductSkillSelection, PRODUCT_MAX_STEPS } from '../skills.js';
 import { productManagerProfile, productReviewerProfile, type ProductAgentRole } from './product-roles.js';
 import type { AnyWorkspace } from '@mastra/core/workspace';
 import type { ToolsInput } from '@mastra/core/agent';
@@ -91,6 +91,16 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
       tools: options.workspaceTools,
     });
   }
+  /** Studio 使用受治理方法和独立会话，不装配项目工作区或执行工具。 */
+  function developmentChatAgent(id: string, name: string, responsibility: string, skillPaths: string[]) {
+    return new Agent({
+      id, name, model: model('development'),
+      instructions: `你是${name}。${responsibility}只依据用户在对话中提供的材料工作，缺少必要上下文时明确说明。按任务使用已绑定的只读 Skill。区分已确认事实、技术建议和待决业务规则；待决规则不得写成已批准验收或确定行为。代码和补丁仅为建议；不得声称读取了仓库、修改了文件、运行了检查，或获得了审批与交付结果。`,
+      memory: createNativeMemory(model('development'), options.storage, methods),
+      skills: skillPaths.map(path => loadGovernedSkill(resolve(config.rootDir, '.agents/skills'), path)),
+      defaultOptions: { maxSteps: PRODUCT_MAX_STEPS },
+    });
+  }
   return {
     minimalAgent: new Agent({
       id: 'minimal-agent', name: 'Mastra 原生最小助手',
@@ -102,6 +112,9 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
       instructions: methodPrompt('mastra.agents.index.4', options.methods ?? options.resources?.methods),
     }),
     testingAgent: stageAgent('testing'),
+    developmentLeadAgent: developmentChatAgent('studio-development-lead-agent', '研发负责人 Agent', '分析需求、设计技术方案、拆分任务并指出待决问题。', ['development/architecture-document', 'development/bmad-task-handoff', 'development/gstack-engineering-review']),
+    developmentImplementerAgent: developmentChatAgent('studio-development-implementer-agent', '研发实施 Agent', '根据提供的任务和代码给出实现或补丁建议。', ['development/implementation-handoff', 'development/gstack-engineering-review']),
+    developmentReviewerAgent: developmentChatAgent('studio-development-reviewer-agent', '研发审查 Agent', '独立审查提供的方案、代码或差异，说明问题、依据和验证建议。', ['development/bmad-code-review', 'development/gstack-code-review']),
     productManagerAgent: specializedProductAgent(productManagerProfile, 'product-manager-agent', 'product-manager'),
     productReviewerAgent: specializedProductAgent(productReviewerProfile, 'product-reviewer-agent', 'product-reviewer'),
   };

@@ -37,8 +37,8 @@ test('111项上游入口和解析后资源完整且符合来源锁', async () =>
     // 原生对象名称作为引用解析集合。
     (skill) => skill.name,
   ));
-  assert.equal(loaded.length, 113);
-  assert.equal(names.size, 113);
+  assert.equal(loaded.length, 114);
+  assert.equal(names.size, 114);
   const sources = new Set<string>();
   for (const entry of lock.entries) {
     counts[entry.kind]++;
@@ -129,7 +129,7 @@ for (const [agentKey, profile] of [['productManagerAgent', productManagerProfile
     const listed = await agent.listSkills();
     const names = new Set(listed.map(/** 收集实际发现的角色方法。 */skill => skill.name));
     const expected = ['product-pm-product-requirements-alignment', 'product-requirements-handoff', 'product-pm-test-scenarios', 'product-pm-strategy-red-team'];
-    if (agentKey === 'productManagerAgent') expected.push('product-pm-create-prd', 'product-pm-user-stories');
+    if (agentKey === 'productManagerAgent') expected.push('product-pm-create-prd', 'product-pm-user-stories', 'product-pm-gstack-discovery');
     assert.deepEqual(names, new Set(expected));
     const instructions = JSON.stringify(await agent.getInstructions());
     assert.ok(instructions.includes(profile.instructions));
