@@ -8,6 +8,16 @@
 
 ## Requirements
 
+### Requirement: Studio provides native agent editing
+
+Studio SHALL 注册 Mastra 原生 Editor 并复用当前 Mastra Store，支持对 Studio 注册的 Agent 保存草稿和发布配置。Editor 的配置 SHALL NOT 替代 Run 冻结的团队方法目录或审批事实。
+
+#### Scenario: Edit a registered agent in Studio
+
+- **WHEN** 用户打开 Studio 中已注册 Agent 的编辑器
+- **THEN** 系统 SHALL 提供原生编辑、草稿和发布能力，编辑数据保存在当前 Store
+- **AND** 当前 Run 冻结的方法和审批事实 SHALL 保持原有语义
+
 ### Requirement: All team methods use a frozen Nacos catalog
 
 启用 Nacos 的新 live 主线 Run SHALL 在初始化冻结产品、研发、测试、浏览器 QA 及共享上下文方法的角色和任务 Prompt、Skill 正文、references、角色绑定、精确版本和摘要。方法 SHALL 来自统一的服务端清单；缺失绑定或资源、越界、撤销及同版本漂移 SHALL 失败关闭，不得静默回退本地方法。Nacos SHALL NOT 授予工具、改变结构化输出 Schema、执行计划、预算上限或人工审批事实。

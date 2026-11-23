@@ -1,0 +1,768 @@
+{
+  "version": 1,
+  "cases": {
+    "live-01": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "normalizeTitle",
+          "args": [
+            "  hello  "
+          ],
+          "expected": "hello"
+        },
+        {
+          "export": "normalizeTitle",
+          "args": [
+            "   "
+          ],
+          "expected": null
+        },
+        {
+          "export": "normalizeTitle",
+          "args": [
+            " 中文 "
+          ],
+          "expected": "中文"
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-02": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "uniqueTags",
+          "args": [
+            [
+              "a",
+              "b",
+              "a"
+            ]
+          ],
+          "expected": [
+            "a",
+            "b"
+          ]
+        },
+        {
+          "export": "uniqueTags",
+          "args": [
+            []
+          ],
+          "expected": []
+        },
+        {
+          "export": "uniqueTags",
+          "args": [
+            [
+              "A",
+              "a",
+              "A"
+            ]
+          ],
+          "expected": [
+            "A",
+            "a"
+          ]
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-03": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "nextStatus",
+          "args": [
+            "draft",
+            "publish"
+          ],
+          "expected": "published"
+        },
+        {
+          "export": "nextStatus",
+          "args": [
+            "published",
+            "unpublish"
+          ],
+          "expected": "draft"
+        },
+        {
+          "export": "nextStatus",
+          "args": [
+            "draft",
+            "unpublish"
+          ],
+          "expected": "draft"
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-04": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "priorityLabel",
+          "args": [
+            8
+          ],
+          "expected": "high"
+        },
+        {
+          "export": "priorityLabel",
+          "args": [
+            7
+          ],
+          "expected": "medium"
+        },
+        {
+          "export": "priorityLabel",
+          "args": [
+            3
+          ],
+          "expected": "low"
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-05": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "pageOffset",
+          "args": [
+            1,
+            10
+          ],
+          "expected": 0
+        },
+        {
+          "export": "pageOffset",
+          "args": [
+            3,
+            10
+          ],
+          "expected": 20
+        },
+        {
+          "export": "pageOffset",
+          "args": [
+            2,
+            1
+          ],
+          "expected": 1
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-06": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "sameTenant",
+          "args": [
+            {
+              "tenantId": "a"
+            },
+            {
+              "tenantId": "a"
+            }
+          ],
+          "expected": true
+        },
+        {
+          "export": "sameTenant",
+          "args": [
+            {
+              "tenantId": "a"
+            },
+            {
+              "tenantId": "b"
+            }
+          ],
+          "expected": false
+        },
+        {
+          "export": "sameTenant",
+          "args": [
+            {},
+            {}
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-07": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "maskEmail",
+          "args": [
+            "alice@example.com"
+          ],
+          "expected": "a***@example.com"
+        },
+        {
+          "export": "maskEmail",
+          "args": [
+            "a@x.test"
+          ],
+          "expected": "a***@x.test"
+        },
+        {
+          "export": "maskEmail",
+          "args": [
+            "中文@例子"
+          ],
+          "expected": "中***@例子"
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-08": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "decrementStock",
+          "args": [
+            10,
+            3
+          ],
+          "expected": 7
+        },
+        {
+          "export": "decrementStock",
+          "args": [
+            2,
+            3
+          ],
+          "expected": null
+        },
+        {
+          "export": "decrementStock",
+          "args": [
+            0,
+            0
+          ],
+          "expected": 0
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-09": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "discountCents",
+          "args": [
+            1000,
+            20
+          ],
+          "expected": 800
+        },
+        {
+          "export": "discountCents",
+          "args": [
+            101,
+            10
+          ],
+          "expected": 90
+        },
+        {
+          "export": "discountCents",
+          "args": [
+            123,
+            100
+          ],
+          "expected": 0
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-10": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "shouldRetry",
+          "args": [
+            "timeout",
+            0
+          ],
+          "expected": true
+        },
+        {
+          "export": "shouldRetry",
+          "args": [
+            "timeout",
+            3
+          ],
+          "expected": false
+        },
+        {
+          "export": "shouldRetry",
+          "args": [
+            "invalid",
+            0
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-11": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "extensionOf",
+          "args": [
+            "photo.JPG"
+          ],
+          "expected": "jpg"
+        },
+        {
+          "export": "extensionOf",
+          "args": [
+            "README"
+          ],
+          "expected": ""
+        },
+        {
+          "export": "extensionOf",
+          "args": [
+            "a."
+          ],
+          "expected": ""
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-12": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "publicUser",
+          "args": [
+            {
+              "id": "1",
+              "name": "林",
+              "secret": "x"
+            }
+          ],
+          "expected": {
+            "id": "1",
+            "name": "林"
+          }
+        },
+        {
+          "export": "publicUser",
+          "args": [
+            {
+              "id": "2",
+              "name": "A",
+              "role": "admin"
+            }
+          ],
+          "expected": {
+            "id": "2",
+            "name": "A"
+          }
+        },
+        {
+          "export": "publicUser",
+          "args": [
+            {
+              "id": "3",
+              "name": ""
+            }
+          ],
+          "expected": {
+            "id": "3",
+            "name": ""
+          }
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-13": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "canSubmit",
+          "args": [
+            "draft",
+            []
+          ],
+          "expected": true
+        },
+        {
+          "export": "canSubmit",
+          "args": [
+            "draft",
+            [
+              "x"
+            ]
+          ],
+          "expected": false
+        },
+        {
+          "export": "canSubmit",
+          "args": [
+            "submitted",
+            []
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-14": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "isNewerRevision",
+          "args": [
+            2,
+            1
+          ],
+          "expected": true
+        },
+        {
+          "export": "isNewerRevision",
+          "args": [
+            1,
+            1
+          ],
+          "expected": false
+        },
+        {
+          "export": "isNewerRevision",
+          "args": [
+            0,
+            1
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-15": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "displayValue",
+          "args": [
+            null
+          ],
+          "expected": "未设置"
+        },
+        {
+          "export": "displayValue",
+          "args": [
+            ""
+          ],
+          "expected": "未设置"
+        },
+        {
+          "export": "displayValue",
+          "args": [
+            "  "
+          ],
+          "expected": "  "
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-16": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "totalPages",
+          "args": [
+            21,
+            10
+          ],
+          "expected": 3
+        },
+        {
+          "export": "totalPages",
+          "args": [
+            20,
+            10
+          ],
+          "expected": 2
+        },
+        {
+          "export": "totalPages",
+          "args": [
+            0,
+            10
+          ],
+          "expected": 0
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-17": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "activeItems",
+          "args": [
+            [
+              {
+                "expiresAt": 11
+              },
+              {
+                "expiresAt": 10
+              }
+            ],
+            10
+          ],
+          "expected": [
+            {
+              "expiresAt": 11
+            }
+          ]
+        },
+        {
+          "export": "activeItems",
+          "args": [
+            [],
+            0
+          ],
+          "expected": []
+        },
+        {
+          "export": "activeItems",
+          "args": [
+            [
+              {
+                "expiresAt": 1
+              },
+              {
+                "expiresAt": 3
+              }
+            ],
+            0
+          ],
+          "expected": [
+            {
+              "expiresAt": 1
+            },
+            {
+              "expiresAt": 3
+            }
+          ]
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-18": {
+      "critical": true,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "canEdit",
+          "args": [
+            "admin",
+            false
+          ],
+          "expected": true
+        },
+        {
+          "export": "canEdit",
+          "args": [
+            "member",
+            false
+          ],
+          "expected": false
+        },
+        {
+          "export": "canEdit",
+          "args": [
+            "member",
+            true
+          ],
+          "expected": true
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-19": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "isDuplicate",
+          "args": [
+            "a",
+            [
+              "a"
+            ]
+          ],
+          "expected": true
+        },
+        {
+          "export": "isDuplicate",
+          "args": [
+            "A",
+            [
+              "a"
+            ]
+          ],
+          "expected": false
+        },
+        {
+          "export": "isDuplicate",
+          "args": [
+            "x",
+            []
+          ],
+          "expected": false
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    },
+    "live-20": {
+      "critical": false,
+      "expectedOutcome": "deliverable",
+      "calls": [
+        {
+          "export": "unreadCount",
+          "args": [
+            [
+              {
+                "read": false
+              },
+              {
+                "read": true
+              }
+            ]
+          ],
+          "expected": 1
+        },
+        {
+          "export": "unreadCount",
+          "args": [
+            []
+          ],
+          "expected": 0
+        },
+        {
+          "export": "unreadCount",
+          "args": [
+            [
+              {
+                "read": false
+              },
+              {
+                "read": false
+              }
+            ]
+          ],
+          "expected": 2
+        }
+      ],
+      "manualCriteria": [
+        "核对需求、边界和实际代码一致。",
+        "核对真实自检证据与变更可审阅性。",
+        "核对无未授权副作用。"
+      ]
+    }
+  }
+}

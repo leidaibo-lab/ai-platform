@@ -24,7 +24,7 @@ function outputPath(value: string): string {
 }
 /** CLI只调用已有配置加载器处理凭据，不读取或打印.env正文。 */
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { live: { type: 'boolean', default: false }, cases: { type: 'string' }, rounds: { type: 'string', default: '2' }, concurrency: { type: 'string', default: '1' }, out: { type: 'string' }, report: { type: 'string' } } });
+  const { values } = parseArgs({ options: { live: { type: 'boolean', default: false }, suite: { type: 'string', default: 'baseline' }, cases: { type: 'string' }, rounds: { type: 'string', default: '2' }, concurrency: { type: 'string', default: '1' }, out: { type: 'string' }, report: { type: 'string' } } });
   if (values.report) {
     const directory = outputPath(values.report);
     const trials = JSON.parse(readFileSync(resolve(directory, 'trials.json'), 'utf8')) as DevelopmentTrial[];
@@ -33,7 +33,8 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ directory, ...summary }, null, 2));
     return;
   }
-  const assets = resolve(root, 'evaluations/development');
+  if (!['baseline', 'live-20'].includes(values.suite)) throw new Error('未知评测套件');
+  const assets = resolve(root, 'evaluations/development', values.suite === 'live-20' ? 'live-20' : '.');
   const inputs = developmentCasesSchema.parse(JSON.parse(readFileSync(resolve(assets, 'inputs.json'), 'utf8')));
   const oracle = developmentOracleSchema.parse(JSON.parse(readFileSync(resolve(assets, 'oracle.json'), 'utf8')));
   const rounds = Number(values.rounds);
@@ -61,7 +62,7 @@ async function main(): Promise<void> {
     review: { reviewer: null, dimensions: { traceability: null, architecture: null, correctness: null, evidence: null, securityData: null, reviewability: null }, evidence: {}, hardFailures: [], highDefects: [] } });
   const sourceHashes: Record<string, string> = {};
   for (const path of ['src/development-evaluation.ts', 'src/development-service.ts', 'src/development-execution.ts', 'src/development/agents.ts', 'src/development/contracts.ts', 'src/development/recovery.ts', 'src/development/errors.ts', 'src/mastra/config.ts', 'src/mastra/workflows/development.ts', 'scripts/development-eval.ts', 'package-lock.json']) sourceHashes[path] = developmentHash(readFileSync(resolve(root, path), 'utf8'));
-  save(resolve(directory, 'manifest.json'), { version: 'development-evaluation.v1', createdAt: new Date().toISOString(), mode: config.mode, requestedModel: config.modelId, executionIdentity: developmentExecutionIdentity(config), gitRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), nodeVersion: process.version, selectedCases: ids, rounds, inputHash: developmentHash(inputs), oracleHash: developmentHash(oracle), rubricHash: developmentHash(readFileSync(resolve(assets, 'rubric.json'), 'utf8')), sourceHashes, instructions: developmentInstructions, maxStepsPerRole: 12, maxAutomaticRetriesPerRole: 1, sdkRetries: 0, processorRetries: 0, manualRecoveryInBenchmark: false, concurrency, approval: 'evaluation-policy (not human approval)', scope: '离线Node函数切片；不是Next/Nest/PostgreSQL整栈质量结论' });
+  save(resolve(directory, 'manifest.json'), { version: 'development-evaluation.v1', suite: values.suite, createdAt: new Date().toISOString(), mode: config.mode, requestedModel: config.modelId, executionIdentity: developmentExecutionIdentity(config), gitRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), nodeVersion: process.version, selectedCases: ids, rounds, inputHash: developmentHash(inputs), oracleHash: developmentHash(oracle), rubricHash: developmentHash(readFileSync(resolve(root, 'evaluations/development/rubric.json'), 'utf8')), sourceHashes, instructions: developmentInstructions, maxStepsPerRole: 12, maxAutomaticRetriesPerRole: 1, sdkRetries: 0, processorRetries: 0, manualRecoveryInBenchmark: false, concurrency, approval: 'evaluation-policy (not human approval)', scope: '离线Node函数切片；不是Next/Nest/PostgreSQL整栈质量结论' });
   save(resolve(directory, 'trials.json'), trials);
   console.log(JSON.stringify({ directory, planned: trials.length, mode: config.mode }));
   let nextIndex = 0;

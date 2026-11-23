@@ -9,6 +9,7 @@ import { createDevelopmentNodeWorkflows } from '../evaluation/development-nodes.
 import { createNodeScorers } from '../evaluation/scorers.js';
 import { ConsoleLogger } from '@mastra/core/logger';
 import { LibSQLStore } from '@mastra/libsql';
+import { MastraEditor } from '@mastra/editor';
 import type { PracticeConfig } from './config.js';
 import { createAgents } from './agents/index.js';
 import { productWorkspace } from './project-workspaces.js';
@@ -40,6 +41,7 @@ export function createStudioApplicationOptions(config: PracticeConfig) {
     scorers: createNodeScorers(config),
     workflows: { productDevelopmentWorkflow, ...independentTeams, teamInputPackage, ...createDevelopmentNodeWorkflows(config) },
     storage,
+    editor: new MastraEditor(),
     ...(config.localTrace ? { observability: createLocalObservability() } : {}),
     logger: new ConsoleLogger({ name: 'mastra-native-practice', level: 'info' }),
     server: { host: '127.0.0.1', port: config.port, apiRoutes: [...createTeamRunRoutes({ productDevelopmentWorkflow, ...independentTeams, teamInputPackage }, config), createIntakeVoiceRoute(config), ...createAssetRoutes(config), ...createIntakeRoutes(productDevelopmentWorkflow, config.mode, repository, config), ...createPlatformRecoveryRoutes(productDevelopmentWorkflow, config)] },

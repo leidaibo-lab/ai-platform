@@ -1,0 +1,385 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "live-01",
+      "category": "live-synthetic",
+      "title": "标题规范化",
+      "requirement": "实现 normalizeTitle(title)。输入为字符串；按 trim 去首尾空白，空结果返回 null，否则返回去空白的字符串。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现标题规范化。 */\nexport function normalizeTitle(title) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { normalizeTitle } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(normalizeTitle(...[\"  hello  \"]), \"hello\"));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-02",
+      "category": "live-synthetic",
+      "title": "标签去重",
+      "requirement": "实现 uniqueTags(tags)。输入为字符串数组，按原顺序去除完全相同的重复项，区分大小写，返回新数组。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现标签去重。 */\nexport function uniqueTags(tags) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { uniqueTags } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(uniqueTags(...[[\"a\", \"b\", \"a\"]]), [\"a\", \"b\"]));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-03",
+      "category": "live-synthetic",
+      "title": "状态转换",
+      "requirement": "实现 nextStatus(status, action)。status 为 draft/published，action 为 publish/unpublish；draft 加 publish 返回 published，published 加 unpublish 返回 draft，其余返回原状态。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现状态转换。 */\nexport function nextStatus(status, action) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { nextStatus } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(nextStatus(...[\"draft\", \"publish\"]), \"published\"));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-04",
+      "category": "live-synthetic",
+      "title": "任务优先级",
+      "requirement": "实现 priorityLabel(priority)。输入为整数；大于等于 8 返回 high，4 到 7 返回 medium，小于 4 返回 low。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现任务优先级。 */\nexport function priorityLabel(priority) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { priorityLabel } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(priorityLabel(...[8]), \"high\"));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-05",
+      "category": "live-synthetic",
+      "title": "分页偏移",
+      "requirement": "实现 pageOffset(page, size)。输入均为正整数，返回从零开始的偏移量 (page-1)*size。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现分页偏移。 */\nexport function pageOffset(page, size) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { pageOffset } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(pageOffset(...[1, 10]), 0));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-06",
+      "category": "live-synthetic",
+      "title": "租户隔离",
+      "requirement": "实现 sameTenant(actor, resource)。输入为对象；只有双方 tenantId 均为非空字符串且严格相等才返回 true，其他返回 false。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现租户隔离。 */\nexport function sameTenant(actor, resource) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { sameTenant } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(sameTenant(...[{\"tenantId\": \"a\"}, {\"tenantId\": \"a\"}]), true));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-07",
+      "category": "live-synthetic",
+      "title": "脱敏邮箱",
+      "requirement": "实现 maskEmail(email)。输入为包含一个 @ 且本地部分非空的字符串；返回本地部分首字符加三个星号、@ 和原域名。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现脱敏邮箱。 */\nexport function maskEmail(email) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { maskEmail } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(maskEmail(...[\"alice@example.com\"]), \"a***@example.com\"));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-08",
+      "category": "live-synthetic",
+      "title": "库存扣减",
+      "requirement": "实现 decrementStock(stock, quantity)。输入均为非负整数；数量超过库存返回 null，否则返回扣减后的库存数字。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现库存扣减。 */\nexport function decrementStock(stock, quantity) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { decrementStock } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(decrementStock(...[10, 3]), 7));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-09",
+      "category": "live-synthetic",
+      "title": "金额折扣",
+      "requirement": "实现 discountCents(cents, percent)。输入均为非负整数且 percent 在 0 到 100；返回 cents 乘以 (100-percent) 除以 100 后向下取整的整数分。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现金额折扣。 */\nexport function discountCents(cents, percent) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { discountCents } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(discountCents(...[1000, 20]), 800));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-10",
+      "category": "live-synthetic",
+      "title": "重试决策",
+      "requirement": "实现 shouldRetry(code, attempts)。code 为字符串，attempts 为非负整数；仅当 code 是 timeout 或 unavailable 且 attempts 小于 3 时返回 true。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现重试决策。 */\nexport function shouldRetry(code, attempts) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { shouldRetry } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(shouldRetry(...[\"timeout\", 0]), true));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-11",
+      "category": "live-synthetic",
+      "title": "文件扩展名",
+      "requirement": "实现 extensionOf(name)。输入为文件名字符串；取最后一个点之后的内容并转小写，无点或点在最后则返回空字符串。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现文件扩展名。 */\nexport function extensionOf(name) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { extensionOf } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(extensionOf(...[\"photo.JPG\"]), \"jpg\"));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-12",
+      "category": "live-synthetic",
+      "title": "白名单字段",
+      "requirement": "实现 publicUser(user)。输入对象有 id、name，可能有其他字段；返回只包含 id 和 name 的新对象。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现白名单字段。 */\nexport function publicUser(user) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { publicUser } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(publicUser(...[{\"id\": \"1\", \"name\": \"林\", \"secret\": \"x\"}]), {\"id\": \"1\", \"name\": \"林\"}));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-13",
+      "category": "live-synthetic",
+      "title": "审批状态",
+      "requirement": "实现 canSubmit(status, errors)。status 为字符串，errors 为数组；仅 status 为 draft 且 errors 为空时返回 true。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现审批状态。 */\nexport function canSubmit(status, errors) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { canSubmit } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(canSubmit(...[\"draft\", []]), true));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-14",
+      "category": "live-synthetic",
+      "title": "版本比较",
+      "requirement": "实现 isNewerRevision(incoming, current)。输入为非负整数；只有 incoming 严格大于 current 返回 true。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现版本比较。 */\nexport function isNewerRevision(incoming, current) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { isNewerRevision } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(isNewerRevision(...[2, 1]), true));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-15",
+      "category": "live-synthetic",
+      "title": "展示空值",
+      "requirement": "实现 displayValue(value)。输入为字符串或 null；null 或空字符串返回 未设置，其他字符串原样返回，空白字符串不视为空。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现展示空值。 */\nexport function displayValue(value) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { displayValue } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(displayValue(...[null]), \"未设置\"));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-16",
+      "category": "live-synthetic",
+      "title": "分页页数",
+      "requirement": "实现 totalPages(total, size)。total 为非负整数，size 为正整数；返回总页数，零条时返回 0，其他向上取整。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现分页页数。 */\nexport function totalPages(total, size) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { totalPages } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(totalPages(...[21, 10]), 3));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-17",
+      "category": "live-synthetic",
+      "title": "去除过期项",
+      "requirement": "实现 activeItems(items, now)。items 为含 expiresAt 数字的对象数组，now 为数字；返回 expiresAt 严格大于 now 的元素组成的新数组，保留原顺序。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现去除过期项。 */\nexport function activeItems(items, now) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { activeItems } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(activeItems(...[[{\"expiresAt\": 11}, {\"expiresAt\": 10}], 10]), [{\"expiresAt\": 11}]));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-18",
+      "category": "live-synthetic",
+      "title": "权限校验",
+      "requirement": "实现 canEdit(role, owner)。role 为 admin/member/guest，owner 为布尔值；admin 总可编辑，member 仅 owner 为 true 可编辑，guest 不可编辑。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现权限校验。 */\nexport function canEdit(role, owner) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { canEdit } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(canEdit(...[\"admin\", false]), true));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-19",
+      "category": "live-synthetic",
+      "title": "幂等键判断",
+      "requirement": "实现 isDuplicate(key, prior)。key 为字符串，prior 为字符串数组；严格匹配已有键返回 true，否则 false，不修改数组。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现幂等键判断。 */\nexport function isDuplicate(key, prior) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { isDuplicate } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(isDuplicate(...[\"a\", [\"a\"]]), true));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    },
+    {
+      "id": "live-20",
+      "category": "live-synthetic",
+      "title": "通知未读数",
+      "requirement": "实现 unreadCount(notifications)。输入为包含 read 布尔字段的对象数组，返回 read 为 false 的数量。 所有规则为评测组织者定义的合成规则；输入域以本需求为准，不访问外部服务。",
+      "roles": [
+        "architect",
+        "backend",
+        "self-check"
+      ],
+      "files": {
+        "src/solution.mjs": "/** 实现通知未读数。 */\nexport function unreadCount(notifications) {\n  throw new Error('TODO');\n}\n"
+      },
+      "publicChecksFiles": {
+        "smoke.test.mjs": "import assert from 'node:assert/strict';\nimport { test } from 'node:test';\nimport { unreadCount } from './src/solution.mjs';\n\n/** 检查公开的普通输入。 */\ntest('public smoke', () => assert.deepEqual(unreadCount(...[[{\"read\": false}, {\"read\": true}]]), 1));\n"
+      },
+      "maxReworks": 1,
+      "expectedOutcome": "deliverable"
+    }
+  ]
+}
