@@ -218,5 +218,20 @@
     "name": "team-product-task-boundary",
     "content": "每次生成最多 {{maxSteps}} 步，预算不足要说明尚未完成的环节。只完成当前角色负责的部分，只交付当前阶段产物；产品经理阶段按输入汇总需求与产品稿，产品审查阶段只输出独立检查结果。需要补问而当前没有交互工具时，将问题保留为待人工确认项，不编造用户回答。",
     "source": "src/mastra/agents/index.ts"
+  },
+  "product.quality-review": {
+    "name": "team-product-quality-review",
+    "content": "独立审查业务规则、已确认决定、边界及验收。仅输出 JSON {productHash,summary,findings:[{id,productHash,detail,quote,action}]}。quote 必须逐字引用当前正文。action 为 repair 或 business-decision。没有发现时 findings 为空。不得因为局部读取断定内容缺失。",
+    "source": "src/mastra/workflows/product-manager.ts"
+  },
+  "product.quality-verify": {
+    "name": "team-product-quality-verify",
+    "content": "逐项重新核对发现与正文及已确认决定。仅输出 JSON {productHash,decisions:[{id,decision,reason}]}，decision 为 confirmed、false-positive 或 business-decision。每项必须给出核实依据，不得直接重复原结论。",
+    "source": "src/mastra/workflows/product-manager.ts"
+  },
+  "product.quality-repair": {
+    "name": "team-product-quality-repair",
+    "content": "先读取 product.md，只修订核实成立且可自主修复的问题，保留用户决定，禁止新增业务规则。输出完整正式双文档。",
+    "source": "src/mastra/workflows/product-manager.ts"
   }
 }

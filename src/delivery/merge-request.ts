@@ -1,3 +1,4 @@
+import { deliveryAttemptSchema } from './contracts.js';
 import { canWriteProjectPath } from '../development/contracts.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -111,27 +112,31 @@ export function createMergeRequestDelivery(config: PracticeConfig, scope: Return
   const submit = createStep({
     id: 'submit-merge-request', description: '核对候选与 QA 证据，向 main 提交 MR',
     inputSchema: lifecycleSchema, outputSchema: lifecycleSchema,
-    suspendSchema: z.object({ hash: hashSchema, sourceHash: hashSchema, reportHash: hashSchema, reason: z.string() }),
+    suspendSchema: z.object({ hash: hashSchema, sourceHash: hashSchema, reportHash: hashSchema, reason: z.string(), attempts: z.array(deliveryAttemptSchema).optional() }),
     resumeSchema: mergeRequestRetrySchema,
     // 只有质量门放行才进入候选提交与远端操作。
-    execute: async ({ inputData: state, resumeData, suspend }) => {
+    execute: async ({ inputData: state, resumeData, suspendData, suspend }) => {
       if (state.outcome !== 'in-progress') return state;
       if (state.quality.status !== 'passed' || state.quality.review?.decision !== 'pass' || !matchesAcceptancePlan(state) || state.quality.sourceHash !== state.development.checkpointHash || state.quality.reportHash !== qualityHash(state)) throw new Error('交付缺少同版本 QA 放行证据');
       const sourceHash = state.development.checkpointHash;
       const reportHash = state.quality.reportHash;
       const hash = developmentHash({ sourceHash, reportHash, correlation: state.development.input.correlation, specifications: state.formalSpecifications });
       if (resumeData && resumeData.hash !== hash) throw new Error('MR 交付版本已变化');
+      const tracked = !!state.development.input.teamRunPolicy?.delivery;
+      const prior = resumeData ? suspendData?.attempts ?? [] : state.deliveryAttempts ?? [];
+      if (prior.some(item => item.sourceHash !== sourceHash || item.reportHash !== reportHash)) throw new Error('交付尝试记录与当前候选不一致');
+      const recordAttempt = (outcome: 'candidate-mismatch' | 'remote-failure' | 'confirmed' | 'fixture') => tracked ? [...prior, { sequence: prior.length + 1, sourceHash, reportHash, outcome, policyVersion: 'delivery-retry.v1' as const }] : undefined;
       try { await assertCandidate(state, scope.port); }
-      catch { return suspend({ hash, sourceHash, reportHash, reason: '候选源码与 QA 版本不一致，请核对候选检查点。' }); }
-      if (config.mode === 'fixture') return { ...state, outcome: 'fixture-completed' as const };
+      catch { return suspend({ hash, sourceHash, reportHash, reason: '候选源码与 QA 版本不一致，请核对候选检查点。', attempts: recordAttempt('candidate-mismatch') }); }
+      if (config.mode === 'fixture') return { ...state, ...(tracked ? { deliveryAttempts: recordAttempt('fixture') } : {}), outcome: 'fixture-completed' as const };
       try {
         const mergeRequest = await submitReviewedCandidate(config, state, scope.port, sourceHash, reportHash);
-        return { ...state, mergeRequest, outcome: 'delivery-confirmed' as const };
+        return { ...state, ...(tracked ? { deliveryAttempts: recordAttempt('confirmed') } : {}), mergeRequest, outcome: 'delivery-confirmed' as const };
       } catch (error) {
         const reason = (error as NodeJS.ErrnoException).code === 'ENOENT'
           ? '服务器无法启动 GitHub CLI。请联系维护者核对 gh 的安装和登录后重试。'
           : 'MR 交付未完成，请核对 Run 分支、候选版本和 GitHub 凭据后重试。';
-        return suspend({ hash, sourceHash, reportHash, reason });
+        return suspend({ hash, sourceHash, reportHash, reason, attempts: recordAttempt('remote-failure') });
       }
     },
   });

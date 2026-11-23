@@ -1,3 +1,8 @@
+import { methodPrompt } from '../team-methods.js';
+import { runProductQualityLoop } from '../../team/product-quality-loop.js';
+import { assertProductRepairContinuation, type ProductRepairCheckpoint } from '../../team/product-repair.js';
+import { productWritingPolicy, type TeamRunPolicy } from '../../team/run-policy.js';
+import { externalSourceReceipts } from '../../intake/external-evidence.js';
 import { acceptanceRequirementsInstruction, ProductDraftPresentationError, productDocumentsInstruction, readProductDocuments, validateProductDraftPresentation } from '../../business-engineering/product-documents.js';
 import type { projectSpec } from '../../business-engineering/project.js';
 import { readAcceptanceRequirements } from '../../business-engineering/acceptance-requirements.js';
@@ -22,7 +27,6 @@ import { correctionPauseSchema, runInterruptibleProductAttempt } from '../../int
 import { productReworkFeedback } from './product-rework.js';
 import { publishLiveOutput } from '../../intake/live-output.js';
 import { describeProductStep, productSteps } from './product-steps.js';
-import { teamRunEnvelopeSchema } from '../../team/contracts.js';
 import { decideProductLoop } from '../../team/product-loop.js';
 import { decideTeamLoop } from '../../team/loop.js';
 
@@ -36,23 +40,41 @@ const managerPhaseInstructions: Record<typeof productManagerStages[number], stri
   writing: '产品稿写作：汇总前序事实、确认结论和范围，生成完整可审阅产品稿。',
 };
 
-/** 从写作尝试投影公共团队信封；Mastra 步骤仍持有运行事实。 */
-function writingLoopDecision(inputVersion: string, used: number, finding: string) {
-  const exhausted = used >= 1;
-  return decideTeamLoop(teamRunEnvelopeSchema.parse({ version: 'team-run-envelope.v1', teamId: 'product', status: exhausted ? 'stopped' : 'rework', phase: 'product-writing', inputVersion, budget: { used, limit: 1 }, evidence: [finding], ...(exhausted ? { stopReason: 'repair-budget' } : {}) }));
-}
-
-/** 通过公共 Loop 对可定位的文档错误修订一次，其他失败原样停止。 */
-export async function repairProductPresentation<T extends { text: string }>(generate: (repair?: { candidate: string; finding: string }) => Promise<T>, enabled: boolean) {
-  let repair: { candidate: string; finding: string } | undefined;
+/** 按候选散列和固定诊断记录修订进展；预算限制模型调用而非替代审批。 */
+export async function repairProductPresentation<T extends { text: string }>(generate: (repair?: { candidate: string; finding: string }) => Promise<T>, enabled: boolean, policy?: TeamRunPolicy, checkpoint?: ProductRepairCheckpoint) {
+  const strategy = productWritingPolicy(policy);
+  const limit = strategy.maxRepairs;
+  if (checkpoint && checkpoint.policyVersion !== strategy.version) throw new Error('产品修订策略与检查点版本不一致');
+  if (checkpoint) assertProductRepairContinuation(checkpoint);
+  let repair = checkpoint?.history.length ? { candidate: checkpoint.candidate, finding: checkpoint.history.at(-1)!.finding } : undefined;
+  const history: ProductRepairCheckpoint['history'] = [...(checkpoint?.history ?? [])];
+  const seen = new Set(history.map(item => `${item.candidateHash}:${item.finding}`));
   for (;;) {
-    const result = await generate(repair);
-    if (!enabled) return { result, repairs: 0 };
-    try { validateProductDraftPresentation(result.text); readProductDocuments(result.text); return { result, repairs: repair ? 1 : 0 }; }
+    let result: T;
+    try { result = await generate(repair); }
     catch (error) {
+      if (error instanceof Error && history.length && repair) Object.assign(error, { productRepairCheckpoint: { version: 'product-repair-checkpoint.v1', policyVersion: strategy.version, candidate: repair.candidate, history }, productRepairHistory: history });
+      throw error;
+    }
+    if (!enabled) return { result, repairs: 0, history };
+    const candidateHash = createHash('sha256').update(result.text).digest('hex');
+    try {
+      validateProductDraftPresentation(result.text); readProductDocuments(result.text);
+      history.push({ candidateHash, finding: '', outcome: 'passed' });
+      return { result, repairs: history.length - 1, history };
+    } catch (error) {
       if (!productDraftValidationMessage(error)) throw error;
-      const action = writingLoopDecision(createHash('sha256').update(result.text).digest('hex'), repair ? 1 : 0, error.message);
-      if (action !== 'request-rework') throw error;
+      const key = `${candidateHash}:${error.message}`;
+      const exhausted = history.length >= limit;
+      const repeated = strategy.stopOnRepeatedCandidate && seen.has(key);
+      const action = decideTeamLoop({ version: 'team-run-envelope.v1', teamId: 'product', status: exhausted || repeated ? 'stopped' : 'rework', phase: 'product-writing', inputVersion: candidateHash, budget: { used: Math.min(history.length, limit), limit }, evidence: [error.message], ...(exhausted || repeated ? { stopReason: repeated ? 'no-progress' : 'repair-budget' } : {}) });
+      const outcome = action === 'request-rework' ? 'rework' : repeated ? 'no-progress' : 'budget-exhausted';
+      history.push({ candidateHash, finding: error.message, outcome });
+      if (outcome !== 'rework') {
+        Object.assign(error, { productRepairHistory: history, productRepairPolicy: strategy.version, productRepairCheckpoint: { version: 'product-repair-checkpoint.v1', policyVersion: strategy.version, candidate: result.text, history } });
+        throw error;
+      }
+      seen.add(key);
       repair = { candidate: result.text, finding: error.message };
     }
   }
@@ -131,9 +153,11 @@ export function createProductManagerPhases(
           instruction: `你是同一个产品经理 Agent 的当前阶段。${stage ? `先调用 mastra_workspace_read_file 读取 ${spec?.path ?? 'brief.md'}。` : ''}只完成当前阶段职责，保留事实、已确认规则、建议和待决项的区别；不得跳过人工产品审批，不得声称已完成后续研发、测试或部署。${modeInstruction}${role === 'writing' ? (inputData.productHandoffFormat ? productDocumentsInstruction : inputData.requirementTracking ? acceptanceRequirementsInstruction : '') : ''}`,
         };
         let presentationRepairs = 0;
+        let presentationRepairHistory: Awaited<ReturnType<typeof repairProductPresentation>>['history'] = [];
         const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, async signal => {
-          const repaired = await repairProductPresentation(repair => generateProductContent(activeManager, JSON.stringify({ ...prompt, ...(repair ? { presentationRepair: repair, instruction: `${prompt.instruction} 请根据校验发现修订完整候选，保留已确认业务规则及需求与任务引用；仅输出完整正式双文档，禁止输出制作过程。` } : {}) }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal, undefined, tracingContext), role === 'writing' && !!inputData.productHandoffFormat && mode === 'live');
+          const repaired = await repairProductPresentation(repair => generateProductContent(activeManager, JSON.stringify({ ...prompt, ...(repair ? { presentationRepair: repair, instruction: `${prompt.instruction} 请根据校验发现修订完整候选，保留已确认业务规则及需求与任务引用；仅输出完整正式双文档，禁止输出制作过程。` } : {}) }), role, mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, `product-${role}`), signal, undefined, tracingContext, config?.externalResearchKey), role === 'writing' && !!inputData.productHandoffFormat && mode === 'live', inputData.teamRunPolicy, inputData.productRepairCheckpoint);
           presentationRepairs = repaired.repairs;
+          presentationRepairHistory = repaired.history;
           return repaired.result;
         });
         if (attempt.correction) return suspend(attempt.correction);
@@ -144,6 +168,7 @@ export function createProductManagerPhases(
           else if (inputData.requirementTracking) readAcceptanceRequirements(content);
         }
         const facts = projectToolFacts(result.toolResults);
+        const externalSources = externalSourceReceipts(result.toolResults);
         if (stage && !hasWorkspaceRead(result.toolResults, spec?.path ?? 'brief.md')) throw new Error('产品 Agent 未读取当前 Workspace 材料');
         const entry = {
           role,
@@ -151,12 +176,13 @@ export function createProductManagerPhases(
           content,
           toolNames: facts.tools,
           files: facts.files,
+          ...(externalSources.length ? { externalSources } : {}),
           startedAt: result.generation?.startedAt,
           endedAt: result.generation?.endedAt,
           durationMs: result.generation?.durationMs,
           modelSteps: result.steps.length,
           generation: result.generation,
-          ...(presentationRepairs ? { presentationRepairs } : {}),
+          ...(presentationRepairs ? { presentationRepairs, presentationRepairHistory } : {}),
           ...(stage ? { workspaceReads: workspaceReadReceipts(result.toolResults, files) } : {}),
         };
         const resultState = { ...inputData, productWork: { version: 'product-graph.v1' as const, entries: [...(inputData.productWork?.entries ?? []), entry] } };
@@ -190,23 +216,63 @@ export function createProductManagerPhases(
       if (inputData.nacosResources) await resolveAgents!(inputData.nacosResources);
       const spec = currentSpec();
       const sources = { ...(!inputData.productSources && config && !config.engineeringProject && !config.engineeringProjects ? readAuthorizedProductSources(currentRoot()) : {}), ...productWorkspaceSources(inputData, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined) };
-      const files = { ...sources, ...(spec ? { [spec.path]: spec.content } : {}), 'product.md': artifact.content };
+      const documents = inputData.productHandoffFormat ? readProductDocuments(artifact.content) : undefined;
+      const files = { ...sources, ...(spec ? { [spec.path]: spec.content } : {}), 'product.md': artifact.content, ...(documents ? { 'requirements.md': documents.requirements, 'product-spec.md': documents.specification } : {}) };
       const stage = config ? await createStageWorkspace(`product-review-${runId}`, '产品审查 · 当前材料（只读）', files) : undefined;
       const activeReviewer = stage && config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, mastra, workspace: stage.workspace, workspaceTools: stage.tools }).productReviewerAgent : reviewer;
       try {
-      const attempt = await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeReviewer, JSON.stringify({
+      const structuredQuality = !!inputData.teamRunPolicy?.product.quality && !!inputData.productHandoffFormat && mode === 'live';
+      const attempt = structuredQuality ? undefined : await runInterruptibleProductAttempt(runId, abortSignal, (inputData.productRework?.round ?? 0) < maxProductReworks, signal => generateProductContent(activeReviewer, JSON.stringify({
         task: 'product-quality-review',
         engineeringSpec: spec ? { projectId: spec.projectId, revision: spec.revision, path: spec.path } : undefined,
         workspaceFile: stage ? 'product.md' : undefined,
         workspaceSources: Object.keys(sources),
         brief: inputData.brief,
         product: artifact.content,
+        ...(documents ? { documentStructureEvidence: '完整双文档已通过确定性校验：每项 REQ 均有 TASK 引用。该证据仅说明格式和引用覆盖，不证明业务语义完整。', documentFiles: ['requirements.md', 'product-spec.md'] } : {}),
         corrections: productReworkFeedback(inputData),
-        instruction: `${stage ? '先调用 mastra_workspace_read_file 读取 product.md。' : ''}独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。检查需求文档中的场景是否忠实覆盖确认的业务规则，产品规格中的交付任务是否与需求对应。只输出审查发现与依据，不修改产品稿，不代替人工审批。`,
-      }), 'reviewer', mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, 'review-product-quality'), signal, undefined, tracingContext));
-      if (attempt.correction) return suspend(attempt.correction);
+        instruction: `${stage ? '先调用 mastra_workspace_read_file 读取 product.md。' : ''}${documents && stage ? '分别读取 requirements.md 和 product-spec.md 的完整正文，核对上述确定性映射证据；不能把局部读取或未找到当作全文缺失。' : ''}独立检查目标、范围、业务规则、正常/边界/异常流程、验收条件、非目标和风险。检查需求文档中的场景是否忠实覆盖确认的业务规则，产品规格中的交付任务是否与需求对应。只输出审查发现与依据，不修改产品稿，不代替人工审批。`,
+      }), 'reviewer', mode, currentRoot() ? { root: currentRoot()!, receipt: inputData.repositoryHandoff } : undefined, inputData.contextBudgetLevel, event => publishLiveOutput(pubsub, runId, event, 'review-product-quality'), signal, undefined, tracingContext, config?.externalResearchKey));
+      if (attempt?.correction) return suspend(attempt.correction);
+      if (inputData.teamRunPolicy?.product.quality && inputData.productHandoffFormat && mode === 'live') {
+        const strategy = inputData.teamRunPolicy.product.quality;
+        const qualityTools = new Set<string>();
+        const qualityReads: { path: string; sourceHash: string }[] = [];
+        /** 每次审查及核验都装配当前版本工作区，避免读取初稿旧文件。 */
+        const generateQuality = async (content: string, task: string, payload: Record<string, unknown>, instruction: string) => {
+          const current = await createStageWorkspace(`product-quality-${runId}`, '产品审查与核验（只读）', { 'product.md': content, 'brief.md': inputData.brief });
+          try {
+            const agent = config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, mastra, workspace: current.workspace, workspaceTools: current.tools }).productReviewerAgent : reviewer;
+            const generated = await generateProductContent(agent, JSON.stringify({ task, workspaceFile: 'product.md', ...payload, confirmedDecisions: inputData.intake ? collectConfirmedDecisions(inputData.intake) : [], instruction: `读取 product.md 的当前正文。${instruction}` }), 'reviewer', mode, undefined, 0, undefined, abortSignal, inputData.nacosResources?.methods, tracingContext, config?.externalResearchKey);
+            if (!hasWorkspaceRead(generated.toolResults, 'product.md')) throw new Error('产品审查未读取当前版本');
+            for (const tool of projectToolFacts(generated.toolResults).tools) qualityTools.add(tool);
+            qualityReads.push(...workspaceReadReceipts(generated.toolResults, { 'product.md': content }));
+            return JSON.parse(generated.text);
+          } finally { await current.close(); }
+        };
+        const loop = await runProductQualityLoop({ content: artifact.content, hash: artifact.hash, maxRepairs: strategy.maxRepairs, checkpoint: inputData.productQualityCheckpoint }, {
+          review: (content, hash) => generateQuality(content, 'product-structured-quality-review', { productHash: hash, structureEvidence: '当前候选已通过需求条目、任务引用和全需求覆盖的确定性校验。仍需核对语义。' }, methodPrompt('product.quality-review', inputData.nacosResources?.methods)),
+          verify: (content, assessment) => generateQuality(content, 'product-finding-verification', { assessment }, methodPrompt('product.quality-verify', inputData.nacosResources?.methods)),
+          repair: async (content, assessment, verification) => {
+            const current = await createStageWorkspace(`product-repair-${runId}`, '产品修订（只读材料）', { 'product.md': content, 'brief.md': inputData.brief });
+            try {
+              const agent = config ? assembleAgents(config, { ...(inputData.nacosResources ? { resources: inputData.nacosResources } : {}), storage, mastra, workspace: current.workspace, workspaceTools: current.tools }).productManagerAgent : manager;
+              const generated = await generateProductContent(agent, JSON.stringify({ task: 'product-quality-repair', workspaceFile: 'product.md', product: content, assessment, verification, confirmedDecisions: inputData.intake ? collectConfirmedDecisions(inputData.intake) : [], instruction: `${methodPrompt('product.quality-repair', inputData.nacosResources?.methods)}${productDocumentsInstruction}` }), 'writing', mode, undefined, 0, undefined, abortSignal, inputData.nacosResources?.methods, tracingContext, config?.externalResearchKey);
+              if (!hasWorkspaceRead(generated.toolResults, 'product.md')) throw new Error('产品修订未读取当前版本');
+              for (const tool of projectToolFacts(generated.toolResults).tools) qualityTools.add(tool);
+              qualityReads.push(...workspaceReadReceipts(generated.toolResults, { 'product.md': content }));
+              return generated.text;
+            } finally { await current.close(); }
+          },
+        });
+        const revised = { ...artifact, content: loop.content, hash: loop.productHash };
+        const quality = productQualityReviewSchema.parse({ version: 'product-quality-review.v1', agent: 'product-reviewer-agent', productHash: loop.productHash, content: loop.rounds.at(-1)!.assessment.summary, hash: createHash('sha256').update(JSON.stringify(loop)).digest('hex'), toolNames: [...qualityTools], workspaceReads: qualityReads, loop: { status: loop.status, rounds: loop.rounds, repairs: loop.repairs } });
+        return { ...inputData, artifacts: [...inputData.artifacts.slice(0, -1), revised], productQualityReview: quality };
+      }
+      if (!attempt?.output) throw new Error('产品审查缺少执行结果');
       const result = attempt.output;
       const facts = projectToolFacts(result.toolResults);
+      const externalSources = externalSourceReceipts(result.toolResults);
       if (stage && !hasWorkspaceRead(result.toolResults, 'product.md')) throw new Error('产品审查未读取当前 Workspace 产品稿');
       const review = productQualityReviewSchema.parse({
         version: 'product-quality-review.v1',
@@ -215,6 +281,7 @@ export function createProductManagerPhases(
         hash: createHash('sha256').update(JSON.stringify({ productHash: artifact.hash, content: result.text })).digest('hex'),
         toolNames: facts.tools,
         files: facts.files,
+        ...(externalSources.length ? { externalSources } : {}),
         generation: result.generation,
         ...(stage ? { workspaceReads: workspaceReadReceipts(result.toolResults, files) } : {}),
       });

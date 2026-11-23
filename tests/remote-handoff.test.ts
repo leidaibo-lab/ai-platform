@@ -3,6 +3,7 @@ import { architectureDocumentPath } from '../src/development/v2/architecture-doc
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +18,8 @@ test('待审双文档拒绝内部制作过程，业务发布门禁可保留', ()
   assert.doesNotThrow(() => validateProductDraftPresentation('# 需求文档\n真实资料入口关闭，待书面制度确认后才能发布。\n# 产品规格\n'));
 });
 import { buildSuccessorBaseline } from '../src/intake/successor-run.js';
+import { rehomeSpecifications } from '../src/team/runs.js';
+import type { FormalSpecificationReceipt } from '../src/delivery/remote-handoff.js';
 
 /** 创建独立工作树与 bare 远端；只使用合成文件。 */
 function repositories(seedMain = true) {
@@ -31,6 +34,47 @@ function repositories(seedMain = true) {
   if (seedMain) git(['push', 'origin', 'main']);
   return { root, remote, directory, git };
 }
+
+test('独立团队重登记三份正式规格，远端部分拒绝后复用原提交', /** 使用本地 bare Git 验证交接重试和回执链。 */async () => {
+  const f = repositories();
+  try {
+    const revision = f.git(['rev-parse', 'HEAD']);
+    const sourceId = randomUUID();
+    const targetId = randomUUID();
+    const iteration = 'team-handoff';
+    const source: FormalSpecificationReceipt[] = [];
+    for (const kind of ['product', 'development', 'testing'] as const) {
+      const path = `specs/${kind}-spec.md`;
+      const handoff = await publishFormalSpecification(f.root, sourceId, iteration, { [path]: `${kind} 已确认规格\n` }, 'docs(spec): 保存测试规格', revision);
+      source.push({ kind, paths: [path], handoff, upstreamCommits: source.map(/** 记录上游回执顺序。 */receipt => receipt.handoff.commit) });
+    }
+    const config = { rootDir: f.root, mode: 'live' as const, modelId: 'openai/synthetic' as const, port: 4111, databaseUrl: 'file::memory:', engineeringProject: { id: 'team-handoff', label: '本地 Git 验证', root: f.root, origin: f.remote, revision } };
+    const branch = formalRunBranch(iteration, targetId);
+    const ref = `refs/heads/${branch}`;
+    const hook = join(f.remote, 'hooks/pre-receive');
+    const [first] = source;
+    const mismatched = { ...first!, handoff: { ...first!.handoff, files: { [first!.paths[0]!]: '0'.repeat(64) } } };
+    await assert.rejects(rehomeSpecifications(config, [mismatched], targetId, iteration, revision), /交付内容散列不一致/);
+    assert.equal(f.git(['ls-remote', '--refs', 'origin', ref]), '');
+    // 允许创建分支，拒绝第二次推送，制造已经交付首份规格的部分失败。
+    writeFileSync(hook, '#!/bin/sh\nread old new ref\ntest "$old" = 0000000000000000000000000000000000000000\n', { mode: 0o700 });
+    await assert.rejects(rehomeSpecifications(config, source, targetId, iteration, revision), /远端同步失败/);
+    const partial = f.git(['ls-remote', '--refs', 'origin', ref]).split(/\s/)[0];
+    assert.match(partial!, /^[a-f0-9]{40}$/);
+    rmSync(hook);
+    const receipts = await rehomeSpecifications(config, source, targetId, iteration, revision);
+    assert.equal(receipts[0]!.handoff.commit, partial);
+    for (const [index, receipt] of receipts.entries()) {
+      const [path] = receipt.paths;
+      assert.equal(receipt.handoff.branch, branch);
+      assert.deepEqual(receipt.upstreamCommits, receipts.slice(0, index).map(/** 目标回执只引用本分支的上游版本。 */upstream => upstream.handoff.commit));
+      assert.equal(readHandoffFile(f.root, receipt.handoff, path!), readHandoffFile(f.root, source[index]!.handoff, path!));
+    }
+    assert.equal(f.git(['ls-remote', '--refs', 'origin', ref]).split(/\s/)[0], receipts[2]!.handoff.commit);
+    assert.equal(f.git(['ls-remote', '--refs', 'origin', `refs/heads/${formalRunBranch(iteration, sourceId)}`]).split(/\s/)[0], source[2]!.handoff.commit);
+    assert.deepEqual(await rehomeSpecifications(config, source, targetId, iteration, revision), receipts);
+  } finally { rmSync(f.directory, { recursive: true, force: true }); }
+});
 
 test('新建正式和归档分支均以远端 main 为父提交', /** 构造互相分叉的本地 HEAD 和远端 main。 */async () => {
   const f = repositories();

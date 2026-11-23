@@ -20,9 +20,10 @@ export const teamWorkflowIds = { product: 'team-product', development: 'team-dev
 const sourceSchema = z.object({ workflow: businessWorkflowSchema, runId: z.uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export const inputPackageReferenceSchema = z.object({ runId: z.uuid(), hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const common = { version: z.literal('team-run-input.v1'), projectId: projectIdSchema, iterationId: assetIdSchema, inputPackage: inputPackageReferenceSchema.optional() };
-export const teamRunInputSchema = z.discriminatedUnion('team', [
+export const teamRunInputSchema = z.union([
   z.object({ ...common, team: z.literal('product'), brief: z.string().trim().min(1).max(12000), intakeMode: intakeModeSchema.default('clarify') }).strict(),
   z.object({ ...common, team: z.literal('development'), source: sourceSchema }).strict(),
+  z.object({ ...common, team: z.literal('development'), evaluation: z.object({ version: z.literal('development-evaluation-input.v1'), requirement: z.string().trim().min(1).max(12000) }).strict() }).strict(),
   z.object({ ...common, team: z.literal('testing'), source: sourceSchema }).strict(),
   z.object({ ...common, team: z.literal('delivery'), source: sourceSchema }).strict(),
 ]);
@@ -57,6 +58,7 @@ export async function resolveTeamSource(mastra: Mastra, config: PracticeConfig, 
     verifyFormalSources(config, product.formalSpecifications ?? []);
   } else {
     const state = team === 'testing' ? development ?? lifecycle?.development : lifecycle?.development;
+    if (state?.input.source.kind === 'evaluation') throw new Error('研发评测结果不能作为正式团队交接来源');
     if (!state?.delivery || state.outcome !== 'development-delivered') throw new Error('来源 Run 缺少研发交付');
     assertProjectCorrelation(config, state.input.correlation);
     validateIdentityV2(state, config, loadDevelopmentMethods(config.rootDir).hashFor(state.input, state.methodBundleHash));

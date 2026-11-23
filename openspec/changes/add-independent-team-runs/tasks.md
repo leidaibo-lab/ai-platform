@@ -1,6 +1,6 @@
 ## 当前状态
 
-本地候选已接入四个独立团队 Workflow、Store 来源解析、独占候选复制、HTTP 与工作台入口。以下任务保留整体验收状态，尚待跨项目独立团队专项及真实环境验证。本清单用于跟踪整体验收，勾选状态以完整验证为准。
+本地候选已接入四个独立团队 Workflow、Store 来源解析、独占候选复制、HTTP 与工作台入口。四团队跨项目隔离专项已通过，真实环境验证仍待完成。本清单用于跟踪整体验收，勾选状态以各项对应的验证范围为准。
 
 ## 本地实施记录（2026-11-22）
 
@@ -67,8 +67,38 @@
 
 ## 后续 TODO（合并时复核）
 
-- [ ] 完成独立团队跨项目并发、来源及 Adapter 漂移拒绝专项。
+- [x] 完成独立团队跨项目并发、来源及 Adapter 漂移拒绝专项。
 - [ ] 验证真实 Git 规格分支重登记、受控 MR 回执及失败重试；分别记录真实模型与生产验收证据。
 - [ ] 对最新代码重新运行完整回归、类型检查、工作台构建及 OpenSpec 严格校验，并记录最终结果。
 - [ ] 覆盖任意外部候选材料的可信接入设计，未经验证的材料不得冒充研发交付或 QA 放行。
 - [ ] 确认全部能力与证据后同步稳定规格、操作说明并归档变更。
+
+## 回归基线（2026-11-23）
+
+- 基于 `607b1d0` 和测试替身修复执行 `npm exec tsx -- --test --test-concurrency=2 tests/*.test.ts`：307 项通过，0 失败，耗时约 263 秒。首次运行 306 项通过、1 项失败：需求分类测试替身仍提供 `generate`，而实际路径已改为 `stream`；更新替身后定向 10 项和完整回归均通过。
+- `npm run check`、`npm run review:build`、`openspec validate --specs --strict` 和 `git diff --check` 通过。工作台构建提示部分压缩后 chunk 超过 500 kB。
+- 此结果是本地 fixture 回归基线，不替代独立团队跨项目专项、真实模型、真实远端 MR 或生产验收。上述整体验收任务继续保持未勾选。
+
+## 独立团队隔离专项（2026-11-23）
+
+- 新增 `tests/independent-team-isolation.test.ts`，在两个独立固定 Git 项目和同一原生 Store 中并发启动产品及研发团队，核对各 Run 的项目绑定与产品来源；跨项目来源和错误来源散列被拒绝。
+- 重开 Store 后，分别注入已完成产品来源内容变化与研发 Run 冻结的 Adapter profile 摘要变化；原生恢复在执行前拒绝，研发 Run 仍处于 suspended。既有团队链回归另覆盖来源候选文件漂移及候选副本隔离。
+- `npx tsx --test --test-concurrency=2 tests/independent-team-runs.test.ts tests/independent-team-isolation.test.ts`：5 项通过。`npm run check`、本变更 OpenSpec 严格校验及 `git diff --check` 通过。
+- 初次专项只覆盖产品和研发团队的跨项目并发。Adapter 漂移通过修改隔离 Store 的冻结摘要注入，后续补验记录见下文。
+- 专项运行中出现固定的运行档案保存警告。独立团队没有主流程的根 Run 资产登记与生命周期 Hook，而共用步骤仍触发档案观察；本次未验证运行档案完整性，也未把警告解释为 Store 或审批失败。是否扩展独立团队档案契约应另行评估。
+- 真实 Git 规格分支重登记、真实远端 MR、失败重试、真实模型及生产验收仍未完成；整体验收条目保持未勾选。
+
+## 四团队并发与 Git 交接补验（2026-11-23）
+
+- `tests/independent-team-isolation.test.ts` 在同一 Mastra 实例、同一隔离 Store 中并发跑通 Node 和 Python 两条产品、研发、测试、交付独立 Run 链。验证团队 HTTP 按项目目录确认范围并拒绝另一个项目的目录散列、各交接拒绝跨项目来源、测试实际执行本项目登记检查、三份候选分别归属各自 Run 并保持同一版本内容。
+- 将当前 Node 可执行文件复制到临时路径，由独立进程重开同一 Store 并通过原生入口恢复之前暂停的研发 Run。实际可执行路径变化触发 Adapter 拒绝，原 Run 保持暂停，原解释器随后正常恢复。本次覆盖可执行路径变化，版本和二进制内容替换未实测。
+- `tests/remote-handoff.test.ts` 直连本地 bare Git，验证产品、研发、测试规格在目标 Run 分支按序重新登记。模拟首份提交成功、后续推送被拒绝，重试复用已交付提交、补齐目标回执链，并核对来源分支与再次重试结果。
+- `npm exec tsx -- --test --test-concurrency=2 tests/independent-team-isolation.test.ts tests/independent-team-runs.test.ts tests/remote-handoff.test.ts` 共 22 项通过，耗时约 134 秒。类型检查、稳定规格与本变更 OpenSpec 严格校验通过。
+- 独立团队仍出现运行档案保存警告。专项以原生 Store、候选与 Git 回执取证，档案完整性、实际业务远端 MR、真实模型及生产验收仍待验证。
+
+## 整体专项续验（2026-11-23）
+
+- 当前工作区执行 `npm exec tsx -- --test --test-concurrency=2 tests/*.test.ts`：315 项通过，0 失败，耗时约 404 秒，日志 `/tmp/ai-platform-independent-full-20261123.log`。此轮运行期间追加的下游外部候选负例另行单独执行通过，不将其计入上述数量。
+- `npm run check`、`npm run review:build`、稳定规格与本变更 OpenSpec 严格校验及 `git diff --check` 通过；构建仍提示部分 chunk 超过 500 kB。
+- 设计草案补充外部候选材料隔离、核验、确认和恢复的待决边界。新增测试验证测试和交付入参不能注入候选、路径或手填 QA；不表示已支持外部候选接入。
+- 本地 bare Git 与受控 MR 端口各有验证，但独立交付 Workflow 从远端失败暂停到恢复并取得 MR 回执的贯通验证尚缺。真实业务远端 MR、真实模型和生产验收仍未执行；不能由 fixture 或端口替身替代。

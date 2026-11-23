@@ -3,13 +3,11 @@ import type { TeamMethods } from '../mastra/team-method-contracts.js';
 import { verifyTeamMethods } from '../mastra/nacos-resources.js';
 /** 原生QA Agent工厂；工具闭包持有证据，终答只作说明。 */
 import { Agent } from '@mastra/core/agent';
-import { createTool } from '@mastra/core/tools';
 import { MastraLanguageModelV2Mock } from '@mastra/core/test-utils/llm-mock';
-import { z } from 'zod';
 import { resolveModelId, type PracticeConfig } from '../mastra/config.js';
 import { developmentHash } from '../development/contracts.js';
 import { loadBrowserMethod } from './method.js';
-import { runBrowserCase } from './runner.js';
+import { createBrowserCaseTool } from './tools.js';
 import type { BrowserRequest, BrowserReceipt } from './contracts.js';
 
 /** 每用例只执行一次；缺失方法读取或执行不产生通过证据。 */
@@ -18,7 +16,6 @@ export async function executeBrowserAgent(config: PracticeConfig, requests: Brow
   const method = loadBrowserMethod(config.rootDir, methods);
   if (!requests.length || requests.length > 3 || new Set(requests.map(/** 预算校验与Workflow批准上限一致。 */item => item.caseId)).size !== requests.length) throw new Error('浏览器请求集合越界');
   const receipts = new Map<string, BrowserReceipt>();
-  const attempted = new Set<string>();
   const calls = [{ name: 'skill', input: { name: method.skill.name } }, { name: 'skill_read', input: { skillName: method.skill.name, path: 'references/upstream.md' } }, ...requests.map(/** fixture只控制调用顺序。 */request => ({ name: 'runBrowserCase', input: { caseId: request.caseId } }))];
   let index = 0;
   const model = config.mode === 'fixture' ? new MastraLanguageModelV2Mock({
@@ -26,16 +23,7 @@ export async function executeBrowserAgent(config: PracticeConfig, requests: Brow
     doGenerate: async () => { const call = calls[index++]; return { content: call ? [{ type: 'tool-call' as const, toolCallId: 'browser-' + index, toolName: call.name, input: JSON.stringify(call.input) }] : [{ type: 'text' as const, text: 'fixture工具执行结束；以宿主回执为准。' }], finishReason: call ? 'tool-calls' as const : 'stop' as const, usage: { inputTokens: 12, outputTokens: 20, totalTokens: 32 }, warnings: [] }; },
   }) : { id: resolveModelId(config, 'development'), apiKey: config.apiKey, ...(config.baseUrl ? { url: config.baseUrl } : {}) };
   const agent = new Agent({ id: 'browser-qa-agent', name: '浏览器QA', model, skills: [method.skill], instructions: methodPrompt('browser-qa.agent.1', methods), tools: {
-    runBrowserCase: createTool({ id: 'browser-case', description: '执行批准用例；动作和资源由宿主固定', inputSchema: z.object({ caseId: z.string() }).strict(),
-      /** 模型只选择批准ID，不能修改目标、动作或断言。 */
-      execute: async ({ caseId }) => {
-        const request = requests.find(/** 精确匹配批准集合。 */item => item.caseId === caseId);
-        if (!request || attempted.has(caseId) || request.methodHash !== method.hash) throw new Error('未知、重复或方法漂移的浏览器用例');
-        attempted.add(caseId);
-        const receipt = await runBrowserCase(request, config.browserQaHeaded); receipts.set(caseId, receipt);
-        return { ...receipt, screenshot: receipt.screenshot ? { sha256: receipt.screenshot.sha256 } : null };
-      },
-    }),
+    runBrowserCase: createBrowserCaseTool(requests, method.hash, config.browserQaHeaded, receipts),
   }, maxRetries: 0 });
   let text = 'Agent未完成，未执行部分保持blocked';
   let used: string[] = [];

@@ -1,3 +1,4 @@
+import { createTeamRunPolicy } from '../../team/run-policy.js';
 /** 独立团队复用正式团队 Workflow，各自保存输入来源并在团队边界结束。 */
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import type { Mastra } from '@mastra/core';
@@ -54,7 +55,7 @@ export function createIndependentTeamWorkflows(agents: ReturnType<typeof createA
           const nacosResources = config.nacosResources ? await loadNacosSnapshot(config.nacosResources) : undefined;
           if (nacosResources?.methods) assertCompleteMethods(nacosResources.methods);
           return initializedSchema.parse({
-            correlation, brief: inputData.brief, mode: config.mode,
+            correlation, brief: inputData.brief, mode: config.mode, teamRunPolicy: createTeamRunPolicy(),
             nacosResources, productSources: !config.engineeringProject ? readAuthorizedProductSources(projectRepositoryRoot(config)) : {},
             ...(config.mode === 'live' ? { architectureDocumentFormat, requirementTracking: true, productHandoffFormat: 'paired-markdown.v1' } : {}),
             productFlow: 'four-step', intakeMode: inputData.intakeMode,
@@ -62,6 +63,13 @@ export function createIndependentTeamWorkflows(agents: ReturnType<typeof createA
             artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress',
             teamRun: { version: 'team-run-binding.v1', input: inputData },
           });
+        }
+        if (inputData.team === 'development' && 'evaluation' in inputData) {
+          if (config.mode === 'live' && config.nacosResources && !config.nacosResources.methods) throw new Error('新 live Run 必须配置完整 Nacos 团队方法目录');
+          const nacosResources = config.nacosResources ? await loadNacosSnapshot(config.nacosResources) : undefined;
+          if (nacosResources?.methods) assertCompleteMethods(nacosResources.methods);
+          const trusted = deliverySchema.parse({ correlation, brief: inputData.evaluation.requirement, mode: config.mode, evaluationRequirement: inputData.evaluation, teamRunPolicy: createTeamRunPolicy(), nacosResources, artifacts: [], reviews: [], formalSpecifications: [], outcome: 'in-progress' });
+          return initializedSchema.parse({ ...trusted, teamRun: { version: 'team-run-binding.v1', input: inputData, sourceHash: developmentHash(inputData.evaluation.requirement) }, trusted });
         }
         const source = await resolveTeamSource(mastra, config, team as Exclude<TeamRunInput['team'], 'product'>, inputData.source, inputData.source.hash);
         const binding = { version: 'team-run-binding.v1', input: inputData, sourceHash: source.hash };
@@ -128,7 +136,8 @@ export function createIndependentTeamWorkflows(agents: ReturnType<typeof createA
         const saved = initializedSchema.parse(value);
         const input = saved.teamRun.input;
         await validatePackageInput(mastra, registryConfig, input);
-        if (input.team !== 'product') await resolveTeamSource(mastra, selectProjectConfig(registryConfig, input.projectId), input.team, input.source, saved.teamRun.sourceHash);
+        if (input.team === 'development' && 'evaluation' in input && saved.teamRun.sourceHash !== developmentHash(input.evaluation.requirement)) throw new Error('研发评测需求版本已变化');
+        if ('source' in input) await resolveTeamSource(mastra, selectProjectConfig(registryConfig, input.projectId), input.team, input.source, saved.teamRun.sourceHash);
       },
     });
   }

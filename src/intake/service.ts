@@ -1,3 +1,6 @@
+import { productQualityCheckpointSchema } from '../team/product-quality-loop.js';
+import { projectTeamRunViews } from '../team/run-view.js';
+import { assertProductRepairContinuation, productRepairCheckpointSchema } from '../team/product-repair.js';
 import { decideProductLoop } from '../team/product-loop.js';
 import { platformWait, projectRecoveryMetrics } from './platform-recovery.js';
 import { readProductDocuments } from '../business-engineering/product-documents.js';
@@ -154,7 +157,9 @@ export async function readIntake(workflow: IntakeWorkflow, runId: string, config
     : undefined;
   const pendingProduct = step === 'review-product' && review.success ? review.data : undefined;
   const productDocuments = projectProductDocuments(pendingProduct?.artifact.content ?? approvedProduct?.content);
-  return { productDocuments, projectId: delivery?.correlation?.projectId, acceptanceEvidence, mergeRequest, directionDraft, approvedProduct, specifications, technicalRecovery, recoveryMetrics: projectRecoveryMetrics(snapshot), productCorrection, activeProductAttempt, appliedCorrection, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, successor, successorBaseline, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: delivery?.mode ?? (sync.success ? sync.data.mode : undefined), intakeMode, brief: delivery?.brief ?? '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: pendingProduct };
+  const productQuality = deliverySchema.safeParse(productReview?.payload).data?.productQualityReview;
+  const qualityReview = productQuality?.loop ? { productHash: productQuality.productHash, status: productQuality.loop.status, repairs: productQuality.loop.repairs, summary: productQuality.content, findings: productQuality.loop.rounds.at(-1)?.assessment.findings, verification: productQuality.loop.rounds.at(-1)?.verification.decisions } : undefined;
+  return { qualityReview, teamRuns: projectTeamRunViews(snapshot), productDocuments, projectId: delivery?.correlation?.projectId, acceptanceEvidence, mergeRequest, directionDraft, approvedProduct, specifications, technicalRecovery, recoveryMetrics: projectRecoveryMetrics(snapshot), productCorrection, activeProductAttempt, appliedCorrection, developmentStop: development.success && development.data.stopReason ? { reason: development.data.stopReason, rounds: development.data.round, calls: development.data.calls, checkRuns: development.data.verificationHistory?.length ?? 0, latestChecks: development.data.verificationHistory?.at(-1)?.checks } : undefined, successor, successorBaseline, reconfigure, clarify, blockage: snapshot.status === 'success' ? blockage : undefined, progress: describeDevelopmentProgress(snapshot.status, snapshot.steps ?? {}), retry, outcome: (snapshot.result as { outcome?: string } | undefined)?.outcome, gate, runId, status: snapshot.status, mode: delivery?.mode ?? (sync.success ? sync.data.mode : undefined), intakeMode, brief: delivery?.brief ?? '', step, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, timeline: projectRunTimeline(snapshot), intake: intake.success ? intake.data : undefined, product: pendingProduct };
 }
 /** 所有非法业务决定在原生 resume 之前拒绝，不损坏人工暂停点。 */
 export async function respondIntake(workflow: IntakeWorkflow, mode: 'fixture' | 'live', runId: string, input: unknown, config?: PracticeConfig) {
@@ -214,6 +219,17 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     if (!input || typeof input !== 'object' || !('retryHash' in input) || input.retryHash !== current.retry.hash) throw new GateInputError('恢复版本已变化，请刷新');
     if ('additionalContextLevel' in input) throw new GateInputError('资料预算门槛已移除，请刷新后直接恢复');
     let checkpointInput: unknown;
+    const repairSnapshot = await workflow.getWorkflowRunById(runId);
+    const repairEntry = repairSnapshot?.steps?.[current.retry.step];
+    if (repairEntry && !Array.isArray(repairEntry) && repairEntry.error && 'productRepairCheckpoint' in repairEntry.error) {
+      const checkpoint = productRepairCheckpointSchema.parse(repairEntry.error.productRepairCheckpoint);
+      assertProductRepairContinuation(checkpoint);
+      checkpointInput = deliverySchema.parse({ ...deliverySchema.parse(repairEntry.payload), productRepairCheckpoint: checkpoint });
+    }
+    if (repairEntry && !Array.isArray(repairEntry) && repairEntry.error && 'productQualityCheckpoint' in repairEntry.error) {
+      const checkpoint = productQualityCheckpointSchema.parse(repairEntry.error.productQualityCheckpoint);
+      checkpointInput = deliverySchema.parse({ ...deliverySchema.parse(repairEntry.payload), productQualityCheckpoint: checkpoint });
+    }
     if (current.retry.step === 'product-team.align-product-requirements') {
       const snapshot = await workflow.getWorkflowRunById(runId);
       const entry = snapshot?.steps?.[current.retry.step];
@@ -268,7 +284,10 @@ async function respondIntakeOnce(workflow: IntakeWorkflow, mode: 'fixture' | 'li
     }
     const run = await workflow.createRun({ runId });
     // 从原生循环容器恢复，但输入是已保存的architecture状态；不依赖本轮未选中的前序分支，也不重做context。
-    await run.timeTravel({ step: current.retry.step.split('.'), ...(checkpointInput ? { inputData: checkpointInput } : {}) });
+    const restart = { step: current.retry.step.split('.'), input: checkpointInput };
+    if (checkpointInput && repairEntry && !Array.isArray(repairEntry) && repairEntry.error && ('productRepairCheckpoint' in repairEntry.error || 'productQualityCheckpoint' in repairEntry.error)) {
+      await withProductRestart(runId, restart, () => run.timeTravel({ step: restart.step, inputData: checkpointInput }));
+    } else await run.timeTravel({ step: restart.step, ...(checkpointInput ? { inputData: checkpointInput } : {}) });
     return readIntake(workflow, runId, config);
   }
   if (current.status !== 'suspended' || current.mode !== mode) throw new Error('状态或模型模式已变化，请刷新');

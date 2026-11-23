@@ -121,7 +121,7 @@ export function prepareProductRework(source: Delivery, rework: ProductRework, ro
       : ['product-team', container, restartDirection ? target : `product-${target}`],
     input: {
       ...source, intake, intakeMode: restartDirection ? 'clarify' as const : source.intakeMode,
-      revision: undefined, artifacts: [], reviews: [], productQualityReview: undefined,
+      revision: undefined, artifacts: [], reviews: [], productQualityReview: undefined, productRepairCheckpoint: undefined, productQualityCheckpoint: undefined,
       productWork: retained.length ? { version: 'product-graph.v1' as const, entries: retained } : undefined,
       productReworkHistory: history.length ? history : undefined,
       productRework: { ...rework, target, reason, method: productReworkMethod }, outcome: 'in-progress' as const,

@@ -36,6 +36,7 @@ test('独立产品→研发→测试→交付入口，跨 Store 恢复并隔离�
     let current = await readIntake(product, productRun.runId, config);
     assert.equal(current.step, 'review-product');
     const pending = await product.getWorkflowRunById(productRun.runId);
+    assert.equal((pending!.steps!['product-team.product-writing'] as any).payload.teamRunPolicy.product.writing.maxRepairs, 3);
     const review = Object.values(pending!.steps!).find(entry => !Array.isArray(entry) && entry.status === 'suspended');
     const forged = await product.createRun({ runId: productRun.runId });
     await assert.rejects(forged.timeTravel({ step: ['product-team', 'product-writing'], inputData: { ...(!Array.isArray(review) ? review?.payload as object : {}), brief: '伪造需求' } }), /检查点/);
@@ -60,6 +61,8 @@ test('独立产品→研发→测试→交付入口，跨 Store 恢复并隔离�
     assert.equal(current.outcome, 'development-delivered', JSON.stringify(await development.getWorkflowRunById(developmentRun.runId)));
     const delivered = await resolveTeamSource(mastra, config, 'testing', { workflow: 'developmentTeamRun', runId: developmentRun.runId });
     const sourceInput = delivered.development!.input;
+    assert.equal(sourceInput.teamRunPolicy?.development?.version, 'development-loop.v2');
+    assert.equal(current.teamRuns.find(item => item.team === 'development')?.used, delivered.development!.calls);
     const original = executionResolver(config)(sourceInput);
     const originalHash = developmentHash(await original.snapshot());
     await original.close();
@@ -95,6 +98,24 @@ test('独立产品→研发→测试→交付入口，跨 Store 恢复并隔离�
     const result = await deliveryRun.start({ inputData: { ...common, team: 'delivery', source: { workflow: 'testingTeamRun', runId: testingRun.runId, hash: passed.hash } } });
     assert.equal(result.status, 'success', JSON.stringify(result));
     assert.equal(result.result.outcome, 'fixture-completed');
+    const deliveredView = await readIntake(delivery, deliveryRun.runId, config);
+    assert.equal(deliveredView.teamRuns.find(item => item.team === 'delivery')?.used, 1);
+    assert.equal(deliveredView.teamRuns.find(item => item.team === 'delivery')?.status, 'fixture');
+    assert.equal(result.result.development.input.teamRunPolicy.testing.version, 'testing-loop.v1');
+    const { createMergeRequestDelivery } = await import('../src/delivery/merge-request.js');
+    let mismatch = true;
+    const candidatePort = { snapshot: async () => mismatch ? {} : result.result.development.delivery!.files };
+    const retryFlow = createMergeRequestDelivery(config, { port: candidatePort, bind: (step: unknown) => step } as any);
+    const retryStep = retryFlow.steps['submit-merge-request'];
+    let pause: any;
+    await retryStep.execute({ inputData: { ...result.result, outcome: 'in-progress' }, suspend: (value: unknown) => { pause = value; } } as any);
+    assert.equal(pause.attempts.at(-1).outcome, 'candidate-mismatch');
+    assert.equal(pause.attempts.length, 2);
+    mismatch = false;
+    const recovered = await retryStep.execute({ inputData: { ...result.result, outcome: 'in-progress' }, resumeData: { hash: pause.hash }, suspendData: pause } as any) as any;
+    assert.equal(recovered.deliveryAttempts.length, 3);
+    assert.equal(recovered.deliveryAttempts.at(-1).outcome, 'fixture');
+
     const unchanged = executionResolver(config)(sourceInput);
     try { assert.equal(developmentHash(await unchanged.snapshot()), originalHash); }
     finally { await unchanged.close(); }
@@ -106,6 +127,17 @@ test('独立产品→研发→测试→交付入口，跨 Store 恢复并隔离�
 test('独立团队公开入参拒绝伪造审批、候选和命令', () => {
   const input = { version: 'team-run-input.v1', team: 'product', projectId: 'hrm', iterationId: 'test', brief: '合成' };
   for (const forged of [{ approved: true }, { candidate: '/tmp/other' }, { command: 'anything' }]) assert.equal(teamRunInputSchema.safeParse({ ...input, ...forged }).success, false);
+});
+
+test('下游团队拒绝外部候选和手工 QA 冒充受信来源', /** 下游只接受已登记 Workflow 引用，不接收候选或审批正文。 */() => {
+  const source = { workflow: 'developmentTeamRun', runId: randomUUID(), hash: 'a'.repeat(64) };
+  for (const team of ['testing', 'delivery'] as const) {
+    const input = { version: 'team-run-input.v1', team, projectId: 'hrm', iterationId: 'test', source };
+    assert.equal(teamRunInputSchema.safeParse(input).success, true);
+    for (const forged of [{ candidate: { 'src/a.mjs': 'external' } }, { qa: { status: 'passed' } }, { source: { ...source, candidatePath: '/tmp/external' } }, { source: { ...source, approval: 'passed' } }]) {
+      assert.equal(teamRunInputSchema.safeParse({ ...input, ...forged }).success, false);
+    }
+  }
 });
 
 test('独立团队 HTTP 身份、来源发现、重复启动和版本化审批', async () => {
@@ -200,5 +232,24 @@ test('输入包跨 Store 重启保留确认与撤销，原生入口禁止覆盖�
     await app.storage.close();
     app = createStudioApplicationOptions(config); mastra = new Mastra(app);
     await assert.rejects(resolveInputPackage(mastra, config, reference), /撤销/);
+  } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('研发独立评测直接接收需求并经过完整团队关口', async () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'development-evaluation-'));
+  const config = { rootDir: resolve('.'), mode: 'fixture' as const, modelId: 'openai/fixture' as const, port: 4111, databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+  const app = createStudioApplicationOptions(config);
+  const mastra = new Mastra(app);
+  try {
+    const workflow = app.workflows.developmentTeamRun;
+    const run = await workflow.createRun();
+    await run.start({ inputData: { version: 'team-run-input.v1', team: 'development', projectId: 'hrm', iterationId: 'evaluation', evaluation: { version: 'development-evaluation-input.v1', requirement: '实现模块返回 1' } } });
+    let view = await readIntake(workflow, run.runId, config);
+    assert.equal(view.gate?.key, 'confirm-project-scope');
+    view = await respondIntake(workflow, 'fixture', run.runId, { gateHash: view.gate!.gateHash, data: { ...actor, project, maxReworks: 1 } }, config);
+    assert.equal(view.gate?.key, 'approve-architecture');
+    view = await respondIntake(workflow, 'fixture', run.runId, { gateHash: view.gate!.gateHash, data: { ...actor, ...view.gate!.fixed, decision: 'approve', resolutions: [] } }, config);
+    assert.equal(view.outcome, 'development-delivered');
+    await assert.rejects(resolveTeamSource(mastra, config, 'testing', { workflow: 'developmentTeamRun', runId: run.runId }), /评测结果/);
   } finally { await app.storage.close(); rmSync(directory, { recursive: true, force: true }); }
 });

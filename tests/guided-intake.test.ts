@@ -102,6 +102,8 @@ test('AI主动补全模式：跳过逐项澄清，直接生成待审产品稿', 
     const current = await readIntake(workflow, run.runId);
     const team = workflow.steps['product-team'] as { steps: Record<string, unknown> };
     assert.deepEqual(Object.keys(team.steps), ['align-product-requirements', 'product-writing', 'review-product-quality', 'review-product']);
+    const policySnapshot = await workflow.getWorkflowRunById(run.runId);
+    assert.equal((policySnapshot!.steps!['product-team.product-writing'] as any).payload.teamRunPolicy.product.writing.maxRepairs, 3);
     assert.equal(current.intakeMode, 'autofill', JSON.stringify(current));
     assert.equal(current.step, 'review-product', JSON.stringify(current));
     assert.ok(current.product);

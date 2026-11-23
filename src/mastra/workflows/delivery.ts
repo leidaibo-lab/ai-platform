@@ -1,3 +1,6 @@
+import { productQualityCheckpointSchema } from '../../team/product-quality-loop.js';
+import { productRepairCheckpointSchema } from '../../team/product-repair.js';
+import { teamRunPolicySchema } from '../../team/run-policy.js';
 import { architectureDocumentFormat } from '../../development/v2/architecture-document.js';
 import { formalSpecificationReceiptSchema, remoteHandoffSchema } from '../../delivery/remote-handoff.js';
 import { intakeSchema, intakeModeSchema } from '../../intake/contracts.js';
@@ -32,7 +35,11 @@ export const reviewSchema = z.object({
 export type Review = z.infer<typeof reviewSchema>;
 /** Workflow 持有有序交接物和审阅记录；各步骤返回新数组，不更改上游快照。 */
 export const deliverySchema = z.object({
+  evaluationRequirement: z.object({ version: z.literal('development-evaluation-input.v1'), requirement: z.string().trim().min(1).max(12000) }).strict().optional(),
   migration: migrationLineageSchema.optional(),
+  teamRunPolicy: teamRunPolicySchema.optional(),
+  productRepairCheckpoint: productRepairCheckpointSchema.optional(),
+  productQualityCheckpoint: productQualityCheckpointSchema.optional(),
   architectureDocumentFormat: z.literal(architectureDocumentFormat).optional(),
   productHandoffFormat: z.literal('paired-markdown.v1').optional(),
   requirementTracking: z.literal(true).optional(),

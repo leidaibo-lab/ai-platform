@@ -1,3 +1,5 @@
+import { productRepairCheckpointSchema } from '../team/product-repair.js';
+import { productRepairDetails } from './product-repair-history.js';
 /** 原生Time travel白名单：产品生成及尚未开工的历史失败架构节点，不开放任意步骤跳转。 */
 import { deliverySchema, type Delivery } from '../mastra/workflows/delivery.js';
 import { productManagerStages } from '../mastra/workflows/product-contract.js';
@@ -64,12 +66,14 @@ export function describeRecovery(runId: string, status: string, steps: Record<st
   if (path.startsWith('product-team.') && (roleIndex < 0 || entries.length !== roleIndex || entries.some((value, index) => value.role !== roles[index]))) return undefined;
   const preserved = entries.map(/** 前序产物保持只读；旧快照中的计划句不计为完成交付。 */value => ({ label: titles[`draft-product.product-${value.role}`], role: value.role, complete: !(value.role === 'scope-priority' && isPlanOnlyProductOutput(value.content)) }));
   const failure = describeProductFailure(entry.error, state.contextBudgetLevel ?? 0);
+  const repairCheckpoint = productRepairCheckpointSchema.safeParse(entry.error?.productRepairCheckpoint);
+  const repairStopped = repairCheckpoint.success && ['no-progress', 'budget-exhausted'].includes(repairCheckpoint.data.history.at(-1)?.outcome ?? '');
   return {
-    hash: developmentHash({ runId, step: path, state, endedAt: entry.endedAt, error: entry.error?.name, details: entry.error?.details }),
+    hash: developmentHash({ runId, step: path, state, endedAt: entry.endedAt, error: entry.error?.name, details: entry.error?.details, repairHistory: productRepairDetails(entry.error) }),
     step: path, title: titles[titleKey], savedAnswers: state.intake?.history.length ?? 0, preserved: simplified && state.intake?.ready && state.intake.plan ? [{ label: '已收敛的产品方向', role: 'direction', complete: true }, ...preserved] : preserved,
     reason: failure?.reason ?? ([408, 504, 524].includes(entry.error?.statusCode) ? '模型服务响应超时' : entry.error?.name === 'AI_APICallError' ? '上游模型调用未成功' : entry.error?.name === 'SyntaxError' || entry.error?.name === 'ZodError' ? '模型输出未通过格式校验' : '此步骤执行未完成'),
-    attemptDetails: failure?.details, next: failure?.next, additionalContextLevel: failure?.additionalContextLevel, retryBlocked: failure?.retryBlocked,
-    message: `可以从“${titles[titleKey]}”的已保存输入继续，无需重填已确认信息。`,
+    attemptDetails: [...(failure?.details ?? []), ...productRepairDetails(entry.error)], next: failure?.next, additionalContextLevel: failure?.additionalContextLevel, retryBlocked: repairStopped || failure?.retryBlocked,
+    message: repairStopped ? '文档修订已停止，普通重试不会重新授予预算。请处理停止原因后发起有明确授权的新任务。' : `可以从“${titles[titleKey]}”的已保存输入继续，无需重填已确认信息。`,
     impact: titleKey === 'draft-product.publish-product' ? '重新整理已有产品稿并生成版本，随后等待人工确认。' : '重新调用该步骤及后续所需的模型；前面已完成的产物保留。生成完整产品稿后仍需人工确认。',
   };
 }
@@ -100,13 +104,13 @@ function describeProductQualityRecovery(runId: string, steps: Record<string, any
   const input = deliverySchema.safeParse(entry.payload);
   const publishedStep = findStep(steps, flatPath ? 'product-team.product-writing' : nativePath ? 'product-team.product-specification.product-writing' : 'draft-product.publish-product');
   const published = deliverySchema.safeParse(publishedStep?.status === 'success' ? publishedStep.output : undefined);
-  if (!input.success || !published.success || developmentHash(input.data) !== developmentHash(published.data)) return undefined;
+  if (!input.success || !published.success || developmentHash({ ...input.data, productQualityCheckpoint: undefined }) !== developmentHash({ ...published.data, productQualityCheckpoint: undefined })) return undefined;
   const state = input.data;
   const artifact = state.artifacts.at(-1);
   if (!artifact || artifact.stage !== 'product' || state.reviews.length || state.productQualityReview || state.outcome !== 'in-progress') return undefined;
   if (Object.entries(steps).some(([key, value]) => /^(product-team\.review-product|development-team|testing-team|test-team|deployment-team|delivery-team)(\.|$)/.test(key) && value?.status && !['pending', 'skipped'].includes(value.status))) return undefined;
   const failure = describeProductFailure(entry.error, state.contextBudgetLevel ?? 0);
-  return { hash: developmentHash({ runId, step: path, state, endedAt: entry.endedAt, error: entry.error?.name, details: entry.error?.details }), step: path, title: '产品质量审查', savedAnswers: state.intake?.history.length ?? 0, preserved: [{ label: '已生成的产品稿', role: 'product', complete: true }], reason: failure?.reason ?? '产品质量审查未完成', attemptDetails: failure?.details, next: failure?.next, message: '可使用已保存的产品稿重新执行质量审查，无需重新生成产品稿。', impact: '重新调用产品审查，可能产生模型费用；完成后仍需人工审阅和确认。' };
+  return { hash: developmentHash({ runId, step: path, state, endedAt: entry.endedAt, error: entry.error?.name, details: entry.error?.details, qualityCheckpoint: entry.error?.productQualityCheckpoint }), step: path, title: '产品质量审查', savedAnswers: state.intake?.history.length ?? 0, preserved: [{ label: '已生成的产品稿', role: 'product', complete: true }], reason: failure?.reason ?? '产品质量审查未完成', attemptDetails: failure?.details, next: failure?.next, message: '可使用已保存的产品稿重新执行质量审查，无需重新生成产品稿。', impact: '重新调用产品审查，可能产生模型费用；完成后仍需人工审阅和确认。' };
 }
 
 /** 旧图同步失败只开放未实施的架构检查点；新版同步故障使用原生暂停关口。 */

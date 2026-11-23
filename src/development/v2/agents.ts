@@ -9,15 +9,14 @@ import { developmentHash } from '../contracts.js';
 import { developmentTimeoutPolicy, diagnoseModelResult, runWithDevelopmentDeadline } from './model-diagnostic.js';
 import { developmentMaxSteps, developmentPrepareStep } from './generation-policy.js';
 import { OutputValidationError } from './output-diagnostic.js';
-import { Agent, type ToolsInput } from '@mastra/core/agent';
+import { Agent } from '@mastra/core/agent';
 import { projectLiveOutputChunk, type LiveOutputEvent } from '../../intake/live-output.js';
-import { createTool } from '@mastra/core/tools';
 import { MastraLanguageModelV2Mock } from '@mastra/core/test-utils/llm-mock';
 import { noopLogger } from '@mastra/core/logger';
 import { z } from 'zod';
 import { resolveModelId, type PracticeConfig } from '../../mastra/config.js';
 import type { ExecutionPort } from './execution-scope.js';
-import { createWorkspaceTools } from '@mastra/core/workspace';
+import { createDevelopmentTools } from './tools.js';
 import { developmentInstructions } from '../agents.js';
 import { classifyDevelopmentError, DevelopmentModelError, DevelopmentToolError } from '../errors.js';
 import { assessmentSchema, contextDraftSchema, evidenceRefs, planV2Schema, type RoleV2, type StateV2, type EntryV2 } from './contracts.js';
@@ -124,21 +123,7 @@ const invocationToolFailures = new WeakMap<Agent, DevelopmentToolError[]>();
 export async function createAgentV2(config: PracticeConfig, execution: ExecutionPort, role: RoleV2, state: StateV2, paths: string[], methods: DevelopmentMethods, runtime?: MemberRuntime, storage?: LibSQLStore) {
   const kind = developmentAgentKind(role);
   if (!kind) throw new Error('development-self-check 必须由 Workflow 执行固定检查，不能创建 Agent');
-  const tools: ToolsInput = {};
-  if (['frontend', 'backend', 'infrastructure'].includes(role) && !runtime?.delegate) tools.writeFile = createTool({ id: 'development-v2-write', description: '只写当前批准任务的精确路径', inputSchema: z.object({ path: z.string(), content: z.string().max(100000) }),
-    // 双重白名单，不给模型任意文件或检查写权限。
-    execute: async ({ path, content }) => { if (!paths.includes(path)) throw new Error('当前任务不可写该文件'); await execution.writeFile(path, content); return { written: path }; },
-  });
-  if (state.input.autonomy && ['frontend', 'backend', 'infrastructure'].includes(role)) tools.runChecks = createTool({ id: 'development-v2-check', description: '执行宿主登记的固定检查', inputSchema: z.object({}),
-    // 模型不能提供 shell、argv 或检查替代品。
-    execute: async () => ({ checks: await execution.runChecks() }),
-  });
-  if (runtime?.delegate) tools.delegateTask = createTool({ id: 'development-delegate-task', description: '在当前批准任务内委派给已登记实现角色；最多3次、不可递归、不可扩大路径', inputSchema: z.object({ role: z.enum(['frontend', 'backend', 'infrastructure']), goal: z.string().trim().min(1).max(2000), paths: z.array(z.string()).min(1) }),
-    // 宿主回调校验角色、精确路径和预算，父成员不能自行写入或授予权限。
-    execute: async (request) => runtime.delegate!(request),
-  });
-  // 动态Agent不在Mastra注册表中，显式装配当前候选Workspace的只读工具。
-  Object.assign(tools, await createWorkspaceTools(execution.workspace));
+  const tools = await createDevelopmentTools(execution, role, state, paths, runtime);
   const failures: DevelopmentToolError[] = [];
   for (const [name, tool] of Object.entries(tools)) {
     if (!tool || !('execute' in tool) || typeof tool.execute !== 'function') continue;

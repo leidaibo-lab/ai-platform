@@ -78,7 +78,7 @@ export function createAgents(config: PracticeConfig, options: ProductAgentOption
       ...(config.mode === 'live' ? { memory: createNativeMemory(model('product'), options.storage, methods) } : {}),
       ...(workspace ? { workspace } : {}),
       ...(options.skillsEnabled === false ? {} : { skills: frozen ? externalSkills : id === 'product-reviewer-agent' ? productSkills.filter(/** 独立审查只接收清单绑定。 */skill => localSelection?.reviewerSkills.includes(skill.name)) : productSkills }),
-      tools: { practiceInfo: practiceInfoTool, ...(options.workspaceTools ?? {}) },
+      tools: options.workspaceTools,
       defaultOptions: { ...options.execution?.(id === 'product-manager-agent' ? 'product-manager' : 'product-reviewer'), maxSteps: PRODUCT_MAX_STEPS },
     });
   }

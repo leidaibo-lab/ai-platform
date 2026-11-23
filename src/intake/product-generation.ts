@@ -1,3 +1,4 @@
+import { createExternalResearchTools } from '../mastra/tools/external-research.js';
 import type { RemoteHandoff } from '../delivery/remote-handoff.js';
 import { createTaskContext } from '../delivery/task-context.js';
 import type { TeamMethods } from '../mastra/team-method-contracts.js';
@@ -16,7 +17,7 @@ export const WRITING_MODEL_SETTINGS = { maxRetries: 0, maxOutputTokens: 16000, t
 export type ProductStreamEvent = LiveOutputEvent;
 type ProductGenerationAgent = Pick<ReturnType<typeof createAgents>['productManagerAgent'], 'generate' | 'stream'>;
 /** 产品团队统一验证原生结束事实；只读临时故障最多两次，单节点共享30分钟截止时间。 */
-export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, onProgress?: (event: ProductStreamEvent) => Promise<void>, abortSignal?: AbortSignal, methods?: TeamMethods, tracingContext?: TracingContext) {
+export async function generateProductContent(agent: ProductGenerationAgent, prompt: string, role: string, mode: 'fixture' | 'live', remote?: { root: string; receipt?: RemoteHandoff }, budgetLevel = 0, onProgress?: (event: ProductStreamEvent) => Promise<void>, abortSignal?: AbortSignal, methods?: TeamMethods, tracingContext?: TracingContext, externalResearchKey?: string) {
   let input: Record<string, unknown>;
   try { input = JSON.parse(prompt); } catch { input = { task: 'product', instruction: prompt }; }
   const attempts: ProductAttempt[] = []; const invocationStarted = performance.now(); const startedAt = new Date().toISOString(); const deadline = invocationStarted + WRITING_MODEL_SETTINGS.timeout.totalMs;
@@ -30,7 +31,8 @@ export async function generateProductContent(agent: ProductGenerationAgent, prom
       context = createTaskContext(input, mode === 'live', remote, budgetLevel, methods);
       const remaining = Math.max(1, Math.floor(deadline - performance.now()));
       abortSignal?.throwIfAborted();
-      const options = { ...context.options, abortSignal, tracingContext, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
+      const external = mode === 'live' && externalResearchKey ? createExternalResearchTools(externalResearchKey) : undefined;
+      const options = { ...context.options, ...(external ? { toolsets: { ...context.options.toolsets, external } } : {}), abortSignal, tracingContext, maxSteps: PRODUCT_MAX_STEPS, modelSettings: { ...WRITING_MODEL_SETTINGS, timeout: { totalMs: remaining, stepMs: Math.min(remaining, WRITING_MODEL_SETTINGS.timeout.stepMs) } } };
       let result;
       if (mode === 'live' && onProgress) {
         const stream = await agent.stream(context.prompt, options);

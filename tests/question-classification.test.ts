@@ -131,9 +131,10 @@ test('只投影同一产品版本的真实批准，历史待审批文字和其�
 
 test('新Run原生链路：生成分类、暂停、仅答必答后继续，不补造可选答案', /** 脚本模型验证完整数据链，不把结构测试当作真实模型判断质量。 */async () => {
   const storage = new LibSQLStore({ id: 'question-classification-regression', url: 'file::memory:' });
-  const agents = { productManagerAgent: { generate: /** 返回混合分类，确认业务入口确实请求严格结构输出。 */async (_prompt: unknown, options: any) => {
+  const agents = { productManagerAgent: { stream: /** 返回混合分类，确认业务入口确实请求严格结构输出。 */async (_prompt: unknown, options: any) => {
     assert.ok(options.structuredOutput.schema);
-    return { object: JSON.parse(String(_prompt)).history?.length ? { ...plan, questions: [optional] } : plan };
+    const object = JSON.parse(String(_prompt)).history?.length ? { ...plan, questions: [optional] } : plan;
+    return { fullStream: [], getFullOutput: /** 返回与流式接口一致的结构化结果。 */async () => ({ object, toolResults: [] }) };
   } } } as any;
   const workflow = createIntakeWorkflow(agents, 'live');
   new Mastra({ workflows: { workflow }, storage, logger: false });

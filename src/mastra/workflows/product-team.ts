@@ -41,6 +41,7 @@ export function createProductTeamWorkflow(agents: ReturnType<typeof createAgents
       if (!resumeData && decideProductLoop('human-review', pending.artifact.hash, 'blocked') === 'block') return suspend(pending);
       if (!resumeData) throw new Error('产品审批缺少恢复数据');
       const decision = validateReview(pending, resumeData);
+      if (decision.decision === 'approve' && inputData.productQualityReview?.loop && (inputData.productQualityReview.productHash !== pending.artifact.hash || inputData.productQualityReview.loop.status !== 'passed')) throw new Error('产品独立复审未通过，请提交返工意见或终止');
       const next = { ...inputData, reviews: [...inputData.reviews, decision] };
       const action = decideProductLoop('human-review', pending.artifact.hash, decision.decision === 'approve' ? 'completed' : decision.decision === 'reject' ? 'stopped' : 'rework');
       if (action === 'stop' || action === 'request-rework') return bail({ ...next, outcome: action === 'stop' ? 'rejected' as const : 'rework-requested' as const });

@@ -199,7 +199,7 @@ function createDevelopmentFlowsV2(config: PracticeConfig, execution: ExecutionPo
       if (review.resolutions.length) throw new Error('方案批准不能处理交付评审发现');
       const approved = review.decision === 'approve';
       let formalSpecification = inputData.formalSpecification;
-      if (approved && config.mode === 'live') {
+      if (approved && config.mode === 'live' && inputData.input.source.kind !== 'evaluation') {
         const root = projectRepositoryRoot(config);
         const capability = inputData.input.correlation?.iterationId;
         const product = inputData.input.formalSpecifications?.find(item => item.kind === 'product');

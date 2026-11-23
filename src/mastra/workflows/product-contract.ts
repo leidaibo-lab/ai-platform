@@ -1,6 +1,8 @@
+import { productQualityRoundSchema } from '../../team/product-quality-loop.js';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { PRODUCT_MAX_STEPS } from '../skills.js';
+import { externalSourceSchema } from '../../intake/external-evidence.js';
 import { productGenerationSchema } from '../../delivery/product-generation-contract.js';
 
 /** 产品经理阶段是同一 Agent 的工作切片，不对应独立角色或独立 Agent。 */
@@ -22,7 +24,9 @@ export const productWorkSchema = z.object({
     modelSteps: z.number().int().min(1).max(PRODUCT_MAX_STEPS),
     // 旧产物不补造完成证据；后续产物记录正常结束及有界重试事实。
     generation: productGenerationSchema.optional(),
-    presentationRepairs: z.number().int().min(0).max(1).optional(),
+    presentationRepairs: z.number().int().min(0).max(3).optional(),
+    presentationRepairHistory: z.array(z.object({ candidateHash: z.string().length(64), finding: z.string().max(1000), outcome: z.enum(['rework', 'no-progress', 'budget-exhausted', 'passed']) })).max(4).optional(),
+    externalSources: z.array(externalSourceSchema).max(30).optional(),
     workspaceReads: z.array(z.object({ path: z.string(), sourceHash: z.string().length(64) })).optional(),
   })).max(4),
 });
@@ -32,11 +36,14 @@ export type ProductWork = z.infer<typeof productWorkSchema>;
 export const productQualityReviewSchema = z.object({
   version: z.literal('product-quality-review.v1'),
   agent: z.literal('product-reviewer-agent'),
+  productHash: z.string().length(64).optional(),
+  loop: z.object({ repairs: z.number().int().min(0).max(2), status: z.enum(['passed', 'business-decision', 'repair-budget', 'no-progress']), rounds: z.array(productQualityRoundSchema).max(3) }).optional(),
   content: z.string().trim().min(1).max(100000),
   hash: z.string().regex(/^[a-f0-9]{64}$/),
   toolNames: z.array(z.string().min(1)).max(30),
   files: z.array(z.string().min(1)).max(100).optional(),
   generation: productGenerationSchema.optional(),
+  externalSources: z.array(externalSourceSchema).max(30).optional(),
   workspaceReads: z.array(z.object({ path: z.string(), sourceHash: z.string().length(64) })).optional(),
 });
 export type ProductQualityReview = z.infer<typeof productQualityReviewSchema>;

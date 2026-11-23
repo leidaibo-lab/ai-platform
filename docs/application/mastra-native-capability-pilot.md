@@ -12,7 +12,7 @@ npx tsx --test tests/mastra-native-pilot.test.ts
 
 Agent Experiment 验证声明的工具替身实际返回给模型、真实工具未执行，以及 `unmockedToolPolicy: 'deny'` 拒绝未声明工具。此机制仅适用于 Agent 目标；现有研发单节点评测使用 Workflow 目标，评审返工专项使用自定义 task，不可直接声明工具替身后声称已拦截。数据项可覆盖实验级策略，实际使用前须校验每项配置。
 
-产品经理 Agent 的固定模型试点可运行 `npm run eval:product-tool-mock`。它使用原有产品经理 Agent、隔离内存 Store、声明的 `practiceInfo` 替身和拒绝未声明工具策略；结果只证明工具替身机制，不代表模型质量或产品验收。
+最小 Agent 的固定模型试点可运行 `npm run eval:product-tool-mock`。它使用最小 Agent、隔离内存 Store、声明的 `practiceInfo` 替身和拒绝未声明工具策略；结果只证明工具替身机制，不代表模型质量或产品验收。
 
 最小化策略按允许字段重新构造 Span，保留框架标识、时间、类型、UUID Run 关联与固定错误标记，丢弃正文、工具参数、输出、异常详情、预览和任意属性。隔离 fixture 已验证产品写作与独立审查动态装配的 Agent 与工具出现在 Workflow 的同一 Trace，且工具位于 Agent 子树；测试同时覆盖需求正文、合成错误以及工具输入输出的过滤。需求澄清、业务阻塞回流及研发 Agent 的动态装配路径尚未完成同样验证。
 

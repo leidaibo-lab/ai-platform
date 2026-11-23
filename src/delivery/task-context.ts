@@ -66,6 +66,30 @@ export function createTaskContext(input: Record<string, unknown>, enabled = true
     /** 只查本调用已登记固定版本，不能扩大文件权限。 */
     execute: async (input) => locate(input),
   });
+  const searchSchema = z.object({ query: z.string().trim().min(1).max(160), materialIndex: z.number().int().nonnegative().default(0), offset: z.number().int().nonnegative().default(0) }).strict();
+  /** 在本调用的登记资料中逐一查找字面关键词，按命中位置分页。 */
+  function search(input: z.input<typeof searchSchema>) {
+    const { query, materialIndex, offset } = searchSchema.parse(input);
+    if (materialIndex > manifest.length || (materialIndex === manifest.length && offset !== 0)) throw new Error('资料检索位置越界');
+    const items: { id: string; path: string; hash: string; offset: number; preview: string }[] = [];
+    for (let i = materialIndex; i < manifest.length; i++) {
+      const entry = manifest[i]; const text = materials.get(entry.id)!;
+      let position = i === materialIndex ? offset : 0;
+      if (position > text.length) throw new Error('资料检索位置越界');
+      while (position <= text.length - query.length) {
+        const found = text.indexOf(query, position);
+        if (found < 0) break;
+        if (items.length === 20) return { items, next: { materialIndex: i, offset: found }, note: '字面匹配；使用 handoff.read 读取原文。' };
+        items.push({ id: entry.id, path: entry.path, hash: entry.hash, offset: found, preview: text.slice(Math.max(0, found - 40), Math.min(text.length, found + query.length + 40)) });
+        position = found + query.length;
+      }
+    }
+    return { items, next: null, note: '仅检索本次登记资料；未命中不代表其他资料不存在。' };
+  }
+  const searchTool = createTool({ id: 'handoff_search', description: '跨本次登记资料按字面关键词定位，使用 materialIndex 和 offset 续页', inputSchema: searchSchema,
+    /** 只能检索本次闭包中的已登记资料。 */
+    execute: async input => search(input),
+  });
   const readSchema = z.object({ id: z.string(), offset: z.number().int().nonnegative().default(0), length: z.number().int().min(1).max(limits.readChars).default(limits.readChars) });
   /** 只接受本调用登记引用；单次返回有界、累计读取不限，不接受路径或 Git 表达式。 */
   function read(input: z.input<typeof readSchema>) {
@@ -79,5 +103,5 @@ export function createTaskContext(input: Record<string, unknown>, enabled = true
     /** 框架只向宿主已注册的资料闭包分派，不能读任意文件。 */
     execute: async (input) => read(input),
   });
-  return { prompt, manifest, read, locate, options: enabled ? { memory: nativeInvocationMemory(), toolsets: { handoff: { read: readTool, locate: locateTool } } } : {} };
+  return { prompt, manifest, read, locate, search, options: enabled ? { memory: nativeInvocationMemory(), toolsets: { handoff: { read: readTool, locate: locateTool, search: searchTool } } } : {} };
 }

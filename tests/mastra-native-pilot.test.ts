@@ -313,8 +313,8 @@ test('原生 Agent Experiment 使用替身并拒绝未声明工具', async () =>
   } finally { await storage.close(); }
 });
 
-/** 将原生工具替身应用于项目真实产品 Agent 的 fixture 评测。 */
-test('产品经理 Agent 的 fixture Experiment 使用原生工具替身', async () => {
+/** 将原生工具替身应用于最小 Agent 的 fixture 评测。 */
+test('最小 Agent 的 fixture Experiment 使用原生工具替身', async () => {
   const result = await evaluateProductAgentToolMock(resolve('.'));
   assert.equal(result.failedCount, 0);
   assert.deepEqual(result.served, ['practiceInfo']);

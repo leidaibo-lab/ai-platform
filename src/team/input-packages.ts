@@ -16,7 +16,7 @@ const confirmedSchema = packageSchema.extend({ confirmation: confirmationSchema 
 /** 每次接入或确认都重新核验服务端项目和适用团队的来源证据。 */
 async function validateMaterial(mastra: Mastra, config: PracticeConfig, input: TeamRunInput) {
   const selected = selectProjectConfig(config, input.projectId);
-  if (input.team !== 'product') await resolveTeamSource(mastra, selected, input.team, input.source, input.source.hash);
+  if ('source' in input) await resolveTeamSource(mastra, selected, input.team, input.source, input.source.hash);
   return selected;
 }
 

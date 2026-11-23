@@ -54,16 +54,12 @@ export function createFixtureModel(stage: string) {
         : '';
       return drafts[stage] + requirements + (serialized.includes('revision-task') ? '\n\n## 修订样例（fixture）\n此为修订流程固定输出；具体结论须由人工检查，不代表模型理解或确认。' : '') + (serialized.includes('sourceContent') ? '\n\n返工样例（fixture）：已进入带来源和反馈的新轮次；此固定文本不代表理解或解决反馈。' : '');
     }
-    /** 所有固定产品角色真实执行已注册工具，再输出各自样例。 */
+    /** 固定产品角色在提供工作区路径时读取资料，再输出样例。 */
     function productResponse(prompt: readonly { role: string }[]) {
-      const hasResult = prompt.some(
-        // 工具完成事实必须来自原生工具循环，而非测试直接调用。
-        (message) => message.role === 'tool',
-      );
       const serialized = JSON.stringify(prompt);
       const workspacePath = serialized.match(/workspaceFile\\?"\s*:\s*\\?"([^"\\]+)/)?.[1];
       const hasWorkspaceRead = serialized.includes('fixture-workspace-read');
-      const call = workspacePath && !hasWorkspaceRead ? { type: 'tool-call' as const, toolCallId: 'fixture-workspace-read', toolName: 'mastra_workspace_read_file', input: JSON.stringify({ path: workspacePath, showLineNumbers: false }) } : !hasResult ? { type: 'tool-call' as const, toolCallId: `fixture-${stage}-info`, toolName: 'practiceInfo', input: '{}' } : undefined;
+      const call = workspacePath && !hasWorkspaceRead ? { type: 'tool-call' as const, toolCallId: 'fixture-workspace-read', toolName: 'mastra_workspace_read_file', input: JSON.stringify({ path: workspacePath, showLineNumbers: false }) } : undefined;
       return {
         content: call ? [call] : [{ type: 'text' as const, text: productText(prompt) }],
         finishReason: call ? 'tool-calls' as const : 'stop' as const,

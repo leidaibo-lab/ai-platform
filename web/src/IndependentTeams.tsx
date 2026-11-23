@@ -45,7 +45,7 @@ export function IndependentTeams({ projectId, close }: { projectId: string; clos
     try {
       const list = await request<{ runs: TeamDocument[] }>(`runs?projectId=${encodeURIComponent(projectId)}`);
       setRuns(list.runs);
-      if (team !== 'product') setSources((await request<{ sources: Source[] }>(`sources?projectId=${encodeURIComponent(projectId)}`)).sources);
+      if (team === 'testing' || team === 'delivery') setSources((await request<{ sources: Source[] }>(`sources?projectId=${encodeURIComponent(projectId)}`)).sources);
     } catch (reason) { setError((reason as Error).message); }
   }
   useEffect(() => { setCurrent(undefined); setInputPackage(undefined); setSources([]); setSource(''); void refresh(); }, [team, projectId]);
@@ -57,7 +57,7 @@ export function IndependentTeams({ projectId, close }: { projectId: string; clos
       const runId = inputPackage?.runId ?? crypto.randomUUID();
       const selected = sources.find(item => `${item.workflow}:${item.runId}` === source);
       const body = action === 'prepare' ? { runId, input: { version: 'team-run-input.v1', team, projectId, iterationId: iteration,
-        ...(team === 'product' ? { brief, intakeMode: 'clarify' } : { source: selected && { workflow: selected.workflow, runId: selected.runId, hash: selected.hash } }) } }
+        ...(team === 'product' ? { brief, intakeMode: 'clarify' } : team === 'development' ? { evaluation: { version: 'development-evaluation-input.v1', requirement: brief } } : { source: selected && { workflow: selected.workflow, runId: selected.runId, hash: selected.hash } }) } }
         : { action, hash: inputPackage!.hash, comment };
       const response = await fetch(`/intake-api/team-input-packages${action === 'prepare' ? '' : `/${runId}/respond`}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const result = await response.json();
@@ -83,7 +83,7 @@ export function IndependentTeams({ projectId, close }: { projectId: string; clos
     setCurrent({ runId, brief, status: 'pending' });
     try {
       const input = { version: 'team-run-input.v1', team, projectId, iterationId: iteration,
-        ...(team === 'product' ? { brief, intakeMode: 'clarify' } : { source: sources.find(item => `${item.workflow}:${item.runId}` === source) }),
+        ...(team === 'product' ? { brief, intakeMode: 'clarify' } : team === 'development' ? { evaluation: { version: 'development-evaluation-input.v1', requirement: brief } } : { source: sources.find(item => `${item.workflow}:${item.runId}` === source) }),
       };
       if ('source' in input && input.source) {
         const { workflow, runId: sourceRunId, hash } = input.source;
@@ -97,11 +97,11 @@ export function IndependentTeams({ projectId, close }: { projectId: string; clos
   return <main className="intake-shell"><header><button disabled={busy} onClick={close}>返回工作台</button><h1>独立团队运行</h1></header>
     <section className="intake-card"><label>团队<select value={team} disabled={busy} onChange={event => setTeam(event.target.value as Team)}>{Object.entries(labels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label>迭代<input value={iteration} onChange={event => setIteration(event.target.value)} /></label>
-      {team === 'product' ? <label>需求<textarea value={brief} onChange={event => setBrief(event.target.value)} maxLength={12000} /></label> : <label>来源<select value={source} onChange={event => setSource(event.target.value)}><option value="">选择已核验来源</option>{sources.map(item => <option key={`${item.workflow}:${item.runId}`} value={`${item.workflow}:${item.runId}`}>{item.brief.slice(0, 60)} · {item.runId.slice(0, 8)}</option>)}</select></label>}
-      {team !== 'product' && !sources.length && <p>当前项目尚无满足该团队输入要求的来源。</p>}
-      <button disabled={busy || !iteration.trim() || (team === 'product' ? !brief.trim() : !source)} onClick={() => void start()}>启动{labels[team]}团队</button>
+      {team === 'product' || team === 'development' ? <label>需求<textarea value={brief} onChange={event => setBrief(event.target.value)} maxLength={12000} /></label> : <label>来源<select value={source} onChange={event => setSource(event.target.value)}><option value="">选择已核验来源</option>{sources.map(item => <option key={`${item.workflow}:${item.runId}`} value={`${item.workflow}:${item.runId}`}>{item.brief.slice(0, 60)} · {item.runId.slice(0, 8)}</option>)}</select></label>}
+      {(team === 'testing' || team === 'delivery') && !sources.length && <p>当前项目尚无满足该团队输入要求的来源。</p>}
+      <button disabled={busy || !iteration.trim() || (team === 'product' || team === 'development' ? !brief.trim() : !source)} onClick={() => void start()}>启动{labels[team]}{team === 'development' ? '团队评测' : '团队'}</button>
       <button disabled={busy} onClick={() => void refresh()}>刷新来源与记录</button>
-      <button disabled={busy || !!inputPackage || (team === 'product' ? !brief.trim() : !source)} onClick={() => void packageRequest('prepare')}>登记当前输入包</button>
+      <button disabled={busy || !!inputPackage || (team === 'product' || team === 'development' ? !brief.trim() : !source)} onClick={() => void packageRequest('prepare')}>登记当前输入包</button>
       {inputPackage && <div><p>输入包 {inputPackage.runId} · {inputPackage.confirmed ? '已确认，启动将使用包内材料' : '待确认'}</p><label>确认或撤销意见<input value={comment} onChange={event => setComment(event.target.value)} /></label><button disabled={busy || !comment.trim()} onClick={() => void packageRequest(inputPackage.confirmed ? 'revoke' : 'confirm')}>{inputPackage.confirmed ? '撤销输入包' : '确认输入包'}</button></div>}
     </section>
     {error && <p role="alert">{error}</p>}

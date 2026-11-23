@@ -1,0 +1,8 @@
+{
+  "version": "development-team-evaluation-case.v1",
+  "id": "hrm-candidate-follow-up",
+  "projectId": "hrm",
+  "iterationId": "candidate-follow-up",
+  "requirementFile": "hrm-candidate-follow-up.md",
+  "purpose": "验证研发团队项目授权、规划、实施、检查、评审和交付；业务规则为待确认提案"
+}
