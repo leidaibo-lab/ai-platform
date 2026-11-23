@@ -8,6 +8,7 @@ import { readConfig } from '../src/mastra/config.js';
 import { createStudioApplicationOptions } from '../src/mastra/app.js';
 import { readIntake } from '../src/intake/service.js';
 import { developmentHash } from '../src/development/contracts.js';
+import { configureEngineeringProjects } from '../src/business-engineering/project.js';
 
 const caseSchema = z.object({ version: z.literal('development-team-evaluation-case.v1'), id: z.string().regex(/^[a-z0-9-]+$/), projectId: z.string(), iterationId: z.string(), requirementFile: z.string().regex(/^[a-z0-9-]+\.md$/), purpose: z.string() }).strict();
 const casePath = resolve(process.argv[2] ?? 'evaluations/independent-teams/cases/hrm-candidate-follow-up.json');
@@ -15,7 +16,10 @@ const testCase = caseSchema.parse(JSON.parse(readFileSync(casePath, 'utf8')));
 const requirement = readFileSync(resolve(dirname(casePath), basename(testCase.requirementFile)), 'utf8');
 const directory = resolve('.data/evaluations', `development-team-${testCase.id}-${randomUUID()}`);
 mkdirSync(directory, { recursive: true });
-const config = { ...readConfig(), databaseUrl: `file:${resolve(directory, 'workflow.db')}` };
+const config = readConfig();
+configureEngineeringProjects(config, process.env);
+if (!config.engineeringProject && !config.engineeringProjects) config.hrmRepositoryRoot = resolve(process.env.MASTRA_HRM_REPOSITORY ?? resolve(config.rootDir, '../hrm'));
+config.databaseUrl = `file:${resolve(directory, 'workflow.db')}`;
 const app = createStudioApplicationOptions(config);
 new Mastra(app);
 try {
